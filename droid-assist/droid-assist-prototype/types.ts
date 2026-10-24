@@ -92,4 +92,8 @@ export interface AssistSettings {
   showTrail: boolean;
   /** Base URL of the Droid desktop bridge (pyautogui replay endpoint). */
   bridgeUrl: string;
+  /** Ollama-compatible /api/chat URL every AI feature calls. */
+  aiUrl: string;
+  /** Model name sent with every AI request. */
+  aiModel: string;
 }

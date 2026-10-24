@@ -3,40 +3,14 @@ import type { Annotation, AssistSettings, Frame, LogEntry, SavedCard, SyncLevel,
 import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
 import { calculate, generateCard, planFromGoal, uid } from './planner.js';
+import { DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, pingAi } from './ai.js';
+import type { AiStatus, AskRequest } from './ai.js';
+import { describeScreen, decidePopup, decideStep } from './assist-ai.js';
 import { sendToBridge } from './bridge.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Looks for a popup's close control: the centroid of the brightest pixels in the
- * popup's top-right corner. Falls back to the corner itself.
- */
-function findCloseButton(frame: Frame, box: { x: number; y: number; w: number; h: number }) {
-  const { data, width, height } = frame.data;
-  const x0 = Math.floor((box.x + box.w * 0.6) * width);
-  const x1 = Math.min(width - 1, Math.ceil((box.x + box.w) * width));
-  const y0 = Math.floor(box.y * height);
-  const y1 = Math.min(height - 1, Math.ceil((box.y + box.h * 0.35) * height));
-  const bright: Array<[number, number]> = [];
-  for (let y = y0; y <= y1; y++) {
-    for (let x = x0; x <= x1; x++) {
-      const i = (y * width + x) * 4;
-      if (data[i] > 200 && data[i + 1] > 200 && data[i + 2] > 200) bright.push([x, y]);
-    }
-  }
-  if (bright.length >= 3) {
-    // Anchor on the bright pixel closest to the top-right corner, then average its
-    // neighbourhood — so nearby text doesn't pull the click off the × button.
-    const anchor = bright.reduce((a, p) => (p[0] - p[1] > a[0] - a[1] ? p : a));
-    const near = bright.filter((p) => Math.abs(p[0] - anchor[0]) <= 8 && Math.abs(p[1] - anchor[1]) <= 8);
-    const cx = near.reduce((s, p) => s + p[0], 0) / near.length;
-    const cy = near.reduce((s, p) => s + p[1], 0) / near.length;
-    return { x: cx / width, y: cy / height, found: true };
-  }
-  return { x: box.x + box.w * 0.93, y: box.y + box.h * 0.09, found: false };
-}
 
 /** Default settings. */
 export const DEFAULT_SETTINGS: AssistSettings = {
@@ -47,7 +21,11 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   aiHelp: true,
   showTrail: true,
   bridgeUrl: '',
+  aiUrl: DEFAULT_AI_URL,
+  aiModel: DEFAULT_AI_MODEL,
 };
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** A background agent the user can toggle. */
 export interface Agent {
@@ -86,6 +64,9 @@ export function useAssist() {
     { id: 'goal', name: 'Goal reviewer', description: 'Reviews the goal after each run and suggests what is next', on: true },
   ]);
   const [plays, setPlays] = useState(0);
+  const [aiStatus, setAiStatus] = useState<AiStatus>({ state: 'checking', detail: 'Connecting to the AI endpoint…' });
+  const [aiAnswer, setAiAnswer] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
 
   const demoCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -104,13 +85,56 @@ export function useAssist() {
   const autoBusyRef = useRef(false);
   const frameId = useRef(0);
   const lastStepAt = useRef(0);
+  const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage));
+  const aiStatusRef = useRef(aiStatus);
+  const logRef = useRef<LogEntry[]>([]);
+  /** The goal as of the last render, for the capture-loop closures. */
+  const goalRef = useRef('');
+  /** The popup annotation the model has already ruled on, so it is asked once per popup. */
+  const popupDecidedRef = useRef<string | null>(null);
 
   settingsRef.current = settings;
+  aiStatusRef.current = aiStatus;
+  logRef.current = log;
+  goalRef.current = goal;
   stepsRef.current = steps;
 
   const addLog = useCallback((source: string, message: string, tone: LogEntry['tone'] = 'info') => {
     setLog((l) => [{ id: uid('log'), time: Date.now(), source, message, tone }, ...l].slice(0, 200));
   }, []);
+
+  // Startup ping, and again whenever the endpoint or model changes.
+  useEffect(() => {
+    let live = true;
+    setAiStatus({ state: 'checking', detail: `Connecting to ${settings.aiUrl}…` });
+    void pingAi({ url: settings.aiUrl, model: settings.aiModel }).then((status) => {
+      if (!live) return;
+      setAiStatus(status);
+      addLog('AI', status.detail, status.state === 'online' ? 'ok' : 'error');
+    });
+    return () => {
+      live = false;
+    };
+  }, [settings.aiUrl, settings.aiModel, addLog]);
+
+  /**
+   * Every model call: the configured URL/model, the session history and the recent log as
+   * context. A failure marks the AI offline and is rethrown — never replaced by a canned answer.
+   */
+  const askAi = useCallback(async (req: AskRequest): Promise<string> => {
+    const { aiUrl, aiModel } = settingsRef.current;
+    const context = logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
+    try {
+      const reply = await aiSessionRef.current.ask({ url: aiUrl, model: aiModel }, { ...req, context });
+      if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${aiModel}` });
+      return reply;
+    } catch (error) {
+      setAiStatus({ state: 'offline', detail: `AI unavailable — ${errorText(error)}` });
+      throw error;
+    }
+  }, []);
+
+  const aiOnline = () => aiStatusRef.current.state === 'online';
 
   const agentOn = useCallback((id: Agent['id']) => agents.find((a) => a.id === id)?.on ?? false, [agents]);
   const agentsRef = useRef(agentOn);
@@ -205,13 +229,12 @@ export function useAssist() {
     const cells = largestCluster(diffCells(prev.data, cur.data));
     const box = cells.length >= 6 ? boundingBox(cells) : null;
     if (!box) return null;
-    const close = findCloseButton(cur, box);
     popupBaseRef.current = prev;
     popupFrameRef.current = cur;
-    const ann: Annotation = { id: uid('ann'), ...box, label: 'New popup / UI mismatch', tone: 'error', actX: close.x, actY: close.y };
+    const ann: Annotation = { id: uid('ann'), ...box, label: 'New popup / UI mismatch', tone: 'error' };
     popupRef.current = ann;
     setAnnotations((a) => [ann, ...a.filter((x) => x.tone !== 'error')].slice(0, 6));
-    if (agentsRef.current('popup')) addLog('Popup watcher', `Intrusive content appeared — close button ${close.found ? 'found' : 'guessed'} at (${(close.x * 100).toFixed(1)}%, ${(close.y * 100).toFixed(1)}%)`, 'warn');
+    if (agentsRef.current('popup')) addLog('Popup watcher', `New content appeared at (${(box.x * 100).toFixed(0)}%, ${(box.y * 100).toFixed(0)}%) — the AI decides whether it is a popup to close`, 'warn');
     return ann;
   }, [addLog]);
 
@@ -254,32 +277,48 @@ export function useAssist() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [captureFrame, detectErrors, settings.captureMs]);
 
-  /** Auto-Actor: when "Auto act" is on, closes popups and runs the next step once it matches the screen. */
+  /** Auto-Actor popup handling: the model rules once per flagged region on whether and where to close it. */
+  const autoClosePopup = async (frame: Frame, popup: Annotation) => {
+    popupDecidedRef.current = popup.id;
+    const d = await decidePopup(askAi, frame, popup);
+    if (!d.close) {
+      addLog('Auto-Actor', `AI left the new content alone: ${d.reason}`, 'info');
+      return;
+    }
+    const r = await execute({ id: 'auto', name: 'Close popup', action: 'click', x: d.x, y: d.y, status: 'pending' }, frame);
+    addLog('Auto-Actor', `AI closed popup at (${(d.x * 100).toFixed(1)}%, ${(d.y * 100).toFixed(1)}%) — ${d.reason}: ${r.message}`, r.ok ? 'ok' : 'warn');
+  };
+
+  /** Auto-Actor step execution: the model decides whether the next step runs now and where its target is. */
+  const autoRunStep = async (frame: Frame, idx: number) => {
+    const next = stepsRef.current[idx];
+    const d = await decideStep(askAi, frame, next, goalRef.current);
+    if (!d.run) {
+      setSync({ level: 'yellow', detail: `AI is waiting on "${next.name}": ${d.reason}` });
+      return;
+    }
+    const corrected = { ...next, correctedX: d.x, correctedY: d.y };
+    const drift = next.refFrame ? matchTemplate(next.refFrame.data, frame.data, next.x, next.y).matchDistance : undefined;
+    const out = await execute(corrected, frame);
+    updateStep(idx, { status: out.ok ? 'done' : 'failed', correctedX: d.x, correctedY: d.y, drift });
+    addLog('Auto-Actor', `${next.name}: ${out.message} (AI: ${d.reason})`, out.ok ? 'ok' : 'error');
+    if (out.ok && agentsRef.current('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
+  };
+
+  /** Auto-Actor: when "Auto act" is on and the AI is online, the model handles popups and runs the next step. */
   const autoAct = async (frame: Frame) => {
     if (!settingsRef.current.autoAct || autoBusyRef.current || replayingRef.current || recordingRef.current) return;
+    if (!aiOnline() || Date.now() - lastStepAt.current < 1500) return;
     autoBusyRef.current = true;
     try {
       const popup = popupRef.current;
-      if (popup && popup.actX !== undefined && agentsRef.current('popup')) {
-        if (Date.now() - lastStepAt.current < 1500) return;
-        const r = await execute({ id: 'auto', name: 'Close popup', action: 'click', x: popup.actX, y: popup.actY!, status: 'pending' }, frame);
-        addLog('Auto-Actor', r.message, r.ok ? 'ok' : 'warn');
-        lastStepAt.current = Date.now();
-        return;
-      }
       const idx = stepsRef.current.findIndex((s) => s.status === 'pending');
-      const next = stepsRef.current[idx];
-      if (!next || Date.now() - lastStepAt.current < 1500) return;
-      // Steps without a screenshot (calc, search, typing) have nothing to match: run them as-is.
-      const r = next.refFrame ? matchTemplate(next.refFrame.data, frame.data, next.x, next.y) : { regionDistance: 0, matchDistance: 0, dx: 0, dy: 0 };
-      if (syncLevelFor(r) === 'red') return;
-      const corrected = { ...next, correctedX: next.x + r.dx, correctedY: next.y + r.dy };
-      const out = await execute(corrected, frame);
-      lastStepAt.current = Date.now();
-      updateStep(idx, { status: out.ok ? 'done' : 'failed', correctedX: corrected.correctedX, correctedY: corrected.correctedY, drift: r.matchDistance });
-      addLog('Auto-Actor', `${next.name}: ${out.message}`, out.ok ? 'ok' : 'error');
-      if (out.ok && agentsRef.current('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
+      if (popup && popupDecidedRef.current !== popup.id && agentsRef.current('popup')) await autoClosePopup(frame, popup);
+      else if (idx >= 0) await autoRunStep(frame, idx);
+    } catch (error) {
+      addLog('Auto-Actor', `AI unavailable — nothing executed: ${errorText(error)}`, 'error');
     } finally {
+      lastStepAt.current = Date.now();
       autoBusyRef.current = false;
     }
   };
@@ -333,6 +372,36 @@ export function useAssist() {
   };
 
   /**
+   * AI help during replay: the model looks at the live frame and decides whether and where
+   * to close the popup covering `step`. Resolves true once it has been cleared.
+   */
+  const clearCoveringPopup = async (popup: Annotation, step: WorkflowStep, dryRun: boolean): Promise<boolean> => {
+    const live = framesRef.current[0];
+    if (!live) return false;
+    try {
+      const d = await decidePopup(askAi, live, popup);
+      if (!d.close) {
+        addLog('AI help', `AI says the region over "${step.name}" is not a popup to close: ${d.reason}`, 'warn');
+        return false;
+      }
+      addLog('AI help', `Popup covers "${step.name}" — AI closes it at (${(d.x * 100).toFixed(1)}%, ${(d.y * 100).toFixed(1)}%): ${d.reason}`, 'warn');
+      setCursor({ x: d.x, y: d.y });
+      if (dryRun) {
+        popupRef.current = null;
+        setAnnotations((a) => a.filter((x) => x.tone !== 'error'));
+        return true;
+      }
+      const r = await execute({ id: 'ai', name: 'Close popup', action: 'click', x: d.x, y: d.y, status: 'pending' }, live);
+      addLog('AI help', r.message, r.ok ? 'ok' : 'warn');
+      await sleep(settingsRef.current.captureMs * 2 + 200);
+      return r.ok;
+    } catch (error) {
+      addLog('AI help', `AI unavailable — popup not cleared: ${errorText(error)}`, 'error');
+      return false;
+    }
+  };
+
+  /**
    * Forward replay with background drift cross-referencing: each move is split into
    * `checkpoints` sub-moves; at every checkpoint the live frame is re-matched against the
    * step's screenshot and the target corrected before the click. A popup over the target
@@ -377,27 +446,18 @@ export function useAssist() {
       // AI help: a popup covering the target is closed first.
       const popup = popupRef.current;
       const covered = popup && target.x >= popup.x && target.x <= popup.x + popup.w && target.y >= popup.y && target.y <= popup.y + popup.h;
-      if (covered && settingsRef.current.aiHelp && popup?.actX !== undefined) {
-        addLog('AI help', `Popup covers "${step.name}" — closing it first`, 'warn');
-        setCursor({ x: popup.actX, y: popup.actY! });
-        if (!dryRun) {
-          const r = await execute({ id: 'ai', name: 'Close popup', action: 'click', x: popup.actX, y: popup.actY!, status: 'pending' }, framesRef.current[0]);
-          addLog('AI help', r.message, r.ok ? 'ok' : 'warn');
-        } else {
-          popupRef.current = null;
-          setAnnotations((a) => a.filter((x) => x.tone !== 'error'));
-        }
-        await sleep(settingsRef.current.captureMs * 2 + 200);
+      if (popup && covered && !(settingsRef.current.aiHelp && (await clearCoveringPopup(popup, step, dryRun)))) {
+        updateStep(i, { status: 'drift', drift: best });
+        addLog('Replay', `"${step.name}" is covered by a popup${settingsRef.current.aiHelp ? ' the AI did not clear' : ' (enable AI help to clear it)'}`, 'error');
+        continue;
+      }
+      if (covered) {
         const live = framesRef.current[0];
         if (step.refFrame && live) {
           const r = matchTemplate(step.refFrame.data, live.data, step.x, step.y);
           if (syncLevelFor(r) !== 'red') target = { x: step.x + r.dx, y: step.y + r.dy };
         }
         setCursor(target);
-      } else if (covered) {
-        updateStep(i, { status: 'drift', drift: best });
-        addLog('Replay', `"${step.name}" is covered by a popup (enable AI help to clear it)`, 'error');
-        continue;
       }
       const drifted = Math.hypot(target.x - step.x, target.y - step.y) > 0.005;
       const corrected = { ...step, correctedX: target.x, correctedY: target.y };
@@ -436,30 +496,49 @@ export function useAssist() {
     addLog('Replay', 'Stopped by user', 'warn');
   };
 
-  /** AI plan: reuse a similar saved workflow or assemble steps from the goal + live screen. */
-  const autoPlan = () => {
+  /** AI plan: reuse a similar saved workflow, otherwise the model plans from the goal + live frame. */
+  const autoPlan = async () => {
     if (!goal.trim()) {
       addLog('Planner', 'Type a goal first', 'warn');
       return;
     }
-    const { steps: planned, source: why } = planFromGoal(goal, cards, framesRef.current[0] ?? null, popupRef.current);
-    setSteps(planned);
-    setDraftCard(generateCard(planned, goal));
-    addLog('Planner', `${why}: ${planned.length} step(s)`, 'ok');
+    setAiBusy(true);
+    try {
+      const context = logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
+      const { steps: planned, source: why } = await planFromGoal(goal, cards, framesRef.current[0] ?? null, askAi, context);
+      setSteps(planned);
+      setDraftCard(generateCard(planned, goal));
+      addLog('Planner', `${why}: ${planned.length} step(s) — ${planned.map((s) => s.name).join(' → ')}`, 'ok');
+    } catch (error) {
+      addLog('Planner', `AI plan failed — no steps created: ${errorText(error)}`, 'error');
+    } finally {
+      setAiBusy(false);
+    }
   };
 
-  /** AI points out what matters on screen now. */
-  const explainScreen = () => {
+  /** AI help: the model answers a question about the live screen and points out what it means. */
+  const askScreen = async (question = 'What on this screen needs my attention, and what should I do next?') => {
     const f = framesRef.current[0];
-    if (!f) return;
-    const next: Annotation[] = [];
-    if (popupRef.current) next.push(popupRef.current);
-    const step = stepsRef.current.find((s) => s.status === 'pending');
-    if (step) next.push({ id: uid('ann'), x: (step.correctedX ?? step.x) - 0.06, y: (step.correctedY ?? step.y) - 0.05, w: 0.12, h: 0.1, label: `Next: ${step.name}`, tone: 'info' });
-    setAnnotations(next);
-    if (step) setCursor({ x: step.correctedX ?? step.x, y: step.correctedY ?? step.y });
-    addLog('AI', next.length ? `Pointed out ${next.length} item(s) on screen and refocused the cursor` : 'Nothing needs attention right now', 'info');
+    if (!f) {
+      addLog('AI help', 'No captured frame yet', 'warn');
+      return;
+    }
+    setAiBusy(true);
+    try {
+      const { answer, annotations: items } = await describeScreen(askAi, f, question, goal);
+      setAiAnswer(answer);
+      setAnnotations(items);
+      addLog('AI help', answer, 'info');
+    } catch (error) {
+      setAiAnswer('');
+      addLog('AI help', `AI unavailable — no answer: ${errorText(error)}`, 'error');
+    } finally {
+      setAiBusy(false);
+    }
   };
+
+  /** Point out: the model's default AI-help question. */
+  const explainScreen = () => askScreen();
 
   const shareScreen = async () => {
     try {
@@ -499,7 +578,7 @@ export function useAssist() {
   return {
     settings, setSettings, source, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
-    agents, setAgents, plays, demoCanvasRef, videoRef, DEMO_W, DEMO_H,
+    agents, setAgents, plays, demoCanvasRef, videoRef, DEMO_W, DEMO_H, aiStatus, aiAnswer, aiBusy, askScreen,
     onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, explainScreen,
     shareScreen, useDemo, saveCard, loadCard, addLog,
   };
