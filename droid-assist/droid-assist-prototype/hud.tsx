@@ -4,6 +4,25 @@ import type { AiStatus } from './ai.js';
 import styles from './droid-assist.module.css';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
+const SOURCE_LABEL: Record<ScreenSource, string> = { demo: 'Demo desktop', screen: 'Screen share', bridge: 'Desktop bridge', native: 'Native capture' };
+
+/** Monitor HUD: mode picker, capture interval, screenshot count, source and /use target. */
+export function MonitorStatus({ engine }: { engine: AssistEngine }) {
+  const { settings, setSettings, intervalMs, shotCount, source, target } = engine;
+  return (
+    <div className={styles.hud2} aria-label="Monitor status">
+      <label>Monitor
+        <select value={settings.monitorMode} onChange={(e) => setSettings({ ...settings, monitorMode: e.target.value as MonitorMode })} aria-label="Monitor mode">
+          {(Object.keys(MONITOR_MODES) as MonitorMode[]).map((m) => <option key={m} value={m}>{MONITOR_MODES[m].label}</option>)}
+        </select>
+      </label>
+      <span>⏱ every <b>{intervalMs} ms</b></span>
+      <span>📸 <b>{shotCount}</b> screenshots</span>
+      <span>Source: <b>{SOURCE_LABEL[source]}</b></span>
+      {target && <span>Using: <b>{target}</b></span>}
+    </div>
+  );
+}
 
 /** Real-time sync indicator: live frame vs the active workflow step. */
 export function SyncStatus({ level, detail }: { level: SyncLevel; detail: string }) {
@@ -41,11 +60,10 @@ export function Hud({ engine }: { engine: AssistEngine }) {
     <>
       <div className={styles.hud}>
         <div className={styles.group}>
-          {source === 'demo' ? (
-            <button type="button" onClick={engine.shareScreen}>🖥 Share my screen</button>
-          ) : (
-            <button type="button" onClick={engine.useDemo}>Use demo desktop</button>
-          )}
+          <button type="button" onClick={engine.connectBridge} disabled={source === 'bridge'}>🔌 Use bridge</button>
+          <button type="button" onClick={engine.shareScreen} disabled={source === 'screen'}>🖥 Share my screen</button>
+          <button type="button" onClick={engine.useDemo} disabled={source === 'demo'}>Demo</button>
+          {source !== 'none' && <button type="button" onClick={engine.disconnect}>Disconnect</button>}
           <button type="button" className={recording ? styles.danger : ''} onClick={engine.toggleRecording} disabled={replaying}>
             {recording ? '■ Stop recording' : '● Record'}
           </button>
@@ -64,6 +82,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
           <button type="button" className={styles.primary} onClick={engine.autoPlan} disabled={aiOff || aiBusy} title={aiTitle}>{aiBusy ? '… thinking' : '✨ AI plan'}</button>
         </div>
       </div>
+      <MonitorStatus engine={engine} />
       <div className={styles.hud2}>
         <AiStatusBadge status={aiStatus} />
         <SyncStatus level={engine.sync.level} detail={engine.sync.detail} />

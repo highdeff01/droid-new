@@ -34,6 +34,7 @@ function AssistScreen() {
           <AiHelpPanel engine={engine} />
           <AgentsPanel engine={engine} />
           <LogPanel engine={engine} />
+          <ActionHistoryPanel engine={engine} />
         </div>
       </main>
     </div>
