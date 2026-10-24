@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Annotation, AssistSettings, Frame, LogEntry, SavedCard, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
-import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
+import type { ActionRecord, Annotation, AssistSettings, Frame, InputAction, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
+import { boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
 import { generateCard, planFromGoal, uid } from './planner.js';
 import { captureDesktop, checkBridge } from './bridge.js';
@@ -33,34 +33,12 @@ async function desktopFrame(bridgeUrl: string, id: number): Promise<Frame> {
   return toFrame(img, shot.frame.width || img.naturalWidth, shot.frame.height || img.naturalHeight, id, 'desktop');
 }
 
-/**
- * Looks for a popup's close control: the centroid of the brightest pixels in the
- * popup's top-right corner. Falls back to the corner itself.
- */
-function findCloseButton(frame: Frame, box: { x: number; y: number; w: number; h: number }) {
-  const { data, width, height } = frame.data;
-  const x0 = Math.floor((box.x + box.w * 0.6) * width);
-  const x1 = Math.min(width - 1, Math.ceil((box.x + box.w) * width));
-  const y0 = Math.floor(box.y * height);
-  const y1 = Math.min(height - 1, Math.ceil((box.y + box.h * 0.35) * height));
-  const bright: Array<[number, number]> = [];
-  for (let y = y0; y <= y1; y++) {
-    for (let x = x0; x <= x1; x++) {
-      const i = (y * width + x) * 4;
-      if (data[i] > 200 && data[i + 1] > 200 && data[i + 2] > 200) bright.push([x, y]);
-    }
-  }
-  if (bright.length >= 3) {
-    // Anchor on the bright pixel closest to the top-right corner, then average its
-    // neighbourhood — so nearby text doesn't pull the click off the × button.
-    const anchor = bright.reduce((a, p) => (p[0] - p[1] > a[0] - a[1] ? p : a));
-    const near = bright.filter((p) => Math.abs(p[0] - anchor[0]) <= 8 && Math.abs(p[1] - anchor[1]) <= 8);
-    const cx = near.reduce((s, p) => s + p[0], 0) / near.length;
-    const cy = near.reduce((s, p) => s + p[1], 0) / near.length;
-    return { x: cx / width, y: cy / height, found: true };
-  }
-  return { x: box.x + box.w * 0.93, y: box.y + box.h * 0.09, found: false };
-}
+/** Workflow actions that are real mouse/keyboard input. */
+const INPUT_ACTIONS: Partial<Record<StepAction, InputAction>> = { click: 'click', double_click: 'double_click', scroll: 'scroll', type: 'type', key: 'key' };
+/** Input actions that first move the pointer to their target. */
+const POINTER_ACTIONS = new Set<InputAction>(['click', 'double_click', 'scroll']);
+
+type ExecResult = { ok: boolean; message: string };
 
 /** A click on a flagged popup's close control, as a real step (no template: the popup is new). */
 const closePopupStep = (popup: Annotation): WorkflowStep => ({ id: uid('close'), name: 'Close popup', action: 'click', x: popup.actX!, y: popup.actY!, status: 'pending' });
@@ -70,11 +48,16 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   gallerySize: 10,
   checkpoints: 6,
   captureMs: 500,
+  monitorMode: 'app',
   autoAct: false,
   aiHelp: true,
   showTrail: true,
   bridgeUrl: '',
+  aiUrl: DEFAULT_AI_URL,
+  aiModel: DEFAULT_AI_MODEL,
 };
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** A background agent the user can toggle. */
 export interface Agent {
@@ -90,7 +73,12 @@ export interface Agent {
  */
 export function useAssist() {
   const [settings, setSettings] = useState<AssistSettings>(DEFAULT_SETTINGS);
-  const [source, setSource] = useState<'demo' | 'screen'>('demo');
+  const [source, setSource] = useState<ScreenSource>('demo');
+  /** The app/window the assistant is attached to via /use. */
+  const [target, setTarget] = useState<string | null>(null);
+  const [history, setHistory] = useState<ActionRecord[]>(() => loadHistory());
+  /** Screenshots taken this session (monitor ticks + per-step evidence). */
+  const [shotCount, setShotCount] = useState(0);
   const [frames, setFrames] = useState<Frame[]>([]);
   const [pinned, setPinned] = useState<Frame[]>([]);
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
@@ -113,9 +101,13 @@ export function useAssist() {
     { id: 'goal', name: 'Goal reviewer', description: 'Reviews the goal after each run and suggests what is next', on: true },
   ]);
   const [plays, setPlays] = useState(0);
+  const [aiStatus, setAiStatus] = useState<AiStatus>({ state: 'checking', detail: 'Connecting to the AI endpoint…' });
+  const [aiAnswer, setAiAnswer] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
 
   const demoCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const tickRef = useRef(0);
   const dismissedCycleRef = useRef(-1);
@@ -131,13 +123,57 @@ export function useAssist() {
   const autoBusyRef = useRef(false);
   const frameId = useRef(0);
   const lastStepAt = useRef(0);
+  const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage));
+  const aiStatusRef = useRef(aiStatus);
+  const logRef = useRef<LogEntry[]>([]);
+  /** The goal as of the last render, for the capture-loop closures. */
+  const goalRef = useRef('');
+  /** The popup annotation the model has already ruled on, so it is asked once per popup. */
+  const popupDecidedRef = useRef<string | null>(null);
 
   settingsRef.current = settings;
+  aiStatusRef.current = aiStatus;
+  logRef.current = log;
+  goalRef.current = goal;
   stepsRef.current = steps;
+  sourceRef.current = source;
 
   const addLog = useCallback((source: string, message: string, tone: LogEntry['tone'] = 'info') => {
     setLog((l) => [{ id: uid('log'), time: Date.now(), source, message, tone }, ...l].slice(0, 200));
   }, []);
+
+  // Startup ping, and again whenever the endpoint or model changes.
+  useEffect(() => {
+    let live = true;
+    setAiStatus({ state: 'checking', detail: `Connecting to ${settings.aiUrl}…` });
+    void pingAi({ url: settings.aiUrl, model: settings.aiModel }).then((status) => {
+      if (!live) return;
+      setAiStatus(status);
+      addLog('AI', status.detail, status.state === 'online' ? 'ok' : 'error');
+    });
+    return () => {
+      live = false;
+    };
+  }, [settings.aiUrl, settings.aiModel, addLog]);
+
+  /**
+   * Every model call: the configured URL/model, the session history and the recent log as
+   * context. A failure marks the AI offline and is rethrown — never replaced by a canned answer.
+   */
+  const askAi = useCallback(async (req: AskRequest): Promise<string> => {
+    const { aiUrl, aiModel } = settingsRef.current;
+    const context = logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
+    try {
+      const reply = await aiSessionRef.current.ask({ url: aiUrl, model: aiModel }, { ...req, context });
+      if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${aiModel}` });
+      return reply;
+    } catch (error) {
+      setAiStatus({ state: 'offline', detail: `AI unavailable — ${errorText(error)}` });
+      throw error;
+    }
+  }, []);
+
+  const aiOnline = () => aiStatusRef.current.state === 'online';
 
   const agentOn = useCallback((id: Agent['id']) => agents.find((a) => a.id === id)?.on ?? false, [agents]);
   const agentsRef = useRef(agentOn);
@@ -218,13 +254,12 @@ export function useAssist() {
     const cells = largestCluster(diffCells(prev.data, cur.data));
     const box = cells.length >= 6 ? boundingBox(cells) : null;
     if (!box) return null;
-    const close = findCloseButton(cur, box);
     popupBaseRef.current = prev;
     popupFrameRef.current = cur;
-    const ann: Annotation = { id: uid('ann'), ...box, label: 'New popup / UI mismatch', tone: 'error', actX: close.x, actY: close.y };
+    const ann: Annotation = { id: uid('ann'), ...box, label: 'New popup / UI mismatch', tone: 'error' };
     popupRef.current = ann;
     setAnnotations((a) => [ann, ...a.filter((x) => x.tone !== 'error')].slice(0, 6));
-    if (agentsRef.current('popup')) addLog('Popup watcher', `Intrusive content appeared — close button ${close.found ? 'found' : 'guessed'} at (${(close.x * 100).toFixed(1)}%, ${(close.y * 100).toFixed(1)}%)`, 'warn');
+    if (agentsRef.current('popup')) addLog('Popup watcher', `New content appeared at (${(box.x * 100).toFixed(0)}%, ${(box.y * 100).toFixed(0)}%) — the AI decides whether it is a popup to close`, 'warn');
     return ann;
   }, [addLog]);
 
@@ -239,33 +274,71 @@ export function useAssist() {
     return () => clearInterval(id);
   }, [source]);
 
-  // Capture loop: gallery, error detection, sync status, auto-actor.
+  // Bridge takeover: when a bridge answers its health check, frames come from the real desktop
+  // unless the user explicitly chose the demo desktop.
   useEffect(() => {
-    const id = setInterval(() => {
-      const frame = captureFrame();
-      if (!frame) return;
-      const prev = framesRef.current[0];
-      framesRef.current = [frame, ...framesRef.current].slice(0, settingsRef.current.gallerySize);
-      setFrames(framesRef.current);
-      if (prev) {
-        const popup = detectErrors(prev, frame);
-        if (!popup && popupRef.current && frameDistance(prev.data, frame.data) < 0.005) {
-          // still showing — keep
-        }
-      }
-      const next = stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running');
-      if (next?.refFrame && agentsRef.current('drift')) {
-        const r = matchTemplate(next.refFrame.data, frame.data, next.x, next.y);
-        const level = syncLevelFor(r);
-        setSync({ level, detail: `"${next.name}": region ${r.regionDistance.toFixed(3)}, best ${r.matchDistance.toFixed(3)}${level === 'yellow' ? `, drift (${(r.dx * 100).toFixed(1)}%, ${(r.dy * 100).toFixed(1)}%)` : ''}` });
-      } else if (!next) {
-        setSync({ level: 'idle', detail: 'No active step' });
+    const url = settings.bridgeUrl;
+    if (!url) return undefined;
+    let cancelled = false;
+    void checkBridge(url).then((r) => {
+      if (cancelled || !r.ok || demoChosenRef.current || sourceRef.current === 'bridge') return;
+      framesRef.current = [];
+      setSource('bridge');
+      addLog('Monitor', 'Desktop bridge online — screenshots now come from the real screen', 'ok');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.bridgeUrl, addLog]);
+
+  const intervalMs = monitorInterval(settings.monitorMode, settings.captureMs);
+
+  // Monitor loop at the mode's interval: gallery, error detection, sync status, auto-actor.
+  useEffect(() => {
+    const tick = async () => {
+      // Only background mode keeps watching and controlling while the page is hidden.
+      if (document.hidden && settingsRef.current.monitorMode !== 'background') return;
+      if (captureBusyRef.current) return;
+      captureBusyRef.current = true;
+      try {
+        const frame = await snapshot();
+        if (frame) onFrame(frame);
+      } finally {
+        captureBusyRef.current = false;
       }
       void autoAct();
     }, settingsRef.current.captureMs);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [captureFrame, detectErrors, settings.captureMs]);
+  }, [snapshot, detectErrors, intervalMs, source]);
+
+  /** Handles one monitor frame. */
+  const onFrame = (frame: Frame) => {
+    const prev = framesRef.current[0];
+    pushFrame(frame);
+    if (prev) detectErrors(prev, frame);
+    const next = stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running');
+    if (next?.refFrame && agentsRef.current('drift')) {
+      const r = matchTemplate(next.refFrame.data, frame.data, next.x, next.y);
+      const level = syncLevelFor(r);
+      setSync({ level, detail: `"${next.name}": region ${r.regionDistance.toFixed(3)}, best ${r.matchDistance.toFixed(3)}${level === 'yellow' ? `, drift (${(r.dx * 100).toFixed(1)}%, ${(r.dy * 100).toFixed(1)}%)` : ''}` });
+    } else if (!next) {
+      setSync({ level: 'idle', detail: 'No active step' });
+    }
+    void autoAct(frame);
+  };
+
+  /** Auto-Actor popup handling: the model rules once per flagged region on whether and where to close it. */
+  const autoClosePopup = async (frame: Frame, popup: Annotation) => {
+    popupDecidedRef.current = popup.id;
+    const d = await decidePopup(askAi, frame, popup);
+    if (!d.close) {
+      addLog('Auto-Actor', `AI left the new content alone: ${d.reason}`, 'info');
+      return;
+    }
+    const r = await execute({ id: 'auto', name: 'Close popup', action: 'click', x: d.x, y: d.y, status: 'pending' }, frame);
+    addLog('Auto-Actor', `AI closed popup at (${(d.x * 100).toFixed(1)}%, ${(d.y * 100).toFixed(1)}%) — ${d.reason}: ${r.message}`, r.ok ? 'ok' : 'warn');
+  };
 
   /** Auto-Actor: when "Auto act" is on, closes popups and runs the next step as real input once it matches the screen. */
   const autoAct = async () => {
@@ -297,6 +370,7 @@ export function useAssist() {
       addLog('Auto-Actor', `${step.name}: ${out.message}`, out.ok ? 'ok' : 'error');
       if (out.executed && agentsRef.current('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
     } finally {
+      lastStepAt.current = Date.now();
       autoBusyRef.current = false;
     }
   };
@@ -439,16 +513,99 @@ export function useAssist() {
     addLog('Replay', 'Stopped by user', 'warn');
   };
 
-  /** AI plan: reuse a similar saved workflow or assemble steps from the goal + live screen. */
-  const autoPlan = () => {
+  /** AI plan: reuse a similar saved workflow, otherwise the model plans from the goal + live frame. */
+  const autoPlan = async () => {
     if (!goal.trim()) {
       addLog('Planner', 'Type a goal first', 'warn');
       return;
     }
-    const { steps: planned, source: why } = planFromGoal(goal, cards, framesRef.current[0] ?? null, popupRef.current);
-    setSteps(planned);
-    setDraftCard(generateCard(planned, goal));
-    addLog('Planner', `${why}: ${planned.length} step(s)`, 'ok');
+    setAiBusy(true);
+    try {
+      const context = logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
+      const { steps: planned, source: why } = await planFromGoal(goal, cards, framesRef.current[0] ?? null, askAi, context);
+      setSteps(planned);
+      setDraftCard(generateCard(planned, goal));
+      addLog('Planner', `${why}: ${planned.length} step(s) — ${planned.map((s) => s.name).join(' → ')}`, 'ok');
+    } catch (error) {
+      addLog('Planner', `AI plan failed — no steps created: ${errorText(error)}`, 'error');
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  /** AI help: the model answers a question about the live screen and points out what it means. */
+  const askScreen = async (question = 'What on this screen needs my attention, and what should I do next?') => {
+    const f = framesRef.current[0];
+    if (!f) {
+      addLog('AI help', 'No captured frame yet', 'warn');
+      return;
+    }
+    setAiBusy(true);
+    try {
+      const { answer, annotations: items } = await describeScreen(askAi, f, question, goal);
+      setAiAnswer(answer);
+      setAnnotations(items);
+      addLog('AI help', answer, 'info');
+    } catch (error) {
+      setAiAnswer('');
+      addLog('AI help', `AI unavailable — no answer: ${errorText(error)}`, 'error');
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  /** Point out: the model's default AI-help question. */
+  const explainScreen = () => askScreen();
+
+  const shareScreen = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      stream.getVideoTracks()[0].addEventListener('ended', () => setSource('demo'));
+      attachSource('screen');
+      addLog('Screen', 'Sharing your screen — the AI now sees it', 'ok');
+      return true;
+    } catch (error) {
+      addLog('Screen', `Screen share cancelled: ${errorText(error)}`, 'warn');
+      return false;
+    }
+  };
+
+  /** "/use <target>": launch/focus the target on the PC via the bridge, or attach to its window via screen share. */
+  const attachTarget = async (name: string) => {
+    const { bridgeUrl } = settingsRef.current;
+    if (bridgeUrl && (await checkBridge(bridgeUrl)).ok) {
+      const r = await launchOnBridge(bridgeUrl, name);
+      addLog('/use', r.ok ? `${r.message}; capturing the real screen via the bridge` : `Could not launch "${name}": ${r.message}`, r.ok ? 'ok' : 'error');
+      if (!r.ok) return;
+      attachSource('bridge');
+      setTarget(name);
+      return;
+    }
+    addLog('/use', `No desktop bridge online — pick the "${name}" window to attach to`, 'info');
+    if (await shareScreen()) {
+      setTarget(name);
+      addLog('/use', `Attached to "${name}" (${realScreenSource() === 'native' ? 'native capture' : 'screen share'}); acting on it needs the desktop bridge`, 'ok');
+    }
+  };
+
+  /** Submits the assist input: slash commands run, anything else is planned as a goal. */
+  const submitInput = async () => {
+    const command = parseCommand(goal);
+    if (!command) {
+      autoPlan();
+      return;
+    }
+    if (command.kind === 'error') {
+      addLog('Command', command.message, 'warn');
+      return;
+    }
+    setGoal('');
+    await attachTarget(command.target);
   };
 
   /** AI points out what matters on screen now. */
@@ -464,28 +621,25 @@ export function useAssist() {
     addLog('AI', next.length ? `Pointed out ${next.length} item(s) on screen and refocused the cursor` : 'Nothing needs attention right now', 'info');
   };
 
-  const shareScreen = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-      stream.getVideoTracks()[0].addEventListener('ended', () => setSource('demo'));
-      setSource('screen');
-      framesRef.current = [];
-      addLog('Screen', 'Sharing your screen — the AI now sees it', 'ok');
-    } catch (error) {
-      addLog('Screen', `Screen share cancelled: ${error instanceof Error ? error.message : String(error)}`, 'warn');
-    }
-  };
-
+  /** Explicit demo mode: the only way demo frames are used once a real source exists. */
   const useDemo = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
+    demoChosenRef.current = true;
+    setTarget(null);
     setSource('demo');
     framesRef.current = [];
+    addLog('Screen', 'Demo desktop selected');
   };
+
+  /** Downloads the action history as JSON or CSV. */
+  const exportHistory = (format: 'json' | 'csv') => {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    if (format === 'json') downloadText(`droid-actions-${stamp}.json`, historyToJson(history), 'application/json');
+    else downloadText(`droid-actions-${stamp}.csv`, historyToCsv(history), 'text/csv');
+    addLog('History', `Exported ${history.length} action(s) as ${format.toUpperCase()}`, 'ok');
+  };
+
+  const resetHistory = () => setHistory(clearHistory());
 
   const saveCard = () => {
     if (!draftCard) return;
@@ -502,7 +656,7 @@ export function useAssist() {
   return {
     settings, setSettings, source, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
-    agents, setAgents, plays, demoCanvasRef, videoRef, DEMO_W, DEMO_H,
+    agents, setAgents, plays, demoCanvasRef, videoRef, DEMO_W, DEMO_H, aiStatus, aiAnswer, aiBusy, askScreen,
     onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, explainScreen,
     shareScreen, useDemo, saveCard, loadCard, addLog,
   };

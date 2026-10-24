@@ -1,3 +1,6 @@
+/** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
+export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
+
 /** A captured screen frame: a display image plus a downsampled pixel buffer for drift math. */
 export interface Frame {
   id: number;
@@ -22,7 +25,7 @@ export interface TrailPoint {
 }
 
 /** Actions a workflow step can perform. */
-export type StepAction = 'click' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media';
+export type StepAction = 'click' | 'double_click' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media';
 
 /** Status of a step during replay. */
 export type StepStatus = 'pending' | 'running' | 'done' | 'drift' | 'failed';
@@ -90,10 +93,16 @@ export interface AssistSettings {
   gallerySize: number;
   /** Drift checkpoints sampled per cursor move, start to finish. */
   checkpoints: number;
+  /** Capture interval of the "app" monitor mode; background and advanced modes use fixed intervals. */
   captureMs: number;
+  monitorMode: MonitorMode;
   autoAct: boolean;
   aiHelp: boolean;
   showTrail: boolean;
   /** Base URL of the Droid desktop bridge (pyautogui replay endpoint). */
   bridgeUrl: string;
+  /** Ollama-compatible /api/chat URL every AI feature calls. */
+  aiUrl: string;
+  /** Model name sent with every AI request. */
+  aiModel: string;
 }
