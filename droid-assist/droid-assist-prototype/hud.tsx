@@ -15,6 +15,28 @@ export function SyncStatus({ level, detail }: { level: SyncLevel; detail: string
   );
 }
 
+/** Safety controls: one-click arm/disarm of real input, emergency stop and the ABORTED state. */
+export function SafetyControls({ engine }: { engine: AssistEngine }) {
+  const { armed, aborted, settings } = engine;
+  return (
+    <div className={styles.safety} data-armed={armed} data-aborted={aborted} aria-live="assertive">
+      <button type="button" className={armed ? styles.danger : ''} onClick={engine.toggleArmed} aria-pressed={armed} title="Real input is only sent to the PC while armed; disarmed runs are dry runs">
+        {armed ? '🔴 Real input ARMED — click to disarm' : '🟢 Dry run (disarmed) — click to arm real input'}
+      </button>
+      {aborted ? (
+        <>
+          <strong className={styles.aborted}>⛔ ABORTED</strong>
+          <button type="button" onClick={engine.clearAbort}>Clear abort</button>
+        </>
+      ) : (
+        <button type="button" className={styles.danger} onClick={() => engine.triggerAbort('stop button')} title={`Emergency stop (${settings.abortHotkey})`}>
+          ⛔ Emergency stop <small>{settings.abortHotkey}</small>
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** Primary HUD: screen source, record / replay / self-test, goal + AI plan. */
 export function Hud({ engine }: { engine: AssistEngine }) {
   const { source, recording, replaying, goal, setGoal, settings, setSettings, steps, progress, plays } = engine;
@@ -48,6 +70,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
         </div>
       </div>
       <div className={styles.hud2}>
+        <SafetyControls engine={engine} />
         <SyncStatus level={engine.sync.level} detail={engine.sync.detail} />
         <label><input type="checkbox" checked={settings.autoAct} onChange={(e) => setSettings({ ...settings, autoAct: e.target.checked })} /> Auto act</label>
         <label><input type="checkbox" checked={settings.aiHelp} onChange={(e) => setSettings({ ...settings, aiHelp: e.target.checked })} /> AI help</label>

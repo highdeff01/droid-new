@@ -4,6 +4,18 @@ import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance,
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
 import { calculate, generateCard, planFromGoal, uid } from './planner.js';
 import { sendToBridge } from './bridge.js';
+import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction } from './safety.js';
+import type { ActionBudget } from './safety.js';
+
+/** Outcome of executing a step; `halt` means the run must stop (abort, disarm or budget). */
+interface ExecResult {
+  ok: boolean;
+  message: string;
+  halt?: boolean;
+}
+
+/** What a dry run reports instead of dispatching. */
+const DRY_RUN_RESULT: ExecResult = { ok: true, message: 'verified (dry run — not dispatched)' };
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -47,6 +59,8 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   aiHelp: true,
   showTrail: true,
   bridgeUrl: '',
+  abortHotkey: DEFAULT_ABORT_HOTKEY,
+  actionBudget: DEFAULT_ACTION_BUDGET,
 };
 
 /** A background agent the user can toggle. */
@@ -86,6 +100,10 @@ export function useAssist() {
     { id: 'goal', name: 'Goal reviewer', description: 'Reviews the goal after each run and suggests what is next', on: true },
   ]);
   const [plays, setPlays] = useState(0);
+  /** Real input is only sent while armed; always starts disarmed. */
+  const [armed, setArmed] = useState(false);
+  /** Sticky emergency-stop latch: halts all automation until cleared. */
+  const [aborted, setAborted] = useState(false);
 
   const demoCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -104,13 +122,68 @@ export function useAssist() {
   const autoBusyRef = useRef(false);
   const frameId = useRef(0);
   const lastStepAt = useRef(0);
+  const armedRef = useRef(armed);
+  const abortedRef = useRef(aborted);
+  /** Budget of the current Auto Act run (from switch-on to switch-off). */
+  const autoBudgetRef = useRef<ActionBudget>(createBudget(settings.actionBudget));
+  /** The popup a disarmed Auto Act already reported, so the dry run is logged once. */
+  const dryPopupRef = useRef<string | null>(null);
 
   settingsRef.current = settings;
   stepsRef.current = steps;
+  armedRef.current = armed;
+  abortedRef.current = aborted;
 
   const addLog = useCallback((source: string, message: string, tone: LogEntry['tone'] = 'info') => {
     setLog((l) => [{ id: uid('log'), time: Date.now(), source, message, tone }, ...l].slice(0, 200));
   }, []);
+
+  /** Emergency stop: latches ABORTED, sets abortRef and switches Auto Act off. */
+  const triggerAbort = useCallback((reason: string) => {
+    abortRef.current = true;
+    abortedRef.current = true;
+    setAborted(true);
+    setSettings((s) => ({ ...s, autoAct: false }));
+    addLog('Safety', `ABORTED (${reason}) — Auto Act, replay and monitor automation halted`, 'error');
+  }, [addLog]);
+
+  const clearAbort = () => {
+    abortedRef.current = false;
+    setAborted(false);
+    addLog('Safety', 'Abort cleared — automation may run again', 'warn');
+  };
+
+  const toggleArmed = () => {
+    const next = !armedRef.current;
+    armedRef.current = next;
+    setArmed(next);
+    addLog('Safety', next ? 'Real input ARMED — runs will dispatch to the PC' : 'Real input DISARMED — runs execute as dry runs', next ? 'warn' : 'ok');
+  };
+
+  // Emergency-stop hotkey, captured at window level so it fires even inside inputs.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!matchesHotkey(e, settings.abortHotkey)) return;
+      e.preventDefault();
+      triggerAbort(`hotkey ${settings.abortHotkey}`);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [settings.abortHotkey, triggerAbort]);
+
+  // Each switch-on of Auto Act starts a new run with a fresh budget.
+  useEffect(() => {
+    if (settings.autoAct) autoBudgetRef.current = createBudget(settingsRef.current.actionBudget);
+  }, [settings.autoAct]);
+
+  /** Last check before real input: refuses when aborted, disarmed or out of budget. */
+  const gateRealInput = useCallback((budget: ActionBudget): ExecResult | null => {
+    if (abortedRef.current) return { ok: false, halt: true, message: 'Aborted — real input not sent' };
+    if (!armedRef.current) return { ok: false, halt: true, message: 'Real input disarmed — not sent' };
+    if (spendAction(budget)) return null;
+    addLog('Safety', `Action budget reached: ${budget.limit} real input action(s) this run — stopping`, 'error');
+    return { ok: false, halt: true, message: `Action budget of ${budget.limit} exceeded — not sent` };
+  }, [addLog]);
 
   const agentOn = useCallback((id: Agent['id']) => agents.find((a) => a.id === id)?.on ?? false, [agents]);
   const agentsRef = useRef(agentOn);
@@ -156,8 +229,11 @@ export function useAssist() {
     return 'Click hit nothing interactive';
   }, []);
 
-  /** Executes a step: demo desktop or native PC via the bridge, plus utility actions. */
-  const execute = useCallback(async (step: WorkflowStep, frame: Frame | null): Promise<{ ok: boolean; message: string }> => {
+  /**
+   * Executes a step: demo desktop or native PC via the bridge, plus utility actions.
+   * Every bridge dispatch is real input and is gated (abort, arm, `budget`) first.
+   */
+  const execute = useCallback(async (step: WorkflowStep, frame: Frame | null, budget: ActionBudget): Promise<ExecResult> => {
     const x = step.correctedX ?? step.x;
     const y = step.correctedY ?? step.y;
     if (step.action === 'calc') {
@@ -174,6 +250,8 @@ export function useAssist() {
     }
     const { bridgeUrl } = settingsRef.current;
     if (bridgeUrl && frame) {
+      const refused = gateRealInput(budget);
+      if (refused) return refused;
       const r = await sendToBridge(bridgeUrl, step, frame.srcW, frame.srcH);
       if (!r.ok || source === 'screen') return r;
     } else if (source === 'screen') {
@@ -184,7 +262,7 @@ export function useAssist() {
       return { ok: !/blocked|nothing/.test(result), message: result };
     }
     return { ok: true, message: `${step.action} simulated on the demo desktop` };
-  }, [demoClick, source]);
+  }, [demoClick, gateRealInput, source]);
 
   /** Visual error detection: frame-to-frame cluster of changed cells → highlighted popup/mismatch. */
   const detectErrors = useCallback((prev: Frame, cur: Frame) => {
@@ -254,17 +332,33 @@ export function useAssist() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [captureFrame, detectErrors, settings.captureMs]);
 
-  /** Auto-Actor: when "Auto act" is on, closes popups and runs the next step once it matches the screen. */
+  /** Stops the Auto Act run when the safety gate refused (abort or budget). */
+  const haltAutoAct = (out: ExecResult) => {
+    if (out.halt) setSettings((s) => ({ ...s, autoAct: false }));
+  };
+
+  /**
+   * Auto-Actor: when "Auto act" is on, closes popups and runs the next step once it matches the screen.
+   * Disarmed, it runs as a dry run: steps are verified against the screen but nothing is dispatched.
+   * Halted entirely while ABORTED.
+   */
   const autoAct = async (frame: Frame) => {
-    if (!settingsRef.current.autoAct || autoBusyRef.current || replayingRef.current || recordingRef.current) return;
+    if (!settingsRef.current.autoAct || abortedRef.current || autoBusyRef.current || replayingRef.current || recordingRef.current) return;
     autoBusyRef.current = true;
     try {
+      const dry = !armedRef.current;
       const popup = popupRef.current;
-      if (popup && popup.actX !== undefined && agentsRef.current('popup')) {
+      const closable = popup?.actX !== undefined && popup.actY !== undefined && agentsRef.current('popup') ? popup : null;
+      if (closable && dry && dryPopupRef.current !== closable.id) {
+        dryPopupRef.current = closable.id;
+        addLog('Auto-Actor', 'Dry run (real input disarmed): would close the popup — not dispatched', 'warn');
+      }
+      if (closable?.actX !== undefined && closable.actY !== undefined && !dry) {
         if (Date.now() - lastStepAt.current < 1500) return;
-        const r = await execute({ id: 'auto', name: 'Close popup', action: 'click', x: popup.actX, y: popup.actY!, status: 'pending' }, frame);
+        const r = await execute({ id: 'auto', name: 'Close popup', action: 'click', x: closable.actX, y: closable.actY, status: 'pending' }, frame, autoBudgetRef.current);
         addLog('Auto-Actor', r.message, r.ok ? 'ok' : 'warn');
         lastStepAt.current = Date.now();
+        haltAutoAct(r);
         return;
       }
       const idx = stepsRef.current.findIndex((s) => s.status === 'pending');
@@ -274,11 +368,16 @@ export function useAssist() {
       const r = next.refFrame ? matchTemplate(next.refFrame.data, frame.data, next.x, next.y) : { regionDistance: 0, matchDistance: 0, dx: 0, dy: 0 };
       if (syncLevelFor(r) === 'red') return;
       const corrected = { ...next, correctedX: next.x + r.dx, correctedY: next.y + r.dy };
-      const out = await execute(corrected, frame);
+      const out = dry ? DRY_RUN_RESULT : await execute(corrected, frame, autoBudgetRef.current);
       lastStepAt.current = Date.now();
+      haltAutoAct(out);
+      if (out.halt) {
+        addLog('Auto-Actor', `${next.name}: ${out.message} — Auto Act stopped`, 'error');
+        return;
+      }
       updateStep(idx, { status: out.ok ? 'done' : 'failed', correctedX: corrected.correctedX, correctedY: corrected.correctedY, drift: r.matchDistance });
-      addLog('Auto-Actor', `${next.name}: ${out.message}`, out.ok ? 'ok' : 'error');
-      if (out.ok && agentsRef.current('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
+      addLog(dry ? 'Auto-Actor (dry run)' : 'Auto-Actor', `${next.name}: ${out.message}`, out.ok ? 'ok' : 'error');
+      if (out.ok && !dry && agentsRef.current('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
     } finally {
       autoBusyRef.current = false;
     }
@@ -337,13 +436,21 @@ export function useAssist() {
    * `checkpoints` sub-moves; at every checkpoint the live frame is re-matched against the
    * step's screenshot and the target corrected before the click. A popup over the target
    * is cleared first when AI help is on. On success the step screenshot is refreshed.
-   * @param dryRun AI self-test: verifies every step but dispatches nothing.
+   * @param selfTest AI self-test: verifies every step but dispatches nothing.
+   * While real input is disarmed every replay runs the same dry-run path.
    */
-  const replay = async (dryRun = false) => {
+  const replay = async (selfTest = false) => {
     if (!stepsRef.current.length) {
       addLog('Replay', 'Nothing to replay — record or plan a workflow first', 'warn');
       return;
     }
+    if (abortedRef.current) {
+      addLog('Safety', 'Replay refused — ABORTED is active; clear the abort first', 'error');
+      return;
+    }
+    const dryRun = selfTest || !armedRef.current;
+    if (dryRun && !selfTest) addLog('Safety', 'Real input disarmed — replay runs as a dry run (nothing is sent to the PC)', 'warn');
+    const budget = createBudget(settingsRef.current.actionBudget);
     abortRef.current = false;
     setReplaying(true);
     setSteps((s) => s.map((st) => ({ ...st, status: 'pending' as const })));
@@ -381,8 +488,12 @@ export function useAssist() {
         addLog('AI help', `Popup covers "${step.name}" — closing it first`, 'warn');
         setCursor({ x: popup.actX, y: popup.actY! });
         if (!dryRun) {
-          const r = await execute({ id: 'ai', name: 'Close popup', action: 'click', x: popup.actX, y: popup.actY!, status: 'pending' }, framesRef.current[0]);
+          const r = await execute({ id: 'ai', name: 'Close popup', action: 'click', x: popup.actX, y: popup.actY!, status: 'pending' }, framesRef.current[0], budget);
           addLog('AI help', r.message, r.ok ? 'ok' : 'warn');
+          if (r.halt) {
+            updateStep(i, { status: 'failed', drift: best });
+            break;
+          }
         } else {
           popupRef.current = null;
           setAnnotations((a) => a.filter((x) => x.tone !== 'error'));
@@ -401,7 +512,12 @@ export function useAssist() {
       }
       const drifted = Math.hypot(target.x - step.x, target.y - step.y) > 0.005;
       const corrected = { ...step, correctedX: target.x, correctedY: target.y };
-      const out = dryRun ? { ok: true, message: 'verified (not dispatched)' } : await execute(corrected, framesRef.current[0]);
+      const out = dryRun ? DRY_RUN_RESULT : await execute(corrected, framesRef.current[0], budget);
+      if (out.halt) {
+        updateStep(i, { status: 'failed', drift: best });
+        addLog('Replay', `${step.name}: ${out.message} — replay stopped`, 'error');
+        break;
+      }
       setTrail((t) => [...t, { x: target.x, y: target.y, t: Date.now(), click: true }]);
       await sleep(settingsRef.current.captureMs + 100);
       const after = framesRef.current[0];
@@ -445,7 +561,7 @@ export function useAssist() {
     const { steps: planned, source: why } = planFromGoal(goal, cards, framesRef.current[0] ?? null, popupRef.current);
     setSteps(planned);
     setDraftCard(generateCard(planned, goal));
-    addLog('Planner', `${why}: ${planned.length} step(s)`, 'ok');
+    addLog('Planner', `${why}: ${planned.length} step(s)${armedRef.current ? '' : ' — real input disarmed, Auto Act / replay will run it as a dry run'}`, 'ok');
   };
 
   /** AI points out what matters on screen now. */
@@ -499,9 +615,9 @@ export function useAssist() {
   return {
     settings, setSettings, source, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
-    agents, setAgents, plays, demoCanvasRef, videoRef, DEMO_W, DEMO_H,
+    agents, setAgents, plays, demoCanvasRef, videoRef, DEMO_W, DEMO_H, armed, aborted,
     onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, explainScreen,
-    shareScreen, useDemo, saveCard, loadCard, addLog,
+    shareScreen, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort,
   };
 }
 
