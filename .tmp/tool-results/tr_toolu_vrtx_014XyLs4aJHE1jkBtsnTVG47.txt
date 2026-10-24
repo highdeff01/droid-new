@@ -1,0 +1,269 @@
+stdout:
+/**
+ * Runs recorded steps one at a time with honest per-step progress:
+ *   backend check → (drift mode) pre-check the live frame against the step's SAVED frame →
+ *   gated dispatch of the one step → (drift mode) post-check: classify the frame change and
+ *   check the next step's target element landed.
+ * A backtrack or unexpected page stops the run, is surfaced, and is handed to the replanner
+ * (the Qwen turn loop) to recalculate a route toward the goal. Nothing is assumed: a failed
+ * dispatch, capture or check is reported as such.
+ */
+import {
+  classifyFrameChange,
+  type CursorMark,
+  type FrameChange,
+  type GrayFrame,
+} from "@/lib/frame-diff";
+
+export interface StepwiseStep {
+  id: string;
+  name: string;
+  action: string;
+  x: number;
+  y: number;
+  targetOcrLabel?: string;
+  referenceScreenshotUrl?: string;
+}
+
+/** A decoded frame plus the pixel size of the screenshot it came from. */
+export interface LoadedFrame {
+  gray: GrayFrame;
+  width: number;
+  height: number;
+}
+
+export interface StepwiseDeps {
+  /** Null when the control backend can act, else why it cannot. */
+  checkBackend: (signal: AbortSignal) => Promise<string | null>;
+  /** A fresh live frame as a data URL; rejects when none can be captured. */
+  capture: (signal: AbortSignal) => Promise<string>;
+  loadFrame: (dataUrl: string) => Promise<LoadedFrame>;
+  /** Dispatches one step through the action gate and resolves once it completed on the device. */
+  runStep: (step: StepwiseStep, signal: AbortSignal) => Promise<void>;
+  /** Whether an element is at the step's target on the frame (the element check). */
+  findElement: (frame: string, step: StepwiseStep, signal: AbortSignal) => Promise<string | null>;
+  /** Hands a drift to the replanner; resolves with what the replanner reported. */
+  replan: (reason: string, remaining: StepwiseStep[], signal: AbortSignal) => Promise<string>;
+}
+
+export type StepPhase = "pre_check" | "executing" | "post_check" | "executed" | "failed" | "skipped";
+
+export interface StepOutcome {
+  stepId: string;
+  name: string;
+  status: "executed" | "failed" | "skipped";
+  detail: string;
+  preCheck?: FrameChange;
+  postCheck?: FrameChange;
+  elementCheck?: string;
+}
+
+export interface StepwiseProgress {
+  /** 1-based index of the step being worked on. */
+  current: number;
+  total: number;
+  stepName: string;
+  phase: StepPhase;
+  message: string;
+  outcomes: StepOutcome[];
+}
+
+export type StepwiseResult =
+  | { status: "completed"; outcomes: StepOutcome[] }
+  | { status: "unavailable"; reason: string; outcomes: StepOutcome[] }
+  | { status: "failed"; reason: string; outcomes: StepOutcome[] }
+  | { status: "cancelled"; reason: string; outcomes: StepOutcome[] }
+  | { status: "replanned"; reason: string; drift: FrameChange; replan: string; outcomes: StepOutcome[] };
+
+export interface StepwiseOptions {
+  signal: AbortSignal;
+  /** Compare frames before/after each step and replan on drift (verified drift replay). */
+  verifyDrift: boolean;
+  onProgress: (progress: StepwiseProgress) => void;
+  /** Called once with a drift that stops the run, before the replanner runs. */
+  onDrift?: (drift: FrameChange, step: StepwiseStep) => void;
+}
+
+const DRIFT_KINDS = new Set<FrameChange["kind"]>(["backtrack", "wrong_page"]);
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+interface RunState {
+  steps: StepwiseStep[];
+  options: StepwiseOptions;
+  deps: StepwiseDeps;
+  outcomes: StepOutcome[];
+  /** Screens already passed (saved or seen), oldest first. */
+  seen: GrayFrame[];
+  live?: { url: string; frame: LoadedFrame };
+}
+
+function report(run: RunState, index: number, phase: StepPhase, message: string) {
+  run.options.onProgress({
+    current: index + 1,
+    total: run.steps.length,
+    stepName: run.steps[index]?.name ?? "",
+    phase,
+    message,
+    outcomes: [...run.outcomes],
+  });
+}
+
+/** The cursor positions near which a frame change is ignored: the step targets around this move. */
+function cursorsFor(frame: LoadedFrame, ...steps: (StepwiseStep | undefined)[]): CursorMark[] {
+  return steps
+    .filter((s): s is StepwiseStep => !!s)
+    .map((s) => ({ x: s.x / Math.max(1, frame.width), y: s.y / Math.max(1, frame.height) }));
+}
+
+async function captureLive(run: RunState): Promise<{ url: string; frame: LoadedFrame }> {
+  const url = await run.deps.capture(run.options.signal);
+  return { url, frame: await run.deps.loadFrame(url) };
+}
+
+async function savedFrame(run: RunState, step: StepwiseStep | undefined): Promise<GrayFrame | null> {
+  if (!step?.referenceScreenshotUrl) return null;
+  return (await run.deps.loadFrame(step.referenceScreenshotUrl)).gray;
+}
+
+/** Pre-check: the live frame against this step's saved frame and the screen before it. */
+async function preCheck(run: RunState, index: number): Promise<FrameChange | undefined> {
+  const step = run.steps[index];
+  report(run, index, "pre_check", `Comparing the live frame with the saved frame for "${step.name}"`);
+  const previous = run.live;
+  run.live = await captureLive(run);
+  const expected = await savedFrame(run, step);
+  if (!expected) return undefined;
+  return classifyFrameChange({
+    previous: (previous ?? run.live).frame.gray,
+    current: run.live.frame.gray,
+    expected,
+    earlier: run.seen,
+    options: { cursors: cursorsFor(run.live.frame, run.steps[index - 1], step) },
+  });
+}
+
+/** Post-check: what the action changed, and whether the next target element landed. */
+async function postCheck(run: RunState, index: number): Promise<Pick<StepOutcome, "postCheck" | "elementCheck">> {
+  const step = run.steps[index];
+  const next = run.steps[index + 1];
+  report(run, index, "post_check", `Verifying the outcome of "${step.name}"`);
+  const before = run.live!;
+  run.seen.push(before.frame.gray);
+  run.live = await captureLive(run);
+  const postCheck = classifyFrameChange({
+    previous: before.frame.gray,
+    current: run.live.frame.gray,
+    expected: await savedFrame(run, next),
+    earlier: run.seen.slice(0, -1),
+    options: { cursors: cursorsFor(run.live.frame, step, next) },
+  });
+  if (!next) return { postCheck, elementCheck: "skipped: last step has no next target" };
+  const element = await run.deps.findElement(run.live.url, next, run.options.signal);
+  return {
+    postCheck,
+    elementCheck: element ? `next target found: ${element}` : `next target "${next.targetOcrLabel || next.name}" not found`,
+  };
+}
+
+async function replanFrom(run: RunState, index: number, drift: FrameChange): Promise<StepwiseResult> {
+  const step = run.steps[index];
+  run.options.onDrift?.(drift, step);
+  const reason = `${drift.kind === "backtrack" ? "Backtrack" : "Unexpected page"} at step ${index + 1} ("${step.name}"): ${drift.reason}`;
+  const replan = await run.deps.replan(reason, run.steps.slice(index), run.options.signal);
+  return { status: "replanned", reason, drift, replan, outcomes: run.outcomes };
+}
+
+function fail(run: RunState, index: number, detail: string, extra: Partial<StepOutcome> = {}): StepwiseResult {
+  const step = run.steps[index];
+  run.outcomes.push({ stepId: step.id, name: step.name, status: "failed", detail, ...extra });
+  report(run, index, "failed", detail);
+  return { status: "failed", reason: `Step ${index + 1} ("${step.name}") failed: ${detail}`, outcomes: run.outcomes };
+}
+
+/** One step: pre-check, dispatch, post-check. Returns a terminal result to stop the run, else null. */
+async function runOne(run: RunState, index: number): Promise<StepwiseResult | null> {
+  const step = run.steps[index];
+  const { verifyDrift, signal } = run.options;
+  let pre: FrameChange | undefined;
+  if (verifyDrift) {
+    pre = await preCheck(run, index);
+    if (pre && DRIFT_KINDS.has(pre.kind)) {
+      run.outcomes.push({ stepId: step.id, name: step.name, status: "skipped", detail: `Not executed: ${pre.reason}`, preCheck: pre });
+      report(run, index, "skipped", pre.reason);
+      return replanFrom(run, index, pre);
+    }
+  }
+  report(run, index, "executing", `Executing "${step.name}" (${step.action} at ${step.x}, ${step.y})`);
+  try {
+    await run.deps.runStep(step, signal);
+  } catch (error) {
+    return fail(run, index, errorText(error), { preCheck: pre });
+  }
+  const post = verifyDrift ? await postCheck(run, index) : {};
+  const outcome: StepOutcome = {
+    stepId: step.id,
+    name: step.name,
+    status: "executed",
+    detail: pre ? `Saved-frame check: ${pre.reason}` : verifyDrift ? "No saved frame for this step; pixel pre-check skipped" : "Executed",
+    preCheck: pre,
+    ...post,
+  };
+  run.outcomes.push(outcome);
+  report(run, index, "executed", post.postCheck ? `${post.postCheck.reason}; ${post.elementCheck}` : `Executed "${step.name}"`);
+  if (post.postCheck && DRIFT_KINDS.has(post.postCheck.kind)) return replanFrom(run, index, post.postCheck);
+  return null;
+}
+
+export async function runStepwiseReplay(
+  steps: StepwiseStep[],
+  options: StepwiseOptions,
+  deps: StepwiseDeps,
+): Promise<StepwiseResult> {
+  const run: RunState = { steps, options, deps, outcomes: [], seen: [] };
+  if (steps.length === 0) return { status: "failed", reason: "No recorded steps to execute.", outcomes: [] };
+  const unavailable = await deps.checkBackend(options.signal);
+  if (unavailable) return { status: "unavailable", reason: unavailable, outcomes: [] };
+  try {
+    for (let index = 0; index < steps.length; index++) {
+      if (options.signal.aborted) return { status: "cancelled", reason: `Stopped before step ${index + 1}`, outcomes: run.outcomes };
+      const stop = await runOne(run, index);
+      if (stop) return stop;
+    }
+  } catch (error) {
+    if (options.signal.aborted) return { status: "cancelled", reason: "Stopped by user", outcomes: run.outcomes };
+    return { status: "failed", reason: errorText(error), outcomes: run.outcomes };
+  }
+  return { status: "completed", outcomes: run.outcomes };
+}
+
+/** One line for the HUD: "3/5 executed, 1 failed" style from the real outcomes. */
+export function summarizeOutcomes(outcomes: StepOutcome[], total: number): string {
+  const count = (status: StepOutcome["status"]) => outcomes.filter((o) => o.status === status).length;
+  return `${count("executed")}/${total} executed, ${count("failed")} failed, ${count("skipped")} skipped`;
+}
+66:export function describeReplanResult(result: TurnLoopResult): string {
+67-  switch (result.status) {
+68-    case "completed":
+69-      return `Qwen replanned and completed the route (${result.steps.length} step(s) verified)`;
+70-    case "planned":
+71-      return `Qwen proposed a new route of ${result.state.plan.length} step(s); it was not run`;
+72-    case "answered":
+73-      return `Qwen answered: ${result.answer}`;
+74-    case "failed":
+75-      return `Qwen replan did not reach the goal: ${result.reason}`;
+76-  }
+77-}
+78-
+79-/** A stored session's points as a replayable trail (recorded positions, timing and clicks). */
+80-export function sessionToTrail(session: { points: Array<{ x: number; y: number; timestamp: number; type?: string }> }): TrailPoint[] {
+81-  return session.points.map((p) => ({ x: p.x, y: p.y, time: p.timestamp, isClick: CLICK_TYPES.has(p.type ?? "") }));
+82-}
+83-
+84-/** HUD steps as turn-loop goal steps; a step the turn loop cannot verify is reported, never dropped silently. */
+85-export function toGoalSteps(steps: HudStepLike[]): GoalStep[] {
+86-  const goalSteps = parseProposedSteps(
+87-    steps.map((step) => ({
+88-      id: step.id,
+89-      name: step.name,
+90-      action: step.action,
+91-      x: Math.max(0, Math.round(step.x)),

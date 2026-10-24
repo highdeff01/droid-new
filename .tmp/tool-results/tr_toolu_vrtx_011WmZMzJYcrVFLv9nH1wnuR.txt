@@ -1,0 +1,249 @@
+stdout:
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:22:import { startReplay, type ReplayRunSnapshot } from "@/lib/automation-runner";
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:24:import { waitForReplayRun } from "@/lib/verified-replay";
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:58:/** Extra attempts for a failed step before the error-fix path (docs/verified-replay.md: at most twice). */
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:62:  | "thinking"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:72:  thinking: "verifying",
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:177:  /** Called with the replay run id each time a gated step starts on the device. */
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:178:  onReplayStarted?: (runId: string) => void;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:289:      const shot = await post(ctx, "/api/replay/capture", { targetDevice, deviceId });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:335:    phase: "thinking",
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:359:  emit(ctx, { phase: "thinking", message: reason ? `Re-planning: ${reason}` : `Planning steps for: ${ctx.goal}` });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:384:    emit(ctx, { phase: "thinking", message: `Continuing toward the goal without pausing: ${pageChange}` });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:388:    emit(ctx, { phase: "thinking", message: `Auto-approved (auto-approve is on): ${reason}` });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:436:    phase: "thinking",
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:459:    emit(ctx, { phase: "thinking", message: `"${planned.name}" target moved; re-grounded on the fresh screen`, x: grounded.step.x, y: grounded.step.y });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:493:/** One goal step as a replay-engine step. */
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:494:export function toReplayStep(step: GoalStep) {
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:508:/** Saved goal steps as a HUD sequence for the existing replay path (desktop or paired phone). */
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:510:  return steps.map((step, index) => ({ ...toReplayStep(step), stepNumber: index + 1, status: "pending" }));
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:536:/** Gate, then replay (the one real mouse: strictly serial), with the next step pre-verified concurrently. */
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:555:  const started = await post(ctx, "/api/replay", {
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:558:    steps: [toReplayStep(step)],
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:562:  if (started.run?.id) ctx.options.onReplayStarted?.(started.run.id);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:564:    (await ctx.deps.get(`/api/replay/${encodeURIComponent(id)}`, { apiKey: device.apiKey, signal })).run as ReplayRunSnapshot;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:565:  await waitForReplayRun(started.run, { signal }, { gate: ctx.deps.gate, start: startReplay, fetch: fetchRun, sleep: ctx.deps.sleep });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:601:  emit(ctx, { phase: "thinking", message: `Screen changed unexpectedly after "${step.name}"; evaluating the new screen against the goal` });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:608:    emit(ctx, { phase: "thinking", message: `Could not evaluate the page change: ${errorMessage(error)}` });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:679:/** Executes the next planned step through the action gate and the replay engine, then verifies it. */
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:703:    // The step may already have taken effect (docs/verified-replay.md): never re-dispatch it; propose a fix.
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:704:    ctx.problem = `"${step.name}" replay failed after dispatch (not repeated): ${errorMessage(error)}`;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:729:  emit(ctx, { phase: "thinking", message: "Checking whether the goal is reached on the fresh screenshot" });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:766:    emit(ctx, { phase: "thinking", message: "Verified run ready to save as the best flow" });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:773:    emit(ctx, { phase: "thinking", message: "Verified run saved as a new flow version; confirm it to make it the best" });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:777:    emit(ctx, { phase: "thinking", message: `Saving the verified run failed: ${ctx.saveError}` });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/lib/qwen-turn-loop.ts:785:  emit(ctx, { phase: "thinking", message: `Asking Qwen: ${question}` });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:69:import { ReplaySessionsModal } from "./ReplaySessionsModal";
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:74:import { runStepwiseReplay, summarizeOutcomes, type StepwiseProgress, type StepwiseResult } from "@/lib/stepwise-replay";
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:81:  replayTrailOnPC,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:85:} from "@/lib/hud-replay";
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:86:import { ReplaySessionPicker } from "./replay-session-picker";
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:87:import type { TrailPoint } from "@shared/trail-replay";
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:91:import { ReplayOverlayLayer } from "./replay-overlay-layer";
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:130:  NO_REPLAY_PATH_MESSAGE,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:131:  selectReplayWaypoints,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:132:  selectedReplaySteps,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:133:} from "@/lib/replay-waypoints";
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:165:  replayProgressLabel,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:166:} from "@/lib/step-replay";
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:171:import type { ReplayRun } from "@shared/replay";
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:265:  /** How many times the replay engine performs this action in a row (default 1). */
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:269:export interface AIThinkingState {
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:275:  isThinking: boolean;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:317:  aiThinking: AIThinkingState | null;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:361:  onReplaySteps?: (steps: SequenceStep[]) => void;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:364:  /** Latest verified replay run; drives the progress readout and pause/resume/cancel. */
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:365:  replayRun?: ReplayRun | null;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:366:  /** Manual replay control (ungated): pause, resume or cancel the live run. */
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:367:  onReplayControl?: (command: "pause" | "resume" | "cancel") => void;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:378:  /** Qwen turn phases (thinking indicator / verification badge). */
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:388:  aiThinking,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:418:  onReplaySteps,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:421:  replayRun = null,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:422:  onReplayControl,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:580:  // Realistic Cursor & Spline Replay State
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:590:  const [isReplayingMovement, setIsReplayingMovement] =
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:592:  const [replayingCursorPos, setReplayingCursorPos] = useState<{
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:614:  const [isReplaySessionsModalOpen, setIsReplaySessionsModalOpen] = useState<boolean>(false);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:619:  const [isReplayPickerOpen, setIsReplayPickerOpen] = useState<boolean>(false);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:623:  /** Aborts the running stepwise execution or trail replay. */
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:624:  const replayAbortRef = useRef<AbortController | null>(null);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:721:  // AI Replay Drift & Frames 1-10 with Clickpoints State
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:723:  const [activeReplayFrame, setActiveReplayFrame] = useState<number | null>(null);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:739:  // Repeating Drawing with Auto-Tool & AI Thinking Between Steps
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:741:  const [qwenThinkingStatus, setQwenThinkingStatus] = useState<string | null>(null);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:783:  // Replay Overlay Layer with Persistent Animated Circular Blinks (.click-blink-active)
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:784:  const [showReplayOverlay, setShowReplayOverlay] = useState<boolean>(true);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:822:    replayAbortRef.current?.abort();
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:826:    setIsReplayingMovement(false);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:844:    toast.error("Stop requested. Check the Replay agent monitor for confirmation.");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1121:  // Flow Replay Packs & Recent Steps Playback State
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1122:  const [flowReplayPacks, setFlowReplayPacks] = useState<
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1126:      const saved = localStorage.getItem("flow_replay_packs");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1132:  const [replayScope, setReplayScope] = useState<"all" | "recent3" | "recent5" | "recent10" | "pack">("recent5");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1137:    if (replayScope === "pack" && activePackId) {
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1138:      const found = flowReplayPacks.find((p) => p.id === activePackId);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1141:    if (replayScope === "recent3") return sequence.slice(-3);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1142:    if (replayScope === "recent5") return sequence.slice(-5);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1143:    if (replayScope === "recent10") return sequence.slice(-10);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1230:    setQwenThinkingStatus("🤖 Qwen Orchestrator: Analyzing step geometry, smoothing paths, and resolving overlaps...");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1245:        setQwenThinkingStatus(`✓ Qwen Orchestrated: Applied ${data.adjustmentsMade || 0} adjustments.`);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1265:          setReplayingCursorPos({ x: lastPt.x, y: lastPt.y });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1275:      setTimeout(() => setQwenThinkingStatus(null), 3500);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1286:    const count = flowReplayPacks.length + 1;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1296:    const updated = [newPack, ...flowReplayPacks.slice(0, 19)];
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1297:    setFlowReplayPacks(updated);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1299:      localStorage.setItem("flow_replay_packs", JSON.stringify(updated));
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1302:    setReplayScope("pack");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1305:      description: `Saved ${stepsToPack.length} recent step(s) as dedicated pack. You can now replay just these steps with [Play Flow].`,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1337:    const fromX = replayingCursorPos?.x ?? mousePos?.x ?? (sequence[0]?.x ?? 960);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1338:    const fromY = replayingCursorPos?.y ?? mousePos?.y ?? (sequence[0]?.y ?? 540);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1355:    setReplayingCursorPos({ x: toX, y: toY });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1384:        thought: `Advancing to Step #${nextIdx + 1} (${replayScope === "pack" ? "Pack Step" : "Flow Step"}): Target (${targetStep.x}, ${targetStep.y}) -> Execute ${targetStep.action.toUpperCase()}`,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1392:      description: `Target (${targetStep.x}, ${targetStep.y}) dispatched to the real device [${replayScope.toUpperCase()}]`,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1408:    setReplayingCursorPos({ x: targetStep.x, y: targetStep.y });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1417:    if (!onReplaySteps) { toast.error("Verified replay is unavailable here"); return; }
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1418:    onReplaySteps(steps);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1646:  const handleReplayFrames1To10OnPC = async () => {
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1648:    if (!onReplaySteps) { toast.error("Verified replay is unavailable here"); return; }
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1649:    onReplaySteps(sequence.slice(0, 10));
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1650:    setQwenLiveThought("Replay requested; fresh screenshot decisions appear in the Replay agent monitor.");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1657:  // current frame. No device dispatch: the gated replay pipeline has no drag action.
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1673:          setQwenThinkingStatus(`Qwen reading the screen before stroke ${sIdx + 1}/${sampleSegments.length}…`);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1678:          setQwenThinkingStatus(`Qwen: ${answer}`);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1683:        description: "Nothing was sent to the device: the gated replay pipeline has no drag action.",
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1688:      setQwenThinkingStatus(null);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1812:  const retryableStep = findRetryableStep(sequence, replayRun, activeStepId);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1813:  const isReplayLive = replayRun?.status === "running" || replayRun?.status === "paused";
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1951:  // onReplaySteps → gate-verified /api/replay, which moves the real mouse via the device bridge.
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1953:   * Replays a recorded trail exactly as recorded: every waypoint at its recorded offset drives the
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1957:  const replayRecordedTrail = async (points: TrailPoint[], onHardware: boolean, label: string) => {
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1958:    if (points.length === 0) { toast.info(NO_REPLAY_PATH_MESSAGE); return; }
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1960:    replayAbortRef.current = controller;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1961:    setIsReplayingMovement(true);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1967:        setReplayingCursorPos({ x: waypoint.x, y: waypoint.y });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1973:    const hardware = onHardware ? replayTrailOnPC(points, trailSpeedMultiplier, controller.signal) : null;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1975:    setIsReplayingMovement(false);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1977:    setReplayingCursorPos(null);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1978:    replayAbortRef.current = null;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1985:  // REPLAY TRAIL ON PC: the recorded waypoints (with their timing) on the overlay and the real mouse.
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:1986:  const handleReplayTrailOnPC = () => replayRecordedTrail(liveMouseTrail, true, "Recorded trail");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2017:  /** Replay picker: a saved session's recorded trail on the overlay, and on the PC when asked. */
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2018:  const handleReplaySavedSession = (session: MouseRecordingSession, onHardware: boolean) => {
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2021:    void replayRecordedTrail(trail, onHardware, `"${session.name}"`);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2073:    const steps = selectedReplaySteps(sequence, selectedStepIds);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2076:    replayAbortRef.current = controller;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2085:    const result = await runStepwiseReplay(steps, {
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2093:      onDrift: (drift, step) => toast.warning(`Replay drift at "${step.name}": ${drift.kind.replace("_", " ")}`, { description: drift.reason }),
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2097:    replayAbortRef.current = null;
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2104:  // VERIFIED DRIFT REPLAY ON PC: saved-frame pre-check, outcome post-check, drift → Qwen replan.
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2105:  const handleVerifiedDriftReplayOnPC = () => runStepwise(true);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2107:  // Replay Drift (HUD preview): animates the route with human drift on the overlay only; nothing is sent to the device.
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2108:  const handleReplayUserMovementWithDrift = () => {
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2109:    const selection = selectReplayWaypoints(
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2110:      selectedReplaySteps(sequence, selectedStepIds),
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2115:      toast.info(NO_REPLAY_PATH_MESSAGE);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2119:    setIsReplayingMovement(true);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2131:        setIsReplayingMovement(false);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2132:        setReplayingCursorPos(null);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2153:        setReplayingCursorPos({ x: curX, y: curY });
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2185:              text: `REPLAY CLICKPOINT [${targetX}, ${targetY}]`,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2189:              { id: `replay_rip_${Date.now()}`, x: targetX, y: targetY, time: Date.now() },
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2404:  // Follow the replay: keep the active step visible in the step list as it advances.
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2485:              aiThinking?.isThinking || isAutoPlayingWorkflow || isExecutingTrailOnPC
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2490:              aiThinking?.isThinking || isAutoPlayingWorkflow || isExecutingTrailOnPC
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2497:                aiThinking?.isThinking || isAutoPlayingWorkflow || isExecutingTrailOnPC
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2503:              {aiThinking?.isThinking || isAutoPlayingWorkflow || isExecutingTrailOnPC
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2508:              {aiThinking?.isThinking || isAutoPlayingWorkflow || isExecutingTrailOnPC
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:2509:                ? `(${aiThinking?.action || "Autonomous Sequence"})`
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3007:                    : "⏳ AI Thinking:"}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3165:          {/* Replay picker: saved recording sessions as frames or mouse trail */}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3170:              setIsReplayPickerOpen(true);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3173:            title="Pick a saved recording and replay it as frames or as its mouse trail"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3175:            <PlayCircle className="w-3.5 h-3.5" /> REPLAY PICKER ({savedSessions.length})
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3250:          {/* Replay Mouse Trail on Actual PC via PyAutoGUI */}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3255:                onClick={handleReplayTrailOnPC}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3256:                disabled={isExecutingTrailOnPC || isReplayingMovement || isRecordingMouseTrail}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3260:                REPLAY TRAIL ON PC ({liveMouseTrail.length} pts)
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3489:          {/* Replay Overlay Layer with Persistent Animated Circular Blinks (.click-blink-active) */}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3493:              setShowReplayOverlay(!showReplayOverlay);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3494:              toast.info(`Replay Overlay ${!showReplayOverlay ? "ENABLED" : "HIDDEN"}`);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3497:              showReplayOverlay
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3501:            title="Replay Overlay: Displays persistent animated circular blinks (.click-blink-active) at physical mouse click coordinates"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3504:            🎯 Replay Overlay ({showReplayOverlay ? "ON" : "OFF"})
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3522:          {/* AI Replay Similar Action for Frames 1-10 with PC Execution & Clickpoint ("..") */}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3525:            onClick={handleReplayFrames1To10OnPC}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3536:              ? `REPLAYING DRIFT [FRAME ${activeReplayFrame || 1}/10] ..`
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3537:              : "REPLAY DRIFT (FRAMES 1-10) 🎯"}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3540:          {/* Repeating Drawing with Auto-Selected Tool & Qwen Thinking in Between Steps */}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3658:            onClick={handleReplayUserMovementWithDrift}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3659:            disabled={isReplayingMovement}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3668:            onClick={handleVerifiedDriftReplayOnPC}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3673:            <Zap className="w-3.5 h-3.5 text-emerald-300" /> Verified Drift Replay on PC
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3871:          replayRun={replayRun}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3960:      {/* Qwen Thinking Status Between Drawing Steps */}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3961:      {qwenThinkingStatus && (
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:3964:          <span className="font-semibold">{qwenThinkingStatus}</span>
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4011:      {/* Replay Overlay Layer: Physical interaction path & persistent animated circular blinks (.click-blink-active) */}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4012:      <ReplayOverlayLayer
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4029:        isVisible={showReplayOverlay}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4121:      {(replayingCursorPos || mousePos) && (
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4125:              replayingCursorPos?.x || mousePos?.x || 0,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4126:              replayingCursorPos?.y || mousePos?.y || 0,
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4162:              ({replayingCursorPos?.x || mousePos?.x},{" "}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4163:              {replayingCursorPos?.y || mousePos?.y})
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4165:            {isReplayingMovement && (
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4324:      {/* AI #2 Focus & Thinking Animation Layer (Purple / Amber) */}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4325:      {aiThinking && aiThinking.isThinking && (
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4327:          style={toPercent(aiThinking.x, aiThinking.y)}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4343:              {aiThinking.action || "Formulating Next Step"}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4346:              {aiThinking.confidence !== undefined &&
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4347:                `Conf: ${(aiThinking.confidence * 100).toFixed(0)}% • `}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4348:              ({aiThinking.x}, {aiThinking.y})
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4494:      {replayingCursorPos && (
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4496:          style={toPercent(replayingCursorPos.x, replayingCursorPos.y)}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4513:            ({replayingCursorPos.x}, {replayingCursorPos.y})
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4518:      {/* Visual Clickpoint Contact Marker ("..") during Frames 1-10 Replay */}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4995:                {replayRun && (
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4998:                    <span className="text-fuchsia-300 font-bold" data-testid="hud-replay-progress">
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:4999:                      {replayProgressLabel(replayRun)}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5025:            {isReplayLive && onReplayControl && (
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5029:                  onClick={() => onReplayControl(replayRun?.status === "paused" ? "resume" : "pause")}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5031:                  title="Pause or resume the live replay"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5033:                  {replayRun?.status === "paused" ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5034:                  {replayRun?.status === "paused" ? "Resume" : "Pause"}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5038:                  onClick={() => onReplayControl("cancel")}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5040:                  title="Cancel the live replay"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5047:            {retryableStep && onRetryStep && !isReplayLive && (
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5085:            {/* Scope Replay Selector: Replay recent steps instead of all steps */}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5090:                  setReplayScope("recent5");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5091:                  toast.info("🎯 Replay Scope: Recent 5 steps");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5094:                  replayScope === "recent5"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5098:                title="Replay only recent 5 steps"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5105:                  setReplayScope("recent3");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5106:                  toast.info("🎯 Replay Scope: Recent 3 steps");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5109:                  replayScope === "recent3"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5113:                title="Replay only recent 3 steps"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5120:                  setReplayScope("pack");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5121:                  toast.info(`🎯 Replay Scope: Active Flow Pack`);
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5124:                  replayScope === "pack"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5128:                title="Replay active flow pack snapshot"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5130:                Pack ({flowReplayPacks.length})
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5135:                  setReplayScope("all");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5136:                  toast.info("🎯 Replay Scope: All steps");
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5139:                  replayScope === "all"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5143:                title="Replay all sequence steps"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5185:              title="Emergency Stop: Immediately halt all sequence replay, auto-play, subprocesses, and recording"
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5546:      {/* 100-Session History Selector & AI PC Replay HUD Modal */}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5547:      <ReplaySessionsModal
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5548:        isOpen={isReplaySessionsModalOpen}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5549:        onClose={() => setIsReplaySessionsModalOpen(false)}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5553:        onSelectSessionForReplay={(session, executeOnHardware) => handleReplaySavedSession(session as MouseRecordingSession, executeOnHardware)}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5811:      {/* Replay picker: saved recording sessions (up to 100) */}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5813:        open={isReplayPickerOpen}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5814:        onClose={() => setIsReplayPickerOpen(false)}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5818:            <PlayCircle className="w-4 h-4 text-purple-400" /> Replay picker — saved recordings
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5822:        <ReplaySessionPicker
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5824:          busy={isReplayingMovement || isExecutingTrailOnPC}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5825:          onReplayTrail={handleReplaySavedSession}
+.repos/highdeff01/Droid_app_main/Droid-Main-main/client/components/live-screen-hud.tsx:5842:        onSelectSessionForReplay={(session, executeOnHardware) => handleReplaySavedSession(session as MouseRecordingSession, executeOnHardware)}
