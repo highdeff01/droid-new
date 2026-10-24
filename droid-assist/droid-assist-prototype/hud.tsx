@@ -35,16 +35,24 @@ export function SyncStatus({ level, detail }: { level: SyncLevel; detail: string
   );
 }
 
-const AI_LEVEL: Record<AiStatus['state'], SyncLevel> = { online: 'green', checking: 'yellow', offline: 'red' };
-const AI_LABEL: Record<AiStatus['state'], string> = { online: 'AI connected', checking: 'AI connecting…', offline: 'AI unavailable' };
-
-/** Live connection status of the model endpoint. */
-export function AiStatusBadge({ status }: { status: AiStatus }) {
+/** Safety controls: one-click arm/disarm of real input, emergency stop and the ABORTED state. */
+export function SafetyControls({ engine }: { engine: AssistEngine }) {
+  const { armed, aborted, settings } = engine;
   return (
-    <div className={styles.sync} data-level={AI_LEVEL[status.state]} title={status.detail} aria-live="polite">
-      <span className={styles.syncDot} />
-      <strong>{AI_LABEL[status.state]}</strong>
-      <span className={styles.syncDetail}>{status.detail}</span>
+    <div className={styles.safety} data-armed={armed} data-aborted={aborted} aria-live="assertive">
+      <button type="button" className={armed ? styles.danger : ''} onClick={engine.toggleArmed} aria-pressed={armed} title="Real input is only sent to the PC while armed; disarmed runs are dry runs">
+        {armed ? '🔴 Real input ARMED — click to disarm' : '🟢 Dry run (disarmed) — click to arm real input'}
+      </button>
+      {aborted ? (
+        <>
+          <strong className={styles.aborted}>⛔ ABORTED</strong>
+          <button type="button" onClick={engine.clearAbort}>Clear abort</button>
+        </>
+      ) : (
+        <button type="button" className={styles.danger} onClick={() => engine.triggerAbort('stop button')} title={`Emergency stop (${settings.abortHotkey})`}>
+          ⛔ Emergency stop <small>{settings.abortHotkey}</small>
+        </button>
+      )}
     </div>
   );
 }
@@ -84,7 +92,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
       </div>
       <MonitorStatus engine={engine} />
       <div className={styles.hud2}>
-        <AiStatusBadge status={aiStatus} />
+        <SafetyControls engine={engine} />
         <SyncStatus level={engine.sync.level} detail={engine.sync.detail} />
         <label><input type="checkbox" checked={settings.autoAct} onChange={(e) => setSettings({ ...settings, autoAct: e.target.checked })} disabled={aiOff} /> Auto act{aiOff && ' (AI unavailable)'}</label>
         <label><input type="checkbox" checked={settings.aiHelp} onChange={(e) => setSettings({ ...settings, aiHelp: e.target.checked })} disabled={aiOff} /> AI help{aiOff && ' (AI unavailable)'}</label>

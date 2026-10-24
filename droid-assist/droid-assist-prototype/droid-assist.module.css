@@ -7,6 +7,9 @@
 .app input, .app textarea { background: #020617; color: var(--text); border: 1px solid #334155; border-radius: 8px; padding: 8px 10px; font: inherit; min-width: 0; }
 .primary { background: linear-gradient(135deg, #0891b2, #7c3aed) !important; border-color: transparent !important; }
 .danger { background: #b91c1c !important; border-color: transparent !important; }
+.safety { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.safety[data-aborted='true'] { padding: 4px 8px; border-radius: 10px; background: #450a0a; border: 2px solid #ef4444; }
+.aborted { color: #fecaca; font-size: 1.1em; letter-spacing: 0.08em; }
 .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; }
 .brand small { font-weight: 400; color: var(--muted); font-size: 12px; }

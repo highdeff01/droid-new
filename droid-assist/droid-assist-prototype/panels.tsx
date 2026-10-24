@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
-import { AiStatusBadge } from './hud.js';
+import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import styles from './droid-assist.module.css';
 
 /** The N most recent frames with frame-to-frame drift, plus the AI-picked frames shown to the user. */
@@ -121,6 +121,24 @@ export function AgentsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>App monitor: capture every <b>{settings.captureMs} ms</b>
         <small>Background monitor is fixed at 1000 ms, advanced at 250 ms. Active: {engine.intervalMs} ms</small>
         <input type="range" min={250} max={2000} step={50} value={settings.captureMs} onChange={(e) => setSettings({ ...settings, captureMs: +e.target.value })} />
+      </label>
+      <label className={styles.setting}>Max real input actions per run <b>{settings.actionBudget}</b>
+        <input type="number" min={1} value={settings.actionBudget} onChange={(e) => setSettings({ ...settings, actionBudget: sanitizeBudget(e.target.valueAsNumber) })} />
+      </label>
+      <label className={styles.setting}>Emergency-stop hotkey <b>{settings.abortHotkey}</b>
+        <input
+          readOnly
+          value={settings.abortHotkey}
+          aria-label="Emergency-stop hotkey: focus and press a new key combo"
+          onKeyDown={(e) => {
+            const combo = hotkeyFromEvent(e);
+            if (!combo || combo === 'Tab') return;
+            e.preventDefault();
+            e.stopPropagation();
+            setSettings({ ...settings, abortHotkey: combo });
+          }}
+        />
+        <small>Focus the field and press a new combo (works while this page has focus).</small>
       </label>
       <label className={styles.setting}>Desktop bridge URL (pyautogui)
         <span className={styles.row}>
