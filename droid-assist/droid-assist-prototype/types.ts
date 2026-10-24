@@ -12,37 +12,8 @@ export interface Frame {
   /** Source resolution of the captured screen (for converting to native coordinates). */
   srcW: number;
   srcH: number;
-  /** Where the frame came from: the demo canvas, a browser screen share, or the desktop bridge. */
-  source: ScreenSource;
-}
-
-/**
- * Where live frames come from: the demo canvas, a browser screen share (getDisplayMedia),
- * the desktop bridge, or the Electron shell's native capture.
- */
-export type ScreenSource = 'demo' | 'screen' | 'bridge' | 'native';
-
-/** Monitor modes, each with its own capture interval. */
-export type MonitorMode = 'app' | 'background' | 'advanced';
-
-/** Real mouse/keyboard actions recorded in the persistent action history. */
-export type InputAction = 'move' | 'click' | 'double_click' | 'type' | 'key' | 'scroll';
-
-/** One executed mouse or keyboard action, persisted for viewing and export. */
-export interface ActionRecord {
-  id: string;
-  time: number;
-  action: InputAction;
-  /** Native screen pixels the action targeted. */
-  x: number;
-  y: number;
-  text?: string;
-  /** Who performed it: Replay, Auto-Actor, AI help, ... */
-  source: string;
-  /** Where it was dispatched: the desktop bridge or the demo desktop. */
-  via: 'bridge' | 'demo';
-  ok: boolean;
-  message: string;
+  /** Where the frame came from: the demo canvas, a shared screen, or a real desktop screenshot from the bridge. */
+  source: 'demo' | 'screen' | 'desktop';
 }
 
 /** One point of the mouse trail, normalized to 0..1 of the screen. */
@@ -75,9 +46,10 @@ export interface WorkflowStep {
   correctedY?: number;
   /** Last measured drift distance (0..1). */
   drift?: number;
-  /** Visual evidence from the last execution: screenshots just before and just after the action. */
-  beforeFrame?: Frame;
-  afterFrame?: Frame;
+  /** Last measured drift in native screen pixels. */
+  driftPx?: number;
+  /** Screenshot of the real desktop taken right after this step was executed. */
+  shot?: Frame;
 }
 
 /** Alignment between the live screen and the active step. */
