@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": false,
+    "types": ["vite/client", "node"]
+  },
+  "include": ["*.ts", "*.tsx", "electron/*.ts"],
+  "exclude": ["node_modules", "dist", "dist-electron", "release", "*.bit-app.ts", "server.app-root.tsx"]
+}

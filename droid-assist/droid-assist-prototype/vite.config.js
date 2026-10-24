@@ -14,7 +14,10 @@ const bridgeProxy = {
 };
 
 export default defineConfig({
+  // Relative asset paths so the built index.html also loads from file:// inside Electron.
+  base: './',
   plugins: [react()],
-  server: { proxy: bridgeProxy },
-  preview: { proxy: bridgeProxy },
+  test: {
+    environment: 'jsdom',
+  },
 });

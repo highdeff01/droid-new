@@ -1,4 +1,4 @@
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter, HashRouter } from 'react-router-dom';
 import { 
   createRoot, 
   // hydrateRoot 
@@ -25,9 +25,11 @@ if (import.meta.hot) {
  */
 const container = document.getElementById('root');
 const root = createRoot(container!);
+/** The packaged Electron app loads index.html from file://, where only hash routes resolve. */
+const Router = window.location.protocol === 'file:' ? HashRouter : BrowserRouter;
 
 root.render(
-  <BrowserRouter>
+  <Router>
     <DroidAssistPrototype />
-  </BrowserRouter>
+  </Router>
 );

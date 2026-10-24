@@ -68,10 +68,14 @@ export function Hud({ engine }: { engine: AssistEngine }) {
     <>
       <div className={styles.hud}>
         <div className={styles.group}>
-          <button type="button" onClick={engine.connectBridge} disabled={source === 'bridge'}>🔌 Use bridge</button>
-          <button type="button" onClick={engine.shareScreen} disabled={source === 'screen'}>🖥 Share my screen</button>
-          <button type="button" onClick={engine.useDemo} disabled={source === 'demo'}>Demo</button>
-          {source !== 'none' && <button type="button" onClick={engine.disconnect}>Disconnect</button>}
+          {source === 'demo' ? (
+            <button type="button" onClick={engine.shareScreen}>🖥 {window.droidNative ? 'Capture my screen' : 'Share my screen'}</button>
+          ) : (
+            <>
+              {engine.captureLost && <button type="button" className={styles.danger} onClick={engine.shareScreen}>↻ Restart capture</button>}
+              <button type="button" onClick={engine.useDemo}>Use demo desktop</button>
+            </>
+          )}
           <button type="button" className={recording ? styles.danger : ''} onClick={engine.toggleRecording} disabled={replaying}>
             {recording ? '■ Stop recording' : '● Record'}
           </button>
