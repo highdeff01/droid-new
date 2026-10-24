@@ -1,0 +1,58 @@
+{
+  "name": "droid-assist-prototype",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Droid Assist — AI screen assistant, as a browser app and an Electron desktop app",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "electron:dev": "node electron/dev.mjs",
+    "build:web": "vite build",
+    "build:electron": "node electron/build.mjs",
+    "build": "npm run build:web && npm run build:electron",
+    "dist:win": "npm run build && electron-builder --win",
+    "test": "vitest run",
+    "lint": "oxlint && tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.0",
+    "jsdom": "^25.0.1",
+    "oxlint": "^1.0.0",
+    "oxlint-tsgolint": "^7.0.2005",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.0",
+    "vitest": "^3.0.0"
+  },
+  "build": {
+    "appId": "net.droid.assist",
+    "productName": "Droid Assist",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    }
+  }
+}

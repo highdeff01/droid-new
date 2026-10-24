@@ -7,7 +7,7 @@ import styles from './droid-assist.module.css';
  * step markers (recorded vs drift-corrected), AI annotations and the AI cursor.
  */
 export function Stage({ engine }: { engine: AssistEngine }) {
-  const { source, demoCanvasRef, videoRef, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex } = engine;
+  const { source, demoCanvasRef, frames, captureLost, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex } = engine;
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [typed, setTyped] = useState('');
@@ -117,8 +117,9 @@ export function Stage({ engine }: { engine: AssistEngine }) {
         }}
       >
         <canvas ref={demoCanvasRef} width={DEMO_W} height={DEMO_H} className={styles.screen} style={{ display: source === 'demo' ? 'block' : 'none' }} />
-        <video ref={videoRef} className={styles.screen} muted playsInline style={{ display: source === 'screen' ? 'block' : 'none' }} />
+        {source === 'screen' && frames[0] && <img src={frames[0].url} alt="Live screen" className={styles.screen} />}
         <canvas ref={overlayRef} className={styles.overlay} />
+        {captureLost && <div className={styles.captureLost} role="alert">⚠ CAPTURE LOST — {captureLost}. Monitoring halted: restart capture or switch to the demo desktop.</div>}
         {recording && <span className={styles.recBadge}>● LIVE RECORDING</span>}
         {replaying && <span className={styles.replayBadge}>▶ REPLAYING</span>}
       </div>

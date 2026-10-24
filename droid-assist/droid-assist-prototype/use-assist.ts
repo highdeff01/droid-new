@@ -4,6 +4,7 @@ import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance,
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
 import { calculate, generateCard, planFromGoal, uid } from './planner.js';
 import { sendToBridge } from './bridge.js';
+import { createScreenCapture, type CapturedImage, type ScreenCapture } from './capture.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -88,8 +89,10 @@ export function useAssist() {
   const [plays, setPlays] = useState(0);
 
   const demoCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  /** The running real-screen capture, null when on the demo or after a loss. */
+  const captureRef = useRef<ScreenCapture | null>(null);
+  /** Why the screen capture stopped on its own; null while healthy. */
+  const [captureLost, setCaptureLost] = useState<string | null>(null);
   const tickRef = useRef(0);
   const dismissedCycleRef = useRef(-1);
   const framesRef = useRef<Frame[]>([]);
@@ -118,13 +121,10 @@ export function useAssist() {
 
   const adDismissed = () => Math.floor(tickRef.current / AD_CYCLE) === dismissedCycleRef.current;
 
-  /** Captures the current source into a Frame (display JPEG + 320×180 pixel buffer). */
-  const captureFrame = useCallback((): Frame | null => {
-    const src: CanvasImageSource | null = source === 'screen' ? videoRef.current : demoCanvasRef.current;
+  /** Captures the demo desktop canvas into a Frame (display JPEG + 320×180 pixel buffer). */
+  const captureDemoFrame = useCallback((): Frame | null => {
+    const src = demoCanvasRef.current;
     if (!src) return null;
-    const srcW = source === 'screen' ? videoRef.current?.videoWidth ?? 0 : DEMO_W;
-    const srcH = source === 'screen' ? videoRef.current?.videoHeight ?? 0 : DEMO_H;
-    if (!srcW || !srcH) return null;
     const small = document.createElement('canvas');
     small.width = SAMPLE_W;
     small.height = SAMPLE_H;
@@ -134,8 +134,8 @@ export function useAssist() {
     view.width = 480;
     view.height = 270;
     view.getContext('2d')!.drawImage(src, 0, 0, 480, 270);
-    return { id: ++frameId.current, time: Date.now(), url: view.toDataURL('image/jpeg', 0.7), data: sctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H), srcW, srcH, source };
-  }, [source]);
+    return { id: ++frameId.current, time: Date.now(), url: view.toDataURL('image/jpeg', 0.7), data: sctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H), srcW: DEMO_W, srcH: DEMO_H, source: 'demo' };
+  }, []);
 
   /** Applies a click to the demo desktop (dismiss the ad, press Play). */
   const demoClick = useCallback((x: number, y: number): string => {
@@ -226,33 +226,47 @@ export function useAssist() {
     return () => clearInterval(id);
   }, [source]);
 
-  // Capture loop: gallery, error detection, sync status, auto-actor.
+  /** Monitor analysis of one frame: gallery, error detection, sync status, auto-actor. */
+  const processFrame = (frame: Frame) => {
+    const prev = framesRef.current[0];
+    framesRef.current = [frame, ...framesRef.current].slice(0, settingsRef.current.gallerySize);
+    setFrames(framesRef.current);
+    if (prev) {
+      const popup = detectErrors(prev, frame);
+      if (!popup && popupRef.current && frameDistance(prev.data, frame.data) < 0.005) {
+        // still showing — keep
+      }
+    }
+    const next = stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running');
+    if (next?.refFrame && agentsRef.current('drift')) {
+      const r = matchTemplate(next.refFrame.data, frame.data, next.x, next.y);
+      const level = syncLevelFor(r);
+      setSync({ level, detail: `"${next.name}": region ${r.regionDistance.toFixed(3)}, best ${r.matchDistance.toFixed(3)}${level === 'yellow' ? `, drift (${(r.dx * 100).toFixed(1)}%, ${(r.dy * 100).toFixed(1)}%)` : ''}` });
+    } else if (!next) {
+      setSync({ level: 'idle', detail: 'No active step' });
+    }
+    void autoAct(frame);
+  };
+  const processRef = useRef(processFrame);
+  processRef.current = processFrame;
+
+  // Demo capture loop. Real-screen frames are pushed by the ScreenCapture instead.
   useEffect(() => {
+    if (source !== 'demo') return undefined;
     const id = setInterval(() => {
-      const frame = captureFrame();
-      if (!frame) return;
-      const prev = framesRef.current[0];
-      framesRef.current = [frame, ...framesRef.current].slice(0, settingsRef.current.gallerySize);
-      setFrames(framesRef.current);
-      if (prev) {
-        const popup = detectErrors(prev, frame);
-        if (!popup && popupRef.current && frameDistance(prev.data, frame.data) < 0.005) {
-          // still showing — keep
-        }
-      }
-      const next = stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running');
-      if (next?.refFrame && agentsRef.current('drift')) {
-        const r = matchTemplate(next.refFrame.data, frame.data, next.x, next.y);
-        const level = syncLevelFor(r);
-        setSync({ level, detail: `"${next.name}": region ${r.regionDistance.toFixed(3)}, best ${r.matchDistance.toFixed(3)}${level === 'yellow' ? `, drift (${(r.dx * 100).toFixed(1)}%, ${(r.dy * 100).toFixed(1)}%)` : ''}` });
-      } else if (!next) {
-        setSync({ level: 'idle', detail: 'No active step' });
-      }
-      void autoAct(frame);
-    }, settingsRef.current.captureMs);
+      const frame = captureDemoFrame();
+      if (frame) processRef.current(frame);
+    }, settings.captureMs);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [captureFrame, detectErrors, settings.captureMs]);
+  }, [captureDemoFrame, settings.captureMs, source]);
+
+  // The running screen capture follows the capture-rate setting live.
+  useEffect(() => {
+    captureRef.current?.setInterval(settings.captureMs);
+  }, [settings.captureMs]);
+
+  // Stop capturing when the engine unmounts.
+  useEffect(() => () => captureRef.current?.stop(), []);
 
   /** Auto-Actor: when "Auto act" is on, closes popups and runs the next step once it matches the screen. */
   const autoAct = async (frame: Frame) => {
@@ -461,25 +475,43 @@ export function useAssist() {
     addLog('AI', next.length ? `Pointed out ${next.length} item(s) on screen and refocused the cursor` : 'Nothing needs attention right now', 'info');
   };
 
+  /** Turns a captured screen image into a Frame and runs the monitor on it. */
+  const onScreenImage = (image: CapturedImage) => {
+    processRef.current({ id: ++frameId.current, ...image, source: 'screen' });
+  };
+
+  /**
+   * The capture ended or failed by itself: stop any replay, keep the screen source (no
+   * silent switch to the demo desktop) and raise a visible error until the user acts.
+   */
+  const onCaptureLost = (reason: string) => {
+    captureRef.current = null;
+    abortRef.current = true;
+    setCaptureLost(reason);
+    addLog('Screen', `CAPTURE LOST: ${reason} — monitoring halted. Restart capture or switch to the demo desktop.`, 'error');
+  };
+
   const shareScreen = async () => {
+    captureRef.current?.stop();
+    const capture = createScreenCapture();
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-      stream.getVideoTracks()[0].addEventListener('ended', () => setSource('demo'));
-      setSource('screen');
-      framesRef.current = [];
-      addLog('Screen', 'Sharing your screen — the AI now sees it', 'ok');
+      await capture.start(settingsRef.current.captureMs, { onImage: onScreenImage, onLost: onCaptureLost });
     } catch (error) {
-      addLog('Screen', `Screen share cancelled: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+      capture.stop();
+      addLog('Screen', `Screen capture failed to start: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      return;
     }
+    captureRef.current = capture;
+    framesRef.current = [];
+    setCaptureLost(null);
+    setSource('screen');
+    addLog('Screen', capture.kind === 'native' ? 'Capturing your screen natively — monitoring continues while minimized' : 'Sharing your screen — the AI now sees it', 'ok');
   };
 
   const useDemo = () => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
+    captureRef.current?.stop();
+    captureRef.current = null;
+    setCaptureLost(null);
     setSource('demo');
     framesRef.current = [];
   };
@@ -499,7 +531,7 @@ export function useAssist() {
   return {
     settings, setSettings, source, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
-    agents, setAgents, plays, demoCanvasRef, videoRef, DEMO_W, DEMO_H,
+    agents, setAgents, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H,
     onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, explainScreen,
     shareScreen, useDemo, saveCard, loadCard, addLog,
   };
