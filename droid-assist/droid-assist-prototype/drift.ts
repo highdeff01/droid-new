@@ -71,6 +71,75 @@ export function syncLevelFor(r: DriftResult): SyncLevel {
   return 'red';
 }
 
+/** A step target verified on the live frame, with the correction to apply. */
+export interface DriftCorrection {
+  level: SyncLevel;
+  /** Corrected normalized target (the original when nothing moved or nothing matched). */
+  x: number;
+  y: number;
+  /** Measured drift in native screen pixels. */
+  dxPx: number;
+  dyPx: number;
+  driftPx: number;
+  regionDistance: number;
+  matchDistance: number;
+  /** True when the UI changed so much that the wide search window was needed. */
+  widened: boolean;
+}
+
+const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+
+/**
+ * Verifies a step's target on the live frame and computes where it moved to.
+ * The template is searched near its recorded spot; when it is not found there and the
+ * UI changed (diffCells), a wider window is searched before giving up ('red').
+ * @param srcW native screen width, for reporting drift in pixels
+ */
+export function correctDrift(ref: ImageData, live: ImageData, nx: number, ny: number, srcW: number, srcH: number): DriftCorrection {
+  let r = matchTemplate(ref, live, nx, ny);
+  let widened = false;
+  if (syncLevelFor(r) === 'red' && diffCells(ref, live).length > 0) {
+    const wide = matchTemplate(ref, live, nx, ny, { radius: 64, stride: 2 });
+    if (wide.matchDistance < r.matchDistance) {
+      r = wide;
+      widened = true;
+    }
+  }
+  const level = syncLevelFor(r);
+  const moved = level === 'red' ? { dx: 0, dy: 0 } : r;
+  const dxPx = Math.round(moved.dx * srcW);
+  const dyPx = Math.round(moved.dy * srcH);
+  return {
+    level,
+    x: clamp01(nx + moved.dx),
+    y: clamp01(ny + moved.dy),
+    dxPx,
+    dyPx,
+    driftPx: Math.round(Math.hypot(dxPx, dyPx)),
+    regionDistance: r.regionDistance,
+    matchDistance: r.matchDistance,
+    widened,
+  };
+}
+
+/** What changed on screen after an action was executed. */
+export interface Reverify {
+  /** Distance around the target between the before and after frames. */
+  targetChange: number;
+  /** Whole-frame distance between the before and after frames. */
+  frameChange: number;
+  /** True when the action visibly changed the screen. */
+  changed: boolean;
+}
+
+/** Re-verifies an executed action: compares the frame before and after around (nx, ny) and overall. */
+export function reverify(before: ImageData, after: ImageData, nx: number, ny: number): Reverify {
+  const box = { x: clamp01(nx - 0.08), y: clamp01(ny - 0.08), w: 0.16, h: 0.16 };
+  const targetChange = boxDistance(before, after, box);
+  const frameChange = frameDistance(before, after);
+  return { targetChange, frameChange, changed: targetChange > 0.02 || frameChange > 0.01 };
+}
+
 /** A grid cell whose pixels changed between two frames. */
 export interface ChangedCell {
   col: number;
