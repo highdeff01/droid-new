@@ -87,6 +87,26 @@ export async function captureBridgeScreen(bridgeUrl: string): Promise<BridgeCapt
   }
 }
 
+/** One captured desktop frame from the bridge, or why there is none. */
+export interface BridgeFrame extends BridgeResult {
+  /** Data URL of the captured screen when ok. */
+  imageData?: string;
+}
+
+/** Fetches the PC's current screen from the bridge's screen-capture route. Never throws. */
+export async function fetchBridgeFrame(bridgeUrl: string): Promise<BridgeFrame> {
+  try {
+    const res = await fetch(`${bridgeUrl.replace(/\/$/, '')}/api/screen-capture`, { signal: AbortSignal.timeout(8000) });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || body?.success !== true || typeof body.imageData !== 'string') {
+      return { ok: false, message: body?.error ?? `Screen capture HTTP ${res.status}` };
+    }
+    return { ok: true, imageData: body.imageData, message: 'Frame captured' };
+  } catch (error) {
+    return { ok: false, message: `Bridge unreachable: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
 /** Pings the bridge health endpoint. */
 export async function checkBridge(bridgeUrl: string): Promise<BridgeResult> {
   try {

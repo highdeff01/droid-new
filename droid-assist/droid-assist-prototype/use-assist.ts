@@ -106,6 +106,7 @@ export function useAssist() {
 
   const demoCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const tickRef = useRef(0);
   const dismissedCycleRef = useRef(-1);

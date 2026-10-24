@@ -7,7 +7,7 @@ import styles from './droid-assist.module.css';
  * step markers (recorded vs drift-corrected), AI annotations and the AI cursor.
  */
 export function Stage({ engine }: { engine: AssistEngine }) {
-  const { source, demoCanvasRef, videoRef, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex } = engine;
+  const { source, demoCanvasRef, videoRef, imgRef, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex } = engine;
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [typed, setTyped] = useState('');
