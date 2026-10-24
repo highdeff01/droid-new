@@ -57,6 +57,9 @@
 .steps img, .noThumb { width: 64px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; background: #1e293b; display: grid; place-items: center; font-size: 10px; color: var(--muted); }
 .steps li div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .steps li input { padding: 4px 6px; }
+.evidence { display: flex; gap: 4px; }
+.evidence img { width: 48px; }
+.hud2 select { background: #020617; color: var(--text); border: 1px solid #334155; border-radius: 8px; padding: 6px; }
 .card { display: grid; gap: 8px; margin-top: 10px; padding: 10px; border: 1px dashed var(--accent); border-radius: 10px; }
 .card textarea { min-height: 54px; resize: vertical; }
 .cards { display: grid; gap: 8px; }
