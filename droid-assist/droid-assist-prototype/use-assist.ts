@@ -3,7 +3,7 @@ import type { ActionRecord, Annotation, AssistSettings, Frame, InputAction, LogE
 import { boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
 import { calculate, generateCard, planFromGoal, uid } from './planner.js';
-import { captureBridgeScreen, checkBridge, launchOnBridge, moveOnBridge, sendToBridge, stepPixels } from './bridge.js';
+import { checkBridge, launchOnBridge, moveOnBridge, sendToBridge, stepPixels } from './bridge.js';
 import { grabFrame, monitorInterval, realScreenSource } from './capture.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
 import { parseCommand } from './commands.js';
