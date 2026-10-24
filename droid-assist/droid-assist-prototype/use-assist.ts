@@ -4,6 +4,9 @@ import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance,
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
 import { calculate, generateCard, planFromGoal, uid } from './planner.js';
 import { sendToBridge } from './bridge.js';
+import { LOG_LIMIT, loadCards, loadLog, loadSettings, saveCards, saveLog, saveSettings } from './storage.js';
+import { decodeFrames, toStoredFrame } from './frame-codec.js';
+import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -62,7 +65,7 @@ export interface Agent {
  * recording, drift-aware replay, auto-actor, planner, agents and saved workflows.
  */
 export function useAssist() {
-  const [settings, setSettings] = useState<AssistSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<AssistSettings>(() => loadSettings(DEFAULT_SETTINGS));
   const [source, setSource] = useState<'demo' | 'screen'>('demo');
   const [frames, setFrames] = useState<Frame[]>([]);
   const [pinned, setPinned] = useState<Frame[]>([]);
@@ -74,7 +77,7 @@ export function useAssist() {
   const [sync, setSync] = useState<{ level: SyncLevel; detail: string }>({ level: 'idle', detail: 'No active step' });
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
-  const [log, setLog] = useState<LogEntry[]>([]);
+  const [log, setLog] = useState<LogEntry[]>(loadLog);
   const [cards, setCards] = useState<SavedCard[]>([]);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
@@ -102,14 +105,46 @@ export function useAssist() {
   /** The frame in which the flagged popup was first seen. */
   const popupFrameRef = useRef<Frame | null>(null);
   const autoBusyRef = useRef(false);
-  const frameId = useRef(0);
+  /** Seeded from the clock so new captures never reuse the ids of frames stored by an earlier session. */
+  const frameId = useRef(Date.now());
+  /** Frames restored from storage: shown in the gallery, never compared against for popups. */
+  const restoredIdsRef = useRef(new Set<number>());
+  /** Cards are written back only after the stored ones have been loaded. */
+  const cardsHydratedRef = useRef(false);
   const lastStepAt = useRef(0);
 
   settingsRef.current = settings;
   stepsRef.current = steps;
 
+  // Persistence: settings, log and cards to localStorage.
+  useEffect(() => saveSettings(settings), [settings]);
+  useEffect(() => saveLog(log), [log]);
+  useEffect(() => {
+    if (cardsHydratedRef.current) saveCards(cards);
+  }, [cards]);
+
+  // Hydrate the async stores: saved cards (screenshots decoded) and the recent frame gallery.
+  useEffect(() => {
+    let live = true;
+    void loadCards().then((stored) => {
+      if (!live) return;
+      cardsHydratedRef.current = true;
+      setCards((c) => [...c, ...stored.filter((s) => !c.some((x) => x.id === s.id))]);
+    });
+    const { gallerySize } = settingsRef.current;
+    void loadStoredFrames(gallerySize).then(decodeFrames).then((restored) => {
+      if (!live || !restored.length) return;
+      restored.forEach((f) => restoredIdsRef.current.add(f.id));
+      framesRef.current = [...framesRef.current, ...restored].slice(0, gallerySize);
+      setFrames(framesRef.current);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   const addLog = useCallback((source: string, message: string, tone: LogEntry['tone'] = 'info') => {
-    setLog((l) => [{ id: uid('log'), time: Date.now(), source, message, tone }, ...l].slice(0, 200));
+    setLog((l) => [{ id: uid('log'), time: Date.now(), source, message, tone }, ...l].slice(0, LOG_LIMIT));
   }, []);
 
   const agentOn = useCallback((id: Agent['id']) => agents.find((a) => a.id === id)?.on ?? false, [agents]);
@@ -234,7 +269,8 @@ export function useAssist() {
       const prev = framesRef.current[0];
       framesRef.current = [frame, ...framesRef.current].slice(0, settingsRef.current.gallerySize);
       setFrames(framesRef.current);
-      if (prev) {
+      void putStoredFrame(toStoredFrame(frame), settingsRef.current.gallerySize);
+      if (prev && !restoredIdsRef.current.has(prev.id)) {
         const popup = detectErrors(prev, frame);
         if (!popup && popupRef.current && frameDistance(prev.data, frame.data) < 0.005) {
           // still showing — keep
