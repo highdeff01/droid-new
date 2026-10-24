@@ -1,8 +1,28 @@
 import type { AssistEngine } from './use-assist.js';
 import type { SyncLevel } from './types.js';
+import type { AiStatus } from './ai.js';
 import styles from './droid-assist.module.css';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
+const SOURCE_LABEL: Record<ScreenSource, string> = { demo: 'Demo desktop', screen: 'Screen share', bridge: 'Desktop bridge', native: 'Native capture' };
+
+/** Monitor HUD: mode picker, capture interval, screenshot count, source and /use target. */
+export function MonitorStatus({ engine }: { engine: AssistEngine }) {
+  const { settings, setSettings, intervalMs, shotCount, source, target } = engine;
+  return (
+    <div className={styles.hud2} aria-label="Monitor status">
+      <label>Monitor
+        <select value={settings.monitorMode} onChange={(e) => setSettings({ ...settings, monitorMode: e.target.value as MonitorMode })} aria-label="Monitor mode">
+          {(Object.keys(MONITOR_MODES) as MonitorMode[]).map((m) => <option key={m} value={m}>{MONITOR_MODES[m].label}</option>)}
+        </select>
+      </label>
+      <span>⏱ every <b>{intervalMs} ms</b></span>
+      <span>📸 <b>{shotCount}</b> screenshots</span>
+      <span>Source: <b>{SOURCE_LABEL[source]}</b></span>
+      {target && <span>Using: <b>{target}</b></span>}
+    </div>
+  );
+}
 
 /** Real-time sync indicator: live frame vs the active workflow step. */
 export function SyncStatus({ level, detail }: { level: SyncLevel; detail: string }) {
@@ -15,11 +35,35 @@ export function SyncStatus({ level, detail }: { level: SyncLevel; detail: string
   );
 }
 
+/** Safety controls: one-click arm/disarm of real input, emergency stop and the ABORTED state. */
+export function SafetyControls({ engine }: { engine: AssistEngine }) {
+  const { armed, aborted, settings } = engine;
+  return (
+    <div className={styles.safety} data-armed={armed} data-aborted={aborted} aria-live="assertive">
+      <button type="button" className={armed ? styles.danger : ''} onClick={engine.toggleArmed} aria-pressed={armed} title="Real input is only sent to the PC while armed; disarmed runs are dry runs">
+        {armed ? '🔴 Real input ARMED — click to disarm' : '🟢 Dry run (disarmed) — click to arm real input'}
+      </button>
+      {aborted ? (
+        <>
+          <strong className={styles.aborted}>⛔ ABORTED</strong>
+          <button type="button" onClick={engine.clearAbort}>Clear abort</button>
+        </>
+      ) : (
+        <button type="button" className={styles.danger} onClick={() => engine.triggerAbort('stop button')} title={`Emergency stop (${settings.abortHotkey})`}>
+          ⛔ Emergency stop <small>{settings.abortHotkey}</small>
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** Primary HUD: screen source, record / replay / self-test, goal + AI plan. */
 export function Hud({ engine }: { engine: AssistEngine }) {
-  const { source, recording, replaying, goal, setGoal, settings, setSettings, steps, progress, plays } = engine;
+  const { source, recording, replaying, goal, setGoal, settings, setSettings, steps, progress, plays, aiStatus, aiBusy } = engine;
+  const aiOff = aiStatus.state !== 'online';
+  const aiTitle = aiOff ? aiStatus.detail : undefined;
   const total = steps.length;
-  const done = steps.filter((s) => s.status === 'done' || s.status === 'drift').length;
+  const done = steps.filter((s) => s.status === 'done').length;
   return (
     <>
       <div className={styles.hud}>
@@ -39,21 +83,23 @@ export function Hud({ engine }: { engine: AssistEngine }) {
             <button type="button" className={styles.danger} onClick={engine.stop}>■ Stop</button>
           ) : (
             <>
-              <button type="button" className={styles.primary} onClick={() => engine.replay(false)} disabled={recording || !total}>▶ Replay + drift</button>
-              <button type="button" onClick={() => engine.replay(true)} disabled={recording || !total}>🧪 AI self-test</button>
+              <button type="button" className={styles.primary} onClick={() => engine.replay(false)} disabled={recording || !total} title="Performs every step as real input on the PC through the desktop bridge">▶ Replay + drift</button>
+              <button type="button" onClick={() => engine.replay(true)} disabled={recording || !total} title="Verifies each step on the live desktop; sends no input">🧪 AI self-test (no input)</button>
             </>
           )}
-          <button type="button" onClick={engine.explainScreen}>👁 Point out</button>
+          <button type="button" onClick={engine.explainScreen} disabled={aiOff || aiBusy} title={aiTitle}>👁 Point out</button>
         </div>
         <div className={styles.goal}>
           <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder='Goal, e.g. "play the game", "calculate 12*7", "search ad blocker"' aria-label="Goal" />
-          <button type="button" className={styles.primary} onClick={engine.autoPlan}>✨ AI plan</button>
+          <button type="button" className={styles.primary} onClick={engine.autoPlan} disabled={aiOff || aiBusy} title={aiTitle}>{aiBusy ? '… thinking' : '✨ AI plan'}</button>
         </div>
       </div>
+      <MonitorStatus engine={engine} />
       <div className={styles.hud2}>
+        <SafetyControls engine={engine} />
         <SyncStatus level={engine.sync.level} detail={engine.sync.detail} />
-        <label><input type="checkbox" checked={settings.autoAct} onChange={(e) => setSettings({ ...settings, autoAct: e.target.checked })} /> Auto act</label>
-        <label><input type="checkbox" checked={settings.aiHelp} onChange={(e) => setSettings({ ...settings, aiHelp: e.target.checked })} /> AI help</label>
+        <label><input type="checkbox" checked={settings.autoAct} onChange={(e) => setSettings({ ...settings, autoAct: e.target.checked })} disabled={aiOff} /> Auto act{aiOff && ' (AI unavailable)'}</label>
+        <label><input type="checkbox" checked={settings.aiHelp} onChange={(e) => setSettings({ ...settings, aiHelp: e.target.checked })} disabled={aiOff} /> AI help{aiOff && ' (AI unavailable)'}</label>
         <label><input type="checkbox" checked={settings.showTrail} onChange={(e) => setSettings({ ...settings, showTrail: e.target.checked })} /> Trail</label>
         <div className={styles.progress} title="Auto progress (verified steps) + manual updates">
           <span>Progress {total ? Math.round((done / total) * 100) : 0}%</span>

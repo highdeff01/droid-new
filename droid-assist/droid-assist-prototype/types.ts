@@ -1,3 +1,6 @@
+/** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
+export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
+
 /** A captured screen frame: a display image plus a downsampled pixel buffer for drift math. */
 export interface Frame {
   id: number;
@@ -9,8 +12,8 @@ export interface Frame {
   /** Source resolution of the captured screen (for converting to native coordinates). */
   srcW: number;
   srcH: number;
-  /** Where the frame came from. */
-  source: 'demo' | 'screen';
+  /** Where the frame came from: the demo canvas, a shared screen, or a real desktop screenshot from the bridge. */
+  source: 'demo' | 'screen' | 'desktop';
 }
 
 /** One point of the mouse trail, normalized to 0..1 of the screen. */
@@ -22,7 +25,7 @@ export interface TrailPoint {
 }
 
 /** Actions a workflow step can perform. */
-export type StepAction = 'click' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media';
+export type StepAction = 'click' | 'double_click' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media';
 
 /** Status of a step during replay. */
 export type StepStatus = 'pending' | 'running' | 'done' | 'drift' | 'failed';
@@ -43,6 +46,10 @@ export interface WorkflowStep {
   correctedY?: number;
   /** Last measured drift distance (0..1). */
   drift?: number;
+  /** Last measured drift in native screen pixels. */
+  driftPx?: number;
+  /** Screenshot of the real desktop taken right after this step was executed. */
+  shot?: Frame;
 }
 
 /** Alignment between the live screen and the active step. */
@@ -86,10 +93,16 @@ export interface AssistSettings {
   gallerySize: number;
   /** Drift checkpoints sampled per cursor move, start to finish. */
   checkpoints: number;
+  /** Capture interval of the "app" monitor mode; background and advanced modes use fixed intervals. */
   captureMs: number;
+  monitorMode: MonitorMode;
   autoAct: boolean;
   aiHelp: boolean;
   showTrail: boolean;
   /** Base URL of the Droid desktop bridge (pyautogui replay endpoint). */
   bridgeUrl: string;
+  /** Emergency-stop key combo, e.g. "Shift+Escape". */
+  abortHotkey: string;
+  /** Max real (bridge-dispatched) input actions per Auto Act / replay run. */
+  actionBudget: number;
 }
