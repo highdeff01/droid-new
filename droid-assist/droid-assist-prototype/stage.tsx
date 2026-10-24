@@ -7,7 +7,7 @@ import styles from './droid-assist.module.css';
  * step markers (recorded vs drift-corrected), AI annotations and the AI cursor.
  */
 export function Stage({ engine }: { engine: AssistEngine }) {
-  const { source, demoCanvasRef, videoRef, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex } = engine;
+  const { source, demoCanvasRef, videoRef, imgRef, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex } = engine;
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [typed, setTyped] = useState('');
@@ -118,6 +118,7 @@ export function Stage({ engine }: { engine: AssistEngine }) {
       >
         <canvas ref={demoCanvasRef} width={DEMO_W} height={DEMO_H} className={styles.screen} style={{ display: source === 'demo' ? 'block' : 'none' }} />
         <video ref={videoRef} className={styles.screen} muted playsInline style={{ display: source === 'screen' ? 'block' : 'none' }} />
+        {(source === 'bridge' || source === 'native') && engine.frames[0] && <img src={engine.frames[0].url} alt="Live desktop" className={styles.screen} />}
         <canvas ref={overlayRef} className={styles.overlay} />
         {recording && <span className={styles.recBadge}>● LIVE RECORDING</span>}
         {replaying && <span className={styles.replayBadge}>▶ REPLAYING</span>}

@@ -1,4 +1,6 @@
 import type { Frame, SavedCard, StepAction, WorkflowStep } from './types.js';
+import { AiError, VIEW_H, VIEW_W, parseJsonReply, toUnit } from './ai.js';
+import type { AskFn } from './ai.js';
 
 let seq = 0;
 /** A short unique id. */
@@ -34,59 +36,13 @@ export function findSimilar(text: string, cards: SavedCard[], min = 0.5): SavedC
   return best;
 }
 
-/**
- * Finds the most button-like (saturated, bright) region of a frame — a fallback target
- * when the planner has no learned coordinates. Returns normalized coordinates.
- */
-export function findSalientTarget(frame: Frame, exclude?: { x: number; y: number; w: number; h: number } | null) {
-  const { data, width, height } = frame.data;
-  let best = { score: 0, x: 0.5, y: 0.5 };
-  for (let y = 6; y < height - 20; y += 4) {
-    for (let x = 6; x < width - 6; x += 4) {
-      const nx = x / width;
-      const ny = y / height;
-      if (exclude && nx >= exclude.x && nx <= exclude.x + exclude.w && ny >= exclude.y && ny <= exclude.y + exclude.h) continue;
-      let score = 0;
-      for (let dy = -4; dy <= 4; dy += 2) {
-        for (let dx = -4; dx <= 4; dx += 2) {
-          const i = ((y + dy) * width + x + dx) * 4;
-          const max = Math.max(data[i], data[i + 1], data[i + 2]);
-          const min = Math.min(data[i], data[i + 1], data[i + 2]);
-          score += (max - min) * (max / 255);
-        }
-      }
-      if (score > best.score) best = { score, x: nx, y: ny };
-    }
-  }
-  // Grow to the full extent of the similarly-colored region and aim at its center,
-  // not the edge pixel that happened to score highest.
-  const at = (x: number, y: number) => ((Math.round(y) * width + Math.round(x)) * 4);
-  const seed = at(best.x * width, best.y * height);
-  const same = (x: number, y: number) => {
-    if (x < 0 || y < 0 || x >= width || y >= height) return false;
-    const i = at(x, y);
-    return Math.abs(data[i] - data[seed]) + Math.abs(data[i + 1] - data[seed + 1]) + Math.abs(data[i + 2] - data[seed + 2]) < 60;
-  };
-  const sx = best.x * width;
-  const sy = best.y * height;
-  let l = sx, r = sx, t = sy, b = sy;
-  while (same(l - 1, sy)) l--;
-  while (same(r + 1, sy)) r++;
-  const cx = (l + r) / 2;
-  while (same(cx, t - 1)) t--;
-  while (same(cx, b + 1)) b++;
-  return { score: best.score, x: cx / width, y: (t + b) / 2 / height };
-}
+const ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(['click', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media']);
 
-const step = (name: string, action: StepAction, x: number, y: number, extra: Partial<WorkflowStep> = {}): WorkflowStep => ({
-  id: uid('step'),
-  name,
-  action,
-  x,
-  y,
-  status: 'pending',
-  ...extra,
-});
+/** System prompt for the planner: the reply contract the model must follow. */
+export const PLAN_SYSTEM = `You are Droid Assist, an agent that controls a computer screen. You see a screenshot (${VIEW_W}x${VIEW_H}) of the user's screen.
+Plan the concrete steps that achieve the user's goal on THIS screen. Look at the screenshot and target real visible controls.
+Reply ONLY with JSON: {"steps":[{"name":string,"action":"click"|"type"|"key"|"open_app"|"wait"|"search"|"calc"|"media","x":number,"y":number,"text"?:string}]}
+x and y are the target's center as fractions 0..1 of the screenshot width/height. "text" is the text to type, the key to press, the search query or the arithmetic expression.`;
 
 /** A plan the assistant proposes, with where it came from. */
 export interface PlanResult {
@@ -94,11 +50,37 @@ export interface PlanResult {
   source: string;
 }
 
+/** Converts one model step into a WorkflowStep; throws AiError when it breaks the contract. */
+function toStep(raw: unknown, frame: Frame | null): WorkflowStep {
+  const s = (raw ?? {}) as Record<string, unknown>;
+  const action = s.action as StepAction;
+  if (!ACTIONS.has(action)) throw new AiError(`AI proposed an unknown action "${String(s.action)}"`);
+  const step: WorkflowStep = {
+    id: uid('step'),
+    name: typeof s.name === 'string' && s.name.trim() ? s.name.trim() : action,
+    action,
+    x: toUnit(s.x ?? 0.5, VIEW_W),
+    y: toUnit(s.y ?? 0.5, VIEW_H),
+    status: 'pending',
+  };
+  if (s.text !== undefined && s.text !== null) step.text = String(s.text);
+  if (action === 'click' && frame) step.refFrame = frame;
+  return step;
+}
+
+/** Parses the planner's JSON reply into steps; throws AiError on malformed or empty plans. */
+export function parsePlan(reply: string, frame: Frame | null): WorkflowStep[] {
+  const steps = parseJsonReply(reply).steps;
+  if (!Array.isArray(steps) || !steps.length) throw new AiError('AI returned no steps for this goal');
+  return steps.map((s) => toStep(s, frame));
+}
+
 /**
- * Auto-fills a workflow from a goal: reuses a similar saved workflow when one exists,
- * otherwise assembles steps from the goal's intent and the live screen.
+ * Fills a workflow from a goal: reuses a similar saved workflow when one exists (no model
+ * call); otherwise the model plans the steps from the goal and the live frame.
+ * Rejects with AiError when the model is unreachable or its reply is unusable.
  */
-export function planFromGoal(goal: string, cards: SavedCard[], frame: Frame | null, popup: { x: number; y: number; w: number; h: number } | null): PlanResult {
+export async function planFromGoal(goal: string, cards: SavedCard[], frame: Frame | null, ask: AskFn, context: string[] = []): Promise<PlanResult> {
   const similar = findSimilar(goal, cards);
   if (similar) {
     return {
@@ -106,25 +88,8 @@ export function planFromGoal(goal: string, cards: SavedCard[], frame: Frame | nu
       steps: similar.steps.map((s) => ({ ...s, id: uid('step'), status: 'pending' as const, correctedX: undefined, correctedY: undefined })),
     };
   }
-  const g = goal.toLowerCase();
-  const out: WorkflowStep[] = [];
-  if (/open|launch|start app/.test(g)) out.push(step(`Open ${goal.replace(/.*(open|launch)\s*/i, '') || 'app'}`, 'open_app', 0.05, 0.4));
-  if (/game|play|level/.test(g) && frame) {
-    const target = findSalientTarget(frame, popup);
-    out.push(step('Click the main action button', 'click', target.x, target.y, { refFrame: frame }));
-  }
-  const typed = goal.match(/(?:type|write)\s+"([^"]+)"/i);
-  if (typed) out.push(step(`Type "${typed[1]}"`, 'type', 0.5, 0.5, { text: typed[1] }));
-  const searched = goal.match(/search\s+(?:for\s+)?(.+)/i);
-  if (searched) out.push(step(`Search: ${searched[1]}`, 'search', 0.5, 0.05, { text: searched[1] }));
-  const calc = goal.match(/(?:calc|calculate)\s+([0-9+\-*/(). ]+)/i);
-  if (calc) out.push(step(`Calculate ${calc[1].trim()}`, 'calc', 0.5, 0.5, { text: calc[1].trim() }));
-  if (/music|media|video/.test(g)) out.push(step('Play / pause media', 'media', 0.5, 0.5));
-  if (!out.length && frame) {
-    const target = findSalientTarget(frame, popup);
-    out.push(step('Click the most prominent control', 'click', target.x, target.y, { refFrame: frame }));
-  }
-  return { steps: out, source: 'Assembled from the goal and the live screen' };
+  const reply = await ask({ system: PLAN_SYSTEM, prompt: `Goal: ${goal}`, frame, context, json: true });
+  return { steps: parsePlan(reply, frame), source: 'AI planned from the goal and the live screen' };
 }
 
 /** A generated name + description for a workflow. */

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Annotation, AssistSettings, Frame, LogEntry, SavedCard, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
-import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
+import type { ActionRecord, Annotation, AssistSettings, Frame, InputAction, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
+import { boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
 import { calculate, generateCard, planFromGoal, uid } from './planner.js';
 import { sendToBridge } from './bridge.js';
@@ -19,42 +19,47 @@ const DRY_RUN_RESULT: ExecResult = { ok: true, message: 'verified (dry run — n
 
 const DEMO_W = 960;
 const DEMO_H = 540;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * Looks for a popup's close control: the centroid of the brightest pixels in the
- * popup's top-right corner. Falls back to the corner itself.
- */
-function findCloseButton(frame: Frame, box: { x: number; y: number; w: number; h: number }) {
-  const { data, width, height } = frame.data;
-  const x0 = Math.floor((box.x + box.w * 0.6) * width);
-  const x1 = Math.min(width - 1, Math.ceil((box.x + box.w) * width));
-  const y0 = Math.floor(box.y * height);
-  const y1 = Math.min(height - 1, Math.ceil((box.y + box.h * 0.35) * height));
-  const bright: Array<[number, number]> = [];
-  for (let y = y0; y <= y1; y++) {
-    for (let x = x0; x <= x1; x++) {
-      const i = (y * width + x) * 4;
-      if (data[i] > 200 && data[i + 1] > 200 && data[i + 2] > 200) bright.push([x, y]);
-    }
-  }
-  if (bright.length >= 3) {
-    // Anchor on the bright pixel closest to the top-right corner, then average its
-    // neighbourhood — so nearby text doesn't pull the click off the × button.
-    const anchor = bright.reduce((a, p) => (p[0] - p[1] > a[0] - a[1] ? p : a));
-    const near = bright.filter((p) => Math.abs(p[0] - anchor[0]) <= 8 && Math.abs(p[1] - anchor[1]) <= 8);
-    const cx = near.reduce((s, p) => s + p[0], 0) / near.length;
-    const cy = near.reduce((s, p) => s + p[1], 0) / near.length;
-    return { x: cx / width, y: cy / height, found: true };
-  }
-  return { x: box.x + box.w * 0.93, y: box.y + box.h * 0.09, found: false };
+/** Draws a source into a Frame: a 480×270 display JPEG plus the 320×180 drift buffer. */
+function toFrame(src: CanvasImageSource, srcW: number, srcH: number, id: number, source: Frame['source']): Frame {
+  const small = document.createElement('canvas');
+  small.width = SAMPLE_W;
+  small.height = SAMPLE_H;
+  const sctx = small.getContext('2d', { willReadFrequently: true })!;
+  sctx.drawImage(src, 0, 0, SAMPLE_W, SAMPLE_H);
+  const view = document.createElement('canvas');
+  view.width = 480;
+  view.height = 270;
+  view.getContext('2d')!.drawImage(src, 0, 0, 480, 270);
+  return { id, time: Date.now(), url: view.toDataURL('image/jpeg', 0.7), data: sctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H), srcW, srcH, source };
 }
+
+/** A real desktop screenshot from the bridge as a Frame; throws with the bridge's reason. */
+async function desktopFrame(bridgeUrl: string, id: number): Promise<Frame> {
+  const shot = await captureDesktop(bridgeUrl);
+  if (!shot.ok) throw new Error(shot.message);
+  const img = new Image();
+  img.src = shot.frame.image;
+  await img.decode();
+  return toFrame(img, shot.frame.width || img.naturalWidth, shot.frame.height || img.naturalHeight, id, 'desktop');
+}
+
+/** Workflow actions that are real mouse/keyboard input. */
+const INPUT_ACTIONS: Partial<Record<StepAction, InputAction>> = { click: 'click', double_click: 'double_click', scroll: 'scroll', type: 'type', key: 'key' };
+/** Input actions that first move the pointer to their target. */
+const POINTER_ACTIONS = new Set<InputAction>(['click', 'double_click', 'scroll']);
+
+type ExecResult = { ok: boolean; message: string };
+
+/** A click on a flagged popup's close control, as a real step (no template: the popup is new). */
+const closePopupStep = (popup: Annotation): WorkflowStep => ({ id: uid('close'), name: 'Close popup', action: 'click', x: popup.actX!, y: popup.actY!, status: 'pending' });
 
 /** Default settings. */
 export const DEFAULT_SETTINGS: AssistSettings = {
   gallerySize: 10,
   checkpoints: 6,
   captureMs: 500,
+  monitorMode: 'app',
   autoAct: false,
   aiHelp: true,
   showTrail: true,
@@ -62,6 +67,8 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   abortHotkey: DEFAULT_ABORT_HOTKEY,
   actionBudget: DEFAULT_ACTION_BUDGET,
 };
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** A background agent the user can toggle. */
 export interface Agent {
@@ -77,7 +84,12 @@ export interface Agent {
  */
 export function useAssist() {
   const [settings, setSettings] = useState<AssistSettings>(DEFAULT_SETTINGS);
-  const [source, setSource] = useState<'demo' | 'screen'>('demo');
+  const [source, setSource] = useState<ScreenSource>('demo');
+  /** The app/window the assistant is attached to via /use. */
+  const [target, setTarget] = useState<string | null>(null);
+  const [history, setHistory] = useState<ActionRecord[]>(() => loadHistory());
+  /** Screenshots taken this session (monitor ticks + per-step evidence). */
+  const [shotCount, setShotCount] = useState(0);
   const [frames, setFrames] = useState<Frame[]>([]);
   const [pinned, setPinned] = useState<Frame[]>([]);
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
@@ -107,6 +119,7 @@ export function useAssist() {
 
   const demoCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const tickRef = useRef(0);
   const dismissedCycleRef = useRef(-1);
@@ -130,6 +143,9 @@ export function useAssist() {
   const dryPopupRef = useRef<string | null>(null);
 
   settingsRef.current = settings;
+  aiStatusRef.current = aiStatus;
+  logRef.current = log;
+  goalRef.current = goal;
   stepsRef.current = steps;
   armedRef.current = armed;
   abortedRef.current = aborted;
@@ -198,16 +214,7 @@ export function useAssist() {
     const srcW = source === 'screen' ? videoRef.current?.videoWidth ?? 0 : DEMO_W;
     const srcH = source === 'screen' ? videoRef.current?.videoHeight ?? 0 : DEMO_H;
     if (!srcW || !srcH) return null;
-    const small = document.createElement('canvas');
-    small.width = SAMPLE_W;
-    small.height = SAMPLE_H;
-    const sctx = small.getContext('2d', { willReadFrequently: true })!;
-    sctx.drawImage(src, 0, 0, SAMPLE_W, SAMPLE_H);
-    const view = document.createElement('canvas');
-    view.width = 480;
-    view.height = 270;
-    view.getContext('2d')!.drawImage(src, 0, 0, 480, 270);
-    return { id: ++frameId.current, time: Date.now(), url: view.toDataURL('image/jpeg', 0.7), data: sctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H), srcW, srcH, source };
+    return toFrame(src, srcW, srcH, ++frameId.current, source);
   }, [source]);
 
   /** Applies a click to the demo desktop (dismiss the ad, press Play). */
@@ -283,13 +290,12 @@ export function useAssist() {
     const cells = largestCluster(diffCells(prev.data, cur.data));
     const box = cells.length >= 6 ? boundingBox(cells) : null;
     if (!box) return null;
-    const close = findCloseButton(cur, box);
     popupBaseRef.current = prev;
     popupFrameRef.current = cur;
-    const ann: Annotation = { id: uid('ann'), ...box, label: 'New popup / UI mismatch', tone: 'error', actX: close.x, actY: close.y };
+    const ann: Annotation = { id: uid('ann'), ...box, label: 'New popup / UI mismatch', tone: 'error' };
     popupRef.current = ann;
     setAnnotations((a) => [ann, ...a.filter((x) => x.tone !== 'error')].slice(0, 6));
-    if (agentsRef.current('popup')) addLog('Popup watcher', `Intrusive content appeared — close button ${close.found ? 'found' : 'guessed'} at (${(close.x * 100).toFixed(1)}%, ${(close.y * 100).toFixed(1)}%)`, 'warn');
+    if (agentsRef.current('popup')) addLog('Popup watcher', `New content appeared at (${(box.x * 100).toFixed(0)}%, ${(box.y * 100).toFixed(0)}%) — the AI decides whether it is a popup to close`, 'warn');
     return ann;
   }, [addLog]);
 
@@ -304,33 +310,59 @@ export function useAssist() {
     return () => clearInterval(id);
   }, [source]);
 
-  // Capture loop: gallery, error detection, sync status, auto-actor.
+  // Bridge takeover: when a bridge answers its health check, frames come from the real desktop
+  // unless the user explicitly chose the demo desktop.
   useEffect(() => {
-    const id = setInterval(() => {
-      const frame = captureFrame();
-      if (!frame) return;
-      const prev = framesRef.current[0];
-      framesRef.current = [frame, ...framesRef.current].slice(0, settingsRef.current.gallerySize);
-      setFrames(framesRef.current);
-      if (prev) {
-        const popup = detectErrors(prev, frame);
-        if (!popup && popupRef.current && frameDistance(prev.data, frame.data) < 0.005) {
-          // still showing — keep
-        }
+    const url = settings.bridgeUrl;
+    if (!url) return undefined;
+    let cancelled = false;
+    void checkBridge(url).then((r) => {
+      if (cancelled || !r.ok || demoChosenRef.current || sourceRef.current === 'bridge') return;
+      framesRef.current = [];
+      setSource('bridge');
+      addLog('Monitor', 'Desktop bridge online — screenshots now come from the real screen', 'ok');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.bridgeUrl, addLog]);
+
+  const intervalMs = monitorInterval(settings.monitorMode, settings.captureMs);
+
+  // Monitor loop at the mode's interval: gallery, error detection, sync status, auto-actor.
+  useEffect(() => {
+    const tick = async () => {
+      // Only background mode keeps watching and controlling while the page is hidden.
+      if (document.hidden && settingsRef.current.monitorMode !== 'background') return;
+      if (captureBusyRef.current) return;
+      captureBusyRef.current = true;
+      try {
+        const frame = await snapshot();
+        if (frame) onFrame(frame);
+      } finally {
+        captureBusyRef.current = false;
       }
-      const next = stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running');
-      if (next?.refFrame && agentsRef.current('drift')) {
-        const r = matchTemplate(next.refFrame.data, frame.data, next.x, next.y);
-        const level = syncLevelFor(r);
-        setSync({ level, detail: `"${next.name}": region ${r.regionDistance.toFixed(3)}, best ${r.matchDistance.toFixed(3)}${level === 'yellow' ? `, drift (${(r.dx * 100).toFixed(1)}%, ${(r.dy * 100).toFixed(1)}%)` : ''}` });
-      } else if (!next) {
-        setSync({ level: 'idle', detail: 'No active step' });
-      }
-      void autoAct(frame);
+      void autoAct();
     }, settingsRef.current.captureMs);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [captureFrame, detectErrors, settings.captureMs]);
+  }, [snapshot, detectErrors, intervalMs, source]);
+
+  /** Handles one monitor frame. */
+  const onFrame = (frame: Frame) => {
+    const prev = framesRef.current[0];
+    pushFrame(frame);
+    if (prev) detectErrors(prev, frame);
+    const next = stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running');
+    if (next?.refFrame && agentsRef.current('drift')) {
+      const r = matchTemplate(next.refFrame.data, frame.data, next.x, next.y);
+      const level = syncLevelFor(r);
+      setSync({ level, detail: `"${next.name}": region ${r.regionDistance.toFixed(3)}, best ${r.matchDistance.toFixed(3)}${level === 'yellow' ? `, drift (${(r.dx * 100).toFixed(1)}%, ${(r.dy * 100).toFixed(1)}%)` : ''}` });
+    } else if (!next) {
+      setSync({ level: 'idle', detail: 'No active step' });
+    }
+    void autoAct(frame);
+  };
 
   /** Stops the Auto Act run when the safety gate refused (abort or budget). */
   const haltAutoAct = (out: ExecResult) => {
@@ -379,6 +411,7 @@ export function useAssist() {
       addLog(dry ? 'Auto-Actor (dry run)' : 'Auto-Actor', `${next.name}: ${out.message}`, out.ok ? 'ok' : 'error');
       if (out.ok && !dry && agentsRef.current('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
     } finally {
+      lastStepAt.current = Date.now();
       autoBusyRef.current = false;
     }
   };
@@ -391,6 +424,18 @@ export function useAssist() {
   const updateStep = (index: number, patch: Partial<WorkflowStep>) => {
     setSteps((s) => s.map((st, i) => (i === index ? { ...st, ...patch } : st)));
     stepsRef.current = stepsRef.current.map((st, i) => (i === index ? { ...st, ...patch } : st));
+  };
+
+  /** Writes a real outcome onto its step: done only when executed, failed otherwise; screenshot and trail follow. */
+  const applyOutcome = (index: number, step: WorkflowStep, out: StepOutcome, dryRun = false) => {
+    const c = out.correction;
+    const measured = { correctedX: out.target.x, correctedY: out.target.y, drift: c?.matchDistance, driftPx: c?.driftPx };
+    if (dryRun && out.ok) {
+      updateStep(index, { status: 'pending', ...measured });
+      return;
+    }
+    updateStep(index, { status: out.executed ? 'done' : 'failed', ...measured, shot: out.shot ?? step.shot });
+    if (out.executed) setTrail((t) => [...t, { x: out.target.x, y: out.target.y, t: Date.now(), click: true }].slice(-1500));
   };
 
   /** Stage pointer input: trail while recording, and clicks become steps (and act on the demo). */
@@ -431,6 +476,20 @@ export function useAssist() {
     }
   };
 
+  /** AI help: a flagged popup over the step's target is closed first, as real input. */
+  const clearCoveringPopup = async (step: WorkflowStep, dryRun: boolean) => {
+    const popup = popupRef.current;
+    const covered = popup && step.x >= popup.x && step.x <= popup.x + popup.w && step.y >= popup.y && step.y <= popup.y + popup.h;
+    if (!covered || popup.actX === undefined) return;
+    if (dryRun || !settingsRef.current.aiHelp) {
+      addLog('AI help', `Popup covers "${step.name}"${dryRun ? ' — self-test does not close it' : ' (enable AI help to clear it)'}`, 'warn');
+      return;
+    }
+    addLog('AI help', `Popup covers "${step.name}" — closing it first`, 'warn');
+    const r = await perform(closePopupStep(popup), true, 'AI help');
+    addLog('AI help', r.message, r.ok ? 'ok' : 'error');
+  };
+
   /**
    * Forward replay with background drift cross-referencing: each move is split into
    * `checkpoints` sub-moves; at every checkpoint the live frame is re-matched against the
@@ -441,7 +500,14 @@ export function useAssist() {
    */
   const replay = async (selfTest = false) => {
     if (!stepsRef.current.length) {
-      addLog('Replay', 'Nothing to replay — record or plan a workflow first', 'warn');
+      addLog(label, 'Nothing to replay — record or plan a workflow first', 'warn');
+      return;
+    }
+    const missing = await bridgeError();
+    if (missing) {
+      setSteps((s) => s.map((st) => ({ ...st, status: 'failed' as const })));
+      stepsRef.current = stepsRef.current.map((st) => ({ ...st, status: 'failed' as const }));
+      addLog(label, `${missing} — no step was executed`, 'error');
       return;
     }
     if (abortedRef.current) {
@@ -455,10 +521,9 @@ export function useAssist() {
     setReplaying(true);
     setSteps((s) => s.map((st) => ({ ...st, status: 'pending' as const })));
     stepsRef.current = stepsRef.current.map((st) => ({ ...st, status: 'pending' as const }));
-    const verified: Frame[] = [];
-    let pos = cursor ?? { x: 0.5, y: 0.9 };
+    const shots: Frame[] = [];
     let ok = 0;
-    addLog(dryRun ? 'Self-test' : 'Replay', `Starting ${dryRun ? 'dry run' : 'replay'} of ${stepsRef.current.length} step(s)`);
+    addLog(label, dryRun ? `Self-test of ${stepsRef.current.length} step(s): verifying on the live desktop, no input is sent` : `Replaying ${stepsRef.current.length} step(s) as real input on the PC`);
     for (let i = 0; i < stepsRef.current.length; i++) {
       if (abortRef.current) break;
       const step = stepsRef.current[i];
@@ -534,16 +599,17 @@ export function useAssist() {
     }
     setActiveIndex(null);
     setReplaying(false);
-    // AI picks the most informative screenshots for the user.
-    const picks = verified
-      .map((f, i) => ({ f, score: i === 0 ? 1 : frameDistance(verified[i - 1].data, f.data) }))
+    // AI picks the most informative post-step screenshots for the user.
+    const picks = shots
+      .map((f, i) => ({ f, score: i === 0 ? 1 : frameDistance(shots[i - 1].data, f.data) }))
       .sort((a, b) => b.score - a.score)
       .slice(0, 3)
       .map((p) => p.f);
     if (picks.length) setPinned(picks);
     if (agentsRef.current('goal')) {
       const total = stepsRef.current.length;
-      addLog('Goal reviewer', ok === total ? `All ${total} steps verified${goal ? ` for "${goal}"` : ''} — ready to save or schedule a repeat` : `${ok}/${total} verified — re-plan the failed steps or let AI help clear blockers`, ok === total ? 'ok' : 'warn');
+      const what = dryRun ? 'verified on screen (not dispatched)' : 'executed on the PC';
+      addLog('Goal reviewer', ok === total ? `All ${total} steps ${what}${goal ? ` for "${goal}"` : ''}` : `${ok}/${total} ${what} — re-plan the failed steps or let AI help clear blockers`, ok === total ? 'ok' : 'warn');
     }
   };
 
@@ -552,8 +618,8 @@ export function useAssist() {
     addLog('Replay', 'Stopped by user', 'warn');
   };
 
-  /** AI plan: reuse a similar saved workflow or assemble steps from the goal + live screen. */
-  const autoPlan = () => {
+  /** AI plan: reuse a similar saved workflow, otherwise the model plans from the goal + live frame. */
+  const autoPlan = async () => {
     if (!goal.trim()) {
       addLog('Planner', 'Type a goal first', 'warn');
       return;
@@ -562,6 +628,81 @@ export function useAssist() {
     setSteps(planned);
     setDraftCard(generateCard(planned, goal));
     addLog('Planner', `${why}: ${planned.length} step(s)${armedRef.current ? '' : ' — real input disarmed, Auto Act / replay will run it as a dry run'}`, 'ok');
+  };
+
+  /** AI help: the model answers a question about the live screen and points out what it means. */
+  const askScreen = async (question = 'What on this screen needs my attention, and what should I do next?') => {
+    const f = framesRef.current[0];
+    if (!f) {
+      addLog('AI help', 'No captured frame yet', 'warn');
+      return;
+    }
+    setAiBusy(true);
+    try {
+      const { answer, annotations: items } = await describeScreen(askAi, f, question, goal);
+      setAiAnswer(answer);
+      setAnnotations(items);
+      addLog('AI help', answer, 'info');
+    } catch (error) {
+      setAiAnswer('');
+      addLog('AI help', `AI unavailable — no answer: ${errorText(error)}`, 'error');
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  /** Point out: the model's default AI-help question. */
+  const explainScreen = () => askScreen();
+
+  const shareScreen = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      stream.getVideoTracks()[0].addEventListener('ended', () => setSource('demo'));
+      attachSource('screen');
+      addLog('Screen', 'Sharing your screen — the AI now sees it', 'ok');
+      return true;
+    } catch (error) {
+      addLog('Screen', `Screen share cancelled: ${errorText(error)}`, 'warn');
+      return false;
+    }
+  };
+
+  /** "/use <target>": launch/focus the target on the PC via the bridge, or attach to its window via screen share. */
+  const attachTarget = async (name: string) => {
+    const { bridgeUrl } = settingsRef.current;
+    if (bridgeUrl && (await checkBridge(bridgeUrl)).ok) {
+      const r = await launchOnBridge(bridgeUrl, name);
+      addLog('/use', r.ok ? `${r.message}; capturing the real screen via the bridge` : `Could not launch "${name}": ${r.message}`, r.ok ? 'ok' : 'error');
+      if (!r.ok) return;
+      attachSource('bridge');
+      setTarget(name);
+      return;
+    }
+    addLog('/use', `No desktop bridge online — pick the "${name}" window to attach to`, 'info');
+    if (await shareScreen()) {
+      setTarget(name);
+      addLog('/use', `Attached to "${name}" (${realScreenSource() === 'native' ? 'native capture' : 'screen share'}); acting on it needs the desktop bridge`, 'ok');
+    }
+  };
+
+  /** Submits the assist input: slash commands run, anything else is planned as a goal. */
+  const submitInput = async () => {
+    const command = parseCommand(goal);
+    if (!command) {
+      autoPlan();
+      return;
+    }
+    if (command.kind === 'error') {
+      addLog('Command', command.message, 'warn');
+      return;
+    }
+    setGoal('');
+    await attachTarget(command.target);
   };
 
   /** AI points out what matters on screen now. */
@@ -577,28 +718,25 @@ export function useAssist() {
     addLog('AI', next.length ? `Pointed out ${next.length} item(s) on screen and refocused the cursor` : 'Nothing needs attention right now', 'info');
   };
 
-  const shareScreen = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-      stream.getVideoTracks()[0].addEventListener('ended', () => setSource('demo'));
-      setSource('screen');
-      framesRef.current = [];
-      addLog('Screen', 'Sharing your screen — the AI now sees it', 'ok');
-    } catch (error) {
-      addLog('Screen', `Screen share cancelled: ${error instanceof Error ? error.message : String(error)}`, 'warn');
-    }
-  };
-
+  /** Explicit demo mode: the only way demo frames are used once a real source exists. */
   const useDemo = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
+    demoChosenRef.current = true;
+    setTarget(null);
     setSource('demo');
     framesRef.current = [];
+    addLog('Screen', 'Demo desktop selected');
   };
+
+  /** Downloads the action history as JSON or CSV. */
+  const exportHistory = (format: 'json' | 'csv') => {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    if (format === 'json') downloadText(`droid-actions-${stamp}.json`, historyToJson(history), 'application/json');
+    else downloadText(`droid-actions-${stamp}.csv`, historyToCsv(history), 'text/csv');
+    addLog('History', `Exported ${history.length} action(s) as ${format.toUpperCase()}`, 'ok');
+  };
+
+  const resetHistory = () => setHistory(clearHistory());
 
   const saveCard = () => {
     if (!draftCard) return;
