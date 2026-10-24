@@ -1,3 +1,6 @@
+/** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
+export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
+
 /** A captured screen frame: a display image plus a downsampled pixel buffer for drift math. */
 export interface Frame {
   id: number;
@@ -10,7 +13,7 @@ export interface Frame {
   srcW: number;
   srcH: number;
   /** Where the frame came from. */
-  source: 'demo' | 'screen';
+  source: Exclude<ScreenSource, 'none'>;
 }
 
 /** One point of the mouse trail, normalized to 0..1 of the screen. */
