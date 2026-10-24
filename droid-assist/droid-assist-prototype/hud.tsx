@@ -19,7 +19,7 @@ export function SyncStatus({ level, detail }: { level: SyncLevel; detail: string
 export function Hud({ engine }: { engine: AssistEngine }) {
   const { source, recording, replaying, goal, setGoal, settings, setSettings, steps, progress, plays } = engine;
   const total = steps.length;
-  const done = steps.filter((s) => s.status === 'done' || s.status === 'drift').length;
+  const done = steps.filter((s) => s.status === 'done').length;
   return (
     <>
       <div className={styles.hud}>
@@ -36,8 +36,8 @@ export function Hud({ engine }: { engine: AssistEngine }) {
             <button type="button" className={styles.danger} onClick={engine.stop}>■ Stop</button>
           ) : (
             <>
-              <button type="button" className={styles.primary} onClick={() => engine.replay(false)} disabled={recording || !total}>▶ Replay + drift</button>
-              <button type="button" onClick={() => engine.replay(true)} disabled={recording || !total}>🧪 AI self-test</button>
+              <button type="button" className={styles.primary} onClick={() => engine.replay(false)} disabled={recording || !total} title="Performs every step as real input on the PC through the desktop bridge">▶ Replay + drift</button>
+              <button type="button" onClick={() => engine.replay(true)} disabled={recording || !total} title="Verifies each step on the live desktop; sends no input">🧪 AI self-test (no input)</button>
             </>
           )}
           <button type="button" onClick={engine.explainScreen}>👁 Point out</button>

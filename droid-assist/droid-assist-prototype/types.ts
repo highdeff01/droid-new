@@ -9,8 +9,8 @@ export interface Frame {
   /** Source resolution of the captured screen (for converting to native coordinates). */
   srcW: number;
   srcH: number;
-  /** Where the frame came from. */
-  source: 'demo' | 'screen';
+  /** Where the frame came from: the demo canvas, a shared screen, or a real desktop screenshot from the bridge. */
+  source: 'demo' | 'screen' | 'desktop';
 }
 
 /** One point of the mouse trail, normalized to 0..1 of the screen. */
@@ -43,6 +43,10 @@ export interface WorkflowStep {
   correctedY?: number;
   /** Last measured drift distance (0..1). */
   drift?: number;
+  /** Last measured drift in native screen pixels. */
+  driftPx?: number;
+  /** Screenshot of the real desktop taken right after this step was executed. */
+  shot?: Frame;
 }
 
 /** Alignment between the live screen and the active step. */

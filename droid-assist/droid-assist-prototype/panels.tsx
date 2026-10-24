@@ -48,12 +48,13 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
       <ol className={styles.steps}>
         {steps.map((s, i) => (
           <li key={s.id} data-status={s.status}>
-            {s.refFrame ? <img src={s.refFrame.url} alt="" /> : <span className={styles.noThumb}>{s.action}</span>}
+            {s.shot ? <img src={s.shot.url} alt={`After step ${i + 1}`} title="Desktop screenshot after this step ran" /> : s.refFrame ? <img src={s.refFrame.url} alt="" /> : <span className={styles.noThumb}>{s.action}</span>}
             <div>
               <input value={s.name} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} aria-label={`Step ${i + 1} name`} />
               <small>
                 {s.action} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}% · {s.status}
-                {s.drift !== undefined && ` · drift ${s.drift.toFixed(3)}`}
+                {s.driftPx !== undefined && ` · drift ${s.driftPx}px`}
+                {s.drift !== undefined && ` · match ${s.drift.toFixed(3)}`}
               </small>
             </div>
             <button type="button" aria-label="Remove step" onClick={() => setSteps(steps.filter((_, j) => j !== i))}>✕</button>
