@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Annotation, AssistSettings, Frame, LogEntry, SavedCard, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
+import type { Annotation, AssistSettings, Frame, LogEntry, SavedCard, ScreenSource, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
 import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
 import { calculate, generateCard, planFromGoal, uid } from './planner.js';
-import { sendToBridge } from './bridge.js';
+import { checkBridge, fetchBridgeFrame, sendToBridge } from './bridge.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -63,7 +63,7 @@ export interface Agent {
  */
 export function useAssist() {
   const [settings, setSettings] = useState<AssistSettings>(DEFAULT_SETTINGS);
-  const [source, setSource] = useState<'demo' | 'screen'>('demo');
+  const [source, setSource] = useState<ScreenSource>('none');
   const [frames, setFrames] = useState<Frame[]>([]);
   const [pinned, setPinned] = useState<Frame[]>([]);
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
@@ -89,6 +89,7 @@ export function useAssist() {
 
   const demoCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const tickRef = useRef(0);
   const dismissedCycleRef = useRef(-1);
@@ -118,13 +119,25 @@ export function useAssist() {
 
   const adDismissed = () => Math.floor(tickRef.current / AD_CYCLE) === dismissedCycleRef.current;
 
+  /** The live element for the current source and its native resolution; null until it has pixels. */
+  const sourceImage = useCallback((): { src: CanvasImageSource; srcW: number; srcH: number } | null => {
+    if (source === 'demo') return demoCanvasRef.current && { src: demoCanvasRef.current, srcW: DEMO_W, srcH: DEMO_H };
+    if (source === 'screen') {
+      const v = videoRef.current;
+      return v && v.videoWidth ? { src: v, srcW: v.videoWidth, srcH: v.videoHeight } : null;
+    }
+    if (source === 'bridge') {
+      const img = imgRef.current;
+      return img && img.complete && img.naturalWidth ? { src: img, srcW: img.naturalWidth, srcH: img.naturalHeight } : null;
+    }
+    return null;
+  }, [source]);
+
   /** Captures the current source into a Frame (display JPEG + 320×180 pixel buffer). */
   const captureFrame = useCallback((): Frame | null => {
-    const src: CanvasImageSource | null = source === 'screen' ? videoRef.current : demoCanvasRef.current;
-    if (!src) return null;
-    const srcW = source === 'screen' ? videoRef.current?.videoWidth ?? 0 : DEMO_W;
-    const srcH = source === 'screen' ? videoRef.current?.videoHeight ?? 0 : DEMO_H;
-    if (!srcW || !srcH) return null;
+    const live = sourceImage();
+    if (!live || source === 'none') return null;
+    const { src, srcW, srcH } = live;
     const small = document.createElement('canvas');
     small.width = SAMPLE_W;
     small.height = SAMPLE_H;
@@ -135,7 +148,7 @@ export function useAssist() {
     view.height = 270;
     view.getContext('2d')!.drawImage(src, 0, 0, 480, 270);
     return { id: ++frameId.current, time: Date.now(), url: view.toDataURL('image/jpeg', 0.7), data: sctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H), srcW, srcH, source };
-  }, [source]);
+  }, [source, sourceImage]);
 
   /** Applies a click to the demo desktop (dismiss the ad, press Play). */
   const demoClick = useCallback((x: number, y: number): string => {
@@ -175,8 +188,8 @@ export function useAssist() {
     const { bridgeUrl } = settingsRef.current;
     if (bridgeUrl && frame) {
       const r = await sendToBridge(bridgeUrl, step, frame.srcW, frame.srcH);
-      if (!r.ok || source === 'screen') return r;
-    } else if (source === 'screen') {
+      if (!r.ok || source !== 'demo') return r;
+    } else if (source !== 'demo') {
       return { ok: false, message: 'No desktop bridge configured — set the bridge URL in Settings to act on the PC' };
     }
     if (step.action === 'click') {
@@ -225,6 +238,23 @@ export function useAssist() {
     }, 400);
     return () => clearInterval(id);
   }, [source]);
+
+  // Bridge frame loop: the PC's real screen, polled into the stage <img>. Failures are logged, never faked.
+  useEffect(() => {
+    if (source !== 'bridge') return undefined;
+    let failing = false;
+    const pull = async () => {
+      const r = await fetchBridgeFrame(settingsRef.current.bridgeUrl);
+      if (r.ok && r.imageData && imgRef.current) imgRef.current.src = r.imageData;
+      const stateUnchanged = r.ok === !failing;
+      if (stateUnchanged) return;
+      failing = !r.ok;
+      addLog('Bridge', r.ok ? 'Screen frames flowing again' : `No screen frame: ${r.message}`, r.ok ? 'ok' : 'warn');
+    };
+    void pull();
+    const id = setInterval(() => void pull(), settings.captureMs);
+    return () => clearInterval(id);
+  }, [source, settings.captureMs, addLog]);
 
   // Capture loop: gallery, error detection, sync status, auto-actor.
   useEffect(() => {
@@ -469,7 +499,7 @@ export function useAssist() {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
-      stream.getVideoTracks()[0].addEventListener('ended', () => setSource('demo'));
+      stream.getVideoTracks()[0].addEventListener('ended', () => setSource('none'));
       setSource('screen');
       framesRef.current = [];
       addLog('Screen', 'Sharing your screen — the AI now sees it', 'ok');
@@ -478,11 +508,31 @@ export function useAssist() {
     }
   };
 
-  const useDemo = () => {
+  /** Switches the stage to a source, stopping any screen share and clearing old frames. */
+  const switchSource = (next: ScreenSource) => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
-    setSource('demo');
+    streamRef.current = null;
     framesRef.current = [];
+    setFrames([]);
+    setSource(next);
   };
+
+  /** The fake demo desktop — only ever shown after this explicit toggle. */
+  const useDemo = () => switchSource('demo');
+
+  /** Shows the PC's real screen through the desktop bridge once its health check passes. */
+  const connectBridge = async () => {
+    const { bridgeUrl } = settingsRef.current;
+    if (!bridgeUrl) {
+      addLog('Bridge', 'Set the desktop bridge URL in Settings first', 'warn');
+      return;
+    }
+    const r = await checkBridge(bridgeUrl);
+    addLog('Bridge', r.message, r.ok ? 'ok' : 'error');
+    if (r.ok) switchSource('bridge');
+  };
+
+  const disconnect = () => switchSource('none');
 
   const saveCard = () => {
     if (!draftCard) return;
@@ -499,9 +549,9 @@ export function useAssist() {
   return {
     settings, setSettings, source, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
-    agents, setAgents, plays, demoCanvasRef, videoRef, DEMO_W, DEMO_H,
+    agents, setAgents, plays, demoCanvasRef, videoRef, imgRef, DEMO_W, DEMO_H,
     onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, explainScreen,
-    shareScreen, useDemo, saveCard, loadCard, addLog,
+    shareScreen, useDemo, connectBridge, disconnect, saveCard, loadCard, addLog,
   };
 }
 

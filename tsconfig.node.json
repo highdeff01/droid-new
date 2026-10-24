@@ -16,7 +16,6 @@
   },
   "include": [
     "droid-assist/**/vite.config.js",
-    "droid-assist/**/*.bit-app.ts",
-    "droid-assist/**/*.spec.ts"
+    "droid-assist/**/*.bit-app.ts"
   ]
 }

@@ -115,8 +115,9 @@ export function AgentsPanel({ engine }: { engine: AssistEngine }) {
       </label>
       <label className={styles.setting}>Desktop bridge URL (pyautogui)
         <span className={styles.row}>
-          <input value={settings.bridgeUrl} onChange={(e) => setSettings({ ...settings, bridgeUrl: e.target.value })} placeholder="http://127.0.0.1:3000" />
+          <input value={settings.bridgeUrl} onChange={(e) => setSettings({ ...settings, bridgeUrl: e.target.value })} placeholder="/bridge or http://127.0.0.1:3000" />
           <button type="button" onClick={async () => setBridge((await checkBridge(settings.bridgeUrl)).message)} disabled={!settings.bridgeUrl}>Test</button>
+          <button type="button" onClick={engine.connectBridge} disabled={!settings.bridgeUrl}>Connect</button>
         </span>
         {bridge && <small>{bridge}</small>}
       </label>

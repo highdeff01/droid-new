@@ -14,5 +14,5 @@
     "noEmit": true
   },
   "include": ["droid-assist/**/*.ts", "droid-assist/**/*.tsx"],
-  "exclude": ["droid-assist/**/*.bit-app.ts", "droid-assist/**/*.spec.ts"]
+  "exclude": ["droid-assist/**/*.bit-app.ts"]
 }
