@@ -21,7 +21,7 @@ const MODIFIER_KEYS = new Set(['Control', 'Alt', 'Shift', 'Meta']);
  */
 export function hotkeyFromEvent(e: HotkeyEvent): string {
   if (MODIFIER_KEYS.has(e.key)) return '';
-  const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  const key = e.key === ' ' ? 'Space' : e.key.length === 1 ? e.key.toUpperCase() : e.key;
   const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Meta'].filter(Boolean);
   return [...mods, key].join('+');
 }

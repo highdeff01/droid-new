@@ -25,6 +25,12 @@ describe('hotkeyFromEvent', () => {
     expect(hotkeyFromEvent(e)).toBe('Shift+Escape');
   });
 
+  it('names the space bar "Space" so a Ctrl+Space combo survives trimming and still matches', () => {
+    const e = keyEvent({ key: ' ', ctrlKey: true });
+    expect(hotkeyFromEvent(e)).toBe('Ctrl+Space');
+    expect(matchesHotkey(e, 'Ctrl+Space')).toBe(true);
+  });
+
   it('uppercases letter keys and orders modifiers Ctrl, Alt, Shift, Meta', () => {
     const e = keyEvent({ key: 'k', ctrlKey: true, shiftKey: true });
     expect(hotkeyFromEvent(e)).toBe('Ctrl+Shift+K');
