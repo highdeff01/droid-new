@@ -4,18 +4,9 @@ import { boundingBox, boxDistance, diffCells, frameDistance, largestCluster, mat
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
 import { calculate, generateCard, planFromGoal, uid } from './planner.js';
 import { sendToBridge } from './bridge.js';
-import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction } from './safety.js';
-import type { ActionBudget } from './safety.js';
-
-/** Outcome of executing a step; `halt` means the run must stop (abort, disarm or budget). */
-interface ExecResult {
-  ok: boolean;
-  message: string;
-  halt?: boolean;
-}
-
-/** What a dry run reports instead of dispatching. */
-const DRY_RUN_RESULT: ExecResult = { ok: true, message: 'verified (dry run — not dispatched)' };
+import { LOG_LIMIT, loadCards, loadLog, loadSettings, saveCards, saveLog, saveSettings } from './storage.js';
+import { decodeFrames, toStoredFrame } from './frame-codec.js';
+import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -83,13 +74,8 @@ export interface Agent {
  * recording, drift-aware replay, auto-actor, planner, agents and saved workflows.
  */
 export function useAssist() {
-  const [settings, setSettings] = useState<AssistSettings>(DEFAULT_SETTINGS);
-  const [source, setSource] = useState<ScreenSource>('demo');
-  /** The app/window the assistant is attached to via /use. */
-  const [target, setTarget] = useState<string | null>(null);
-  const [history, setHistory] = useState<ActionRecord[]>(() => loadHistory());
-  /** Screenshots taken this session (monitor ticks + per-step evidence). */
-  const [shotCount, setShotCount] = useState(0);
+  const [settings, setSettings] = useState<AssistSettings>(() => loadSettings(DEFAULT_SETTINGS));
+  const [source, setSource] = useState<'demo' | 'screen'>('demo');
   const [frames, setFrames] = useState<Frame[]>([]);
   const [pinned, setPinned] = useState<Frame[]>([]);
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
@@ -100,7 +86,7 @@ export function useAssist() {
   const [sync, setSync] = useState<{ level: SyncLevel; detail: string }>({ level: 'idle', detail: 'No active step' });
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
-  const [log, setLog] = useState<LogEntry[]>([]);
+  const [log, setLog] = useState<LogEntry[]>(loadLog);
   const [cards, setCards] = useState<SavedCard[]>([]);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
@@ -133,7 +119,12 @@ export function useAssist() {
   /** The frame in which the flagged popup was first seen. */
   const popupFrameRef = useRef<Frame | null>(null);
   const autoBusyRef = useRef(false);
-  const frameId = useRef(0);
+  /** Seeded from the clock so new captures never reuse the ids of frames stored by an earlier session. */
+  const frameId = useRef(Date.now());
+  /** Frames restored from storage: shown in the gallery, never compared against for popups. */
+  const restoredIdsRef = useRef(new Set<number>());
+  /** Cards are written back only after the stored ones have been loaded. */
+  const cardsHydratedRef = useRef(false);
   const lastStepAt = useRef(0);
   const armedRef = useRef(armed);
   const abortedRef = useRef(aborted);
@@ -150,8 +141,35 @@ export function useAssist() {
   armedRef.current = armed;
   abortedRef.current = aborted;
 
+  // Persistence: settings, log and cards to localStorage.
+  useEffect(() => saveSettings(settings), [settings]);
+  useEffect(() => saveLog(log), [log]);
+  useEffect(() => {
+    if (cardsHydratedRef.current) saveCards(cards);
+  }, [cards]);
+
+  // Hydrate the async stores: saved cards (screenshots decoded) and the recent frame gallery.
+  useEffect(() => {
+    let live = true;
+    void loadCards().then((stored) => {
+      if (!live) return;
+      cardsHydratedRef.current = true;
+      setCards((c) => [...c, ...stored.filter((s) => !c.some((x) => x.id === s.id))]);
+    });
+    const { gallerySize } = settingsRef.current;
+    void loadStoredFrames(gallerySize).then(decodeFrames).then((restored) => {
+      if (!live || !restored.length) return;
+      restored.forEach((f) => restoredIdsRef.current.add(f.id));
+      framesRef.current = [...framesRef.current, ...restored].slice(0, gallerySize);
+      setFrames(framesRef.current);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   const addLog = useCallback((source: string, message: string, tone: LogEntry['tone'] = 'info') => {
-    setLog((l) => [{ id: uid('log'), time: Date.now(), source, message, tone }, ...l].slice(0, 200));
+    setLog((l) => [{ id: uid('log'), time: Date.now(), source, message, tone }, ...l].slice(0, LOG_LIMIT));
   }, []);
 
   /** Emergency stop: latches ABORTED, sets abortRef and switches Auto Act off. */
@@ -313,34 +331,26 @@ export function useAssist() {
   // Bridge takeover: when a bridge answers its health check, frames come from the real desktop
   // unless the user explicitly chose the demo desktop.
   useEffect(() => {
-    const url = settings.bridgeUrl;
-    if (!url) return undefined;
-    let cancelled = false;
-    void checkBridge(url).then((r) => {
-      if (cancelled || !r.ok || demoChosenRef.current || sourceRef.current === 'bridge') return;
-      framesRef.current = [];
-      setSource('bridge');
-      addLog('Monitor', 'Desktop bridge online — screenshots now come from the real screen', 'ok');
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [settings.bridgeUrl, addLog]);
-
-  const intervalMs = monitorInterval(settings.monitorMode, settings.captureMs);
-
-  // Monitor loop at the mode's interval: gallery, error detection, sync status, auto-actor.
-  useEffect(() => {
-    const tick = async () => {
-      // Only background mode keeps watching and controlling while the page is hidden.
-      if (document.hidden && settingsRef.current.monitorMode !== 'background') return;
-      if (captureBusyRef.current) return;
-      captureBusyRef.current = true;
-      try {
-        const frame = await snapshot();
-        if (frame) onFrame(frame);
-      } finally {
-        captureBusyRef.current = false;
+    const id = setInterval(() => {
+      const frame = captureFrame();
+      if (!frame) return;
+      const prev = framesRef.current[0];
+      framesRef.current = [frame, ...framesRef.current].slice(0, settingsRef.current.gallerySize);
+      setFrames(framesRef.current);
+      void putStoredFrame(toStoredFrame(frame), settingsRef.current.gallerySize);
+      if (prev && !restoredIdsRef.current.has(prev.id)) {
+        const popup = detectErrors(prev, frame);
+        if (!popup && popupRef.current && frameDistance(prev.data, frame.data) < 0.005) {
+          // still showing — keep
+        }
+      }
+      const next = stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running');
+      if (next?.refFrame && agentsRef.current('drift')) {
+        const r = matchTemplate(next.refFrame.data, frame.data, next.x, next.y);
+        const level = syncLevelFor(r);
+        setSync({ level, detail: `"${next.name}": region ${r.regionDistance.toFixed(3)}, best ${r.matchDistance.toFixed(3)}${level === 'yellow' ? `, drift (${(r.dx * 100).toFixed(1)}%, ${(r.dy * 100).toFixed(1)}%)` : ''}` });
+      } else if (!next) {
+        setSync({ level: 'idle', detail: 'No active step' });
       }
       void autoAct();
     }, settingsRef.current.captureMs);
