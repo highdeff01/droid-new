@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
+import { AiStatusBadge } from './hud.js';
 import styles from './droid-assist.module.css';
 
 /** The N most recent frames with frame-to-frame drift, plus the AI-picked frames shown to the user. */
@@ -128,6 +129,38 @@ export function AgentsPanel({ engine }: { engine: AssistEngine }) {
         </span>
         {bridge && <small>{bridge}</small>}
       </label>
+      <label className={styles.setting}>AI endpoint (Ollama /api/chat)
+        <input value={settings.aiUrl} onChange={(e) => setSettings({ ...settings, aiUrl: e.target.value })} aria-label="AI endpoint URL" />
+      </label>
+      <label className={styles.setting}>AI model
+        <input value={settings.aiModel} onChange={(e) => setSettings({ ...settings, aiModel: e.target.value })} aria-label="AI model" />
+      </label>
+      <AiStatusBadge status={engine.aiStatus} />
+    </section>
+  );
+}
+
+/** AI help: ask the model about the live screen; shows its latest answer or the connection error. */
+export function AiHelpPanel({ engine }: { engine: AssistEngine }) {
+  const { aiStatus, aiAnswer, aiBusy, settings } = engine;
+  const [question, setQuestion] = useState('');
+  const off = aiStatus.state !== 'online' || !settings.aiHelp;
+  return (
+    <section className={styles.panel}>
+      <h3>AI help <small>{settings.aiModel}</small></h3>
+      <AiStatusBadge status={aiStatus} />
+      <form
+        className={styles.row}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (question.trim()) void engine.askScreen(question.trim());
+        }}
+      >
+        <input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Ask about the screen…" aria-label="Ask the AI" />
+        <button type="submit" disabled={off || aiBusy || !question.trim()}>{aiBusy ? '…' : 'Ask'}</button>
+      </form>
+      {aiStatus.state === 'offline' && <p className={styles.muted} role="alert">{aiStatus.detail}. AI plan, Auto act and AI help are unavailable.</p>}
+      {aiAnswer && <p>{aiAnswer}</p>}
     </section>
   );
 }

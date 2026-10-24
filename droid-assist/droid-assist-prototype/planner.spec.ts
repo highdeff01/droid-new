@@ -1,0 +1,85 @@
+import { describe, expect, it, vi } from 'vitest';
+import { planFromGoal } from './planner.js';
+import { decidePopup, decideStep, describeScreen } from './assist-ai.js';
+import { AiError } from './ai.js';
+import type { AskFn } from './ai.js';
+import type { Frame, SavedCard, WorkflowStep } from './types.js';
+
+const frame = { id: 1, url: 'data:image/jpeg;base64,QUJD' } as Frame;
+const askReturning = (text: string) => vi.fn<AskFn>(async () => text);
+const card: SavedCard = {
+  id: 'c1',
+  name: 'Open calculator app',
+  description: 'opens calculator',
+  steps: [{ id: 's1', name: 'Open calculator', action: 'open_app', x: 0.1, y: 0.2, status: 'done' }],
+  savedAt: 0,
+};
+const step: WorkflowStep = { id: 's', name: 'Press play', action: 'click', x: 0.5, y: 0.5, status: 'pending' };
+
+describe('planFromGoal', () => {
+  it('reuses a similar saved card without calling the model', async () => {
+    const ask = askReturning('{}');
+    const plan = await planFromGoal('open calculator app', [card], frame, ask);
+    expect(ask).not.toHaveBeenCalled();
+    expect(plan.source).toMatch(/Reused saved workflow/);
+    expect(plan.steps[0]).toMatchObject({ action: 'open_app', status: 'pending' });
+  });
+
+  it('builds steps from the model reply, sending goal, frame and context', async () => {
+    const ask = askReturning('{"steps":[{"name":"Hit search box","action":"click","x":0.4,"y":0.1},{"name":"Type","action":"type","x":240,"y":135,"text":"cats"}]}');
+    const plan = await planFromGoal('find cats online', [card], frame, ask, ['[You] opened browser']);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(ask.mock.calls[0][0]).toMatchObject({ prompt: 'Goal: find cats online', frame, context: ['[You] opened browser'], json: true });
+    expect(plan.source).toMatch(/^AI planned/);
+    expect(plan.steps).toMatchObject([
+      { name: 'Hit search box', action: 'click', x: 0.4, y: 0.1, refFrame: frame, status: 'pending' },
+      { name: 'Type', action: 'type', x: 0.5, y: 0.5, text: 'cats' },
+    ]);
+  });
+
+  it('fails on a non-JSON reply instead of inventing steps', async () => {
+    await expect(planFromGoal('do things', [], frame, askReturning('hello'))).rejects.toBeInstanceOf(AiError);
+  });
+
+  it('fails on an unknown action or an empty plan', async () => {
+    await expect(planFromGoal('x', [], frame, askReturning('{"steps":[{"action":"fly"}]}'))).rejects.toThrow(/unknown action/);
+    await expect(planFromGoal('x', [], frame, askReturning('{"steps":[]}'))).rejects.toThrow(/no steps/);
+  });
+
+  it('propagates an unreachable model', async () => {
+    const ask = vi.fn<AskFn>(async () => {
+      throw new AiError('AI endpoint unreachable');
+    });
+    await expect(planFromGoal('x', [], frame, ask)).rejects.toThrow(/unreachable/);
+  });
+});
+
+describe('decidePopup', () => {
+  const box = { x: 0.3, y: 0.3, w: 0.4, h: 0.3 };
+  it('closes where the model points', async () => {
+    const ask = askReturning('{"close":true,"x":0.9,"y":0.1,"reason":"ad"}');
+    await expect(decidePopup(ask, frame, box)).resolves.toEqual({ close: true, x: 0.9, y: 0.1, reason: 'ad' });
+    expect(ask.mock.calls[0][0].frame).toBe(frame);
+  });
+  it('leaves it when the model says so', async () => {
+    await expect(decidePopup(askReturning('{"close":false,"reason":"content"}'), frame, box)).resolves.toEqual({ close: false, reason: 'content' });
+  });
+});
+
+describe('decideStep', () => {
+  it('runs at the model target or waits', async () => {
+    await expect(decideStep(askReturning('{"run":true,"x":0.6,"y":0.7,"reason":"visible"}'), frame, step, 'play')).resolves.toEqual({ run: true, x: 0.6, y: 0.7, reason: 'visible' });
+    await expect(decideStep(askReturning('{"run":false,"reason":"not ready"}'), frame, step, 'play')).resolves.toEqual({ run: false, reason: 'not ready' });
+  });
+});
+
+describe('describeScreen', () => {
+  it('returns the model answer and its boxes', async () => {
+    const r = await describeScreen(askReturning('{"answer":"ZZZ-42","items":[{"label":"Play","x":0.4,"y":0.6,"w":0.2,"h":0.1,"tone":"warn"}]}'), frame, 'what now?', '');
+    expect(r.answer).toBe('ZZZ-42');
+    expect(r.annotations[0]).toMatchObject({ label: 'Play', x: 0.4, y: 0.6, tone: 'warn' });
+  });
+  it('rejects a reply without an answer', async () => {
+    await expect(describeScreen(askReturning('{"items":[]}'), frame, 'q', '')).rejects.toBeInstanceOf(AiError);
+  });
+});
