@@ -77,6 +77,12 @@ export interface FamiliarElement {
   patch?: string;
   /** When it was last verified or used (ms since epoch). */
   lastSeen: number;
+  /** Times the coordinate learner observed it (dwell or verified action). */
+  timesSeen?: number;
+  /** Id of the frame it was last seen on. */
+  frameId?: number;
+  /** Row-major luminance patch (ANCHOR_PATCH²) of the drift buffer around the point, for re-locating it. */
+  anchor?: number[];
 }
 
 /** A lesson attached to one habit: something to avoid or add when acting on that target. */

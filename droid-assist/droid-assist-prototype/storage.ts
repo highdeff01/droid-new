@@ -162,7 +162,9 @@ export function savePatterns(patterns: LearnedPattern[]) {
 function isFamiliar(v: unknown): v is FamiliarElement {
   return isObject(v) && typeof v.id === 'string' && typeof v.name === 'string' && !!v.name.trim()
     && isNum(v.x) && isNum(v.y) && v.x >= 0 && v.x <= 1 && v.y >= 0 && v.y <= 1 && isNum(v.lastSeen)
-    && (v.patch === undefined || (typeof v.patch === 'string' && v.patch.startsWith('data:image/')));
+    && (v.patch === undefined || (typeof v.patch === 'string' && v.patch.startsWith('data:image/')))
+    && (v.timesSeen === undefined || isNum(v.timesSeen)) && (v.frameId === undefined || isNum(v.frameId))
+    && (v.anchor === undefined || (Array.isArray(v.anchor) && v.anchor.every(isNum)));
 }
 
 /** The stored familiar elements (newest first, at most FAMILIAR_LIMIT); invalid entries are dropped. */
