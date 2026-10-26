@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AiError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, chat, createAiSession, parseJsonReply, pingAi, toUnit } from './ai.js';
+import { AiCancelled, AiError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, chat, createAiSession, parseJsonReply, pingAi, toUnit } from './ai.js';
 import type { Frame } from './types.js';
 
 const cfg = { url: 'http://model.test/api/chat', model: 'test-model' };
@@ -59,6 +59,58 @@ describe('chat', () => {
   it('rejects an empty or missing message.content', async () => {
     stubFetch(reply(''));
     await expect(chat(cfg, [])).rejects.toBeInstanceOf(AiError);
+  });
+});
+
+describe('chat cancellation', () => {
+  /** A fetch that only settles when its signal aborts (or after 10 s). */
+  function hangingFetch() {
+    const seen: AbortSignal[] = [];
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => new Promise<Response>((resolve, reject) => {
+      seen.push(init.signal!);
+      const t = setTimeout(() => resolve(reply('late')), 10_000);
+      init.signal!.addEventListener('abort', () => {
+        clearTimeout(t);
+        reject(new DOMException('aborted', 'AbortError'));
+      });
+    })));
+    return seen;
+  }
+
+  it('aborting the signal mid-call cancels the fetch and rejects at once with AiCancelled', async () => {
+    const seen = hangingFetch();
+    const ctrl = new AbortController();
+    const started = Date.now();
+    const call = chat(cfg, [], false, 90_000, ctrl.signal);
+    setTimeout(() => ctrl.abort(), 50);
+    await expect(call).rejects.toBeInstanceOf(AiCancelled);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(seen[0].aborted).toBe(true);
+  });
+
+  it('an already-aborted signal never waits for the endpoint', async () => {
+    hangingFetch();
+    const ctrl = new AbortController();
+    ctrl.abort();
+    await expect(chat(cfg, [], false, 90_000, ctrl.signal)).rejects.toBeInstanceOf(AiCancelled);
+  });
+
+  it('still times out with an AiError (not a cancel) when nothing aborts', async () => {
+    const seen = hangingFetch();
+    const error = await chat(cfg, [], false, 30).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AiError);
+    expect(error).not.toBeInstanceOf(AiCancelled);
+    expect(String(error)).toMatch(/no reply within 30 ms/);
+    expect(seen[0].aborted).toBe(true);
+  });
+
+  it('a session ask passes the request signal through', async () => {
+    const seen = hangingFetch();
+    const ctrl = new AbortController();
+    const call = createAiSession(null).ask(cfg, { system: 's', prompt: 'p', signal: ctrl.signal });
+    ctrl.abort();
+    await expect(call).rejects.toBeInstanceOf(AiCancelled);
+    expect(seen[0].aborted).toBe(true);
   });
 });
 
