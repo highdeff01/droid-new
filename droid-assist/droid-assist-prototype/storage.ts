@@ -10,6 +10,7 @@ import { EMPTY_WATCHER, NOTE_KINDS, NOTE_LIMIT, PROPOSAL_KINDS, PROPOSAL_LIMIT, 
 import type { NoteKind, ProposalKind, ProposalStatus, WatchNote, WatchProposal, WatchTest, WatcherState } from './watcher.js';
 import { sanitizeStages } from './loop-control.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
+import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -23,6 +24,7 @@ const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', l
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
 const PATTERN_KINDS: ReadonlyArray<LearnedPattern['kind']> = ['avoid', 'add'];
+import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 
 const ACTIONS: readonly StepAction[] = STEP_ACTIONS;
 const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
@@ -37,6 +39,7 @@ const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | '
   changeCells: [2, 40],
   maxIterations: [1, 20],
   stepRetries: [STEP_RETRIES_MIN, STEP_RETRIES_MAX],
+  aiMaxInFlight: [AI_MAX_IN_FLIGHT_MIN, AI_MAX_IN_FLIGHT_MAX],
 };
 
 /** A step as persisted: its screenshot without the pixel buffer. */
@@ -76,10 +79,10 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     const v = stored[key];
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
-  for (const key of ['bridgeUrl', 'errorUrl', 'errorToken'] as const) {
+  for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken'] as const) {
     const v = stored[key];
     if (typeof v === 'string') out[key] = v;
   }
@@ -130,6 +133,7 @@ function parseStep(v: unknown): StoredStep | null {
     ...(typeof v.target === 'string' && v.target ? { target: v.target } : {}),
     ...(isNum(v.endX) && isNum(v.endY) ? { endX: v.endX, endY: v.endY } : {}),
     ...(typeof v.endTarget === 'string' && v.endTarget ? { endTarget: v.endTarget } : {}),
+    ...(isNum(v.delayMs) && v.delayMs >= 0 ? { delayMs: v.delayMs } : {}),
     ...(isStoredFrame(v.refFrame) ? { refFrame: v.refFrame } : {}),
   };
 }

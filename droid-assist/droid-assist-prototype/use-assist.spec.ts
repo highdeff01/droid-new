@@ -257,6 +257,79 @@ describe('useAssist drag recorder and guardrails', () => {
   });
 });
 
+describe('useAssist key and scroll recorder with human timing', () => {
+  const press = (key: string, mods: Partial<{ ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }> = {}) => ({ key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...mods });
+
+  afterEach(() => vi.useRealTimers());
+
+  async function recordKeys() {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(100_000);
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.toggleRecording());
+    vi.setSystemTime(100_450);
+    act(() => result.current.onStageKey(press('S', { ctrlKey: true, shiftKey: true })));
+    vi.setSystemTime(100_500);
+    act(() => result.current.onStageKey(press('Shift', { shiftKey: true })));
+    vi.setSystemTime(101_700);
+    act(() => result.current.onStageScroll(0.3, 0.6, -100));
+    vi.setSystemTime(101_800);
+    act(() => result.current.onStageScroll(0.3, 0.6, -40));
+    vi.setSystemTime(102_000);
+    act(() => result.current.onStageClick(0.5, 0.62));
+    act(() => result.current.toggleRecording());
+    return result;
+  }
+
+  it('records key presses with modifiers and wheel gestures as key and scroll steps with measured delays', async () => {
+    const result = await recordKeys();
+    expect(result.current.steps.map((s) => [s.action, s.text, s.delayMs])).toEqual([
+      ['key', 'ctrl+shift+s', 450],
+      ['scroll', 'up', 1250],
+      ['click', undefined, 200],
+    ]);
+    expect(result.current.steps[1]).toMatchObject({ x: 0.3, y: 0.6 });
+    expect(result.current.log.some((l) => l.source === 'Recorder' && /Captured key ctrl\+shift\+s/.test(l.message))).toBe(true);
+  });
+
+  it('never records the abort hotkey or input outside a recording', async () => {
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.onStageKey(press('a')));
+    act(() => result.current.onStageScroll(0.5, 0.5, 100));
+    act(() => result.current.toggleRecording());
+    act(() => result.current.onStageKey(press('Escape', { shiftKey: true })));
+    expect(result.current.steps).toHaveLength(0);
+  });
+
+  it('replays recorded key steps as real input only while armed', async () => {
+    const result = await recordKeys();
+    act(() => result.current.toggleArmed());
+    await act(() => result.current.replay());
+    expect(result.current.history.map((h) => h.action)).toEqual(expect.arrayContaining(['key', 'scroll']));
+    expect(result.current.steps[0]).toMatchObject({ status: 'done', delayMs: 450 });
+  });
+
+  it('a disarmed replay of a key step sends nothing', async () => {
+    const result = await recordKeys();
+    await act(() => result.current.replay());
+    expect(result.current.history).toHaveLength(0);
+  });
+
+  it('a key step is refused when aborted or when loop control has the executor unchecked', async () => {
+    const result = await recordKeys();
+    act(() => result.current.toggleArmed());
+    act(() => result.current.toggleStage('executor', false));
+    await act(() => result.current.replay());
+    expect(result.current.history).toHaveLength(0);
+    act(() => result.current.toggleStage('executor', true));
+    act(() => result.current.triggerAbort('test'));
+    await act(() => result.current.replay());
+    expect(result.current.history).toHaveLength(0);
+  });
+});
+
 describe('useAssist rearrangement on the demo desktop', () => {
   // Files starts at (0.055, 0.105), Game at (0.055, 0.425): "below Game" means the same column, lower.
   const plan = (endY: number, endX = 0.12) => ({ content: JSON.stringify({ steps: [{ name: 'Move Files', action: 'drag', target: 'Files icon', x: 0.055, y: 0.105, endTarget: 'free spot below Game', endX, endY }], expect: [{ element: 'Files icon', relation: 'below', anchor: 'Game' }] }), thinking: 'Files goes under Game.' });
@@ -598,6 +671,22 @@ describe('useAssist loop control', () => {
     expect(JSON.parse(localStorage.getItem('droid-assist.settings')!).stages.reflect).toBe(false);
   });
 
+  it('routes calls through the shared queue: the HUD stats count the running call and free it when its stage is unchecked', async () => {
+    const m = hangingReflect();
+    const result = await mount();
+    expect(result.current.settings.aiMaxInFlight).toBe(2);
+    act(() => result.current.setSteps([{ id: 's1', name: 'Calc', action: 'calc', text: '2+2', x: 0.5, y: 0.5, status: 'pending' }]));
+    let run!: Promise<void>;
+    act(() => {
+      run = result.current.replay(false);
+    });
+    await vi.waitFor(() => expect(m.count('reviewing a step')).toBe(1));
+    expect(result.current.aiQueue).toEqual({ queued: 0, inFlight: 1 });
+    act(() => result.current.toggleStage('reflect', false));
+    await act(() => run);
+    expect(result.current.aiQueue).toEqual({ queued: 0, inFlight: 0 });
+  });
+
   it('cancelling one stage leaves the other stages\' calls alone, and re-checking logs an enable', async () => {
     hangingReflect();
     const result = await mount();
@@ -851,6 +940,8 @@ describe('useAssist supervisor', () => {
     expect(result.current.timeline.some((e) => e.kind === 'movement')).toBe(false);
 
     await act(() => vi.advanceTimersByTimeAsync(4000));
+    // The supervisor's attempt plays as a humanized AI cursor movement (real time) before it is reported.
+    await vi.waitFor(() => expect(result.current.timeline.find((e) => e.kind === 'movement')).toBeDefined(), { timeout: 2000 });
     const move = result.current.timeline.find((e) => e.kind === 'movement');
     expect(move?.text).toMatch(/Executor left "Click Save" unapplied — supervisor dry run at \(60\.0%, 40\.0%\)/);
     expect(result.current.log.some((l) => l.source === 'Supervisor (dry run)')).toBe(true);
@@ -1044,7 +1135,10 @@ describe('useAssist Screen watcher', () => {
     expect(result.current.watcher.tests[0].happened).toMatch(/dry run, not dispatched/);
     expect(result.current.log.some((l) => l.source === 'Screen watcher' && /Test passed: Dry-run click/.test(l.message))).toBe(true);
     expect(result.current.history).toHaveLength(0);
-    expect(result.current.cursor).toBeNull();
+    // A dry run shows the same visuals as a real one: the AI cursor travels to the verified target.
+    expect(result.current.cursor).toEqual({ x: 0.42, y: 0.5 });
+    expect(result.current.trail.length).toBeGreaterThanOrEqual(12);
+    expect(result.current.trail.filter((p) => p.click)).toEqual([expect.objectContaining({ x: 0.42, y: 0.5 })]);
     expect(result.current.patterns).toHaveLength(0);
     // Only Accept saves the element; a test leaves the proposal pending and memory untouched.
     expect(result.current.familiar).toHaveLength(0);
