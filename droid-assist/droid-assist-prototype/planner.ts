@@ -16,13 +16,17 @@ const SYNONYMS: Record<string, string> = {
   calculator: 'calc', calculate: 'calc', compute: 'calc',
   video: 'play', music: 'play', song: 'play', ad: 'popup', ads: 'popup', advert: 'popup',
 };
-/** Folds plural and verb endings so "opening the calculators" matches "open calculator". */
-function stem(w: string): string {
+/** Drops a plural or verb ending: "files" → "file", "messages" → "message", "running" → "run". */
+function inflect(w: string): string {
   if (w.length <= 4) return w;
-  const cut = w.replace(/(ing|ed|es|s)$/, '');
-  return cut === w ? w : cut.replace(/(.)\1$/, '$1');
+  if (/ies$/.test(w)) return w.replace(/ies$/, 'y');
+  if (/(ss|sh|ch|x|z)es$/.test(w)) return w.slice(0, -2);
+  if (/(ing|ed)$/.test(w)) return w.replace(/(ing|ed)$/, '').replace(/(.)\1$/, '$1');
+  return w.replace(/([^s])s$/, '$1');
 }
-const canonical = (w: string) => SYNONYMS[w] ?? SYNONYMS[stem(w)] ?? stem(w);
+/** Folds endings and a silent final "e" so "closes", "closed" and "close" are one word. */
+const stem = (w: string) => inflect(w).replace(/(.{3,})e$/, '$1');
+const canonical = (w: string) => stem(SYNONYMS[w] ?? SYNONYMS[inflect(w)] ?? w);
 const words = (s: string) => new Set(s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => !STOP.has(w)).map(canonical).filter((w) => w.length > 2 && !STOP.has(w)));
 
 /**

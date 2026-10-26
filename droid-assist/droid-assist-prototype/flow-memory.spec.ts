@@ -44,6 +44,14 @@ describe('upsertCard', () => {
     expect(cards[0]).toMatchObject({ id: 'old', savedAt: 9, steps: [{ id: 'b' }] });
   });
 
+  it('treats plural and verb-form rewordings of a flow as the same flow', () => {
+    for (const [a, b] of [['rename file', 'rename files'], ['open message', 'open messages'], ['save the image', 'save the images'], ['close popup', 'closes popups']]) {
+      const first: SavedCard = { id: 'x', name: a, description: '', savedAt: 1, steps: [step('a', 'pending')] };
+      const { cards } = upsertCard([first], { ...first, id: 'y', name: b });
+      expect(cards, `${a} / ${b}`).toHaveLength(1);
+    }
+  });
+
   it('adds an unrelated flow beside the others', () => {
     const fresh: SavedCard = { id: 'new', name: 'Play the video', description: '', savedAt: 9, steps: [step('b', 'pending')] };
     const { cards, replaced } = upsertCard([existing, other], fresh);
