@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ActionRecord, Annotation, AssistSettings, Frame, Habit, InputAction, LearnedPattern, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
+import type { ActionRecord, Annotation, AssistSettings, FamiliarElement, Frame, Habit, InputAction, LearnedPattern, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
 import { POINTER_ACTIONS } from './types.js';
 import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
-import { AI_PLAN_SOURCE, calculate, generateCard, planFromGoal, relocateTarget, uid } from './planner.js';
-import { AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, pingAi } from './ai.js';
+import { AI_PLAN_SOURCE, calculate, generateCard, planFromGoal, planRemaining, relocateTarget, uid } from './planner.js';
+import { AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, pingAi } from './ai.js';
 import type { AiReply, AiStatus, AskRequest } from './ai.js';
 import { confirmTarget, decidePopup, decideStep, describeScreen, reflectStep, verifyGoal, type GoalCheck, type PopupDecision, type StepDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
 import { DEFAULT_MAX_ITERATIONS, autoContinue, type ContinueStop, type RunReport } from './auto-continue.js';
@@ -16,7 +16,9 @@ import { parseCommand } from './commands.js';
 import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction, type ActionBudget } from './safety.js';
-import { LOG_LIMIT, loadCards, loadHabits, loadLog, loadPatterns, loadSettings, saveCards, saveHabits, saveLog, savePatterns, saveSettings } from './storage.js';
+import { LOG_LIMIT, loadCards, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, saveCards, saveFamiliar, saveHabits, saveLog, savePatterns, saveSettings } from './storage.js';
+import { forgetElement, listElements, rememberElement, type ScreenElement } from './elements.js';
+import { gridRef } from './grid.js';
 import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
@@ -151,6 +153,10 @@ export function useAssist() {
   const [patterns, setPatterns] = useState<LearnedPattern[]>(loadPatterns);
   /** Per-target, per-app habits learned from every executed step, applied to planning and grounding. */
   const [habits, setHabits] = useState<Habit[]>(() => loadHabits());
+  /** On-screen elements verified or used before, remembered across sessions. */
+  const [familiar, setFamiliar] = useState<FamiliarElement[]>(loadFamiliar);
+  /** The element a Test click is pointing at on the preview. */
+  const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
   const [progress, setProgress] = useState({ done: 0, manual: 0 });
@@ -214,6 +220,10 @@ export function useAssist() {
   const targetRef = useRef(target);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
+  /** Re-plan loop guard for autoPlan, the plan in flight, and step status changes made by execution. */
+  const planGuardRef = useRef(createPlanGuard());
+  const planningRef = useRef(false);
+  const statusChangesRef = useRef(0);
 
   settingsRef.current = settings;
   sourceRef.current = source;
@@ -237,6 +247,7 @@ export function useAssist() {
   useEffect(() => saveLog(log), [log]);
   useEffect(() => savePatterns(patterns), [patterns]);
   useEffect(() => saveHabits(habits), [habits]);
+  useEffect(() => saveFamiliar(familiar), [familiar]);
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
   }, [cards]);
@@ -583,11 +594,25 @@ export function useAssist() {
   };
 
   /**
+   * Familiar-elements memory: a pointer step whose target was verified or used is remembered
+   * by name with its point, a small patch of the screen around it and the time.
+   */
+  const rememberTarget = async (step: WorkflowStep, out: Performed) => {
+    if (!out.ok || !POINTER_ACTIONS.has(step.action)) return;
+    const frame = out.shot ?? framesRef.current[0];
+    const patch = frame ? await patchAt(frame, out.target).catch(() => undefined) : undefined;
+    setFamiliar((list) => rememberElement(list, { id: uid('el'), name: step.target ?? step.name, x: out.target.x, y: out.target.y, patch, lastSeen: Date.now() }));
+  };
+
+  const forgetFamiliar = (id: string) => setFamiliar((list) => forgetElement(list, id));
+
+  /**
    * performStep, then reflect-after-step: every step the pipeline ran gets the model's reflection
    * and verdict, and the verdict of a step that really ran (not a dry run) updates its habit.
    */
   const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     const out = await performStep(step, actor, budget, dryRun);
+    void rememberTarget(step, out);
     if (out.halt || !aiOnline()) return out;
     const verdict = await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
     if (verdict && !dryRun) learnHabit(step, verdict);
@@ -1013,24 +1038,36 @@ export function useAssist() {
   /**
    * AI plan: reuse a similar saved flow (drift-corrected), otherwise the model plans from the
    * goal + live frame with the reliable habits and learned patterns relevant to this goal as context.
+   * The re-plan guard skips a plan already in flight, a goal whose re-plan came back identical, and
+   * re-plans past the cap while the screen is unchanged.
    */
   const autoPlan = async (text = goal) => {
     if (!text.trim()) {
       addLog('Planner', 'Type a goal first', 'warn');
       return;
     }
+    if (planningRef.current) {
+      addLog('Planner', `Re-plan guard: a plan for "${text.trim()}" is still being thought out — not starting another`, 'warn');
+      return;
+    }
+    const gate = planGuardRef.current.before(text, screenState());
+    if (!gate.run) {
+      if (gate.log) addLog('Planner', `Re-plan guard: ${gate.log}`, 'warn');
+      return;
+    }
+    planningRef.current = true;
     const applied = relevantHabits(text, habitContext(), habitsRef.current);
     if (applied.length) addLog('Habits', `Applying ${applied.length} habit(s) to planning: ${applied.map(habitLine).join(' | ')}`, 'info');
     await withAi(async () => {
       try {
         const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askAi, applied.map(habitLine), patternsRef.current), planSummary);
-        const { steps: planned, source: why } = plan;
-        stepsRef.current = planned;
-        setSteps(planned);
-        setDraftCard(generateCard(planned, text));
-        addLog('Planner', `${why}: ${planned.length} step(s) — ${planned.map((s) => `${s.action} "${s.target ?? s.name}"`).join(' → ')}${armedRef.current ? '' : ' (real input disarmed: replay / Auto Act run it as a dry run)'}`, 'ok');
+        if (planGuardRef.current.after(plan.steps) === 'duplicate') {
+          addLog('Planner', `Re-plan guard: the plan for "${text.trim()}" is identical to the previous one — kept the current steps and will not ask the model again until the screen or a step changes`, 'warn');
+          return;
+        }
+        applyPlan(text, plan.steps, plan.source);
       } catch (error) {
-        addLog('Planner', `AI plan failed — no steps created: ${errorText(error)}`, 'error');
+        addLog('Planner', aiFailure('AI plan failed — no steps created', error), 'error');
       } finally {
         planningRef.current = false;
       }
@@ -1213,8 +1250,11 @@ export function useAssist() {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
-    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, habits, deleteHabit, pinHabit,
-    onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, submitInput, askScreen, explainScreen,
+    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, habits, deleteHabit, pinHabit, continuing,
+    /** The AI is planning, reflecting, deciding or verifying right now. */
+    aiWorking: aiBusy || aiCalls > 0,
+    familiar, forgetFamiliar, elements, highlight, testClick,
+    onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
   };
 }
