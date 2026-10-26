@@ -1,12 +1,13 @@
-import type { AssistSettings, LearnedPattern, LogEntry, MonitorMode, SavedCard, StepAction, WorkflowStep } from './types.js';
+import type { AssistSettings, FamiliarElement, LearnedPattern, LogEntry, MonitorMode, SavedCard, StepAction, WorkflowStep } from './types.js';
 import { STEP_ACTIONS } from './types.js';
 import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 import { sanitizeBudget } from './safety.js';
+import { FAMILIAR_LIMIT } from './elements.js';
 
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', familiar: 'droid-assist.familiar' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -60,7 +61,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     const v = stored[key];
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
-  for (const key of ['autoAct', 'aiHelp', 'showTrail'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'showGrid'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
   if (typeof stored.bridgeUrl === 'string') out.bridgeUrl = stored.bridgeUrl;
@@ -155,4 +156,22 @@ export function loadPatterns(): LearnedPattern[] {
 /** Persists the newest PATTERN_LIMIT learned patterns. */
 export function savePatterns(patterns: LearnedPattern[]) {
   writeJson(KEYS.patterns, patterns.slice(0, PATTERN_LIMIT));
+}
+
+function isFamiliar(v: unknown): v is FamiliarElement {
+  return isObject(v) && typeof v.id === 'string' && typeof v.name === 'string' && !!v.name.trim()
+    && isNum(v.x) && isNum(v.y) && v.x >= 0 && v.x <= 1 && v.y >= 0 && v.y <= 1 && isNum(v.lastSeen)
+    && (v.patch === undefined || (typeof v.patch === 'string' && v.patch.startsWith('data:image/')));
+}
+
+/** The stored familiar elements (newest first, at most FAMILIAR_LIMIT); invalid entries are dropped. */
+export function loadFamiliar(): FamiliarElement[] {
+  const stored = readJson(KEYS.familiar);
+  return Array.isArray(stored) ? stored.filter(isFamiliar).slice(0, FAMILIAR_LIMIT) : [];
+}
+
+/** Persists the familiar elements; when they do not fit, retries without their screenshot patches. */
+export function saveFamiliar(elements: FamiliarElement[]) {
+  const kept = elements.slice(0, FAMILIAR_LIMIT);
+  if (!writeJson(KEYS.familiar, kept)) writeJson(KEYS.familiar, kept.map(({ patch: _patch, ...e }) => e));
 }

@@ -1,7 +1,8 @@
 import type { Frame, LearnedPattern, SavedCard, StepAction, WorkflowStep } from './types.js';
 import { POINTER_ACTIONS, STEP_ACTIONS } from './types.js';
-import { AiError, VIEW_H, VIEW_W, parseJsonReply, toUnit } from './ai.js';
+import { AiError, VIEW_H, VIEW_W, parseJsonReply } from './ai.js';
 import type { AskFn } from './ai.js';
+import { GRID_PROMPT, gridRef, replyPoint } from './grid.js';
 
 let seq = 0;
 /** A short unique id. */
@@ -62,9 +63,10 @@ const ACTION_LIST = STEP_ACTIONS.map((a) => `"${a}"`).join('|');
 /** System prompt for the planner: the reply contract the model must follow. */
 export const PLAN_SYSTEM = `You are Droid Assist, an agent that controls a computer screen. You see a screenshot (${VIEW_W}x${VIEW_H}) of the user's screen.
 Plan the concrete steps that achieve the user's goal on THIS screen. Look at the screenshot and target real visible controls.
-Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"x":number,"y":number,"text"?:string}]}
-x and y are the target's center as fractions 0..1 of the screenshot width/height. "target" names the on-screen thing the step points at (e.g. "Files icon in the taskbar").
-"move" only moves (hovers) the mouse cursor onto the target without clicking — use it for "move the mouse to X" / "hover over X", e.g. {"name":"Move to Files icon","action":"move","target":"Files icon","x":0.42,"y":0.97}.
+${GRID_PROMPT}
+Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"cell":string,"cx":number,"cy":number,"text"?:string}]}
+"cell","cx","cy" locate the target's center on the grid. "target" names the on-screen thing the step points at (e.g. "Files icon in the taskbar").
+"move" only moves (hovers) the mouse cursor onto the target without clicking — use it for "move the mouse to X" / "hover over X", e.g. {"name":"Move to Files icon","action":"move","target":"Files icon","cell":"H6","cx":0.04,"cy":0.76}.
 "click" clicks the target once, "double_click" double-clicks it (open a desktop icon or file), "scroll" scrolls over the target with "text" "up" or "down".
 "text" is the text to type, the key to press, the search query, the arithmetic expression or the scroll direction.
 Never substitute another action for the one the goal asks for; if the target is not visible, return {"steps":[]}.`;
@@ -85,8 +87,7 @@ function toStep(raw: unknown, frame: Frame | null): WorkflowStep {
     id: uid('step'),
     name: typeof s.name === 'string' && s.name.trim() ? s.name.trim() : action,
     action,
-    x: toUnit(s.x ?? 0.5, VIEW_W),
-    y: toUnit(s.y ?? 0.5, VIEW_H),
+    ...replyPoint(s, { x: 0.5, y: 0.5 }),
     status: 'pending',
   };
   if (s.text !== undefined && s.text !== null) step.text = String(s.text);
@@ -159,7 +160,7 @@ export async function planFromGoal(goal: string, cards: SavedCard[], frame: Fram
  * (`feedback` says why). Resolves the new point, or null when the model says it is not visible.
  */
 export async function relocateTarget(ask: AskFn, frame: Frame, step: WorkflowStep, feedback: string): Promise<{ x: number; y: number; thinking: string | null } | null> {
-  const at = `(${(step.x * 100).toFixed(1)}%, ${(step.y * 100).toFixed(1)}%)`;
+  const at = `${gridRef(step)} = (${(step.x * 100).toFixed(1)}%, ${(step.y * 100).toFixed(1)}%)`;
   const reply = await ask({
     system: `${PLAN_SYSTEM}\nThis is a correction: reply with exactly one step for the named target, or {"steps":[]} if it is not visible.`,
     prompt: `Step "${step.name}" (${step.action}) targets "${step.target ?? step.name}". Your previous point ${at} was rejected: ${feedback}\nLook again and give the target's true center.`,
@@ -169,7 +170,7 @@ export async function relocateTarget(ask: AskFn, frame: Frame, step: WorkflowSte
   const steps = parseJsonReply(reply.content).steps;
   if (!Array.isArray(steps) || !steps.length) return null;
   const s = (steps[0] ?? {}) as Record<string, unknown>;
-  return { x: toUnit(s.x, VIEW_W), y: toUnit(s.y, VIEW_H), thinking: reply.thinking };
+  return { ...replyPoint(s), thinking: reply.thinking };
 }
 
 /** A generated name + description for a workflow. */

@@ -65,6 +65,39 @@ describe('useAssist flow and pattern memory', () => {
   });
 });
 
+describe('useAssist elements and Test click', () => {
+  const el = { id: 'el1', name: 'Files icon', x: 0.42, y: 0.97, source: 'familiar' as const };
+
+  it('lists persisted familiar elements and persists forgetting one', () => {
+    localStorage.setItem('droid-assist.familiar', JSON.stringify([{ id: 'el1', name: 'Files icon', x: 0.42, y: 0.97, lastSeen: 1 }]));
+    const { result } = renderHook(() => useAssist());
+    expect(result.current.elements).toMatchObject([{ name: 'Files icon', x: 0.42, y: 0.97, source: 'familiar' }]);
+    act(() => result.current.forgetFamiliar('el1'));
+    expect(result.current.elements).toEqual([]);
+    expect(JSON.parse(localStorage.getItem('droid-assist.familiar')!)).toEqual([]);
+  });
+
+  it('disarmed: highlights the target only — no input, no action recorded', async () => {
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.testClick(el));
+    expect(result.current.highlight).toMatchObject({ x: 0.42, y: 0.97, label: 'Files icon' });
+    expect(result.current.history).toHaveLength(0);
+    expect(result.current.log.find((l) => l.source === 'Test click')?.message).toMatch(/H6 .*dry run/);
+  });
+
+  it('armed: clicks through the gated pipeline; aborted refuses', async () => {
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.toggleArmed());
+    await act(() => result.current.testClick(el));
+    // On the demo desktop the click is really applied at the point; nothing interactive is there.
+    expect(result.current.log.find((l) => l.source === 'Test click')?.message).toMatch(/Files icon.*hit nothing interactive/);
+    expect(result.current.cursor).toEqual({ x: 0.42, y: 0.97 });
+    act(() => result.current.triggerAbort('test'));
+    await act(() => result.current.testClick(el));
+    expect(result.current.log.find((l) => l.source === 'Test click')?.message).toMatch(/Aborted/);
+  });
+});
+
 describe('useAssist Qwen thinking timeline', () => {
   const chatReply = (message: Record<string, unknown>) => vi.fn(async () => new Response(JSON.stringify({ message: { role: 'assistant', ...message } }), { status: 200 }));
 

@@ -76,6 +76,47 @@ describe('planFromGoal', () => {
   it('tells the model about every action and the target field', () => {
     for (const word of ['"move"', '"double_click"', '"scroll"', '"target"']) expect(PLAN_SYSTEM).toContain(word);
   });
+
+  it('includes the grid definition and asks for a cell plus in-cell position', () => {
+    for (const word of ['"A1"', '"H12"', '0.000..0.083', '"cell"', '"cx"', '"cy"']) expect(PLAN_SYSTEM).toContain(word);
+  });
+
+  it('resolves a grid cell + in-cell fraction to exact coordinates', async () => {
+    const ask = askReturning('{"steps":[{"name":"Open Docs","action":"click","target":"Docs in sidebar","cell":"C1","cx":0.5,"cy":0.25}]}');
+    const plan = await planFromGoal('open docs folder', [], frame, ask);
+    expect(plan.steps[0].x).toBeCloseTo(0.5 / 12);
+    expect(plan.steps[0].y).toBeCloseTo(2.25 / 8);
+  });
+});
+
+describe('grid in grounding prompts', () => {
+  it('relocateTarget sends the grid, states the rejected cell and resolves the new cell', async () => {
+    const ask = askReturning('{"steps":[{"action":"move","target":"Files icon","cell":"H6","cx":0,"cy":1}]}');
+    const move: WorkflowStep = { id: 'm', name: 'Move', action: 'move', target: 'Files icon', x: 0.06, y: 0.35, status: 'pending' };
+    const p = await relocateTarget(ask, frame, move, 'wrong');
+    expect(p?.x).toBeCloseTo(5 / 12);
+    expect(p?.y).toBeCloseTo(1);
+    expect(ask.mock.calls[0][0].system).toContain('"A1"');
+    expect(ask.mock.calls[0][0].prompt).toContain('C1 (');
+  });
+
+  it('popup, executor and screen-help prompts carry the grid definition', async () => {
+    const popupAsk = askReturning('{"close":true,"cell":"A12","cx":0.5,"cy":0.5,"reason":"ad"}');
+    const d = await decidePopup(popupAsk, frame, { x: 0.3, y: 0.3, w: 0.4, h: 0.3 });
+    expect(d).toMatchObject({ close: true });
+    if (d.close) {
+      expect(d.x).toBeCloseTo(23 / 24);
+      expect(d.y).toBeCloseTo(1 / 16);
+    }
+    const stepAsk = askReturning('{"run":true,"x":0.6,"y":0.7,"reason":"ok"}');
+    await decideStep(stepAsk, frame, step, 'play');
+    const helpAsk = askReturning('{"answer":"ok","items":[]}');
+    await describeScreen(helpAsk, frame, 'q', '');
+    for (const ask of [popupAsk, stepAsk, helpAsk]) {
+      expect(ask.mock.calls[0][0].system).toContain('"A1"');
+      expect(ask.mock.calls[0][0].system).toContain('0.000..0.083');
+    }
+  });
 });
 
 describe('relocateTarget', () => {
