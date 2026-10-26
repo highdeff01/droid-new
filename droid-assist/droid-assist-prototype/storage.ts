@@ -97,6 +97,7 @@ function parseStep(v: unknown): StoredStep | null {
     y: v.y,
     status: 'pending',
     ...(typeof v.text === 'string' ? { text: v.text } : {}),
+    ...(typeof v.target === 'string' && v.target ? { target: v.target } : {}),
     ...(isStoredFrame(v.refFrame) ? { refFrame: v.refFrame } : {}),
   };
 }
