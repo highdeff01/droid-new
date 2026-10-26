@@ -271,6 +271,25 @@ export function LoopControlPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
+/**
+ * The background agents the user can toggle. Each also has an inbox on the inter-agent bus
+ * (see the Agent bus panel), so a discovered element can be forwarded between them.
+ */
+export function AgentsPanel({ engine }: { engine: AssistEngine }) {
+  const { agents, setAgents } = engine;
+  return (
+    <section className={styles.panel}>
+      <h3>Agents</h3>
+      {agents.map((a) => (
+        <label key={a.id} className={styles.agent}>
+          <input type="checkbox" checked={a.on} onChange={(e) => setAgents(agents.map((x) => (x.id === a.id ? { ...x, on: e.target.checked } : x)))} />
+          <span><strong>{a.name}</strong><small>{a.description}</small></span>
+        </label>
+      ))}
+    </section>
+  );
+}
+
 /** Settings: gallery size, drift checkpoints, capture rate, budget, hotkey, bridge, AI endpoint. */
 export function SettingsPanel({ engine }: { engine: AssistEngine }) {
   const { settings, setSettings } = engine;

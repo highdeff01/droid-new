@@ -5,6 +5,7 @@ export type AssistCommand = { kind: CommandName; target: string } | { kind: 'err
 const COMMANDS = {
   use: 'Usage: /use <app or target>',
   move: 'Usage: /move <on-screen target>, e.g. /move files icon',
+  test: 'Usage: /test links Files, Notes · /test route Cart > Checkout > Pay · /test <what to verify>',
   measure: 'Usage: /measure <a> to <b> [to <c>…], e.g. /measure files icon to game icon, /measure files icon to left edge, /measure 100,200 to 400,200',
   arrange: 'Usage: /arrange <how to move or reorder elements>, e.g. /arrange move the Files icon below Game',
 } as const;
@@ -24,7 +25,7 @@ export function parseCommand(input: string): AssistCommand | null {
   if (!text.startsWith('/')) return null;
   const match = /^\/([a-z]+)(?:\s+(.*))?$/.exec(text);
   const name = match?.[1] ?? '';
-  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /measure <a> to <b> or /arrange <goal>` };
+  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b> or /arrange <goal>` };
   const target = (match[2] ?? '').trim();
   return target ? { kind: name, target } : { kind: 'error', message: COMMANDS[name] };
 }

@@ -737,6 +737,79 @@ describe('useAssist screen-change responder and proposals', () => {
   });
 });
 
+describe('useAssist agent forwarding and subagent link tests', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Stub model: plans one move onto the link named in the goal, reflects, and passes every link except "Calc". */
+  function stubModel() {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      const body = String(init.body);
+      bodies.push(body);
+      // The body carries the session history, so the newest mention names the current link.
+      const step = body.includes('final verdict') || body.includes('reviewing a step');
+      const mentions = [...body.matchAll(step ? /Move to (Files|Notes|Calc)/g : /\\"(Files|Notes|Calc)\\"/g)];
+      const link = mentions.at(-1)?.[1] ?? 'Files';
+      const message = body.includes('final verdict')
+        ? { content: JSON.stringify({ success: link !== 'Calc', pattern_avoid: link === 'Calc' ? 'clicking Calc twice' : null, pattern_add: null }), thinking: `verdict ${link}` }
+        : body.includes('reviewing a step')
+          ? { content: `Reached ${link}.`, thinking: null }
+          : { content: JSON.stringify({ steps: [{ name: `Move to ${link}`, action: 'move', target: link, x: 0.1, y: 0.5 }] }), thinking: `plan ${link}` };
+      return new Response(JSON.stringify({ message: { role: 'assistant', ...message } }), { status: 200 });
+    }));
+    return bodies;
+  }
+
+  it('runs one subagent per link through plan, execute, reflect and verdict, and reports pass/fail', async () => {
+    const bodies = stubModel();
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.setGoal('/test links Files, Notes, Calc'));
+    await act(() => result.current.submitInput());
+    const report = result.current.subReport!;
+    expect(report.finished).toBe(true);
+    expect(report.results.map((r) => [r.label, r.status, r.dry])).toEqual([['Files', 'pass', true], ['Notes', 'pass', true], ['Calc', 'fail', true]]);
+    expect(report.results[0].thinking).toEqual(['plan Files', 'verdict Files']);
+    expect(report.results.reduce((s, r) => s + r.budget, 0)).toBeLessThanOrEqual(result.current.settings.actionBudget);
+    expect(bodies.filter((b) => b.includes('final verdict'))).toHaveLength(3);
+    expect(result.current.patterns.some((p) => p.kind === 'avoid' && p.pattern === 'clicking Calc twice')).toBe(true);
+    expect(result.current.patterns.some((p) => p.kind === 'add' && /Files/.test(p.pattern))).toBe(true);
+    // Passed links are forwarded on the bus: predefined by the coordinate learner.
+    expect(result.current.knownElements.map((e) => e.name)).toEqual(['Notes', 'Files']);
+    expect(result.current.bus.some((m) => m.from === 'supervisor' && m.to === 'habits' && m.status === 'handled')).toBe(true);
+    expect(result.current.log.some((l) => l.source === 'Supervisor' && /2\/3 passed · 1 failed/.test(l.message))).toBe(true);
+  });
+
+  it('fails a subagent loudly and never passes it when the AI is unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    await act(() => result.current.testRoutes({ kind: 'link', items: ['Files'], goal: 'test Files' }));
+    expect(result.current.subReport!.results[0]).toMatchObject({ status: 'fail', thinking: [] });
+    expect(result.current.subReport!.results[0].message).toMatch(/unreachable/);
+  });
+
+  it('aborts the remaining subagents after the emergency stop', async () => {
+    stubModel();
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.triggerAbort('test'));
+    await act(() => result.current.testRoutes({ kind: 'route', items: ['Files', 'Notes'], goal: 'route' }));
+    expect(result.current.subReport).toBeNull();
+    expect(result.current.log[0].message).toMatch(/ABORTED is active/);
+  });
+
+  it('forwards an element from any agent into every other inbox', () => {
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.forwardElement('drift', { name: 'Search box', x: 0.5, y: 0.1 }));
+    expect(new Set(result.current.bus.map((m) => m.to)).size).toBe(7);
+    expect(result.current.bus.every((m) => m.status === 'handled')).toBe(true);
+    expect(result.current.knownElements[0].name).toBe('Search box');
+    expect(result.current.patterns[0]).toMatchObject({ kind: 'add' });
+    expect(result.current.annotations.some((a) => a.label === 'Watching: Search box')).toBe(true);
+  });
+});
+
 describe('useAssist screen capture', () => {
   it('starts native capture at the configured rate and analyses every pushed frame', async () => {
     const { api, hooks } = installNative();

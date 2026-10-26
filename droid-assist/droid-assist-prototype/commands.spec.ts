@@ -23,6 +23,10 @@ describe('parseCommand', () => {
     expect(parseCommand('/move')).toMatchObject({ kind: 'error' });
     expect(parseCommand('/move   ')).toMatchObject({ kind: 'error' });
   });
+  it('parses /test with its spec', () => {
+    expect(parseCommand('/test links Files, Notes')).toEqual({ kind: 'test', target: 'links Files, Notes' });
+    expect(parseCommand('/test')).toMatchObject({ kind: 'error' });
+  });
   it('names /move in the unknown-command error', () => {
     const r = parseCommand('/hover icon');
     expect(r).toMatchObject({ kind: 'error' });
