@@ -189,6 +189,8 @@ export interface LogEntry {
   source: string;
   message: string;
   tone: 'info' | 'ok' | 'warn' | 'error';
+  /** Screenshot evidence (data URLs), e.g. a moved element before and after; never persisted. */
+  shots?: string[];
 }
 
 /** A saved, named workflow card for later comparison and selection. */

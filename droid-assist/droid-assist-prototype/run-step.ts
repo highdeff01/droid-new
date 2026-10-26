@@ -58,7 +58,11 @@ export interface StepOutcome {
   executed: boolean;
   message: string;
   target: { x: number; y: number };
+  /** A drag's drift-corrected, grounded drop point. */
+  end?: { x: number; y: number };
   correction?: DriftCorrection;
+  /** The live frame the step was located on, just before the input. */
+  live?: Frame;
   /** Screenshot taken after the step was executed. */
   shot?: Frame;
   check?: Reverify;
@@ -161,6 +165,21 @@ export function dragEndError(step: WorkflowStep): string | null {
 }
 
 /**
+ * A drag's drop point on the live frame: drift-corrected against the reference screenshot like
+ * the start (a drop point that no longer matches is kept as planned, since an empty spot can
+ * change), then confirmed by the AI as the named end target.
+ */
+async function groundEnd(step: WorkflowStep, live: Frame, deps: StepDeps): Promise<{ point: Point } | { error: string }> {
+  const planned = { x: step.endX!, y: step.endY! };
+  const c = step.refFrame ? correctDrift(step.refFrame.data, live.data, planned.x, planned.y, live.srcW, live.srcH) : null;
+  const end = c && c.level !== 'red' ? { x: c.x, y: c.y } : planned;
+  const how = !c ? 'no reference screenshot, as planned' : c.level === 'red' ? 'reference no longer matches there, kept as planned' : `drift ${c.driftPx}px`;
+  deps.log(`"${step.name}": drop point ${px(end, live)} (${how})`, c?.driftPx ? 'warn' : 'info');
+  if (!deps.grounding || !step.endTarget) return { point: end };
+  return groundTarget({ ...step, target: step.endTarget }, live, end, deps.grounding, deps.log);
+}
+
+/**
  * The point a pointer step starts from: a matching habit's remembered position when it is
  * found on the live frame, otherwise the drift-corrected one.
  */
@@ -177,7 +196,7 @@ function startPoint(step: WorkflowStep, live: Frame, correction: DriftCorrection
  * The single real-input pipeline: verify the target on a live desktop frame, correct its
  * drift (or start from a learned habit's remembered position), confirm a named target with
  * the AI, perform the input through the bridge at that position, then re-verify. A drag
- * grounds its start this way; its end must be on-screen.
+ * grounds and drift-corrects both its start and its end.
  */
 export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepOutcome> {
   const badEnd = dragEndError(step);
@@ -195,11 +214,17 @@ export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepO
     target = grounded.point;
     deps.onVerified?.(live, step, target);
   }
-  if (!deps.dispatch) return { ok: true, executed: false, message: 'verified on the live screen — self-test, not dispatched', target, correction };
-  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y }, live.srcW, live.srcH);
-  if (!sent.ok) return { ok: false, executed: false, message: sent.message, target, correction };
+  let end: Point | undefined;
+  if (step.action === 'drag') {
+    const e = await groundEnd(step, live, deps);
+    if ('error' in e) return { ok: false, executed: false, message: e.error, target, correction, live };
+    end = e.point;
+  }
+  if (!deps.dispatch) return { ok: true, executed: false, message: 'verified on the live screen — self-test, not dispatched', target, end, correction, live };
+  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH);
+  if (!sent.ok) return { ok: false, executed: false, message: sent.message, target, end, correction, live };
   const after = await verifyAfter(step, live, target, deps);
-  const done: StepOutcome = { ok: true, executed: true, message: sent.message, target, correction, ...after };
+  const done: StepOutcome = { ok: true, executed: true, message: sent.message, target, end, correction, live, ...after };
   return retryMissed(step, done, deps);
 }
 

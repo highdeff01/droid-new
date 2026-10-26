@@ -527,14 +527,14 @@ export function LearnedCoordsPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict' };
+const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check' };
 
-/** Tone of an entry: failures as errors, verdicts by their outcome, unready proposals as warnings, the rest informational. */
+/** Tone of an entry: failures as errors, verdicts and checks by their outcome, unready proposals as warnings, the rest informational. */
 function entryTone(e: ThinkingEntry): LogEntry['tone'] {
   if (e.error) return 'error';
   if (e.kind === 'proposal') return e.text.includes('NOT READY') ? 'warn' : 'info';
-  if (e.kind !== 'verdict') return 'info';
-  return e.text.startsWith('SUCCESS') ? 'ok' : 'warn';
+  if (e.kind !== 'verdict' && e.kind !== 'check') return 'info';
+  return /^(SUCCESS|PASS)/.test(e.text) ? 'ok' : 'warn';
 }
 
 /** One timeline entry: what the model answered and the thinking it returned — or plainly that there was none. */
@@ -578,6 +578,11 @@ export function LogPanel({ engine }: { engine: AssistEngine }) {
         {engine.log.map((l) => (
           <li key={l.id} data-tone={l.tone}>
             <time>{new Date(l.time).toLocaleTimeString()}</time> <b>{l.source}</b> {l.message}
+            {l.shots && (
+              <span>
+                {l.shots.map((url, i) => <img key={i} src={url} alt={i === 0 ? 'before' : 'after'} width={120} />)}
+              </span>
+            )}
           </li>
         ))}
       </ul>

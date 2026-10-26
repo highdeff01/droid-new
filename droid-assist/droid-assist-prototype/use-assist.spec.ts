@@ -216,7 +216,8 @@ describe('useAssist Qwen thinking timeline', () => {
     act(() => result.current.toggleArmed());
     await act(() => result.current.replay());
     const kinds = result.current.timeline.filter((e) => e.step === 'Drag Report to Archive').map((e) => e.kind);
-    expect(kinds).toEqual(['verdict', 'reflection', 'proposal']);
+    expect(kinds).toEqual(['check', 'verdict', 'reflection', 'proposal']);
+    expect(result.current.timeline.find((e) => e.kind === 'check' && e.step === 'Drag Report to Archive')?.text).toMatch(/^PASS — "Report file"/);
     expect(result.current.timeline.some((e) => e.kind === 'thought' && e.thinking === 'Report is top-right.')).toBe(true);
     expect(result.current.history[0]).toMatchObject({ action: 'drag', via: 'demo', ok: true, x: 864, y: 108, endX: 864, endY: 378 });
   });
@@ -256,6 +257,99 @@ describe('useAssist drag recorder and guardrails', () => {
   });
 });
 
+describe('useAssist rearrangement on the demo desktop', () => {
+  // Files starts at (0.055, 0.105), Game at (0.055, 0.425): "below Game" means the same column, lower.
+  const plan = (endY: number, endX = 0.12) => ({ content: JSON.stringify({ steps: [{ name: 'Move Files', action: 'drag', target: 'Files icon', x: 0.055, y: 0.105, endTarget: 'free spot below Game', endX, endY }], expect: [{ element: 'Files icon', relation: 'below', anchor: 'Game' }] }), thinking: 'Files goes under Game.' });
+  const replan = (fromY: number, endY: number, x = 0.12) => ({ content: JSON.stringify({ steps: [{ name: 'x', action: 'drag', target: 'Files icon', x, y: fromY, endTarget: 'free spot below Game', endX: x, endY }] }), thinking: 'Try again.' });
+
+  function stubAi(first: Record<string, unknown>, again: Record<string, unknown>) {
+    const replies: Record<string, Record<string, unknown>> = {
+      plan: first,
+      replan: again,
+      reflect: { content: 'Moved.', thinking: null },
+      verdict: { content: '{"success":true,"pattern_avoid":null,"pattern_add":null}', thinking: null },
+      propose: { content: '{"ready":true,"x":0.055,"y":0.105,"why":"moving Files below Game serves the goal."}', thinking: null },
+    };
+    const pick = (body: string) => (body.includes('final verdict') ? 'verdict' : body.includes('reviewing a step') ? 'reflect' : body.includes('correction of one drag') ? 'replan' : body.includes('state WHAT') ? 'propose' : 'plan');
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => new Response(JSON.stringify({ message: { role: 'assistant', ...replies[pick(String(init.body))] } }), { status: 200 })));
+  }
+
+  async function arrange(armed: boolean, before?: (r: { current: ReturnType<typeof useAssist> }) => void) {
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    if (armed) act(() => result.current.toggleArmed());
+    before?.(result);
+    act(() => result.current.setGoal('/arrange move the Files icon below Game'));
+    await act(() => result.current.submitInput());
+    return result;
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('plans the drag with its arrangement, checks the move and verifies the arrangement with PASS per element', async () => {
+    stubAi(plan(0.55), replan(0, 0));
+    const result = await arrange(true);
+    expect(result.current.steps[0]).toMatchObject({ action: 'drag', status: 'done', endX: 0.12, endY: 0.55 });
+    expect(result.current.history).toHaveLength(1);
+    expect(result.current.timeline.find((e) => e.step === 'Move Files' && e.kind === 'check')?.text).toMatch(/^PASS/);
+    const verify = result.current.log.filter((l) => l.source === 'Verify');
+    expect(verify.some((l) => /^PASS "Files icon" — .*below "Game" as requested/.test(l.message) && l.tone === 'ok')).toBe(true);
+    expect(verify.some((l) => /Arrangement confirmed: 1\/1/.test(l.message))).toBe(true);
+    expect(result.current.timeline.some((e) => e.step === 'Verify "Files icon"' && e.kind === 'check' && /^PASS/.test(e.text))).toBe(true);
+  });
+
+  it('re-plans a drag that missed once and passes on the retry', async () => {
+    // 0.99 is clamped above the taskbar, so the first drop misses; the re-plan drags it from there.
+    stubAi(plan(0.99), replan(0.885, 0.55));
+    const result = await arrange(true);
+    expect(result.current.history).toHaveLength(2);
+    expect(result.current.steps[0].status).toBe('done');
+    const checks = result.current.timeline.filter((e) => e.kind === 'check' && e.step === 'Move Files').map((e) => e.text.slice(0, 4));
+    expect(checks).toEqual(['PASS', 'FAIL']);
+    expect(result.current.log.some((l) => /retrying once/.test(l.message))).toBe(true);
+  });
+
+  it('marks the drag failed after one retry and the arrangement FAIL', async () => {
+    // Both drops land clamped at (0.5, 0.885): off the drop point and not in Game's column.
+    stubAi(plan(1, 0.5), replan(0.885, 1, 0.5));
+    const result = await arrange(true);
+    expect(result.current.history).toHaveLength(2);
+    expect(result.current.steps[0].status).toBe('failed');
+    expect(result.current.log.some((l) => l.source === 'Verify' && /^FAIL "Files icon"/.test(l.message) && l.tone === 'error')).toBe(true);
+    expect(result.current.log.some((l) => /Arrangement NOT confirmed: 0\/1/.test(l.message))).toBe(true);
+    expect(result.current.log.some((l) => /Flow saved/.test(l.message))).toBe(false);
+    expect(result.current.cards).toHaveLength(0);
+  });
+
+  it('a second /arrange plans fresh with its relations instead of reusing a saved flow', async () => {
+    stubAi(plan(0.55), replan(0, 0));
+    const result = await arrange(true);
+    expect(result.current.cards).toHaveLength(1);
+    act(() => result.current.setGoal('/arrange move the Files icon below Game'));
+    await act(() => result.current.submitInput());
+    expect(result.current.log.some((l) => /Reused saved workflow/.test(l.message))).toBe(false);
+    expect(result.current.log.filter((l) => l.source === 'Planner' && /arrangement: "Files icon" below "Game"/.test(l.message))).toHaveLength(2);
+    // The same goal typed as a plain goal is planned fresh too, never reused from the saved drag flow.
+    act(() => result.current.setGoal('move the Files icon below Game'));
+    await act(() => result.current.submitInput());
+    expect(result.current.log.some((l) => /Reused saved workflow/.test(l.message))).toBe(false);
+    expect(result.current.log.filter((l) => l.source === 'Planner' && /arrangement: "Files icon" below "Game"/.test(l.message))).toHaveLength(3);
+  });
+
+  it('disarmed: a dry run sends nothing and runs no verification pass', async () => {
+    stubAi(plan(0.55), replan(0, 0));
+    const result = await arrange(false);
+    expect(result.current.history).toHaveLength(0);
+    expect(result.current.log.some((l) => l.source === 'Verify')).toBe(false);
+  });
+
+  it('aborted: nothing is dragged', async () => {
+    stubAi(plan(0.55), replan(0, 0));
+    const result = await arrange(true, (r) => act(() => r.current.triggerAbort('test')));
+    expect(result.current.history).toHaveLength(0);
+    expect(result.current.log.some((l) => l.source === 'Verify')).toBe(false);
+  });
+});
 describe('useAssist re-plan loop guard and parse failures', () => {
   const planBody = (x: number) => ({ content: `{"steps":[{"name":"Hover Files","action":"move","target":"files icon","x":${x},"y":0.9}]}`, thinking: 'Files sits bottom-left.' });
   const isPlan = (init: RequestInit) => typeof init.body === 'string' && init.body.includes('Goal: move mouse to files icon');
