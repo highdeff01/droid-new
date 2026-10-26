@@ -113,11 +113,11 @@ export function Stage({ engine }: { engine: AssistEngine }) {
         }}
         onClick={(e) => {
           const p = norm(e);
-          engine.onStageClick(p.x, p.y, e.altKey);
+          engine.onStageClick(p.x, p.y);
         }}
       >
         <canvas ref={demoCanvasRef} width={DEMO_W} height={DEMO_H} className={styles.screen} style={{ display: source === 'demo' ? 'block' : 'none' }} />
-        {source !== 'demo' && frames[0] && <img src={frames[0].url} alt="Live screen" className={styles.screen} />}
+        {source === 'screen' && frames[0] && <img src={frames[0].url} alt="Live screen" className={styles.screen} />}
         <canvas ref={overlayRef} className={styles.overlay} />
         {captureLost && <div className={styles.captureLost} role="alert">⚠ CAPTURE LOST — {captureLost}. Monitoring halted: restart capture or switch to the demo desktop.</div>}
         {recording && <span className={styles.recBadge}>● LIVE RECORDING</span>}

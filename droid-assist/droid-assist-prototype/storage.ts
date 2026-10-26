@@ -10,7 +10,7 @@ const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', l
 export const PATTERN_LIMIT = 100;
 const PATTERN_KINDS: ReadonlyArray<LearnedPattern['kind']> = ['avoid', 'add'];
 
-const ACTIONS: readonly StepAction[] = STEP_ACTIONS;
+const ACTIONS: readonly StepAction[] = ['click', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
@@ -60,11 +60,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   for (const key of ['autoAct', 'aiHelp', 'showTrail'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
-  for (const key of ['bridgeUrl', 'abortHotkey', 'aiUrl', 'aiModel'] as const) {
-    if (typeof stored[key] === 'string' && (key === 'bridgeUrl' || stored[key])) out[key] = stored[key] as string;
-  }
-  if (isNum(stored.actionBudget) && stored.actionBudget >= 1) out.actionBudget = stored.actionBudget;
-  if (typeof stored.monitorMode === 'string' && stored.monitorMode in MONITOR_MODES) out.monitorMode = stored.monitorMode as MonitorMode;
+  if (typeof stored.bridgeUrl === 'string') out.bridgeUrl = stored.bridgeUrl;
   return out;
 }
 

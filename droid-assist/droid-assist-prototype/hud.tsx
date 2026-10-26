@@ -1,10 +1,10 @@
 import type { AssistEngine } from './use-assist.js';
-import type { MonitorMode, ScreenSource, SyncLevel } from './types.js';
-import { MONITOR_MODES } from './types.js';
+import type { SyncLevel } from './types.js';
+import type { AiStatus } from './ai.js';
 import styles from './droid-assist.module.css';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
-const SOURCE_LABEL: Record<ScreenSource, string> = { none: 'None', demo: 'Demo desktop', screen: 'Screen capture', bridge: 'Desktop bridge' };
+const SOURCE_LABEL: Record<ScreenSource, string> = { demo: 'Demo desktop', screen: 'Screen share', bridge: 'Desktop bridge', native: 'Native capture' };
 
 /** Monitor HUD: mode picker, capture interval, screenshot count, source and /use target. */
 export function MonitorStatus({ engine }: { engine: AssistEngine }) {
@@ -87,18 +87,12 @@ export function Hud({ engine }: { engine: AssistEngine }) {
               <button type="button" onClick={() => engine.replay(true)} disabled={recording || !total} title="Verifies each step on the live desktop; sends no input">🧪 AI self-test (no input)</button>
             </>
           )}
-          <button type="button" onClick={() => void engine.explainScreen()} disabled={aiOff || aiBusy} title={aiTitle}>👁 Point out</button>
+          <button type="button" onClick={engine.explainScreen} disabled={aiOff || aiBusy} title={aiTitle}>👁 Point out</button>
         </div>
-        <form
-          className={styles.goal}
-          onSubmit={(e) => {
-            e.preventDefault();
-            void engine.submitInput();
-          }}
-        >
-          <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder='Goal or command, e.g. "move mouse to the files icon", "/move files icon", "/use notepad"' aria-label="Goal" />
-          <button type="submit" className={styles.primary} disabled={aiBusy || (aiOff && !goal.trim().startsWith('/use'))} title={aiTitle}>{aiBusy ? '… thinking' : '✨ AI plan / run'}</button>
-        </form>
+        <div className={styles.goal}>
+          <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder='Goal, e.g. "play the game", "calculate 12*7", "search ad blocker"' aria-label="Goal" />
+          <button type="button" className={styles.primary} onClick={engine.autoPlan} disabled={aiOff || aiBusy} title={aiTitle}>{aiBusy ? '… thinking' : '✨ AI plan'}</button>
+        </div>
       </div>
       <MonitorStatus engine={engine} />
       <div className={styles.hud2}>

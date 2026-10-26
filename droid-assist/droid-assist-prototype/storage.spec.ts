@@ -71,12 +71,6 @@ describe('cards', () => {
     expect(loaded.steps.map((s) => [s.id, s.action, s.status, s.text])).toEqual([['s1', 'click', 'pending', undefined], ['s2', 'type', 'pending', 'hi']]);
   });
 
-  it('keeps a step\'s named target so a reloaded step is still grounded', async () => {
-    saveCards([{ ...card, steps: [{ id: 'm', name: 'Move to Files icon', action: 'move', target: 'Files icon', x: 0.4, y: 0.9, status: 'done' }] }]);
-    const [loaded] = await loadCards();
-    expect(loaded.steps[0]).toMatchObject({ action: 'move', target: 'Files icon' });
-  });
-
   it('stores a step screenshot without its pixel buffer', () => {
     const refFrame = { id: 7, time: 1, url: 'data:image/jpeg;base64,AAAA', data: { width: 320 } as unknown as ImageData, srcW: 960, srcH: 540, source: 'demo' as const };
     saveCards([{ ...card, steps: [{ ...card.steps[0], refFrame }] }]);
