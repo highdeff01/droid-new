@@ -177,6 +177,8 @@ export interface AssistSettings {
   autoAct: boolean;
   aiHelp: boolean;
   showTrail: boolean;
+  /** Draw the labeled spatial grid (A1..H12) over the live preview. */
+  showGrid: boolean;
   /** Base URL of the Droid desktop bridge (pyautogui replay endpoint). */
   bridgeUrl: string;
   /** Emergency-stop key combo, e.g. "Shift+Escape". */
@@ -187,4 +189,8 @@ export interface AssistSettings {
   aiUrl: string;
   /** Model name sent with every AI request. */
   aiModel: string;
+  /** After a replay, verify the goal on the live screen and keep planning/running until it is done. */
+  autoContinue: boolean;
+  /** Max auto-continue rounds (verify → re-plan → run) after the first run. */
+  maxIterations: number;
 }

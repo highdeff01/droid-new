@@ -2,8 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistSettings, Habit, LearnedPattern, LogEntry, SavedCard } from './types.js';
 import { HABIT_STALE_MS } from './habits.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadHabits, loadLog, loadPatterns, loadSettings, savePatterns, saveCards, saveHabits, saveLog, saveSettings } from './storage.js';
+import type { AssistSettings, FamiliarElement, LearnedPattern, LogEntry, SavedCard } from './types.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadFamiliar, loadLog, loadPatterns, loadSettings, saveFamiliar, savePatterns, saveCards, saveLog, saveSettings } from './storage.js';
+import { FAMILIAR_LIMIT } from './elements.js';
 
-const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b' };
+const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b', autoContinue: false, maxIterations: 5 };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
 
 describe('settings', () => {

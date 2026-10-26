@@ -1,6 +1,7 @@
 import type { Annotation, Frame, WorkflowStep } from './types.js';
-import { AiError, VIEW_H, VIEW_W, parseJsonReply, toUnit } from './ai.js';
+import { AiError, VIEW_H, VIEW_W, parseJsonReply, stripThinking, toUnit } from './ai.js';
 import type { AiReply, AskFn } from './ai.js';
+import { GRID_PROMPT, gridRef, replyPoint } from './grid.js';
 import { uid } from './planner.js';
 
 /** A normalized box on the screen. */
@@ -18,7 +19,7 @@ export interface Thought {
 
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
 const boxText = (b: Box) => `x=${pct(b.x)}..${pct(b.x + b.w)}, y=${pct(b.y)}..${pct(b.y + b.h)}`;
-const COORDS = `Coordinates are fractions 0..1 of the screenshot (${VIEW_W}x${VIEW_H}) width/height.`;
+const COORDS = `${GRID_PROMPT}\nBoxes (x,y,w,h) are fractions 0..1 of the screenshot (${VIEW_W}x${VIEW_H}) width/height; use the grid ranges above to measure them.`;
 const stepText = (step: WorkflowStep) => `"${step.name}" — action ${step.action}${step.text ? ` with "${step.text}"` : ''}`;
 
 /** The model's ruling on a changed region: close it at (x, y), or leave it. */
@@ -27,15 +28,15 @@ export type PopupDecision = ({ close: true; x: number; y: number; reason: string
 /** Asks the model whether the flagged region is an intrusive popup and where its close control is. */
 export async function decidePopup(ask: AskFn, frame: Frame, box: Box): Promise<PopupDecision> {
   const { content, thinking } = await ask({
-    system: `You are Droid Assist's popup handler. Look at the screenshot. ${COORDS} Reply ONLY with JSON {"close":boolean,"x":number,"y":number,"reason":string}.`,
-    prompt: `New content appeared in the region ${boxText(box)}. If it is an ad, dialog or popup that blocks the user, set close=true and give the center of its close/dismiss control. Otherwise close=false.`,
+    system: `You are Droid Assist's popup handler. Look at the screenshot. ${COORDS} Reply ONLY with JSON {"close":boolean,"cell":string,"cx":number,"cy":number,"reason":string}.`,
+    prompt: `New content appeared in the region ${boxText(box)} (from cell ${gridRef(box)}). If it is an ad, dialog or popup that blocks the user, set close=true and give the center of its close/dismiss control as cell + cx,cy. Otherwise close=false.`,
     frame,
     json: true,
   });
   const r = parseJsonReply(content);
   const reason = String(r.reason ?? '');
   if (r.close !== true) return { close: false, reason, thinking };
-  return { close: true, x: toUnit(r.x, VIEW_W), y: toUnit(r.y, VIEW_H), reason, thinking };
+  return { close: true, ...replyPoint(r), reason, thinking };
 }
 
 /** The model's ruling on the next step: run it now (at a possibly corrected target) or wait. */
@@ -43,17 +44,18 @@ export type StepDecision = ({ run: true; x: number; y: number; reason: string } 
 
 /** Asks the model whether the screen is ready for `step` and where its target is now. */
 export async function decideStep(ask: AskFn, frame: Frame, step: WorkflowStep, goal: string): Promise<StepDecision> {
-  const target = `(${pct(step.correctedX ?? step.x)}, ${pct(step.correctedY ?? step.y)})`;
+  const planned = { x: step.correctedX ?? step.x, y: step.correctedY ?? step.y };
+  const target = `cell ${gridRef(planned)} = (${pct(planned.x)}, ${pct(planned.y)})`;
   const { content, thinking } = await ask({
-    system: `You are Droid Assist's executor. Look at the screenshot and decide whether the next step can run now. ${COORDS} Reply ONLY with JSON {"run":boolean,"x":number,"y":number,"reason":string}.`,
-    prompt: `Goal: ${goal || '(none)'}\nNext step: ${stepText(step)}, planned target ${target}.\nSet run=true only if the screen is ready for it, with x,y the target's current center. Set run=false if something blocks it or the screen is not ready.`,
+    system: `You are Droid Assist's executor. Look at the screenshot and decide whether the next step can run now. ${COORDS} Reply ONLY with JSON {"run":boolean,"cell":string,"cx":number,"cy":number,"reason":string}.`,
+    prompt: `Goal: ${goal || '(none)'}\nNext step: ${stepText(step)}, planned target ${target}.\nSet run=true only if the screen is ready for it, with cell + cx,cy the target's current center. Set run=false if something blocks it or the screen is not ready.`,
     frame,
     json: true,
   });
   const r = parseJsonReply(content);
   const reason = String(r.reason ?? '');
   if (r.run !== true) return { run: false, reason, thinking };
-  return { run: true, x: toUnit(r.x ?? step.x, VIEW_W), y: toUnit(r.y ?? step.y, VIEW_H), reason, thinking };
+  return { run: true, ...replyPoint(r, step), reason, thinking };
 }
 
 /** The model's ruling on whether a step's named target is under the proposed point. */
@@ -105,6 +107,34 @@ export async function describeScreen(ask: AskFn, frame: Frame, question: string,
   return { answer: r.answer.trim(), annotations: items.map(toAnnotation), thinking };
 }
 
+/** The model's check of the goal against the live screen after a run. */
+export interface GoalCheck extends Thought {
+  /** The goal is verifiably achieved on the screen. */
+  complete: boolean;
+  /** The last run moved the screen closer to the goal. */
+  progress: boolean;
+  reason: string;
+}
+
+/** One line per step of the run just finished: what it was and how it ended. */
+const runLine = (s: WorkflowStep) => `- ${stepText(s)}: ${s.status}`;
+
+/**
+ * Auto-continue verification: shown the live screen and the run's steps, the model says whether
+ * the goal is complete and whether the run made progress. Non-boolean fields are an AiError.
+ */
+export async function verifyGoal(ask: AskFn, frame: Frame | null, goal: string, ran: WorkflowStep[]): Promise<GoalCheck> {
+  const reply = await ask({
+    system: 'You are Droid Assist verifying whether the user\'s goal is achieved. The screenshot shows the screen now. Reply ONLY with JSON {"complete":boolean,"progress":boolean,"reason":string}: complete=true only if the screen shows the goal achieved; progress=true if the last steps moved the screen closer to it.',
+    prompt: `Goal: ${goal}\nSteps just run:\n${ran.map(runLine).join('\n') || '(none)'}`,
+    frame,
+    json: true,
+  });
+  const r = parseJsonReply(reply.content);
+  if (typeof r.complete !== 'boolean') throw new AiError(`AI goal check had no boolean "complete": ${String(r.complete)}`);
+  return { complete: r.complete, progress: r.progress === true, reason: String(r.reason ?? ''), thinking: reply.thinking };
+}
+
 /** What actually happened when a step ran. */
 export interface StepResult {
   ok: boolean;
@@ -150,5 +180,5 @@ export async function reflectStep(ask: AskFn, frame: Frame | null, step: Workflo
     frame,
     json: true,
   });
-  return { reflection: { text: first.content, thinking: first.thinking }, verdict: parseVerdict(second) };
+  return { reflection: { text: stripThinking(first.content), thinking: first.thinking }, verdict: parseVerdict(second) };
 }
