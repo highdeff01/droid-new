@@ -2,6 +2,7 @@ import type { AssistEngine } from './use-assist.js';
 import type { MonitorMode, ScreenSource, SyncLevel } from './types.js';
 import type { AiStatus } from './ai.js';
 import { MONITOR_MODES } from './capture.js';
+import { insecureBridgeUrl } from './bridge.js';
 import styles from './droid-assist.module.css';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
@@ -20,9 +21,19 @@ export function AiStatusBadge({ status }: { status: AiStatus }) {
   );
 }
 
+/** Loud warning shown while the bridge URL is plain http to a non-localhost host. */
+export function InsecureBridgeWarning({ bridgeUrl }: { bridgeUrl: string }) {
+  if (!insecureBridgeUrl(bridgeUrl)) return null;
+  return (
+    <div className={styles.insecure} role="alert">
+      ⚠ INSECURE BRIDGE: {bridgeUrl} is plain http on a non-localhost address — the bridge token and every mouse/keyboard command cross the network unencrypted. Use https or a localhost URL.
+    </div>
+  );
+}
+
 /** Monitor HUD: mode picker, capture interval, screenshot count, source and /use target. */
 export function MonitorStatus({ engine }: { engine: AssistEngine }) {
-  const { settings, setSettings, intervalMs, shotCount, source, target } = engine;
+  const { settings, setSettings, intervalMs, shotCount, source, target, aiQueue } = engine;
   return (
     <div className={styles.hud2} aria-label="Monitor status">
       <label>Monitor
@@ -34,6 +45,7 @@ export function MonitorStatus({ engine }: { engine: AssistEngine }) {
       <span>📸 <b>{shotCount}</b> screenshots</span>
       <span>Source: <b>{SOURCE_LABEL[source]}</b></span>
       {target && <span>Using: <b>{target}</b></span>}
+      <span aria-label="AI queue" title={`At most ${settings.aiMaxInFlight} AI call(s) run at once; the rest wait by priority`}>🧠 AI <b>{aiQueue.inFlight}/{settings.aiMaxInFlight}</b> in flight · <b>{aiQueue.queued}</b> queued</span>
     </div>
   );
 }
@@ -128,6 +140,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
         </form>
       </div>
       <MonitorStatus engine={engine} />
+      <InsecureBridgeWarning bridgeUrl={settings.bridgeUrl} />
       <div className={styles.hud2}>
         <SafetyControls engine={engine} />
         <AiStatusBadge status={aiStatus} />
@@ -138,6 +151,8 @@ export function Hud({ engine }: { engine: AssistEngine }) {
         <label>Max iterations <input type="number" min={1} max={20} value={settings.maxIterations} onChange={(e) => setSettings({ ...settings, maxIterations: Math.min(20, Math.max(1, Math.floor(e.target.valueAsNumber) || 1)) })} aria-label="Auto-continue max iterations" /></label>
         <label><input type="checkbox" checked={settings.showTrail} onChange={(e) => setSettings({ ...settings, showTrail: e.target.checked })} /> Trail</label>
         <label title="Labeled A1..H12 grid on the preview; the AI answers with these cells"><input type="checkbox" checked={settings.showGrid} onChange={(e) => setSettings({ ...settings, showGrid: e.target.checked })} aria-label="Grid overlay" /> Grid</label>
+        <label title="Label every cell (A1..H12); off shows only the edge numbers and letters"><input type="checkbox" checked={settings.gridLabels} onChange={(e) => setSettings({ ...settings, gridLabels: e.target.checked })} disabled={!settings.showGrid} aria-label="Grid cell labels" /> Grid labels</label>
+        <label title="How visible the grid lines are">Grid opacity <input type="range" min={GRID_OPACITY_RANGE[0]} max={GRID_OPACITY_RANGE[1]} step={0.02} value={settings.gridOpacity} onChange={(e) => setSettings({ ...settings, gridOpacity: e.target.valueAsNumber })} disabled={!settings.showGrid} aria-label="Grid opacity" /></label>
         <div className={styles.progress} title="Auto progress (verified steps) + manual updates">
           <span>Progress {total ? Math.round((done / total) * 100) : 0}%</span>
           <span className={styles.bar}><span style={{ width: `${total ? (done / total) * 100 : 0}%` }} /></span>

@@ -17,6 +17,8 @@ export interface Grounding {
 /** What the real-input pipeline needs from its host. */
 export interface StepDeps {
   bridgeUrl: string;
+  /** Bridge auth token sent with every bridge call; never logged. */
+  bridgeToken: string;
   /** A fresh real desktop screenshot; throws with the reason when there is none. */
   capture: () => Promise<Frame>;
   /** Live-frame checks before giving up on a target that cannot be found. */
@@ -41,6 +43,8 @@ export interface StepDeps {
   learned?: (live: Frame, step: WorkflowStep) => Point | null;
   /** Called with the point the AI grounding pass confirmed for the step's target. */
   onVerified?: (live: Frame, step: WorkflowStep, p: Point) => void;
+  /** Shows each point the pipeline tries (planned, drift-corrected, grounded, retried) as an AI cursor movement. */
+  aim?: (p: Point) => void;
 }
 
 /** The corrected retry of a missed step: the measured miss offset and the point retried. */
@@ -203,6 +207,7 @@ function startPoint(step: WorkflowStep, live: Frame, correction: DriftCorrection
 export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepOutcome> {
   const badEnd = dragEndError(step);
   if (badEnd) return { ok: false, executed: false, message: badEnd, target: { x: step.x, y: step.y } };
+  if (POINTER_ACTIONS.has(step.action)) deps.aim?.({ x: step.x, y: step.y });
   const found = await locateTarget(step, deps);
   if ('error' in found) return { ok: false, executed: false, message: found.error, target: { x: step.x, y: step.y } };
   const { live, correction } = found;
@@ -210,10 +215,12 @@ export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepO
   const learned = POINTER_ACTIONS.has(step.action) ? deps.learned?.(live, step) ?? null : null;
   if (learned) deps.log(`"${step.name}": learned coordinates — "${step.target ?? step.name}" found at ${px(learned, live)}, no AI grounding needed`, 'info');
   let target = learned ?? startPoint(step, live, correction, deps);
+  if (POINTER_ACTIONS.has(step.action)) deps.aim?.(target);
   if (!learned && needsGrounding(step) && deps.grounding) {
     const grounded = await groundTarget(step, live, target, deps.grounding, deps.log);
     if ('error' in grounded) return { ok: false, executed: false, message: grounded.error, target, correction };
     target = grounded.point;
+    deps.aim?.(target);
     deps.onVerified?.(live, step, target);
   }
   let end: Point | undefined;
@@ -223,7 +230,7 @@ export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepO
     end = e.point;
   }
   if (!deps.dispatch) return { ok: true, executed: false, message: 'verified on the live screen — self-test, not dispatched', target, end, correction, live };
-  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH);
+  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, { token: deps.bridgeToken });
   if (!sent.ok) return { ok: false, executed: false, message: sent.message, target, end, correction, live };
   const after = await verifyAfter(step, live, target, deps);
   const done: StepOutcome = { ok: true, executed: true, message: sent.message, target, end, correction, live, ...after };
@@ -260,6 +267,7 @@ async function retryMissed(step: WorkflowStep, out: StepOutcome, deps: StepDeps)
   }
   const shot = out.shot!;
   deps.log(`"${step.name}": missed by ${delta} — retrying once at ${px(miss.at, shot)}`, 'warn');
+  deps.aim?.(miss.at);
   const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: miss.at.x, correctedY: miss.at.y }, shot.srcW, shot.srcH);
   const retry = { dxPx: miss.dxPx, dyPx: miss.dyPx, at: miss.at, ok: sent.ok, message: sent.message };
   if (!sent.ok) return { ...out, retry };

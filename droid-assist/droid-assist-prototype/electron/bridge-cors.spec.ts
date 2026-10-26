@@ -9,6 +9,7 @@ describe('withBridgeCors', () => {
     expect(out['Access-Control-Allow-Origin']).toEqual(['*']);
     expect(out['Access-Control-Allow-Methods'][0]).toContain('POST');
     expect(out['Access-Control-Allow-Headers'][0]).toContain('Content-Type');
+    expect(out['Access-Control-Allow-Headers'][0]).toContain('Authorization');
     expect(out['content-type']).toEqual(['application/json']);
   });
 
