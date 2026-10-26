@@ -66,7 +66,7 @@ export function learnCoordinate(list: FamiliarElement[], obs: CoordObservation):
     ...(obs.frame ? { frameId: obs.frame.id } : {}),
     ...(anchor ? { anchor } : {}),
   };
-  const moved = prev && dist(prev, to) > COORD_MOVE_EPS ? { name: entry.name, from: { x: prev.x, y: prev.y }, to } : null;
+  const moved = prev && dist(prev, to) > COORD_MOVE_EPS + 1e-9 ? { name: entry.name, from: { x: prev.x, y: prev.y }, to } : null;
   return { list: rememberElement(list, entry), moved };
 }
 

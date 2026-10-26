@@ -168,6 +168,17 @@ describe('familiar elements', () => {
     expect(loadFamiliar()).toHaveLength(FAMILIAR_LIMIT);
   });
 
+  it('round-trips learned coordinate fields (timesSeen, frameId, numeric anchor)', () => {
+    const learned: FamiliarElement = { ...fam(7), timesSeen: 3, frameId: 9, anchor: [1, 2, 3] };
+    saveFamiliar([learned]);
+    expect(loadFamiliar()).toEqual([learned]);
+  });
+
+  it('drops entries with a non-numeric timesSeen or a non-numeric anchor', () => {
+    localStorage.setItem('droid-assist.familiar', JSON.stringify([{ ...fam(8), timesSeen: 'x' }, { ...fam(9), anchor: ['a'] }]));
+    expect(loadFamiliar()).toEqual([]);
+  });
+
   it('retries without patches when storage is full, leaving the patterns intact', () => {
     savePatterns([{ id: 'p1', kind: 'add', pattern: 'p', context: '', time: 1 }]);
     const real = Storage.prototype.setItem;
