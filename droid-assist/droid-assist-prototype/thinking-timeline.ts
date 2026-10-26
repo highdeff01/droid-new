@@ -4,9 +4,9 @@ import { uid } from './planner.js';
 /**
  * What an entry records: the model's initial thought, its assessment of a screen change, the
  * what/why proposal made before a step runs, its follow-up reflection, the final verdict, a
- * verification check, or a supervisor review / movement.
+ * verification check, a supervisor review / movement, or one attempt of a step's retry ladder.
  */
-export type ThoughtKind = 'thought' | 'change' | 'proposal' | 'reflection' | 'verdict' | 'check' | 'review' | 'movement';
+export type ThoughtKind = 'thought' | 'change' | 'proposal' | 'reflection' | 'verdict' | 'check' | 'review' | 'movement' | 'attempt';
 
 /** One timestamped AI call on the per-step thinking timeline. */
 export interface ThinkingEntry {
