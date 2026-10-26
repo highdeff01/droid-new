@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useAssist } from './use-assist.js';
 import type { NativeCaptureApi, NativeFrame } from './electron/capture-api.js';
 
+// jsdom has no canvas: the boxed full frame and zoomed crop are the frame itself here.
+vi.mock('./grounding.js', async (orig) => ({ ...(await orig<typeof import('./grounding.js')>()), boxedFrames: vi.fn(async (f: unknown) => ({ full: f, crop: f })) }));
+
 if (typeof globalThis.ImageData === 'undefined') {
   class ImageDataPolyfill {
     constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
@@ -129,8 +132,9 @@ describe('useAssist Qwen thinking timeline', () => {
       plan: { content: '{"steps":[{"name":"Hover Files","action":"move","target":"files icon","x":0.1,"y":0.9}]}', thinking: 'Files sits bottom-left.' },
       reflect: { content: 'The cursor is on the files icon.', thinking: 'Looks right.' },
       verdict: { content: '{"success":true,"pattern_avoid":null,"pattern_add":"hover before clicking"}', thinking: 'It worked.' },
+      propose: { content: '{"ready":true,"x":0.12,"y":0.9,"why":"Hovering Files is the goal itself."}', thinking: 'Files is still bottom-left.' },
     };
-    const pick = (body: string) => (body.includes('final verdict') ? 'verdict' : body.includes('reviewing a step') ? 'reflect' : 'plan');
+    const pick = (body: string) => (body.includes('final verdict') ? 'verdict' : body.includes('reviewing a step') ? 'reflect' : body.includes('state WHAT') ? 'propose' : 'plan');
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => new Response(JSON.stringify({ message: { role: 'assistant', ...replies[pick(String(init.body))] } }), { status: 200 })));
     const { result } = renderHook(() => useAssist());
     await act(async () => {});
@@ -138,9 +142,16 @@ describe('useAssist Qwen thinking timeline', () => {
     await act(() => result.current.submitInput());
     expect(result.current.steps[0]).toMatchObject({ action: 'move', target: 'files icon' });
     const kinds = result.current.timeline.map((e) => [e.step, e.kind]);
-    expect(kinds).toEqual([['Hover Files', 'verdict'], ['Hover Files', 'reflection'], ['/move files icon', 'thought']]);
+    expect(kinds).toEqual([['Hover Files', 'verdict'], ['Hover Files', 'reflection'], ['Hover Files', 'proposal'], ['/move files icon', 'thought']]);
     expect(result.current.timeline[0]).toMatchObject({ thinking: 'It worked.' });
-    expect(result.current.timeline[2]).toMatchObject({ thinking: 'Files sits bottom-left.' });
+    expect(result.current.timeline[2]).toMatchObject({ thinking: 'Files is still bottom-left.' });
+    expect(result.current.timeline[2].text).toMatch(/WHAT: move "files icon" at \(12%, 90%\) · WHY: Hovering Files is the goal itself\./);
+    expect(result.current.timeline[3]).toMatchObject({ thinking: 'Files sits bottom-left.' });
+    const moveLog = result.current.log.filter((l) => l.source === '/move').reverse().map((l) => l.message);
+    const proposed = moveLog.findIndex((m) => /^Proposal for "Hover Files": WHAT/.test(m));
+    const executed = moveLog.findIndex((m) => m.startsWith('Hover Files:'));
+    expect(proposed).toBeGreaterThanOrEqual(0);
+    expect(proposed).toBeLessThan(executed);
     expect(result.current.log.some((l) => l.source === '/move' && /Verdict on "Hover Files"/.test(l.message))).toBe(true);
   });
 
@@ -155,8 +166,9 @@ describe('useAssist Qwen thinking timeline', () => {
       plan: { content: '{"steps":[{"name":"Drag Report to Archive","action":"drag","target":"Report file","x":0.9,"y":0.2,"endTarget":"Archive folder","endX":0.9,"endY":0.7}]}', thinking: 'Report is top-right.' },
       reflect: { content: 'The file is in the archive.', thinking: 'Filed.' },
       verdict: { content: '{"success":true,"pattern_avoid":null,"pattern_add":null}', thinking: 'Drag worked.' },
+      propose: { content: '{"ready":true,"x":0.9,"y":0.2,"why":"filing the report is the goal itself."}', thinking: 'Report is still top-right.' },
     };
-    const pick = (body: string) => (body.includes('final verdict') ? 'verdict' : body.includes('reviewing a step') ? 'reflect' : 'plan');
+    const pick = (body: string) => (body.includes('final verdict') ? 'verdict' : body.includes('reviewing a step') ? 'reflect' : body.includes('state WHAT') ? 'propose' : 'plan');
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => new Response(JSON.stringify({ message: { role: 'assistant', ...replies[pick(String(init.body))] } }), { status: 200 })));
     const { result } = renderHook(() => useAssist());
     await act(async () => {});
@@ -166,7 +178,7 @@ describe('useAssist Qwen thinking timeline', () => {
     act(() => result.current.toggleArmed());
     await act(() => result.current.replay());
     const kinds = result.current.timeline.filter((e) => e.step === 'Drag Report to Archive').map((e) => e.kind);
-    expect(kinds).toEqual(['verdict', 'reflection']);
+    expect(kinds).toEqual(['verdict', 'reflection', 'proposal']);
     expect(result.current.timeline.some((e) => e.kind === 'thought' && e.thinking === 'Report is top-right.')).toBe(true);
     expect(result.current.history[0]).toMatchObject({ action: 'drag', via: 'demo', ok: true, x: 864, y: 108, endX: 864, endY: 378 });
   });
@@ -417,7 +429,7 @@ describe('useAssist loop control', () => {
       if (body.includes('reviewing a step')) {
         return new Promise<Response>((_, reject) => init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
       }
-      const content = body.includes('final verdict') ? '{"success":true,"pattern_avoid":null,"pattern_add":null}' : body.includes('Reply with OK') ? 'OK' : '{"patterns":[]}';
+      const content = body.includes('final verdict') ? '{"success":true,"pattern_avoid":null,"pattern_add":null}' : body.includes('Reply with OK') ? 'OK' : body.includes('state WHAT') ? '{"ready":true,"x":0.5,"y":0.5,"why":"the planned step serves the goal"}' : '{"patterns":[]}';
       return Promise.resolve(new Response(JSON.stringify({ message: { role: 'assistant', content } }), { status: 200 }));
     }));
     return { calls, count: (part: string) => calls.filter((c) => c.body.includes(part)).length };
@@ -498,6 +510,98 @@ describe('useAssist loop control', () => {
     await act(() => result.current.testClick(el));
     expect(result.current.log.find((l) => l.source === 'Test click')?.message).toMatch(/Aborted/);
     expect(result.current.history).toHaveLength(0);
+  });
+});
+
+describe('useAssist screen-change responder and proposals', () => {
+  const black = (): NativeFrame => frame();
+  /** A frame with a white 3×3-cell block (a material change at the default threshold). */
+  const changed = (): NativeFrame => {
+    const f = frame();
+    for (let y = 40; y < 100; y++) for (let x = 80; x < 140; x++) f.pixels.fill(255, (y * 320 + x) * 4, (y * 320 + x) * 4 + 4);
+    return f;
+  };
+
+  function stub(propose: string) {
+    const replies: Record<string, string> = {
+      ping: 'OK',
+      change: '{"kind":"navigation","summary":"the Settings page","stale":true,"effect":"the Files icon moved"}',
+      propose,
+      plan: '{"steps":[{"name":"Hover Files","action":"move","target":"files icon","x":0.1,"y":0.9}]}',
+      other: 'fine',
+    };
+    const pick = (body: string) => (body.includes('Reply with OK') ? 'ping' : body.includes('state WHAT') ? 'propose' : body.includes('screen-change responder. The first image') ? 'change' : body.includes('Plan the concrete steps') ? 'plan' : 'other');
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => new Response(JSON.stringify({ message: { role: 'assistant', content: replies[pick(String(init.body))] } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  async function changeMidPlan() {
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(black()));
+    act(() => result.current.setGoal('hover the files icon'));
+    await act(() => result.current.autoPlan());
+    act(() => result.current.setSettings({ ...result.current.settings, autoAct: true }));
+    await act(async () => {
+      hooks.onFrame!(changed());
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    return result;
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('responds to a second change that arrives while the first is being assessed', async () => {
+    const fetchMock = stub('{"ready":false,"why":"waiting"}');
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(black()));
+    const second = (): NativeFrame => {
+      const f = changed();
+      for (let y = 120; y < 180; y++) for (let x = 200; x < 300; x++) f.pixels.fill(255, (y * 320 + x) * 4, (y * 320 + x) * 4 + 4);
+      return f;
+    };
+    await act(async () => {
+      hooks.onFrame!(changed());
+      hooks.onFrame!(second());
+      await new Promise((r) => setTimeout(r, 30));
+      hooks.onFrame!(second());
+      await new Promise((r) => setTimeout(r, 30));
+      hooks.onFrame!(second());
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    const changeCalls = fetchMock.mock.calls.filter((c) => String(c[1].body).includes('screen-change responder. The first image'));
+    expect(changeCalls).toHaveLength(2);
+  });
+
+  it('assesses a mid-plan change and re-proposes the stale step (what/why referencing it) before it runs', async () => {
+    const fetchMock = stub('{"ready":true,"x":0.2,"y":0.8,"why":"hovering Files is the goal"}');
+    const result = await changeMidPlan();
+    const change = result.current.timeline.find((e) => e.kind === 'change');
+    expect(change?.text).toBe('[navigation] the Settings page — PLAN STALE: the Files icon moved');
+    const changeReq = fetchMock.mock.calls.map((c) => JSON.parse(String(c[1].body))).find((b) => b.messages[0].content.includes('screen-change responder. The first image'));
+    expect(changeReq.messages.at(-1).images).toHaveLength(2);
+    const log = [...result.current.log].reverse();
+    const assessed = log.findIndex((l) => l.source === 'Screen-change responder' && /PLAN STALE/.test(l.message));
+    const proposed = log.findIndex((l) => l.source === 'Auto-Actor' && /^Re-proposal for "Hover Files": WHAT: move "files icon" at \(20%, 80%\) · WHY: The screen now shows the Settings page, so I will/.test(l.message));
+    const ran = log.findIndex((l) => l.source.startsWith('Auto-Actor') && l.message.startsWith('Hover Files:'));
+    expect(assessed).toBeGreaterThanOrEqual(0);
+    expect(proposed).toBeGreaterThan(assessed);
+    expect(ran).toBeGreaterThan(proposed);
+    expect(result.current.timeline.find((e) => e.kind === 'proposal')?.text).toMatch(/WHY: The screen now shows the Settings page/);
+  });
+
+  it('fails the step honestly when its one re-proposal still cannot justify it', async () => {
+    stub('{"ready":false,"why":"the Files icon is not on this page"}');
+    const result = await changeMidPlan();
+    expect(result.current.steps[0].status).toBe('failed');
+    expect(result.current.log.some((l) => l.source === 'Auto-Actor' && /could not be justified after re-proposal: The screen now shows the Settings page.*the Files icon is not on this page/.test(l.message))).toBe(true);
+    expect(result.current.log.some((l) => l.message.startsWith('Hover Files:'))).toBe(false);
   });
 });
 

@@ -200,6 +200,8 @@ export interface AssistSettings {
   checkpoints: number;
   /** Capture interval of the "app" monitor mode; background and advanced modes use fixed intervals. */
   captureMs: number;
+  /** Size (cells of the 16x9 diff grid) the largest changed cluster must reach to count as a material screen change. */
+  changeCells: number;
   monitorMode: MonitorMode;
   autoAct: boolean;
   aiHelp: boolean;

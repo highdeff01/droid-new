@@ -240,6 +240,9 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         <small>Background monitor is fixed at 1000 ms, advanced at 250 ms. Active: {engine.intervalMs} ms</small>
         <input type="range" min={250} max={2000} step={50} value={settings.captureMs} onChange={(e) => setSettings({ ...settings, captureMs: +e.target.value })} />
       </label>
+      <label className={styles.setting}>Screen-change threshold <b>{settings.changeCells} cells</b>
+        <input type="range" min={2} max={40} value={settings.changeCells} onChange={(e) => setSettings({ ...settings, changeCells: +e.target.value })} aria-label="Screen-change threshold" />
+      </label>
       <label className={styles.setting}>Max real input actions per run <b>{settings.actionBudget}</b>
         <input type="number" min={1} value={settings.actionBudget} onChange={(e) => setSettings({ ...settings, actionBudget: sanitizeBudget(e.target.valueAsNumber) })} />
       </label>
@@ -355,11 +358,12 @@ export function ElementsPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', reflection: '🔁 Reflection', verdict: '⚖️ Verdict' };
+const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict' };
 
-/** Tone of an entry: failures as errors, verdicts by their outcome, the rest informational. */
+/** Tone of an entry: failures as errors, verdicts by their outcome, unready proposals as warnings, the rest informational. */
 function entryTone(e: ThinkingEntry): LogEntry['tone'] {
   if (e.error) return 'error';
+  if (e.kind === 'proposal') return e.text.includes('NOT READY') ? 'warn' : 'info';
   if (e.kind !== 'verdict') return 'info';
   return e.text.startsWith('SUCCESS') ? 'ok' : 'warn';
 }
