@@ -660,6 +660,166 @@ describe('useAssist screen capture', () => {
   });
 });
 
+describe('useAssist Screen watcher', () => {
+  const observation = JSON.stringify({
+    notes: [{ kind: 'element', text: 'Files sidebar item at the left' }, { kind: 'unusual', text: 'An ad covers the top right' }],
+    proposals: [{ kind: 'familiar', text: 'Files sidebar item is stable — save as familiar element', target: 'Files sidebar item', cell: 'C1', cx: 0.5, cy: 0.5 }],
+  });
+  /** A fake model: watcher observations, step reflections/verdicts, and OK for the health ping. */
+  const model = () => vi.fn(async (_url: string, init: RequestInit) => {
+    const body = String(init.body);
+    const content = body.includes('screen watcher') ? observation
+      : body.includes('final verdict') ? '{"success":false,"pattern_avoid":null,"pattern_add":null}'
+        : body.includes('reviewing a step') ? 'It did not run.' : 'OK';
+    return new Response(JSON.stringify({ message: { role: 'assistant', content, thinking: 'watching' } }), { status: 200 });
+  });
+  const watcherCalls = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.filter(([, init]) => String((init as RequestInit).body).includes('screen watcher')).length;
+  const enableWatcher = (result: { current: ReturnType<typeof useAssist> }) =>
+    act(() => result.current.toggleStage('screenWatcher', true));
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('is a loop-control stage beside the pipeline and the other agents', () => {
+    const { result } = renderHook(() => useAssist());
+    expect(result.current.settings.stages.screenWatcher).toBe(true);
+    expect(Object.keys(result.current.settings.stages)).toEqual(expect.arrayContaining(['planner', 'popup', 'screenWatcher', 'coords', 'supervisor']));
+    expect(result.current.settings.watchMs).toBe(5000);
+  });
+
+  it('observes the live capture at its interval: deduplicated notes, one proposal, thinking on the timeline, a background test, persisted', async () => {
+    vi.useFakeTimers();
+    const fetchMock = model();
+    vi.stubGlobal('fetch', fetchMock);
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(() => vi.advanceTimersByTimeAsync(10));
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(frame()));
+    enableWatcher(result);
+    await act(() => vi.advanceTimersByTimeAsync(5000 * 3 + 100));
+    expect(watcherCalls(fetchMock)).toBeGreaterThanOrEqual(2);
+    // A static screen: the same notes and proposal every round are kept once.
+    expect(result.current.watcher.notes.map((n) => n.text)).toEqual(['Files sidebar item at the left', 'An ad covers the top right']);
+    expect(result.current.watcher.proposals).toHaveLength(1);
+    expect(result.current.timeline.some((e) => e.step === 'Screen watcher' && e.thinking === 'watching')).toBe(true);
+    // Its background test ran once (no bridge here, so it failed) and fed the pattern system.
+    expect(result.current.watcher.tests).toHaveLength(1);
+    expect(result.current.watcher.tests[0]).toMatchObject({ verdict: 'failed', dryRun: true });
+    expect(result.current.watcher.tests[0].tried).toMatch(/Dry-run click on "Files sidebar item"/);
+    expect(result.current.patterns.some((p) => p.kind === 'avoid' && /Files sidebar item/.test(p.pattern))).toBe(true);
+    expect(result.current.history).toHaveLength(0);
+    expect(JSON.parse(localStorage.getItem('droid-assist.watcher')!).notes).toHaveLength(2);
+  });
+
+  it('makes no model call while its stage is off, and none without a live capture', async () => {
+    vi.useFakeTimers();
+    const fetchMock = model();
+    vi.stubGlobal('fetch', fetchMock);
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(() => vi.advanceTimersByTimeAsync(10));
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(frame()));
+    act(() => result.current.toggleStage('screenWatcher', false));
+    await act(() => vi.advanceTimersByTimeAsync(12_000));
+    expect(watcherCalls(fetchMock)).toBe(0);
+    act(() => hooks.onError!('Display disconnected'));
+    enableWatcher(result);
+    await act(() => vi.advanceTimersByTimeAsync(12_000));
+    expect(watcherCalls(fetchMock)).toBe(0);
+  });
+
+  it('pauses while the executor is running, then resumes', async () => {
+    vi.useFakeTimers();
+    const fetchMock = model();
+    let release: () => void = () => undefined;
+    let hung = false;
+    // The AI-help call hangs until released, keeping the executor busy (later calls carry it in their session history).
+    vi.stubGlobal('fetch', vi.fn((url: string, init: RequestInit) => (!hung && String(init.body).includes('Where is search')
+      ? new Promise<Response>((resolve) => { hung = true; release = () => resolve(new Response(JSON.stringify({ message: { role: 'assistant', content: '{"answer":"Top","items":[]}' } }))); })
+      : fetchMock(url, init))));
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(() => vi.advanceTimersByTimeAsync(10));
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(frame()));
+    let asking: Promise<void> = Promise.resolve();
+    act(() => {
+      asking = result.current.askScreen('Where is search?');
+    });
+    enableWatcher(result);
+    await act(() => vi.advanceTimersByTimeAsync(12_000));
+    expect(result.current.aiBusy).toBe(true);
+    expect(watcherCalls(fetchMock)).toBe(0);
+    await act(async () => {
+      release();
+      await asking;
+    });
+    await act(() => vi.advanceTimersByTimeAsync(5100));
+    expect(watcherCalls(fetchMock)).toBe(1);
+  });
+
+  const stored = (p: Record<string, unknown>) => localStorage.setItem('droid-assist.watcher', JSON.stringify({ notes: [], tests: [], proposals: [{ id: 'p1', time: 1, status: 'pending', ...p }] }));
+
+  it('dry-run test on the demo desktop while disarmed: logged, nothing dispatched', async () => {
+    stored({ kind: 'familiar', text: 'Save Files as familiar', target: 'Files icon', x: 0.42, y: 0.5 });
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.testProposal('p1'));
+    expect(result.current.watcher.tests[0]).toMatchObject({ proposalId: 'p1', verdict: 'passed', dryRun: true });
+    expect(result.current.watcher.tests[0].happened).toMatch(/dry run, not dispatched/);
+    expect(result.current.log.some((l) => l.source === 'Screen watcher' && /Test passed: Dry-run click/.test(l.message))).toBe(true);
+    expect(result.current.history).toHaveLength(0);
+    expect(result.current.cursor).toBeNull();
+    expect(result.current.patterns).toHaveLength(0);
+    // Only Accept saves the element; a test leaves the proposal pending and memory untouched.
+    expect(result.current.familiar).toHaveLength(0);
+    expect(result.current.watcher.proposals[0].status).toBe('pending');
+  });
+
+  it('armed test is a real click through the gate; aborted refuses it', async () => {
+    stored({ kind: 'familiar', text: 'Save Files as familiar', target: 'Files icon', x: 0.42, y: 0.97 });
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.toggleArmed());
+    await act(() => result.current.testProposal('p1'));
+    expect(result.current.watcher.tests[0]).toMatchObject({ dryRun: false });
+    expect(result.current.cursor).toEqual({ x: 0.42, y: 0.97 });
+    act(() => result.current.triggerAbort('test'));
+    await act(() => result.current.testProposal('p1'));
+    expect(result.current.watcher.tests[0]).toMatchObject({ verdict: 'failed', happened: expect.stringMatching(/Aborted/) });
+  });
+
+  it('accepting a familiar proposal saves the element; dismissing is logged', () => {
+    stored({ kind: 'familiar', text: 'Save Files as familiar', target: 'Files icon', x: 0.42, y: 0.97 });
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.acceptProposal('p1'));
+    expect(result.current.familiar).toMatchObject([{ name: 'Files icon', x: 0.42, y: 0.97 }]);
+    expect(result.current.watcher.proposals[0].status).toBe('accepted');
+    expect(result.current.log[0].message).toMatch(/Accepted .*familiar/);
+    act(() => result.current.dismissProposal('p1'));
+    expect(result.current.watcher.proposals[0].status).toBe('accepted');
+  });
+
+  it('accepting a reorder edits the steps; a pattern proposal becomes a learned pattern; dismiss logs', () => {
+    localStorage.setItem('droid-assist.watcher', JSON.stringify({ notes: [], tests: [], proposals: [
+      { id: 'r', time: 1, status: 'pending', kind: 'reorder', text: 'Flow fails at step 2 — move it first', from: 2, to: 1 },
+      { id: 'a', time: 1, status: 'pending', kind: 'pattern', text: 'avoid clicking the ad banner' },
+      { id: 'c', time: 1, status: 'pending', kind: 'close_popup', text: 'Popup keeps returning', target: 'close X', x: 0.9, y: 0.1 },
+    ] }));
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.setSteps([{ id: 's1', name: 'One', action: 'wait', x: 0, y: 0, status: 'pending' }, { id: 's2', name: 'Two', action: 'wait', x: 0, y: 0, status: 'pending' }]));
+    act(() => result.current.acceptProposal('r'));
+    expect(result.current.steps.map((s) => s.id)).toEqual(['s2', 's1']);
+    act(() => result.current.acceptProposal('a'));
+    expect(result.current.patterns[0]).toMatchObject({ kind: 'avoid', pattern: 'clicking the ad banner' });
+    act(() => result.current.dismissProposal('c'));
+    expect(result.current.watcher.proposals.find((p) => p.id === 'c')?.status).toBe('dismissed');
+    expect(result.current.log[0].message).toMatch(/Dismissed "Popup keeps returning"/);
+  });
+});
+
 describe('useAssist habits', () => {
   const habit = (id: string, target: string) => ({ id, target, context: 'Notepad', attempts: 4, successes: 3, lastUsed: Date.now(), lessons: [], pinned: false });
   const seeded = [habit('h1', 'Save button'), habit('h2', 'Close icon')];

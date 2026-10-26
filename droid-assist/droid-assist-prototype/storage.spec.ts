@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard } from './types.js';
 import { HABIT_STALE_MS } from './habits.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, saveFamiliar, savePatterns, saveCards, saveHabits, saveLog, saveSettings } from './storage.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, loadWatcher, saveFamiliar, savePatterns, saveCards, saveHabits, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { DEFAULT_STAGES } from './loop-control.js';
+import type { WatchNote, WatchProposal, WatchTest } from './watcher.js';
 
-const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, changeCells: 6, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, showGrid: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b', autoContinue: false, maxIterations: 5, stages: DEFAULT_STAGES, errorUrl: '', errorForwarding: false, errorToken: '' };
+const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, changeCells: 6, monitorMode: 'app', watchMs: 5000, autoAct: false, aiHelp: true, showTrail: true, showGrid: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b', autoContinue: false, maxIterations: 5, stages: DEFAULT_STAGES, errorUrl: '', errorForwarding: false, errorToken: '' };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
 
 describe('settings', () => {
@@ -31,6 +32,15 @@ describe('settings', () => {
     for (const raw of ['{', '[1,2]', 'null', '42']) {
       localStorage.setItem('droid-assist.settings', raw);
       expect(loadSettings(DEFAULTS)).toEqual(DEFAULTS);
+    }
+  });
+
+  it('keeps a stored watchMs within 2000..30000 and falls back to the default otherwise', () => {
+    localStorage.setItem('droid-assist.settings', '{"watchMs":8000}');
+    expect(loadSettings(DEFAULTS).watchMs).toBe(8000);
+    for (const bad of [0, -5, 100000, '8000']) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ watchMs: bad }));
+      expect(loadSettings(DEFAULTS).watchMs).toBe(DEFAULTS.watchMs);
     }
   });
 
@@ -230,5 +240,33 @@ describe('familiar elements', () => {
     spy.mockRestore();
     expect(loadFamiliar()).toEqual([fam(1)]);
     expect(loadPatterns()).toHaveLength(1);
+  });
+});
+
+describe('loadWatcher', () => {
+  beforeEach(() => localStorage.clear());
+
+  const note = (n: number): WatchNote => ({ id: `n${n}`, time: n, kind: 'element', text: `note ${n}` });
+  const proposal = (n: number): WatchProposal => ({ id: `w${n}`, time: n, kind: 'pattern', text: `proposal ${n}`, status: 'pending' });
+  const test = (n: number): WatchTest => ({ id: `t${n}`, time: n, proposalId: 'w1', tried: 'click', happened: 'nothing', verdict: 'passed', dryRun: true });
+
+  it('round-trips notes, proposals and tests', () => {
+    const state = { notes: [note(1), note(2)], proposals: [proposal(1)], tests: [test(1)] };
+    saveWatcher(state);
+    expect(loadWatcher()).toEqual(state);
+  });
+
+  it('drops invalid entries', () => {
+    localStorage.setItem('droid-assist.watcher', JSON.stringify({
+      notes: [note(1), { ...note(2), kind: 'bogus' }, { ...note(3), text: '' }, null],
+      proposals: [proposal(1), { ...proposal(2), status: 'bogus' }, null],
+      tests: [test(1), { ...test(2), verdict: 'maybe' }, null],
+    }));
+    expect(loadWatcher()).toEqual({ notes: [note(1)], proposals: [proposal(1)], tests: [test(1)] });
+  });
+
+  it('gives empty lists for corrupt JSON', () => {
+    localStorage.setItem('droid-assist.watcher', '{oops');
+    expect(loadWatcher()).toEqual({ notes: [], proposals: [], tests: [] });
   });
 });

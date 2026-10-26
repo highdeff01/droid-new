@@ -2,7 +2,7 @@ import { Routes, Route } from 'react-router-dom';
 import { useAssist } from './use-assist.js';
 import { Stage } from './stage.js';
 import { Hud } from './hud.js';
-import { ActionHistoryPanel, AiHelpPanel, ComparisonGallery, ElementsPanel, ErrorsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, WorkflowPanel } from './panels.js';
+import { ActionHistoryPanel, AiHelpPanel, ComparisonGallery, ElementsPanel, ErrorsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, WatcherPanel, WorkflowPanel } from './panels.js';
 import styles from './droid-assist.module.css';
 
 /** The Droid Assist workspace: live screen + overlay, HUDs, workflow, gallery, agents and log. */
@@ -30,6 +30,7 @@ function AssistScreen() {
             <ElementsPanel engine={engine} />
             <LibraryPanel engine={engine} />
             <PatternsPanel engine={engine} />
+            <WatcherPanel engine={engine} />
           </div>
         </div>
         <div className={styles.bottom}>

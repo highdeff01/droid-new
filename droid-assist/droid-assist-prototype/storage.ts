@@ -5,12 +5,18 @@ import { sanitizeBudget } from './safety.js';
 import { OUTBOX_LIMIT, isErrorReport, type ErrorReport } from './error-forwarding.js';
 import { pruneHabits } from './habits.js';
 import { FAMILIAR_LIMIT } from './elements.js';
+import { EMPTY_WATCHER, NOTE_KINDS, NOTE_LIMIT, PROPOSAL_KINDS, PROPOSAL_LIMIT, PROPOSAL_STATUSES, TEST_LIMIT } from './watcher.js';
+import type { NoteKind, ProposalKind, ProposalStatus, WatchNote, WatchProposal, WatchTest, WatcherState } from './watcher.js';
 import { sanitizeStages } from './loop-control.js';
+
+/** Valid range of the Screen watcher interval (matches its Settings slider). */
+export const WATCH_MS_MIN = 2000;
+export const WATCH_MS_MAX = 30000;
 
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -21,10 +27,11 @@ const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'changeCells' | 'maxIterations', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
+  watchMs: [WATCH_MS_MIN, WATCH_MS_MAX],
   changeCells: [2, 40],
   maxIterations: [1, 20],
 };
@@ -234,4 +241,36 @@ export function loadFamiliar(): FamiliarElement[] {
 export function saveFamiliar(elements: FamiliarElement[]) {
   const kept = elements.slice(0, FAMILIAR_LIMIT);
   if (!writeJson(KEYS.familiar, kept)) writeJson(KEYS.familiar, kept.map(({ patch: _patch, ...e }) => e));
+}
+
+const isStr = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
+const optNum = (v: unknown) => v === undefined || isNum(v);
+
+function isNote(v: unknown): v is WatchNote {
+  return isObject(v) && isStr(v.id) && isNum(v.time) && NOTE_KINDS.includes(v.kind as NoteKind) && isStr(v.text);
+}
+
+function isProposal(v: unknown): v is WatchProposal {
+  return isObject(v) && isStr(v.id) && isNum(v.time) && PROPOSAL_KINDS.includes(v.kind as ProposalKind) && isStr(v.text)
+    && PROPOSAL_STATUSES.includes(v.status as ProposalStatus) && (v.target === undefined || typeof v.target === 'string')
+    && optNum(v.x) && optNum(v.y) && optNum(v.from) && optNum(v.to);
+}
+
+function isTest(v: unknown): v is WatchTest {
+  return isObject(v) && isStr(v.id) && isNum(v.time) && typeof v.proposalId === 'string' && typeof v.tried === 'string'
+    && typeof v.happened === 'string' && (v.verdict === 'passed' || v.verdict === 'failed') && typeof v.dryRun === 'boolean';
+}
+
+const listOf = <T>(v: unknown, guard: (x: unknown) => x is T, limit: number): T[] => (Array.isArray(v) ? v.filter(guard).slice(0, limit) : []);
+
+/** The stored Screen watcher notes, proposals and test results; invalid entries are dropped. */
+export function loadWatcher(): WatcherState {
+  const stored = readJson(KEYS.watcher);
+  if (!isObject(stored)) return EMPTY_WATCHER;
+  return { notes: listOf(stored.notes, isNote, NOTE_LIMIT), proposals: listOf(stored.proposals, isProposal, PROPOSAL_LIMIT), tests: listOf(stored.tests, isTest, TEST_LIMIT) };
+}
+
+/** Persists the Screen watcher state, capped per list. */
+export function saveWatcher(state: WatcherState) {
+  writeJson(KEYS.watcher, { notes: state.notes.slice(0, NOTE_LIMIT), proposals: state.proposals.slice(0, PROPOSAL_LIMIT), tests: state.tests.slice(0, TEST_LIMIT) });
 }

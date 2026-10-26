@@ -203,6 +203,8 @@ export interface AssistSettings {
   /** Size (cells of the 16x9 diff grid) the largest changed cluster must reach to count as a material screen change. */
   changeCells: number;
   monitorMode: MonitorMode;
+  /** How often the Screen watcher observes the live frame, in ms. */
+  watchMs: number;
   autoAct: boolean;
   aiHelp: boolean;
   showTrail: boolean;

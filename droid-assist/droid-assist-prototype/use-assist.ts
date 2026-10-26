@@ -19,13 +19,14 @@ import { parseCommand } from './commands.js';
 import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction, type ActionBudget } from './safety.js';
-import { LOG_LIMIT, loadCards, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, saveCards, saveFamiliar, saveHabits, saveLog, savePatterns, saveSettings } from './storage.js';
+import { LOG_LIMIT, loadCards, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, loadWatcher, saveCards, saveFamiliar, saveHabits, saveLog, savePatterns, saveSettings, saveWatcher } from './storage.js';
+import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, reorderSteps, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
 import { forgetElement, listElements, rememberElement, type ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
 import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
-import { failurePattern, flowCard, learnPatterns, mergePatterns, runVerdict, upsertCard } from './flow-memory.js';
+import { failurePattern, flowCard, learnPatterns, mergePatterns, newPattern, runVerdict, upsertCard } from './flow-memory.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
 import { buildElementMap } from './element-map.js';
 import type { Calibration } from './calibration.js';
@@ -115,6 +116,9 @@ const stepsText = (steps: WorkflowStep[]) => steps.map((s) => `${s.action} "${s.
 /** Log tone of each way an auto-continue loop ends. */
 const STOP_TONE: Record<ContinueStop, LogEntry['tone']> = { complete: 'ok', aborted: 'warn', halted: 'error', cap: 'warn', 'no-progress': 'warn' };
 
+/** Timeline text of a watcher observation. */
+const observationSummary = (o: Observation) => `${o.notes.length} note(s), ${o.proposals.length} proposal(s)${o.notes.length ? `: ${o.notes.map((n) => n.text).join('; ')}` : ''}`;
+
 /** Default settings. */
 export const DEFAULT_SETTINGS: AssistSettings = {
   gallerySize: 10,
@@ -122,6 +126,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   captureMs: 500,
   changeCells: DEFAULT_CHANGE_CELLS,
   monitorMode: 'app',
+  watchMs: 5000,
   autoAct: false,
   aiHelp: true,
   showTrail: true,
@@ -168,6 +173,8 @@ export function useAssist() {
   /** Per-target, per-app habits learned from every executed step, applied to planning and grounding. */
   const [habits, setHabits] = useState<Habit[]>(() => loadHabits());
   const [familiar, setFamiliar] = useState<FamiliarElement[]>(loadFamiliar);
+  /** The Screen watcher's notes, proposals and test results (persisted). */
+  const [watcher, setWatcher] = useState<WatcherState>(loadWatcher);
   const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
@@ -234,6 +241,13 @@ export function useAssist() {
   const targetRef = useRef(target);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
+  const watcherRef = useRef(watcher);
+  const aiBusyRef = useRef(aiBusy);
+  aiBusyRef.current = aiBusy;
+  /** A watcher observation or test is in flight; ticks never overlap and Auto Act waits for it. */
+  const watchBusyRef = useRef(false);
+  /** Real-input budget of the watcher's armed tests, renewed each time the watcher is switched on. */
+  const watchBudgetRef = useRef<ActionBudget>(createBudget(settings.actionBudget));
   /** The frame the next material screen change is measured against. */
   const changeBaseRef = useRef<Frame | null>(null);
   /** The in-flight change assessment; the executor waits for it before proposing. */
@@ -270,6 +284,7 @@ export function useAssist() {
   useEffect(() => savePatterns(patterns), [patterns]);
   useEffect(() => saveHabits(habits), [habits]);
   useEffect(() => saveFamiliar(familiar), [familiar]);
+  useEffect(() => saveWatcher(watcher), [watcher]);
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
   }, [cards]);
@@ -983,7 +998,7 @@ export function useAssist() {
   /** Auto Act: with the AI online, the model handles popups and runs the next pending step. Disarmed = dry run. */
   const autoAct = async (frame: Frame) => {
     const { autoAct: on } = settingsRef.current;
-    if (!on || abortedRef.current || autoBusyRef.current || replayingRef.current || recordingRef.current || !stageOn('screenResponder')) return;
+    if (!on || abortedRef.current || autoBusyRef.current || watchBusyRef.current || replayingRef.current || recordingRef.current || !stageOn('screenResponder')) return;
     if (!aiOnline() || Date.now() - lastStepAt.current < 1500) return;
     autoBusyRef.current = true;
     try {
@@ -1559,6 +1574,140 @@ export function useAssist() {
 
   const resetHistory = () => setHistory(clearHistory());
 
+  const updateWatcher = (fn: (w: WatcherState) => WatcherState) => {
+    watcherRef.current = fn(watcherRef.current);
+    setWatcher(watcherRef.current);
+  };
+
+  /** A capture source is live: the demo, the bridge, or a running (not lost) screen capture. */
+  const captureLive = () => sourceRef.current === 'demo' || sourceRef.current === 'bridge' || (sourceRef.current === 'screen' && !!captureRef.current);
+
+  /** The executor is running a step (Auto Act, replay, or an AI command); the watcher must not compete with it. */
+  const executorBusy = () => autoBusyRef.current || replayingRef.current || aiBusyRef.current;
+
+  /**
+   * Tests a proposal's on-screen target as a click through the shared pipeline: a dry run unless
+   * armed (abort latch and the watcher's budget gate real input). The result goes to the panel and
+   * the log; a failed test is learned as an "avoid" pattern.
+   */
+  const runWatchTest = async (p: WatchProposal) => {
+    const step = proposalStep(p);
+    if (!step) {
+      addLog('Screen watcher', `"${p.text}" has no on-screen target to test`, 'warn');
+      return;
+    }
+    const dryRun = !armedRef.current;
+    const tried = `${dryRun ? 'Dry-run' : 'Real'} click on "${step.target}" at ${gridRef(step)}`;
+    const actor = dryRun ? 'Screen watcher (dry run)' : 'Screen watcher';
+    // performStep, not perform: a test must not remember its target as familiar — only Accept does.
+    const out = await performStep(step, actor, watchBudgetRef.current, dryRun);
+    if (!out.halt && aiOnline()) await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
+    const verdict = out.ok ? 'passed' : 'failed';
+    updateWatcher((w) => ({ ...w, tests: addTest(w.tests, { proposalId: p.id, tried, happened: out.message, verdict, dryRun }), proposals: patchProposal(w.proposals, p.id, { tested: true }) }));
+    addLog('Screen watcher', `Test ${verdict}: ${tried} — ${out.message}`, out.ok ? 'ok' : 'warn');
+    if (out.ok) return;
+    addPatterns([newPattern('avoid', `${tried} failed — ${out.message}`, p.text)]);
+    addLog('Patterns', `Watcher test failed — learned: avoid ${tried}`, 'warn');
+  };
+
+  /** Stores an observation: deduplicated notes and proposals, each new proposal logged. */
+  const recordObservation = (obs: Observation) => {
+    const time = Date.now();
+    const notes = mergeNotes(watcherRef.current.notes, obs.notes, time);
+    const proposals = mergeProposals(watcherRef.current.proposals, obs.proposals, time);
+    updateWatcher((w) => ({ ...w, notes: notes.notes, proposals: proposals.proposals }));
+    if (notes.added.length) addLog('Screen watcher', `${notes.added.length} new note(s): ${notes.added.map((n) => n.text).join('; ')}`, 'info');
+    proposals.added.forEach((p) => addLog('Screen watcher', `Proposal: ${p.text}`, 'info'));
+  };
+
+  /** One watcher round: observe the live frame, record notes/proposals, then background-test one untested proposal. */
+  const watchTick = async () => {
+    if (!stageOn('screenWatcher') || watchBusyRef.current || executorBusy() || abortedRef.current || !captureLive() || pausedWhileHidden() || !aiOnline()) return;
+    const frame = framesRef.current[0];
+    if (!frame) return;
+    watchBusyRef.current = true;
+    try {
+      recordObservation(await thought('Screen watcher', () => observeScreen(askFor('screenWatcher'), frame, watcherRef.current.notes, stepsRef.current, goalRef.current), observationSummary));
+      const untested = watcherRef.current.proposals.find((p) => p.status === 'pending' && !p.tested && proposalStep(p));
+      if (untested && !executorBusy() && !abortedRef.current) await runWatchTest(untested);
+    } catch (error) {
+      addLog('Screen watcher', `AI unavailable — no notes this round: ${errorText(error)}`, 'warn');
+    } finally {
+      watchBusyRef.current = false;
+    }
+  };
+  const watchTickRef = useRef(watchTick);
+  watchTickRef.current = watchTick;
+
+  // Screen watcher loop at its own interval while the agent is on; each switch-on renews its budget.
+  const watcherOn = settings.stages.screenWatcher;
+  useEffect(() => {
+    if (!watcherOn) return undefined;
+    watchBudgetRef.current = createBudget(settingsRef.current.actionBudget);
+    const id = setInterval(() => void watchTickRef.current(), settings.watchMs);
+    return () => clearInterval(id);
+  }, [watcherOn, settings.watchMs]);
+
+  /** Applies an accepted proposal through the existing mechanisms; null when it does not apply now. */
+  const applyProposal: Record<ProposalKind, (p: WatchProposal) => string | null> = {
+    close_popup: (p) => {
+      addPatterns([newPattern('add', `Close the returning popup with its ${p.target ?? 'close control'}`, p.text)]);
+      return 'added to the close list (learned pattern)';
+    },
+    familiar: (p) => {
+      if (!p.target || p.x === undefined || p.y === undefined) return null;
+      setFamiliar((list) => rememberElement(list, { id: uid('el'), name: p.target!, x: p.x!, y: p.y!, lastSeen: Date.now() }));
+      return `saved "${p.target}" as a familiar element`;
+    },
+    pattern: (p) => {
+      const kind = /^avoid\b/i.test(p.text) ? 'avoid' : 'add';
+      addPatterns([newPattern(kind, p.text.replace(/^(avoid|add)\b\s*:?\s*/i, '') || p.text, p.target ?? '')]);
+      return `saved as an "${kind}" pattern`;
+    },
+    reorder: (p) => {
+      const next = p.from && p.to ? reorderSteps(stepsRef.current, p.from, p.to) : null;
+      if (!next) return null;
+      stepsRef.current = next;
+      setSteps(next);
+      return `moved step ${p.from} to position ${p.to}`;
+    },
+  };
+
+  const acceptProposal = (id: string) => {
+    const p = watcherRef.current.proposals.find((x) => x.id === id && x.status === 'pending');
+    if (!p) return;
+    const done = applyProposal[p.kind](p);
+    if (done === null) {
+      addLog('Screen watcher', `Cannot apply "${p.text}" — it does not match the current screen or steps`, 'warn');
+      return;
+    }
+    updateWatcher((w) => ({ ...w, proposals: patchProposal(w.proposals, id, { status: 'accepted' }) }));
+    addLog('Screen watcher', `Accepted "${p.text}": ${done}`, 'ok');
+  };
+
+  const dismissProposal = (id: string) => {
+    const p = watcherRef.current.proposals.find((x) => x.id === id && x.status === 'pending');
+    if (!p) return;
+    updateWatcher((w) => ({ ...w, proposals: patchProposal(w.proposals, id, { status: 'dismissed' }) }));
+    addLog('Screen watcher', `Dismissed "${p.text}"`, 'info');
+  };
+
+  /** The Test button: a background test of one proposal, refused while the executor or watcher is busy. */
+  const testProposal = async (id: string) => {
+    const p = watcherRef.current.proposals.find((x) => x.id === id);
+    if (!p) return;
+    if (watchBusyRef.current || executorBusy()) {
+      addLog('Screen watcher', `Busy running a step — test of "${p.text}" not started`, 'warn');
+      return;
+    }
+    watchBusyRef.current = true;
+    try {
+      await runWatchTest(p);
+    } finally {
+      watchBusyRef.current = false;
+    }
+  };
+
   const saveCard = () => {
     if (!draftCard) return;
     setCards((c) => [{ id: uid('card'), ...draftCard, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
@@ -1578,6 +1727,7 @@ export function useAssist() {
     toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
     armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, ruler, continuing, habits, deleteHabit, pinHabit,
     familiar, forgetFamiliar, elements, highlight, testClick,
+    watcher, acceptProposal, dismissProposal, testProposal,
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDrag, onStageType, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
