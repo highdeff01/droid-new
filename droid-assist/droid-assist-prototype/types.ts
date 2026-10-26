@@ -153,6 +153,8 @@ export interface AssistSettings {
   /** Capture interval of the "app" monitor mode; background and advanced modes use fixed intervals. */
   captureMs: number;
   monitorMode: MonitorMode;
+  /** How often the Screen watcher observes the live frame, in ms. */
+  watchMs: number;
   autoAct: boolean;
   aiHelp: boolean;
   showTrail: boolean;

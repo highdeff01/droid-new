@@ -8,7 +8,53 @@ import type { LogEntry } from './types.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
 import type { ElementSource, ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
+import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
+import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import styles from './droid-assist.module.css';
+
+const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity' };
+const clock = (t: number) => new Date(t).toLocaleTimeString();
+
+/** One proposal with Accept / Dismiss (pending) and Test (when it has an on-screen target). */
+function ProposalItem({ engine, p }: { engine: AssistEngine; p: WatchProposal }) {
+  const pending = p.status === 'pending';
+  return (
+    <li data-tone={pending ? 'warn' : p.status === 'accepted' ? 'ok' : 'info'}>
+      <small>{clock(p.time)}</small> {p.text} <small>· {p.status}{p.tested ? ' · tested' : ''}</small>
+      {pending && <button type="button" onClick={() => engine.acceptProposal(p.id)}>Accept</button>}
+      {pending && <button type="button" onClick={() => engine.dismissProposal(p.id)}>Dismiss</button>}
+      {proposalStep(p) && (
+        <button type="button" onClick={() => void engine.testProposal(p.id)} title={engine.armed ? 'Real click (armed, budgeted)' : 'Dry run — nothing is sent'}>Test</button>
+      )}
+    </li>
+  );
+}
+
+/** The Screen watcher: timestamped notes, proposals with Accept / Dismiss / Test, and test results. */
+export function WatcherPanel({ engine }: { engine: AssistEngine }) {
+  const { notes, proposals, tests } = engine.watcher;
+  const on = engine.agents.some((a) => a.id === 'watcher' && a.on);
+  return (
+    <section className={styles.panel} aria-label="Watcher">
+      <h3>Watcher <small>{on ? `observing every ${(engine.settings.watchMs / 1000).toFixed(1)} s` : 'off — enable Screen watcher in Agents'}</small></h3>
+      <h4>Proposals <small>{proposals.filter((p) => p.status === 'pending').length} pending</small></h4>
+      <ul className={styles.log}>{proposals.map((p) => <ProposalItem key={p.id} engine={engine} p={p} />)}</ul>
+      <h4>Tests <small>{tests.length}</small></h4>
+      <ul className={styles.log}>
+        {tests.map((t) => (
+          <li key={t.id} data-tone={t.verdict === 'passed' ? 'ok' : 'error'}>
+            <small>{clock(t.time)}</small> <b>{t.verdict}</b> {t.tried} — {t.happened}
+          </li>
+        ))}
+      </ul>
+      <h4>Notes <small>{notes.length}</small></h4>
+      {!notes.length && <p className={styles.muted}>Notes on notable elements, changes and opportunities appear here while the watcher runs.</p>}
+      <ul className={styles.log}>
+        {notes.map((n) => <li key={n.id}><small>{clock(n.time)}</small> <b>{NOTE_LABEL[n.kind]}</b> {n.text}</li>)}
+      </ul>
+    </section>
+  );
+}
 
 /** The N most recent frames with frame-to-frame drift, plus the AI-picked frames shown to the user. */
 export function ComparisonGallery({ engine }: { engine: AssistEngine }) {
@@ -145,6 +191,9 @@ export function AgentsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>App monitor: capture every <b>{settings.captureMs} ms</b>
         <small>Background monitor is fixed at 1000 ms, advanced at 250 ms. Active: {engine.intervalMs} ms</small>
         <input type="range" min={250} max={2000} step={50} value={settings.captureMs} onChange={(e) => setSettings({ ...settings, captureMs: +e.target.value })} />
+      </label>
+      <label className={styles.setting}>Screen watcher: observe every <b>{(settings.watchMs / 1000).toFixed(1)} s</b>
+        <input type="range" min={WATCH_MS_MIN} max={WATCH_MS_MAX} step={500} value={settings.watchMs} onChange={(e) => setSettings({ ...settings, watchMs: +e.target.value })} />
       </label>
       <label className={styles.setting}>Max real input actions per run <b>{settings.actionBudget}</b>
         <input type="number" min={1} value={settings.actionBudget} onChange={(e) => setSettings({ ...settings, actionBudget: sanitizeBudget(e.target.valueAsNumber) })} />
