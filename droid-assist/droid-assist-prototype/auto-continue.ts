@@ -35,6 +35,22 @@ export interface ContinueResult {
   iterations: number;
 }
 
+/** What one goal check decides: stop (and why), or continue with the updated no-progress count. */
+export type CheckVerdict = { stop: ContinueStop; detail: string } | { stop: null; stalls: number };
+
+/**
+ * The loop's ruling on one goal check after `iteration` continuation rounds: complete, too many
+ * checks in a row without progress, the `maxIterations` cap, or continue. Shared by replay's
+ * loop and Auto Act's continuation so both stop for the same reasons.
+ */
+export function judgeCheck(check: GoalCheck, stalls: number, iteration: number, maxIterations: number): CheckVerdict {
+  if (check.complete) return { stop: 'complete', detail: `Goal verified complete — ${check.reason}` };
+  const next = check.progress ? 0 : stalls + 1;
+  if (next >= NO_PROGRESS_LIMIT) return { stop: 'no-progress', detail: `No verified progress in ${NO_PROGRESS_LIMIT} consecutive iterations — ${check.reason}` };
+  if (iteration >= maxIterations) return { stop: 'cap', detail: `Max iterations (${maxIterations}) reached without verifying the goal — ${check.reason}` };
+  return { stop: null, stalls: next };
+}
+
 /**
  * Auto-continue: run, verify the goal on the live frame, and while it is not complete plan the
  * remaining steps and run again. Stops when the goal is verified complete, a run halts (action
@@ -50,10 +66,9 @@ export async function autoContinue(deps: ContinueDeps): Promise<ContinueResult> 
     if (halt) return end('halted', halt);
     const check = await deps.verify(ran, iteration);
     if (deps.aborted()) return end('aborted', 'Stopped by abort');
-    if (check.complete) return end('complete', `Goal verified complete — ${check.reason}`);
-    stalls = check.progress ? 0 : stalls + 1;
-    if (stalls >= NO_PROGRESS_LIMIT) return end('no-progress', `No verified progress in ${NO_PROGRESS_LIMIT} consecutive iterations — ${check.reason}`);
-    if (iteration >= deps.maxIterations) return end('cap', `Max iterations (${deps.maxIterations}) reached without verifying the goal — ${check.reason}`);
+    const verdict = judgeCheck(check, stalls, iteration, deps.maxIterations);
+    if (verdict.stop) return end(verdict.stop, verdict.detail);
+    stalls = verdict.stalls;
     await deps.plan(ran, check, iteration + 1);
     if (deps.aborted()) return { stop: 'aborted', detail: 'Stopped by abort', iterations: iteration + 1 };
   }

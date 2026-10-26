@@ -867,6 +867,8 @@ describe('useAssist supervisor', () => {
     expect(result.current.timeline.some((e) => e.kind === 'movement')).toBe(false);
 
     await act(() => vi.advanceTimersByTimeAsync(4000));
+    // The supervisor's attempt plays as a humanized AI cursor movement (real time) before it is reported.
+    await vi.waitFor(() => expect(result.current.timeline.find((e) => e.kind === 'movement')).toBeDefined(), { timeout: 2000 });
     const move = result.current.timeline.find((e) => e.kind === 'movement');
     expect(move?.text).toMatch(/Executor left "Click Save" unapplied — supervisor dry run at \(60\.0%, 40\.0%\)/);
     expect(result.current.log.some((l) => l.source === 'Supervisor (dry run)')).toBe(true);
@@ -1060,7 +1062,10 @@ describe('useAssist Screen watcher', () => {
     expect(result.current.watcher.tests[0].happened).toMatch(/dry run, not dispatched/);
     expect(result.current.log.some((l) => l.source === 'Screen watcher' && /Test passed: Dry-run click/.test(l.message))).toBe(true);
     expect(result.current.history).toHaveLength(0);
-    expect(result.current.cursor).toBeNull();
+    // A dry run shows the same visuals as a real one: the AI cursor travels to the verified target.
+    expect(result.current.cursor).toEqual({ x: 0.42, y: 0.5 });
+    expect(result.current.trail.length).toBeGreaterThanOrEqual(12);
+    expect(result.current.trail.filter((p) => p.click)).toEqual([expect.objectContaining({ x: 0.42, y: 0.5 })]);
     expect(result.current.patterns).toHaveLength(0);
     // Only Accept saves the element; a test leaves the proposal pending and memory untouched.
     expect(result.current.familiar).toHaveLength(0);

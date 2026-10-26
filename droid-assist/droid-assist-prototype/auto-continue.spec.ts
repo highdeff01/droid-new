@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { autoContinue, type ContinueDeps } from './auto-continue.js';
+import { autoContinue, judgeCheck, type ContinueDeps } from './auto-continue.js';
 import type { GoalCheck } from './assist-ai.js';
 import type { WorkflowStep } from './types.js';
 
@@ -75,5 +75,21 @@ describe('autoContinue', () => {
   it('rejects when the model call fails', async () => {
     const d = deps([check(false)], { verify: vi.fn(async () => { throw new Error('down'); }) });
     await expect(autoContinue(d)).rejects.toThrow('down');
+  });
+});
+
+describe('judgeCheck', () => {
+  it('stops on a complete goal', () => {
+    expect(judgeCheck(check(true), 0, 0, 5)).toMatchObject({ stop: 'complete', detail: 'Goal verified complete — done' });
+  });
+
+  it('continues with the no-progress count reset by progress and raised without it', () => {
+    expect(judgeCheck(check(false, true), 1, 0, 5)).toEqual({ stop: null, stalls: 0 });
+    expect(judgeCheck(check(false, false), 0, 0, 5)).toEqual({ stop: null, stalls: 1 });
+  });
+
+  it('stops after two checks in a row without progress, and at the iteration cap', () => {
+    expect(judgeCheck(check(false, false), 1, 0, 5).stop).toBe('no-progress');
+    expect(judgeCheck(check(false, true), 0, 3, 3)).toMatchObject({ stop: 'cap', detail: expect.stringMatching(/Max iterations \(3\)/) });
   });
 });

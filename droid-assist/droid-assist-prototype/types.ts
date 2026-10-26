@@ -24,6 +24,8 @@ export interface TrailPoint {
   y: number;
   t: number;
   click?: boolean;
+  /** A typing marker: the AI typed text at this point. */
+  typed?: boolean;
 }
 
 /**
@@ -220,6 +222,10 @@ export interface AssistSettings {
   showTrail: boolean;
   /** Draw the labeled spatial grid (A1..H12) over the live preview. */
   showGrid: boolean;
+  /** Label every grid cell (A1..H12); off draws only the edge column numbers / row letters. */
+  gridLabels: boolean;
+  /** Alpha of the grid lines, kept low so the captured frame always shows through. */
+  gridOpacity: number;
   /** Base URL of the Droid desktop bridge (pyautogui replay endpoint). */
   bridgeUrl: string;
   /** Emergency-stop key combo, e.g. "Shift+Escape". */

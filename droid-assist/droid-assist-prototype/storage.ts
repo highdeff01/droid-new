@@ -23,6 +23,7 @@ const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', l
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
 const PATTERN_KINDS: ReadonlyArray<LearnedPattern['kind']> = ['avoid', 'add'];
+import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 
 const ACTIONS: readonly StepAction[] = STEP_ACTIONS;
 const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
@@ -76,7 +77,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     const v = stored[key];
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
   for (const key of ['bridgeUrl', 'errorUrl', 'errorToken'] as const) {

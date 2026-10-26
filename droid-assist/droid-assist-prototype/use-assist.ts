@@ -10,7 +10,9 @@ import type { AiReply, AiStatus, AskFn, AskRequest } from './ai.js';
 import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type StageId } from './loop-control.js';
 import { DEFAULT_AI_MAX_IN_FLIGHT, createAiQueue, type AiQueue, type AiQueueStats } from './ai-queue.js';
 import { confirmTarget, decidePopup, decideStep, describeScreen, judgeStep, reflectOn, reflectStep, verifyGoal, type GoalCheck, type PopupDecision, type StepDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
-import { DEFAULT_MAX_ITERATIONS, autoContinue, type ContinueStop, type RunReport } from './auto-continue.js';
+import { DEFAULT_GRID_OPACITY } from './grid-overlay.js';
+import { MARKER_OF, createCursorAnimator, type CursorAnimator } from './cursor-path.js';
+import { DEFAULT_MAX_ITERATIONS, autoContinue, judgeCheck, type ContinueStop, type RunReport } from './auto-continue.js';
 import { DEFAULT_CHANGE_CELLS, assessChange, changeText, detectChange, type ChangeAssessment, type ScreenChange } from './screen-change.js';
 import { localProposal, proposalText, proposeStep, type Proposal, type ProposalContext } from './proposal.js';
 import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './thinking-timeline.js';
@@ -97,6 +99,9 @@ const LOCAL_ACTIONS: Partial<Record<StepAction, (step: WorkflowStep) => Promise<
 /** One step's real result plus whether the run must stop (abort, disarm, budget) and, for a drag, what it grabbed and moved. */
 type Performed = StepOutcome & { halt?: boolean; grabbed?: string; moved?: MovedElement };
 
+/** Auto Act's continuation state: the goal it verifies, checks in a row without progress, rounds made. */
+type AutoLoop = { goal: string; stalls: number; iteration: number };
+
 const refused = (step: WorkflowStep, message: string): Performed => ({ ok: false, executed: false, halt: true, message, target: { x: step.x, y: step.y } });
 
 const at = (x: number, y: number) => `(${(x * 100).toFixed(1)}%, ${(y * 100).toFixed(1)}%)`;
@@ -140,12 +145,14 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   aiHelp: true,
   showTrail: true,
   showGrid: true,
+  gridLabels: false,
+  gridOpacity: DEFAULT_GRID_OPACITY,
   bridgeUrl: '',
   abortHotkey: DEFAULT_ABORT_HOTKEY,
   actionBudget: DEFAULT_ACTION_BUDGET,
   aiUrl: DEFAULT_AI_URL,
   aiModel: DEFAULT_AI_MODEL,
-  autoContinue: false,
+  autoContinue: true,
   maxIterations: DEFAULT_MAX_ITERATIONS,
   aiMaxInFlight: DEFAULT_AI_MAX_IN_FLIGHT,
   stages: DEFAULT_STAGES,
@@ -184,6 +191,17 @@ export function useAssist() {
   const [sync, setSync] = useState<{ level: SyncLevel; detail: string }>({ level: 'idle', detail: 'No active step' });
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  const animatorRef = useRef<CursorAnimator | null>(null);
+  /** The AI cursor animator: every frame of a movement moves the cursor and extends the trail. */
+  const animator = () => (animatorRef.current ??= createCursorAnimator({
+    frame: (p) => {
+      setCursor(p);
+      setTrail((t) => [...t, { x: p.x, y: p.y, t: Date.now() }].slice(-1500));
+    },
+    mark: (p) => setTrail((t) => [...t, p].slice(-1500)),
+  }));
+  /** Shows one attempt at `p` as a humanized AI cursor movement. */
+  const aim = (p: { x: number; y: number }) => animator().aim(p);
   const [log, setLog] = useState<LogEntry[]>(loadLog);
   const [cards, setCards] = useState<SavedCard[]>([]);
   /** Lessons learned from finished runs, fed into future planning. */
@@ -294,6 +312,8 @@ export function useAssist() {
   const targetRef = useRef(target);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
+  /** Auto Act's verify → plan → continue loop while it is running; null between loops. */
+  const autoLoopRef = useRef<AutoLoop | null>(null);
   const timelineRef = useRef(timeline);
   const syncRef = useRef(sync);
   const progressRef = useRef(progress);
@@ -846,8 +866,12 @@ export function useAssist() {
       if (syncLevelFor(r) === 'red') return { ok: false, executed: false, message: `Target of "${step.name}" not found on the demo screen (best match ${r.matchDistance.toFixed(3)}) — not executed`, target: p };
       p = { x: step.x + r.dx, y: step.y + r.dy };
     }
-    if (dryRun) return { ok: true, executed: false, message: 'verified on the demo screen — dry run, not dispatched', target: p };
-    setCursor(p);
+    if (POINTER_ACTIONS.has(step.action)) {
+      aim({ x: step.x, y: step.y });
+      aim(p);
+      await animator().idle();
+    }
+    if (dryRun) return { ok: true, executed: false, message: 'verified on the demo screen — dry run, not dispatched', target: p, ...(step.action === 'drag' ? { end: { x: step.endX!, y: step.endY! } } : {}) };
     if (step.action === 'drag') return demoDragStep(step, p, live);
     const message = demoEffect(step, p);
     const ok = !/blocked|nothing/.test(message);
@@ -866,7 +890,29 @@ export function useAssist() {
     if (step.action === 'measure') return measureStep(step, actor);
     const out = await performInput(step, actor, budget, dryRun);
     ruler.noteGrounding(out);
+    if (out.ok) markOutcome(step, out);
+    await animator().idle();
     return out;
+  };
+
+  /**
+   * The marker an attempt that succeeded (executed or dry run alike) leaves on the trail: a drag
+   * travels start → end with a click dot at each, a click/double-click gets a click dot at its
+   * target, typing gets a typing marker where the cursor is; other actions leave only their path.
+   */
+  const markOutcome = (step: WorkflowStep, out: Performed) => {
+    const a = animator();
+    if (step.action === 'drag' && out.end) {
+      aim(out.target);
+      a.mark('click');
+      aim(out.end);
+      a.mark('click');
+      return;
+    }
+    const kind = MARKER_OF[step.action];
+    if (!kind) return;
+    if (kind === 'click') aim(out.target);
+    a.mark(kind);
   };
 
   /** The measure action: no input is sent and no budget spent; the result (or the loud error) goes to the log and the model. */
@@ -906,6 +952,7 @@ export function useAssist() {
       seed: habitSeed,
       learned: learnedPoint,
       onVerified: strengthen,
+      aim,
       gateRetry: dryRun ? undefined : () => gateRealInput(budget),
     });
     if (out.executed) recordAction(step, out, actor, 'bridge', size.w, size.h);
@@ -977,7 +1024,10 @@ export function useAssist() {
     const live = await liveFrame();
     if (!live) return { ok: false, message: 'no live frame to verify against' };
     const c = correctDrift(input.frame.data, live.data, id.x, id.y, live.srcW, live.srcH);
+    aim(id);
+    aim(c);
     if (c.level === 'red') return { ok: false, message: `no template match on the live frame (best ${c.matchDistance.toFixed(3)})` };
+    await animator().idle();
     return { ok: true, x: c.x, y: c.y, message: `dry-run move verified on the live frame at ${gridRef(c)} (drift ${c.driftPx}px, match ${c.matchDistance.toFixed(3)})`, live };
   };
 
@@ -1230,8 +1280,6 @@ export function useAssist() {
     const evidence = out.executed ? { beforeFrame: before ?? undefined, afterFrame: out.shot ?? framesRef.current[0] } : {};
     updateStep(index, { status: out.executed ? 'done' : 'failed', ...measured, ...(out.shot ? { shot: out.shot } : {}), ...evidence });
     if (!out.executed) return;
-    setCursor(out.target);
-    setTrail((t) => [...t, { x: out.target.x, y: out.target.y, t: Date.now(), click: stepsRef.current[index]?.action !== 'move' }].slice(-1500));
     if (stageOn('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
   };
 
@@ -1474,6 +1522,7 @@ export function useAssist() {
 
   /** Starts a new plan: a fresh baseline for "changed since the plan" and fresh re-proposal allowances. */
   const markPlan = () => {
+    autoLoopRef.current = null;
     planAtRef.current = Date.now();
     reproposedRef.current = new Set();
     staleHandledRef.current = null;
@@ -1503,6 +1552,43 @@ export function useAssist() {
     return { ok: false, executed: false, message: reason, target: { x: step.x, y: step.y } };
   };
 
+  /** Ends Auto Act's continuation loop with why; false, so the finished run is reviewed. */
+  const endAutoLoop = (loop: AutoLoop, stop: ContinueStop, detail: string): boolean => {
+    autoLoopRef.current = null;
+    addLog('Auto-continue', `Auto Act stopped after ${loop.iteration} continuation(s): ${detail}`, STOP_TONE[stop]);
+    return false;
+  };
+
+  /**
+   * Auto Act's continuation once no step is pending: verify the goal, and while it is not complete
+   * plan the remaining steps for the next frames to run. Stops for the same reasons as replay's
+   * loop (judgeCheck), on abort and when Auto Act was turned off (budget halt). True when it planned more.
+   */
+  const continueAutoAct = async (): Promise<boolean> => {
+    if (!continueEnabled() || !settingsRef.current.autoAct || abortedRef.current) return false;
+    const loop = autoLoopRef.current ?? { goal: runGoalOf(), stalls: 0, iteration: 0 };
+    autoLoopRef.current = loop;
+    const ran = stepsRef.current;
+    setContinuing(true);
+    try {
+      const check = await checkGoal(loop.goal, ran, loop.iteration);
+      if (abortedRef.current || !settingsRef.current.autoAct) return endAutoLoop(loop, 'aborted', 'Stopped by abort or Auto Act was turned off');
+      const verdict = judgeCheck(check, loop.stalls, loop.iteration, settingsRef.current.maxIterations);
+      if (verdict.stop) return endAutoLoop(loop, verdict.stop, verdict.detail);
+      loop.stalls = verdict.stalls;
+      loop.iteration += 1;
+      await planNext(loop.goal, ran, check, loop.iteration);
+      if (!stepsRef.current.length) return endAutoLoop(loop, 'no-progress', 'the re-plan found no remaining steps');
+      return true;
+    } catch (error) {
+      autoLoopRef.current = null;
+      addLog('Auto-continue', aiFailure('AI unavailable — Auto Act continuation stopped', error), 'error');
+      return false;
+    } finally {
+      setContinuing(false);
+    }
+  };
+
   /** Auto-Actor step execution: a recorded what/why proposal for the next step, then it runs grounded. */
   const autoRunStep = async (frame: Frame, idx: number, dry: boolean) => {
     const next = stepsRef.current[idx];
@@ -1528,6 +1614,7 @@ export function useAssist() {
     }
     if (dry) autoDryRef.current = true;
     if (!stepsRef.current.some((s) => s.status === 'pending')) {
+      if (await continueAutoAct()) return;
       const dryRun = autoDryRef.current;
       autoDryRef.current = false;
       void learnFromRun(stepsRef.current, { dryRun, stopped: false });
@@ -1725,7 +1812,6 @@ export function useAssist() {
     const planned = stepsRef.current[i];
     setActiveIndex(i);
     updateStep(i, { status: 'running' });
-    setCursor({ x: planned.x, y: planned.y });
     const popup = popupRef.current;
     if (coveredBy(popup, planned) && !(settingsRef.current.aiHelp && stageOn('popup') && aiOnline() && (await clearCoveringPopup(popup, planned, budget, dryRun)))) {
       const out: Performed = { ok: false, executed: false, message: `"${planned.name}" is covered by a popup${settingsRef.current.aiHelp ? ' the AI did not clear' : ' (enable AI help to clear it)'} — not executed`, target: { x: planned.x, y: planned.y } };
@@ -1781,8 +1867,8 @@ export function useAssist() {
     reproposedRef.current = new Set();
     setReplaying(true);
     const shots: Frame[] = [];
-    const runGoal = goalRef.current.trim();
-    const looping = settingsRef.current.autoContinue && stageOn('autoContinue') && !selfTest && !!runGoal;
+    const runGoal = runGoalOf();
+    const looping = continueEnabled() && !selfTest;
     const { ran, ok } = looping ? await continueToGoal(runGoal, budget, dryRun, label, shots) : await runSteps(budget, dryRun, label, shots);
     setActiveIndex(null);
     setReplaying(false);
@@ -1816,6 +1902,12 @@ export function useAssist() {
     if (!arranged) stepsRef.current = stepsRef.current.map((s) => (s.action === 'drag' ? { ...s, status: 'failed' as const } : s));
     return { ran: stepsRef.current, halt: null, ok };
   };
+
+  /** Whether runs continue until the goal is verified: the setting, its loop stage, and the AI to verify with. */
+  const continueEnabled = () => settingsRef.current.autoContinue && stageOn('autoContinue') && aiOnline();
+
+  /** The goal a run verifies: the goal text, else the draft card's description or name, else the plan's steps. */
+  const runGoalOf = () => goalRef.current.trim() || draftCard?.description.trim() || draftCard?.name.trim() || `Complete the plan: ${stepsText(stepsRef.current)}`;
 
   /** Auto-continue check: the model verifies the goal on the live frame; timeline + log. */
   const checkGoal = async (runGoal: string, ran: WorkflowStep[], n: number): Promise<GoalCheck> => {
