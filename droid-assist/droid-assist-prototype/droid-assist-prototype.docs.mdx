@@ -24,3 +24,56 @@ bit run droid-assist-prototype
 - A replay or Auto Act run that executes every step as real input (not a dry run) is saved automatically as a workflow card, logged as `Flow saved: "<name>"`. Steps keep their drift-corrected coordinates and screenshots. A near-duplicate card for the same flow is replaced, not added again.
 - Typing a goal that resembles a saved flow (synonyms, plurals and verb forms are folded, e.g. "launch the calculator" ≈ "Open calculator app") reuses it without calling the model, and the log says `Reused saved workflow "<name>"`.
 - After each real run the AI adds lessons (`avoid` / `add`) to the **Learned patterns** panel (`PatternsPanel`). A failed run is never saved as a flow; its failure is recorded as an `avoid` pattern. Patterns persist in `localStorage` and can be deleted with ✕, and the ones relevant to a new goal are sent as planning context.
+
+## Error forwarding
+
+Errors can be forwarded to any error-fix app with an HTTP API. Set this up under **Agents → Error forwarding**:
+
+- **Endpoint URL**: where error reports are sent.
+- **Forward errors**: turns automatic forwarding on or off.
+- **Auth token** (optional): stored with the other settings. It is sent only as `Authorization: Bearer <token>` and never appears in the activity log.
+- **Send test error**: posts a sample report. The result is written to the activity log.
+
+Errors are captured where the app already reports failures: the AI being unavailable, a failed or halted step, drift turning red, bridge failures and failed self-test steps. Each one becomes an `ErrorReport` (see `error-forwarding.ts`) with:
+
+- `timestamp` and `kind` (`ai`, `step`, `drift`, `bridge`, `watcher` or `test`)
+- `message`
+- `goal` and `step`, when relevant
+- `recentLog`: the last 8 activity-log lines
+- `screenshot`: the current frame as a JPEG data URL
+
+Delivery is asynchronous. A failed send is retried once. If it fails again, the error goes into a persisted outbox (10 entries at most) and gets a **Resend** button in the **Errors** panel (`ErrorsPanel`). The same error repeated within 60 s is counted on its existing entry and is not sent again.
+
+### Usage
+
+Receive reports with a local listener:
+
+```js
+// listener.mjs — node listener.mjs, then set the endpoint to http://127.0.0.1:8787/api/errors
+import { createServer } from 'node:http';
+createServer((req, res) => {
+  let body = '';
+  req.on('data', (c) => (body += c));
+  req.on('end', () => {
+    const report = JSON.parse(body);
+    console.log(report.kind, report.message, report.screenshot?.slice(0, 30));
+    res.writeHead(200).end();
+  });
+}).listen(8787);
+```
+
+Build a report and send it yourself (one retry):
+
+```ts
+import { buildReport, deliver } from './error-forwarding.js';
+
+const report = buildReport({ kind: 'step', message: 'Target not found', goal: 'open notepad', step: 'Click Start' }, log, frame, token);
+const result = await deliver('http://127.0.0.1:8787/api/errors', token, report, 1, 1000);
+```
+
+Capture an error from a component through the hook:
+
+```ts
+const forwarding = useErrorForwarding(settings, addLog, () => ({ log, frame: frames[0] ?? null }));
+forwarding.capture({ kind: 'bridge', message: 'Bridge unreachable' });
+```
