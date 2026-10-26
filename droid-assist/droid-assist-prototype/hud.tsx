@@ -112,6 +112,8 @@ export function Hud({ engine }: { engine: AssistEngine }) {
             </>
           )}
           <button type="button" onClick={() => void engine.explainScreen()} disabled={aiOff || aiBusy} title={aiTitle}>👁 Point out</button>
+          <button type="button" className={engine.ruler.on ? styles.primary : ''} onClick={engine.ruler.toggle} aria-pressed={engine.ruler.on} title="Ruler mode: click points on the screen to measure distances">📏 Ruler{engine.ruler.on ? ' (on)' : ''}</button>
+          <button type="button" onClick={() => engine.ruler.recalibrateNow('manual')} title="Re-measure the baseline references on the live frame and rescale stored coordinates on drift">⟲ Recalibrate</button>
         </div>
         <form
           className={styles.goal}

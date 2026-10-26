@@ -1,10 +1,11 @@
 /** A slash command typed into the assist input. */
-export type AssistCommand = { kind: 'use'; target: string } | { kind: 'move'; target: string } | { kind: 'error'; message: string };
+export type AssistCommand = { kind: 'use'; target: string } | { kind: 'move'; target: string } | { kind: 'measure'; target: string } | { kind: 'error'; message: string };
 
 /** Every slash command and its usage line. */
 const COMMANDS = {
   use: 'Usage: /use <app or target>',
   move: 'Usage: /move <on-screen target>, e.g. /move files icon',
+  measure: 'Usage: /measure <a> to <b> [to <c>…], e.g. /measure files icon to game icon, /measure files icon to left edge, /measure 100,200 to 400,200',
 } as const;
 
 type CommandName = keyof typeof COMMANDS;
@@ -20,7 +21,7 @@ export function parseCommand(input: string): AssistCommand | null {
   if (!text.startsWith('/')) return null;
   const match = /^\/([a-z]+)(?:\s+(.*))?$/.exec(text);
   const name = match?.[1] ?? '';
-  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target> or /move <target>` };
+  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target> or /measure <a> to <b>` };
   const target = (match[2] ?? '').trim();
   return target ? { kind: name, target } : { kind: 'error', message: COMMANDS[name] };
 }
