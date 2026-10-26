@@ -95,7 +95,7 @@ const LOCAL_ACTIONS: Partial<Record<StepAction, (step: WorkflowStep) => Promise<
 };
 
 /** One step's real result plus whether the run must stop (abort, disarm, budget) and, for a drag, what it grabbed and moved. */
-type Performed = StepOutcome & { halt?: boolean; grabbed?: string; moved?: MovedElement };
+type Performed = StepOutcome & { halt?: boolean; grabbed?: string; moved?: MovedElement; replanned?: boolean };
 
 const refused = (step: WorkflowStep, message: string): Performed => ({ ok: false, executed: false, halt: true, message, target: { x: step.x, y: step.y } });
 
@@ -925,10 +925,10 @@ export function useAssist() {
    * ran (not a dry run) updates its habit. No step is dispatched without a recorded proposal for
    * it (intent before action). The verdict is returned so subagents can judge their own steps.
    */
-  const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null): Promise<Performed & { verdict?: StepVerdict | null }> => {
+  const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null, ladder = true): Promise<Performed & { verdict?: StepVerdict | null }> => {
     if (!proposal?.ready) return refused(step, `No recorded proposal for "${step.name}" — not executed`);
     const before = framesRef.current[0] ?? null;
-    const out = await performWithRetries(step, actor, budget, dryRun);
+    const out = ladder ? await performWithRetries(step, actor, budget, dryRun) : await performIdentified(step, actor, budget, dryRun);
     learnFromOutcome(step, out, before);
     void rememberTarget(step, out);
     if (!out.ok) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
@@ -991,10 +991,11 @@ export function useAssist() {
       onAttempt: (s, a) => noteAttempt(actor, s, a),
       log: (m, tone) => addLog(actor, m, tone),
     });
-    if (!exhausted) return out;
+    const replanned = attempts.some((a) => a.kind === 'replan');
+    if (!exhausted) return { ...out, replanned };
     addLog(actor, `"${step.name}": failed after ${attempts.length} attempt(s) — marked failed, avoid pattern recorded`, 'error');
     learnFailure(step, attempts);
-    return { ...out, message: `${out.message} (failed after ${attempts.length} attempt(s))` };
+    return { ...out, replanned, message: `${out.message} (failed after ${attempts.length} attempt(s))` };
   };
 
   /** Whether the element identifier may send a request now. */
@@ -1171,12 +1172,14 @@ export function useAssist() {
   /**
    * A drag through the gated pipeline, then the move check on the live frame. A miss is
    * re-planned (or retried) once through the same pipeline, spending budget; a second miss fails.
+   * The retry ladder runs only on the first attempt and its one re-plan is the step's only one:
+   * a drag the ladder already re-planned is not re-planned again.
    */
   const performDrag = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null): Promise<Performed & { verdict?: StepVerdict | null }> => {
     let current = step;
     for (let attempt = 1; ; attempt++) {
       const since = Date.now();
-      const out = await perform(current, actor, budget, dryRun, proposal);
+      const out = await perform(current, actor, budget, dryRun, proposal, attempt === 1);
       if (!out.executed) return out;
       const moved = movedBy(current, out);
       const check = checkDrag(current, moved, out, since);
@@ -1184,6 +1187,7 @@ export function useAssist() {
         void rememberAt(moved.name, check.at ?? moved.to, out.shot);
         return { ...out, moved };
       }
+      if (out.replanned) return missed(out, moved, `${check.detail} (already re-planned once by the retry ladder)`);
       if (attempt === 2 || abortRef.current) return missed(out, moved, `${check.detail}${attempt === 2 ? ' (failed after one retry)' : ' (stopped, no retry)'}`);
       addLog(actor, `"${moved.name}" did not land at its drop point (${check.detail}) — retrying once`, 'warn');
       try {
