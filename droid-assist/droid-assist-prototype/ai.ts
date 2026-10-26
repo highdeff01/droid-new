@@ -45,28 +45,56 @@ function thinkingOf(raw: unknown): string | null {
   return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
 }
 
-/** The extra turn sent when the model spent its whole reply thinking and left message.content empty. */
-export const CONTENT_RETRY_INSTRUCTION =
-  'Your previous reply contained only thinking and an empty answer. Do not think further: put your final answer directly in the message content now.';
-const CONTENT_RETRY_JSON = ' Reply with exactly one JSON object and nothing else.';
-
-/**
- * A signal that aborts on the per-request AbortSignal.timeout or when `cancel` (the session's
- * AbortController) aborts; `cancelled()` tells the two apart after a failure.
- */
-function requestSignal(timeoutMs: number, cancel?: AbortSignal) {
-  const ctrl = new AbortController();
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const abort = () => ctrl.abort();
-  timeout.addEventListener('abort', abort, { once: true });
-  cancel?.addEventListener('abort', abort, { once: true });
-  if (cancel?.aborted) ctrl.abort();
-  return { signal: ctrl.signal, cancelled: () => cancel?.aborted === true };
+/** A model call the user cancelled (AI stop, emergency stop): not an endpoint failure. */
+export class AiCancelled extends AiError {
+  override name = 'AiCancelled';
 }
 
-/** One POST; content is '' when the reply carried none. HTTP, network and cancel failures reject with AiError. */
-async function post(cfg: AiConfig, messages: ChatMessage[], json: boolean, timeoutMs: number, cancel?: AbortSignal): Promise<AiReply> {
-  const req = requestSignal(timeoutMs, cancel);
+/**
+ * One request's cancellation: its own AbortController, aborted by the timeout or by the
+ * caller's `signal`; `cancelled` rejects at that moment so the call settles immediately.
+ */
+function cancellation(url: string, timeoutMs: number, signal?: AbortSignal) {
+  const ctrl = new AbortController();
+  let reject: (error: AiError) => void = () => undefined;
+  const cancelled = new Promise<never>((_, r) => {
+    reject = r;
+  });
+  cancelled.catch(() => undefined);
+  const stop = (error: AiError) => {
+    if (ctrl.signal.aborted) return;
+    reject(error);
+    ctrl.abort(error);
+  };
+  const timer = setTimeout(() => stop(new AiError(`AI endpoint unreachable (${url}): no reply within ${timeoutMs} ms`)), timeoutMs);
+  const onAbort = () => stop(new AiCancelled('AI call cancelled by the user'));
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
+  const done = () => {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+  };
+  return { signal: ctrl.signal, cancelled, done };
+}
+
+/**
+ * One non-streaming POST to the chat endpoint with thinking enabled; resolves with
+ * message.content and message.thinking.
+ * HTTP errors, network errors, non-JSON bodies, empty replies and the timeout reject with AiError;
+ * aborting `signal` cancels the in-flight fetch and rejects at once with AiCancelled.
+ * @param json ask the server for a JSON-formatted reply
+ */
+export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = 90_000, signal?: AbortSignal): Promise<AiReply> {
+  const call = cancellation(cfg.url, timeoutMs, signal);
+  try {
+    return await Promise.race([post(cfg, messages, json, call.signal), call.cancelled]);
+  } finally {
+    call.done();
+  }
+}
+
+/** The fetch and reply parsing of chat(), on an already-combined signal. */
+async function post(cfg: AiConfig, messages: ChatMessage[], json: boolean, signal: AbortSignal): Promise<AiReply> {
   let res: Response;
   try {
     res = await fetch(cfg.url, {
@@ -206,6 +234,8 @@ export interface AskRequest {
   /** Recent log / action lines sent as context. */
   context?: string[];
   json?: boolean;
+  /** Cancels the call (AI stop / emergency stop). */
+  signal?: AbortSignal;
 }
 
 /** The asker every AI feature goes through. */
@@ -235,7 +265,7 @@ export function createAiSession(store: HistoryStore | null) {
     const context = req.context?.length ? `\n\nRecent activity (newest first):\n${req.context.join('\n')}` : '';
     const content = `${req.prompt}${context}`;
     const user: ChatMessage = { role: 'user', content, ...(req.frame ? { images: [frameToBase64(req.frame)] } : {}) };
-    const reply = await chat(cfg, [{ role: 'system', content: req.system }, ...history, user], req.json, undefined, controller.signal);
+    const reply = await chat(cfg, [{ role: 'system', content: req.system }, ...history, user], req.json, undefined, req.signal);
     history = [...history, { role: 'user' as const, content }, { role: 'assistant' as const, content: reply.content }].slice(-HISTORY_MAX);
     store?.setItem(HISTORY_KEY, JSON.stringify(history));
     return reply;

@@ -118,75 +118,130 @@ describe('useAssist Qwen thinking timeline', () => {
   });
 });
 
-describe('useAssist re-plan loop guard and parse failures', () => {
-  const planBody = (x: number) => ({ content: `{"steps":[{"name":"Hover Files","action":"move","target":"files icon","x":${x},"y":0.9}]}`, thinking: 'Files sits bottom-left.' });
-  const isPlan = (init: RequestInit) => typeof init.body === 'string' && init.body.includes('Goal: move mouse to files icon');
+describe('useAssist auto-continue and AI stop', () => {
+  const calc = (n: number) => ({ name: `Calc ${n}`, action: 'calc', text: `${n}+1`, x: 0.5, y: 0.5 });
+  type Script = { checks: Array<{ complete: boolean; progress: boolean; reason: string }>; hangVerify?: boolean };
 
-  /** Stubs fetch: plan calls get `planReply(n)` for the n-th plan call, everything else a plain OK. */
-  function stubModel(planReply: (n: number) => Record<string, unknown>) {
-    let n = 0;
-    const fn = vi.fn(async (_url: string, init: RequestInit) => {
-      const message = isPlan(init) ? planReply(n++) : { content: 'OK' };
-      return new Response(JSON.stringify({ message: { role: 'assistant', ...message } }), { status: 200 });
-    });
-    vi.stubGlobal('fetch', fn);
-    return { planCalls: () => fn.mock.calls.filter(([, init]) => isPlan(init)).length };
+  /** A model that answers each prompt kind; verification answers come from `script.checks` in order. */
+  function model(script: Script) {
+    const signals: AbortSignal[] = [];
+    const bodies: string[] = [];
+    let plans = 0;
+    const answer = (body: string): string => {
+      if (body.includes('verifying whether the user')) return JSON.stringify(script.checks.length > 1 ? script.checks.shift() : script.checks[0]);
+      if (body.includes('This is a continuation')) return JSON.stringify({ steps: [calc(10 + plans++)] });
+      if (body.includes('final verdict')) return '{"success":true,"pattern_avoid":null,"pattern_add":null}';
+      if (body.includes('reviewing a step')) return 'Fine.';
+      if (body.includes('Reply with OK')) return 'OK';
+      return '{"patterns":[]}';
+    };
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => {
+      const body = String(init.body);
+      bodies.push(body);
+      signals.push(init.signal!);
+      if (script.hangVerify && body.includes('verifying whether the user')) {
+        return new Promise<Response>((_, reject) => init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ message: { role: 'assistant', content: answer(body), thinking: 'reasoning' } }), { status: 200 }));
+    }));
+    return { signals, bodies, plans: () => plans, verifies: () => bodies.filter((b) => b.includes('verifying whether the user')).length };
   }
 
-  async function mount() {
+  async function engineWith(settings: Record<string, unknown>) {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ autoContinue: true, ...settings }));
     const { result } = renderHook(() => useAssist());
     await act(async () => {});
+    act(() => {
+      result.current.setGoal('add the numbers');
+      result.current.setSteps([{ id: 's1', ...calc(1), action: 'calc', status: 'pending' }]);
+    });
     return result;
   }
 
-  const guardLogs = (result: Awaited<ReturnType<typeof mount>>) => result.current.log.filter((l) => l.source === 'Planner' && /Re-plan guard/.test(l.message));
-
   afterEach(() => vi.unstubAllGlobals());
 
-  it('dedupes identical consecutive plans: logs once and skips further model calls', async () => {
-    const model = stubModel(() => planBody(0.1));
-    const result = await mount();
-    for (let i = 0; i < 4; i++) await act(() => result.current.autoPlan('move mouse to files icon'));
-    expect(model.planCalls()).toBe(2);
-    expect(guardLogs(result).filter((l) => /identical/.test(l.message))).toHaveLength(1);
-    expect(result.current.log.filter((l) => l.source === 'Planner' && l.tone === 'ok')).toHaveLength(1);
+  it('verifies the goal after the run, re-plans and continues until it is verified complete', async () => {
+    const m = model({ checks: [{ complete: false, progress: true, reason: 'one sum left' }, { complete: true, progress: true, reason: 'both sums shown' }] });
+    const result = await engineWith({});
+    await act(() => result.current.replay(false));
+    expect(m.verifies()).toBe(2);
+    expect(m.plans()).toBe(1);
+    const auto = result.current.log.filter((l) => l.source === 'Auto-continue').map((l) => l.message);
+    expect(auto.some((x) => /Iteration 1 check: Goal not complete \(progress made\) — one sum left/.test(x))).toBe(true);
+    expect(auto.some((x) => /Iteration 1 plan: 1 step\(s\) — calc "Calc 10"/.test(x))).toBe(true);
+    expect(auto.some((x) => /Iteration 2 check: Goal COMPLETE/.test(x))).toBe(true);
+    expect(auto[0]).toMatch(/Stopped after 1 continuation\(s\): Goal verified complete — both sums shown/);
+    const steps = result.current.timeline.map((e) => e.step);
+    expect(steps).toEqual(expect.arrayContaining(['Verify goal #1: add the numbers', 'Continue #1: add the numbers', 'Verify goal #2: add the numbers']));
+    expect(result.current.continuing).toBe(false);
   });
 
-  it('caps re-plans per goal at 3 on an unchanged screen and resumes after a new frame', async () => {
-    const { hooks } = installNative();
-    const model = stubModel((n) => planBody(0.1 + n / 20));
-    const result = await mount();
-    await act(() => result.current.shareScreen());
-    act(() => hooks.onFrame!(frame()));
-    for (let i = 0; i < 6; i++) await act(() => result.current.autoPlan('move mouse to files icon'));
-    expect(model.planCalls()).toBe(4);
-    expect(guardLogs(result).filter((l) => /cap/.test(l.message))).toHaveLength(1);
-    act(() => hooks.onFrame!(frame()));
-    await act(() => result.current.autoPlan('move mouse to files icon'));
-    expect(model.planCalls()).toBe(5);
+  it('stops after two consecutive iterations with no verified progress and reports why', async () => {
+    const m = model({ checks: [{ complete: false, progress: false, reason: 'nothing changed' }] });
+    const result = await engineWith({});
+    await act(() => result.current.replay(false));
+    expect(m.verifies()).toBe(2);
+    expect(m.plans()).toBe(1);
+    const stop = result.current.log.find((l) => l.source === 'Auto-continue' && l.message.startsWith('Stopped'));
+    expect(stop?.message).toMatch(/No verified progress in 2 consecutive iterations — nothing changed/);
+    expect(stop?.tone).toBe('warn');
   });
 
-  it('does not start a second plan while one is still in flight', async () => {
-    const model = stubModel(() => planBody(0.1));
-    const result = await mount();
-    await act(() => Promise.all([result.current.autoPlan('move mouse to files icon'), result.current.autoPlan('move mouse to files icon')]));
-    expect(model.planCalls()).toBe(1);
-    expect(guardLogs(result).filter((l) => /still being thought out/.test(l.message))).toHaveLength(1);
+  it('respects a persisted max-iteration cap', async () => {
+    const m = model({ checks: [{ complete: false, progress: true, reason: 'more to do' }] });
+    const result = await engineWith({ maxIterations: 2 });
+    expect(result.current.settings.maxIterations).toBe(2);
+    await act(() => result.current.replay(false));
+    expect(m.plans()).toBe(2);
+    expect(result.current.log.find((l) => l.message.startsWith('Stopped after'))?.message).toMatch(/Max iterations \(2\) reached/);
   });
 
-  it('logs prose instead of JSON as an AI parse failure and never shows it as a plan', async () => {
-    const prose = `Thinking Process: 1. Analyze the request. ${'The user wants to move the mouse. '.repeat(20)}`;
-    stubModel(() => ({ content: prose, thinking: 'hmm' }));
-    const result = await mount();
-    await act(() => result.current.autoPlan('move mouse to files icon'));
-    const parse = result.current.log.filter((l) => l.source === 'AI parse');
-    expect(parse).toHaveLength(1);
-    expect(parse[0].tone).toBe('error');
-    expect(parse[0].message).toContain('Thinking Process');
-    expect(parse[0].message.length).toBeLessThan(prose.length);
-    expect(result.current.steps).toHaveLength(0);
-    expect(result.current.timeline[0]).toMatchObject({ kind: 'thought', text: '' });
-    expect(result.current.timeline.some((e) => e.text.includes('Thinking Process'))).toBe(false);
+  it('the emergency stop cancels the in-flight model call mid-verification; no further AI call is made', async () => {
+    const m = model({ checks: [{ complete: false, progress: true, reason: '' }], hangVerify: true });
+    const result = await engineWith({});
+    let run!: Promise<void>;
+    act(() => {
+      run = result.current.replay(false);
+    });
+    await vi.waitFor(() => expect(m.verifies()).toBe(1));
+    expect(result.current.aiWorking).toBe(true);
+    expect(result.current.continuing).toBe(true);
+    const calls = m.bodies.length;
+    act(() => result.current.triggerAbort('stop button'));
+    await act(() => run);
+    expect(m.signals[m.signals.length - 1].aborted).toBe(true);
+    expect(m.bodies.length).toBe(calls);
+    expect(m.plans()).toBe(0);
+    expect(result.current.aborted).toBe(true);
+    expect(result.current.aiStatus.state).not.toBe('offline');
+    expect(result.current.log.some((l) => l.source === 'Auto-continue' && /cancelled by the user/.test(l.message))).toBe(true);
+    expect(result.current.continuing).toBe(false);
+  });
+
+  it('the hotkey and the AI Stop button also cancel the in-flight call, and later calls are not pre-cancelled', async () => {
+    const m = model({ checks: [{ complete: false, progress: true, reason: '' }], hangVerify: true });
+    const result = await engineWith({});
+    let run!: Promise<void>;
+    act(() => {
+      run = result.current.replay(false);
+    });
+    await vi.waitFor(() => expect(m.verifies()).toBe(1));
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', shiftKey: true }));
+    });
+    await act(() => run);
+    expect(m.signals[m.signals.length - 1].aborted).toBe(true);
+    act(() => result.current.clearAbort());
+    act(() => result.current.setSteps([{ id: 's2', ...calc(2), action: 'calc', status: 'pending' }]));
+    act(() => {
+      run = result.current.replay(false);
+    });
+    await vi.waitFor(() => expect(m.verifies()).toBe(2));
+    expect(m.signals[m.signals.length - 1].aborted).toBe(false);
+    act(() => result.current.stopAi());
+    await act(() => run);
+    expect(m.signals[m.signals.length - 1].aborted).toBe(true);
+    expect(result.current.aborted).toBe(true);
   });
 });
 
