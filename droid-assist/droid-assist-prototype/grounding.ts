@@ -74,3 +74,17 @@ export async function boxedFrames(live: Frame, box: Box): Promise<{ full: Frame;
   crop.getContext('2d')!.drawImage(img, box.x * W, box.y * H, sw, sh, 0, 0, crop.width, crop.height);
   return { full: { ...live, url: full.toDataURL('image/jpeg', 0.85) }, crop: { ...live, url: crop.toDataURL('image/jpeg', 0.85) } };
 }
+
+/** Pixel size of the square screenshot patch kept with a familiar element. */
+export const PATCH_PX = 48;
+
+/** A small JPEG data URL of the live frame around `p`, for the familiar-elements memory. */
+export async function patchAt(live: Frame, p: { x: number; y: number }): Promise<string> {
+  const img = await decode(live.url);
+  const box = zoomBox(p, live.srcW / live.srcH, 0.06);
+  const canvas = document.createElement('canvas');
+  canvas.width = PATCH_PX;
+  canvas.height = PATCH_PX;
+  canvas.getContext('2d')!.drawImage(img, box.x * img.naturalWidth, box.y * img.naturalHeight, box.w * img.naturalWidth, box.h * img.naturalHeight, 0, 0, PATCH_PX, PATCH_PX);
+  return canvas.toDataURL('image/jpeg', 0.7);
+}
