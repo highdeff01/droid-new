@@ -141,6 +141,8 @@ export interface WorkflowStep {
   text?: string;
   /** The on-screen thing a pointer step acts on ("files icon"); its coordinates are confirmed against it before dispatch. */
   target?: string;
+  /** Set when the planner gave no point for this pointer step's target (it ran at a default). */
+  unlocated?: boolean;
   /** A drag's release point, normalized 0..1 like x/y. Required for a drag step. */
   endX?: number;
   endY?: number;

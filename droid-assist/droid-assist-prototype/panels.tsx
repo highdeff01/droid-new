@@ -11,6 +11,7 @@ import type { DeliveryStatus, EndpointStatus, ForwardedError } from './error-for
 import { segmentLine } from './ruler.js';
 import type { ElementSource, ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
+import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js';
 import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
 import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
@@ -459,6 +460,40 @@ export function ElementsPanel({ engine }: { engine: AssistEngine }) {
       {!elements.length && <p className={styles.muted}>Verified or used targets are remembered here with their grid cell and coordinates.</p>}
       <ul className={styles.log}>
         {elements.map((el) => <ElementItem key={el.id} engine={engine} el={el} />)}
+      </ul>
+    </section>
+  );
+}
+
+/** Element map studio: toggle the map mode, name the drawn box, list and delete mapped elements. */
+export function ElementMapPanel({ engine }: { engine: AssistEngine }) {
+  const { elementMap, mapMode, mapDraft } = engine;
+  const [name, setName] = useState('');
+  return (
+    <section className={styles.panel} aria-label="Element map">
+      <h3>Element map <small>{elementMap.length} mapped · own {MAP_ROWS}x{MAP_COLS} grid</small></h3>
+      <button type="button" aria-pressed={mapMode} onClick={engine.toggleMapMode}>{mapMode ? 'Done mapping' : 'Map elements'}</button>
+      {mapMode && !mapDraft && <p className={styles.muted}>Click-drag on the live screen to draw an element's boundary.</p>}
+      {mapDraft && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void engine.saveMapped(name);
+            setName('');
+          }}
+        >
+          <small>Box {mapCells(mapDraft)} · {(mapDraft.w * 100).toFixed(1)}% x {(mapDraft.h * 100).toFixed(1)}%</small>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Element name" aria-label="Element name" />
+          <button type="submit" disabled={!name.trim()}>Save element</button>
+        </form>
+      )}
+      <ul className={styles.log}>
+        {elementMap.map((el) => (
+          <li key={el.id} data-tone="info">
+            <b>{el.name}</b> · {mapCells(el.box)} · center {gridRef(boxCenter(el.box))}
+            <button type="button" aria-label={`Delete ${el.name}`} onClick={() => engine.deleteMapped(el.id)}>✕</button>
+          </li>
+        ))}
       </ul>
     </section>
   );

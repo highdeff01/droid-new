@@ -30,6 +30,7 @@ export const STAGES = [
   { id: 'progress', group: 'agent', name: 'Progress tracker', description: 'Counts verified steps toward the goal', verifies: false },
   { id: 'goal', group: 'agent', name: 'Goal reviewer', description: 'Reviews the goal after each run', verifies: false },
   { id: 'screenWatcher', group: 'agent', name: 'Screen watcher', description: 'AI help: answers questions about the live screen', verifies: false },
+  { id: 'identify', group: 'agent', name: 'Element identifier', description: 'Sends missed, unproposed, new or changing elements to the AI and agent-tests the answer (3 tries / 30 s)', verifies: false },
   { id: 'coords', group: 'agent', name: 'Coordinate learner', description: 'Learns and reuses target coordinates from verified steps (habits)', verifies: false },
   { id: 'supervisor', group: 'agent', name: 'Supervisor', description: 'Reviews finished runs: saves flows and learns patterns', verifies: false },
   { id: 'elementMap', group: 'agent', name: 'Element-mapping intercept', description: 'Remembers used targets as familiar elements', verifies: false },
