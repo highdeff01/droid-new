@@ -1,12 +1,13 @@
-import type { AssistSettings, LearnedPattern, LogEntry, MonitorMode, SavedCard, StepAction, WorkflowStep } from './types.js';
+import type { AssistSettings, Habit, HabitAnchor, HabitLesson, LearnedPattern, LogEntry, MonitorMode, SavedCard, StepAction, WorkflowStep } from './types.js';
 import { STEP_ACTIONS } from './types.js';
 import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 import { sanitizeBudget } from './safety.js';
+import { pruneHabits } from './habits.js';
 
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', habits: 'droid-assist.habits' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -156,4 +157,41 @@ export function loadPatterns(): LearnedPattern[] {
 /** Persists the newest PATTERN_LIMIT learned patterns. */
 export function savePatterns(patterns: LearnedPattern[]) {
   writeJson(KEYS.patterns, patterns.slice(0, PATTERN_LIMIT));
+}
+
+function isLesson(v: unknown): v is HabitLesson {
+  return isObject(v) && PATTERN_KINDS.includes(v.kind as LearnedPattern['kind']) && typeof v.text === 'string' && !!v.text.trim() && isNum(v.time);
+}
+
+function isAnchor(v: unknown): v is HabitAnchor {
+  return isObject(v) && isNum(v.x) && isNum(v.y) && isNum(v.size) && isNum(v.time)
+    && Array.isArray(v.patch) && v.patch.length === v.size * v.size && v.patch.every(isNum);
+}
+
+/** A valid stored habit (invalid lessons and anchor dropped), or null. */
+function parseHabit(v: unknown): Habit | null {
+  if (!isObject(v) || typeof v.id !== 'string' || typeof v.target !== 'string' || !v.target.trim() || typeof v.context !== 'string'
+    || !isNum(v.attempts) || !isNum(v.successes) || v.successes < 0 || v.successes > v.attempts || !isNum(v.lastUsed)) return null;
+  return {
+    id: v.id,
+    target: v.target,
+    context: v.context,
+    attempts: v.attempts,
+    successes: v.successes,
+    lastUsed: v.lastUsed,
+    lessons: Array.isArray(v.lessons) ? v.lessons.filter(isLesson) : [],
+    pinned: v.pinned === true,
+    ...(isAnchor(v.anchor) ? { anchor: v.anchor } : {}),
+  };
+}
+
+/** The stored habits, pruned of stale and low-value ones; invalid entries are dropped. */
+export function loadHabits(now = Date.now()): Habit[] {
+  const stored = readJson(KEYS.habits);
+  return Array.isArray(stored) ? pruneHabits(stored.map(parseHabit).filter((h): h is Habit => h !== null), now) : [];
+}
+
+/** Persists the habits after pruning stale and low-value ones. */
+export function saveHabits(habits: Habit[], now = Date.now()) {
+  writeJson(KEYS.habits, pruneHabits(habits, now));
 }

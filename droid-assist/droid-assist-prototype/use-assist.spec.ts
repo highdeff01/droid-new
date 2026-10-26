@@ -371,3 +371,44 @@ describe('useAssist screen capture', () => {
     expect(result.current.captureLost).toBeNull();
   });
 });
+
+describe('useAssist habits', () => {
+  const habit = (id: string, target: string) => ({ id, target, context: 'Notepad', attempts: 4, successes: 3, lastUsed: Date.now(), lessons: [], pinned: false });
+  const seeded = [habit('h1', 'Save button'), habit('h2', 'Close icon')];
+  const lessons = [
+    { id: 'p1', kind: 'avoid', pattern: 'clicking the taskbar', context: 'open notepad', time: 2 },
+    { id: 'p2', kind: 'add', pattern: 'wait for the window', context: '', time: 1 },
+  ];
+
+  it('loads persisted habits', () => {
+    localStorage.setItem('droid-assist.habits', JSON.stringify(seeded));
+    const { result } = renderHook(() => useAssist());
+    expect(result.current.habits.map((h) => h.id)).toEqual(['h1', 'h2']);
+  });
+
+  it('pins a habit and persists the pin', () => {
+    localStorage.setItem('droid-assist.habits', JSON.stringify(seeded));
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.pinHabit('h1'));
+    expect(result.current.habits.find((h) => h.id === 'h1')).toMatchObject({ pinned: true });
+    const stored = JSON.parse(localStorage.getItem('droid-assist.habits')!);
+    expect(stored.find((h: { id: string }) => h.id === 'h1')).toMatchObject({ pinned: true });
+  });
+
+  it('deletes a habit from state and storage', () => {
+    localStorage.setItem('droid-assist.habits', JSON.stringify(seeded));
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.deleteHabit('h1'));
+    expect(result.current.habits.map((h) => h.id)).toEqual(['h2']);
+    const stored = JSON.parse(localStorage.getItem('droid-assist.habits')!);
+    expect(stored.map((h: { id: string }) => h.id)).toEqual(['h2']);
+  });
+
+  it('loads habits and patterns side by side', () => {
+    localStorage.setItem('droid-assist.habits', JSON.stringify(seeded));
+    localStorage.setItem('droid-assist.patterns', JSON.stringify(lessons));
+    const { result } = renderHook(() => useAssist());
+    expect(result.current.habits.map((h) => h.id)).toEqual(['h1', 'h2']);
+    expect(result.current.patterns.map((p) => p.id)).toEqual(['p1', 'p2']);
+  });
+});
