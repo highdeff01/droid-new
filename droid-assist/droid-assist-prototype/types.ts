@@ -24,6 +24,39 @@ export interface TrailPoint {
   click?: boolean;
 }
 
+/** Capture cadence: the app interval setting, background (1 s) or advanced (0.25 s). */
+export type MonitorMode = 'app' | 'background' | 'advanced';
+
+/** Real mouse/keyboard actions recorded in the persistent action history. */
+export type InputAction = 'move' | 'click' | 'double_click' | 'type' | 'key' | 'scroll';
+
+/** One executed mouse or keyboard action, persisted for viewing and export. */
+export interface ActionRecord {
+  id: string;
+  time: number;
+  action: InputAction;
+  /** Native screen pixels the action targeted. */
+  x: number;
+  y: number;
+  text?: string;
+  /** Who performed it: Replay, Auto-Actor, AI help, ... */
+  source: string;
+  /** Where it was dispatched: the desktop bridge or the demo desktop. */
+  via: 'bridge' | 'demo';
+  ok: boolean;
+  message: string;
+}
+
+/** A lesson learned from a run: something to avoid or to add when planning similar goals. */
+export interface LearnedPattern {
+  id: string;
+  kind: 'avoid' | 'add';
+  pattern: string;
+  /** The goal or situation the lesson applies to. */
+  context: string;
+  time: number;
+}
+
 /** Actions a workflow step can perform. */
 export type StepAction = 'click' | 'double_click' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media';
 

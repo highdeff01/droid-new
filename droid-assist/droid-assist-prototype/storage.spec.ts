@@ -1,11 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AssistSettings, LogEntry, SavedCard } from './types.js';
-import { LOG_LIMIT, loadCards, loadLog, loadSettings, saveCards, saveLog, saveSettings } from './storage.js';
+import type { AssistSettings, LearnedPattern, LogEntry, SavedCard } from './types.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadLog, loadPatterns, loadSettings, savePatterns, saveCards, saveLog, saveSettings } from './storage.js';
 
-const DEFAULTS: AssistSettings = {
-  gallerySize: 10, checkpoints: 6, captureMs: 500, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, bridgeUrl: '',
-  abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://quantumclaw.net/ollama/api/chat', aiModel: 'qwen3.5:2b',
-};
+const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50 };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
 
 describe('settings', () => {
@@ -102,5 +99,39 @@ describe('cards', () => {
       spy.mockRestore();
     }
     expect(await loadCards()).toEqual([]);
+  });
+});
+
+describe('cards: drift-corrected coordinates', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('keeps a saved flow step\'s corrected coordinates so the next replay starts there', async () => {
+    saveCards([{ id: 'f', name: 'Play video', description: '', savedAt: 5, steps: [{ id: 'a', name: 'Play', action: 'click', x: 0.52, y: 0.33, correctedX: 0.52, correctedY: 0.33, status: 'done' }] }]);
+    const [loaded] = await loadCards();
+    expect(loaded.steps[0]).toMatchObject({ x: 0.52, y: 0.33, correctedX: 0.52, correctedY: 0.33, status: 'pending' });
+  });
+});
+
+describe('learned patterns', () => {
+  beforeEach(() => localStorage.clear());
+  const pat = (n: number, kind: LearnedPattern['kind'] = 'avoid'): LearnedPattern => ({ id: `p${n}`, kind, pattern: `pattern ${n}`, context: 'notepad', time: n });
+
+  it('round-trips patterns under their own key', () => {
+    savePatterns([pat(1), pat(2, 'add')]);
+    expect(localStorage.getItem('droid-assist.patterns')).not.toBeNull();
+    expect(loadPatterns()).toEqual([pat(1), pat(2, 'add')]);
+  });
+
+  it('starts empty and tolerates corrupt or invalid data', () => {
+    expect(loadPatterns()).toEqual([]);
+    localStorage.setItem('droid-assist.patterns', '{oops');
+    expect(loadPatterns()).toEqual([]);
+    localStorage.setItem('droid-assist.patterns', JSON.stringify([pat(3), { ...pat(4), kind: 'maybe' }, { ...pat(5), pattern: '  ' }, null, { id: 'x' }]));
+    expect(loadPatterns()).toEqual([pat(3)]);
+  });
+
+  it('keeps at most PATTERN_LIMIT entries', () => {
+    savePatterns(Array.from({ length: PATTERN_LIMIT + 5 }, (_, i) => pat(i)));
+    expect(loadPatterns()).toHaveLength(PATTERN_LIMIT);
   });
 });

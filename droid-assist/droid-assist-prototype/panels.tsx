@@ -101,6 +101,25 @@ export function LibraryPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
+/** Lessons learned from finished runs; the planner applies the relevant ones to new goals. */
+export function PatternsPanel({ engine }: { engine: AssistEngine }) {
+  return (
+    <section className={styles.panel}>
+      <h3>Learned patterns <small>{engine.patterns.length}</small></h3>
+      {!engine.patterns.length && <p className={styles.muted}>After each real run the AI notes what to avoid and what to add next time.</p>}
+      <ul className={styles.log}>
+        {engine.patterns.map((p) => (
+          <li key={p.id} data-tone={p.kind === 'avoid' ? 'warn' : 'ok'}>
+            <b>{p.kind === 'avoid' ? 'Avoid' : 'Add'}</b> {p.pattern}
+            {p.context && <small> · {p.context}</small>}
+            <button type="button" aria-label={`Delete pattern ${p.pattern}`} onClick={() => engine.deletePattern(p.id)}>✕</button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /** Watcher / monitor agents and settings (gallery size, drift checkpoints, capture rate, bridge). */
 export function AgentsPanel({ engine }: { engine: AssistEngine }) {
   const { agents, setAgents, settings, setSettings } = engine;
