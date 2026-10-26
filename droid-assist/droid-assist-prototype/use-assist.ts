@@ -768,6 +768,7 @@ export function useAssist() {
       const out: Performed = { ok: false, executed: false, message: `"${step.name}" is covered by a popup${settingsRef.current.aiHelp ? ' the AI did not clear' : ' (enable AI help to clear it)'} — not executed`, target: { x: step.x, y: step.y } };
       updateStep(i, { status: 'drift' });
       addLog(label, out.message, 'error');
+      captureError({ kind: 'drift', message: out.message, goal: goalRef.current, step: step.name });
       return out;
     }
     const before = framesRef.current[0] ?? null;
