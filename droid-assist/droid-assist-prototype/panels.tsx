@@ -3,7 +3,8 @@ import type { AssistEngine } from './use-assist.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
-import { AiStatusBadge, InsecureBridgeWarning } from './hud.js';
+import { AiStatusBadge } from './hud.js';
+import { ModelPicker } from './model-picker.js';
 import type { FamiliarElement, Habit, LogEntry } from './types.js';
 import { isReliable, successRate } from './habits.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
@@ -16,6 +17,7 @@ import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js
 import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
 import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
+import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import styles from './droid-assist.module.css';
 
 const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity' };
@@ -317,6 +319,10 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>Max real input actions per run <b>{settings.actionBudget}</b>
         <input type="number" min={1} value={settings.actionBudget} onChange={(e) => setSettings({ ...settings, actionBudget: sanitizeBudget(e.target.valueAsNumber) })} />
       </label>
+      <label className={styles.setting}>Max AI calls in flight <b>{settings.aiMaxInFlight}</b>
+        <small>Further calls wait in a shared queue: executor/grounding first, planner/verdict next, background agents last.</small>
+        <input type="range" min={AI_MAX_IN_FLIGHT_MIN} max={AI_MAX_IN_FLIGHT_MAX} value={settings.aiMaxInFlight} onChange={(e) => setSettings({ ...settings, aiMaxInFlight: +e.target.value })} aria-label="Max AI calls in flight" />
+      </label>
       <label className={styles.setting}>Emergency-stop hotkey <b>{settings.abortHotkey}</b>
         <input
           readOnly
@@ -348,9 +354,7 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>AI endpoint (Ollama /api/chat)
         <input value={settings.aiUrl} onChange={(e) => setSettings({ ...settings, aiUrl: e.target.value })} aria-label="AI endpoint URL" />
       </label>
-      <label className={styles.setting}>AI model
-        <input value={settings.aiModel} onChange={(e) => setSettings({ ...settings, aiModel: e.target.value })} aria-label="AI model" />
-      </label>
+      <ModelPicker url={settings.aiUrl} model={settings.aiModel} onSelect={(aiModel) => setSettings({ ...settings, aiModel })} />
       <AiStatusBadge status={engine.aiStatus} />
       <ErrorForwardingSettings engine={engine} />
     </section>

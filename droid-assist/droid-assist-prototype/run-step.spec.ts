@@ -403,3 +403,27 @@ describe('runStep habit seed', () => {
     expect(onVerified).not.toHaveBeenCalled();
   });
 });
+
+describe('runStep attempt visualization (aim)', () => {
+  it('aims at the planned point, then the drift-corrected point, then the AI re-located point', async () => {
+    const aims: Array<{ x: number; y: number }> = [];
+    const relocated = { x: 0.6, y: 0.5 };
+    const confirm = vi.fn().mockResolvedValueOnce({ visible: false, reason: 'not here' }).mockResolvedValueOnce({ visible: true, reason: 'there' });
+    const named = { ...step, target: 'play button' };
+    const { d } = deps([frame(1, image(110, 66))], { dispatch: false, aim: (p) => aims.push(p), grounding: { confirm, relocate: vi.fn(async () => relocated) } });
+    const out = await runStep(named, d);
+    expect(out).toMatchObject({ ok: true, executed: false });
+    expect(aims).toHaveLength(3);
+    expect(aims[0]).toEqual({ x: step.x, y: step.y });
+    expect(aims[1].x).toBeCloseTo(110 / W, 2);
+    expect(aims[1].y).toBeCloseTo(66 / H, 2);
+    expect(aims[2]).toEqual(relocated);
+  });
+
+  it('does not aim the cursor for a non-pointer step', async () => {
+    const aims: unknown[] = [];
+    const { d } = deps([frame(1, image(100, 60))], { dispatch: false, aim: (p) => aims.push(p) });
+    await runStep({ ...step, action: 'key', text: 'enter', refFrame: undefined }, d);
+    expect(aims).toEqual([]);
+  });
+});

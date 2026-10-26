@@ -24,6 +24,8 @@ export interface TrailPoint {
   y: number;
   t: number;
   click?: boolean;
+  /** A typing marker: the AI typed text at this point. */
+  typed?: boolean;
 }
 
 /**
@@ -220,6 +222,10 @@ export interface AssistSettings {
   showTrail: boolean;
   /** Draw the labeled spatial grid (A1..H12) over the live preview. */
   showGrid: boolean;
+  /** Label every grid cell (A1..H12); off draws only the edge column numbers / row letters. */
+  gridLabels: boolean;
+  /** Alpha of the grid lines, kept low so the captured frame always shows through. */
+  gridOpacity: number;
   /** Base URL of the Droid desktop bridge (pyautogui replay endpoint). */
   bridgeUrl: string;
   /** Shared secret the bridge requires on every call (Authorization: Bearer); masked in the UI, never logged. */
@@ -236,6 +242,8 @@ export interface AssistSettings {
   autoContinue: boolean;
   /** Max auto-continue rounds (verify → re-plan → run) after the first run. */
   maxIterations: number;
+  /** Cap on model calls in flight at once; further calls wait in the shared priority queue. */
+  aiMaxInFlight: number;
   /** Loop control: on/off per automation stage and agent (guardrails are never in it). */
   stages: StageMap;
   /** Error forwarding: the error-fix app's HTTP endpoint captured errors are POSTed to. */
