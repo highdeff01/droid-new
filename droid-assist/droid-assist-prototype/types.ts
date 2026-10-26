@@ -79,6 +79,40 @@ export interface FamiliarElement {
   lastSeen: number;
 }
 
+/** A lesson attached to one habit: something to avoid or add when acting on that target. */
+export interface HabitLesson {
+  kind: LearnedPattern['kind'];
+  text: string;
+  time: number;
+}
+
+/** Where a habit's target was last confirmed: the point and a luminance patch of the drift buffer around it. */
+export interface HabitAnchor {
+  x: number;
+  y: number;
+  /** Row-major luminance values (0..255) of a square patch centred on the point. */
+  patch: number[];
+  size: number;
+  time: number;
+}
+
+/** Learned outcomes of acting on one target in one app/window context. */
+export interface Habit {
+  id: string;
+  /** The target/element name as the steps name it. */
+  target: string;
+  /** The app/window the assistant was attached to (empty when none). */
+  context: string;
+  attempts: number;
+  successes: number;
+  /** Last-known-good coordinates, when a verification confirmed them. */
+  anchor?: HabitAnchor;
+  lastUsed: number;
+  lessons: HabitLesson[];
+  /** Pinned habits are never pruned. */
+  pinned: boolean;
+}
+
 /** Status of a step during replay. */
 export type StepStatus = 'pending' | 'running' | 'done' | 'drift' | 'failed';
 

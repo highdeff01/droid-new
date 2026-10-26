@@ -4,7 +4,8 @@ import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import { AiStatusBadge } from './hud.js';
-import type { LogEntry } from './types.js';
+import type { Habit, LogEntry } from './types.js';
+import { isReliable, successRate } from './habits.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
 import type { ElementSource, ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
@@ -103,10 +104,38 @@ export function LibraryPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-/** Lessons learned from finished runs; the planner applies the relevant ones to new goals. */
+/** One habit: its counts, rate, last use and lessons; unreliable ones are flagged and not auto-applied. */
+function HabitItem({ habit: h, engine }: { habit: Habit; engine: AssistEngine }) {
+  const reliable = isReliable(h);
+  return (
+    <li data-tone={reliable ? 'ok' : 'warn'}>
+      <b>{h.pinned ? '📌 ' : ''}{h.target}</b>{h.context && <small> · {h.context}</small>}
+      {' '}<span>{h.successes} ok / {h.attempts - h.successes} failed · {Math.round(successRate(h) * 100)}%</span>
+      {!reliable && <strong> · unreliable — not auto-applied</strong>}
+      <small> · last used {new Date(h.lastUsed).toLocaleString()}</small>
+      <button type="button" aria-label={`${h.pinned ? 'Unpin' : 'Pin'} habit ${h.target}`} onClick={() => engine.pinHabit(h.id)}>{h.pinned ? 'Unpin' : 'Pin'}</button>
+      <button type="button" aria-label={`Delete habit ${h.target}`} onClick={() => engine.deleteHabit(h.id)}>✕</button>
+      {h.lessons.length > 0 && (
+        <ul>
+          {h.lessons.map((l) => <li key={`${l.kind}:${l.text}`}><b>{l.kind === 'avoid' ? 'Avoid' : 'Add'}</b> {l.text}</li>)}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Habits learned from every executed step (applied to planning and grounding while reliable),
+ * then the run-level lessons the planner applies to new goals.
+ */
 export function PatternsPanel({ engine }: { engine: AssistEngine }) {
   return (
     <section className={styles.panel}>
+      <h3>Habits <small>{engine.habits.length}</small></h3>
+      {!engine.habits.length && <p className={styles.muted}>Each executed step's verdict builds a habit for its target: success rate, last good position and lessons.</p>}
+      <ul className={styles.log} aria-label="Habits">
+        {engine.habits.map((h) => <HabitItem key={h.id} habit={h} engine={engine} />)}
+      </ul>
       <h3>Learned patterns <small>{engine.patterns.length}</small></h3>
       {!engine.patterns.length && <p className={styles.muted}>After each real run the AI notes what to avoid and what to add next time.</p>}
       <ul className={styles.log}>
