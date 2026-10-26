@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mapContext } from './element-map.js';
+import { mapContext } from './element-map-studio.js';
 import { PLAN_SYSTEM, findSimilar, planFromGoal, relevantPatterns, relocateTarget, similarity } from './planner.js';
 import { decidePopup, decideStep, describeScreen, reflectStep } from './assist-ai.js';
 import { AiError } from './ai.js';

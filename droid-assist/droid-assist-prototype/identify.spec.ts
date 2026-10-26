@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Frame } from './types.js';
 import { CHANGE_HITS, IDENTIFY_SYSTEM, characteristics, identifyAndVerify, identifyRequest, iou, mappedDistances, noteChange, parseIdentification, recentlySent, regionStats, type IdentifyInput, type IdentifyLoop } from './identify.js';
-import type { MappedElement } from './element-map.js';
+import type { MappedElement } from './element-map-studio.js';
 
 /** A w x h buffer filled with one colour, with an optional coloured rectangle (pixel coords). */
 function buffer(w: number, h: number, bg: [number, number, number], rect?: { x: number; y: number; w: number; h: number; c: [number, number, number] }): ImageData {

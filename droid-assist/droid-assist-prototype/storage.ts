@@ -1,14 +1,23 @@
-import type { AssistSettings, FamiliarElement, LearnedPattern, LogEntry, MonitorMode, SavedCard, StepAction, WorkflowStep } from './types.js';
+import type { AssistSettings, FamiliarElement, Habit, HabitAnchor, HabitLesson, LearnedPattern, LogEntry, MonitorMode, SavedCard, StepAction, WorkflowStep } from './types.js';
 import { STEP_ACTIONS } from './types.js';
 import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 import { sanitizeBudget } from './safety.js';
 import { FAMILIAR_LIMIT } from './elements.js';
-import { MAP_LIMIT, type MappedElement } from './element-map.js';
+import { MAP_LIMIT, type MappedElement } from './element-map-studio.js';
+import { pruneHabits } from './habits.js';
+import { OUTBOX_LIMIT, isErrorReport, type ErrorReport } from './error-forwarding.js';
+import { EMPTY_WATCHER, NOTE_KINDS, NOTE_LIMIT, PROPOSAL_KINDS, PROPOSAL_LIMIT, PROPOSAL_STATUSES, TEST_LIMIT } from './watcher.js';
+import type { NoteKind, ProposalKind, ProposalStatus, WatchNote, WatchProposal, WatchTest, WatcherState } from './watcher.js';
+import { sanitizeStages } from './loop-control.js';
+
+/** Valid range of the Screen watcher interval (matches its Settings slider). */
+export const WATCH_MS_MIN = 2000;
+export const WATCH_MS_MAX = 30000;
 
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', familiar: 'droid-assist.familiar', elementMap: 'droid-assist.element-map' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -19,10 +28,13 @@ const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
+  watchMs: [WATCH_MS_MIN, WATCH_MS_MAX],
+  changeCells: [2, 40],
+  maxIterations: [1, 20],
 };
 
 /** A step as persisted: its screenshot without the pixel buffer. */
@@ -62,16 +74,20 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     const v = stored[key];
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'showGrid'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
-  if (typeof stored.bridgeUrl === 'string') out.bridgeUrl = stored.bridgeUrl;
+  for (const key of ['bridgeUrl', 'errorUrl', 'errorToken'] as const) {
+    const v = stored[key];
+    if (typeof v === 'string') out[key] = v;
+  }
   for (const key of ['abortHotkey', 'aiUrl', 'aiModel'] as const) {
     const v = stored[key];
     if (typeof v === 'string' && v.trim()) out[key] = v;
   }
   if (typeof stored.monitorMode === 'string' && MODES.includes(stored.monitorMode as MonitorMode)) out.monitorMode = stored.monitorMode as MonitorMode;
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
+  out.stages = sanitizeStages(stored.stages ?? defaults.stages);
   return out;
 }
 
@@ -109,6 +125,8 @@ function parseStep(v: unknown): StoredStep | null {
     ...(typeof v.text === 'string' ? { text: v.text } : {}),
     ...(isNum(v.correctedX) && isNum(v.correctedY) ? { correctedX: v.correctedX, correctedY: v.correctedY } : {}),
     ...(typeof v.target === 'string' && v.target ? { target: v.target } : {}),
+    ...(isNum(v.endX) && isNum(v.endY) ? { endX: v.endX, endY: v.endY } : {}),
+    ...(typeof v.endTarget === 'string' && v.endTarget ? { endTarget: v.endTarget } : {}),
     ...(isStoredFrame(v.refFrame) ? { refFrame: v.refFrame } : {}),
   };
 }
@@ -154,6 +172,18 @@ export function loadPatterns(): LearnedPattern[] {
   return Array.isArray(stored) ? stored.filter(isPattern).slice(0, PATTERN_LIMIT) : [];
 }
 
+/** The persisted error outbox (newest first, at most OUTBOX_LIMIT); invalid entries are dropped. */
+export function loadOutbox(): ErrorReport[] {
+  const stored = readJson(KEYS.outbox);
+  return Array.isArray(stored) ? stored.filter(isErrorReport).slice(0, OUTBOX_LIMIT) : [];
+}
+
+/** Persists the newest OUTBOX_LIMIT reports; when they do not fit, retries without screenshots. */
+export function saveOutbox(outbox: ErrorReport[]) {
+  const kept = outbox.slice(0, OUTBOX_LIMIT);
+  if (!writeJson(KEYS.outbox, kept)) writeJson(KEYS.outbox, kept.map((r) => ({ ...r, screenshot: null })));
+}
+
 /** Persists the newest PATTERN_LIMIT learned patterns. */
 export function savePatterns(patterns: LearnedPattern[]) {
   writeJson(KEYS.patterns, patterns.slice(0, PATTERN_LIMIT));
@@ -162,7 +192,9 @@ export function savePatterns(patterns: LearnedPattern[]) {
 function isFamiliar(v: unknown): v is FamiliarElement {
   return isObject(v) && typeof v.id === 'string' && typeof v.name === 'string' && !!v.name.trim()
     && isNum(v.x) && isNum(v.y) && v.x >= 0 && v.x <= 1 && v.y >= 0 && v.y <= 1 && isNum(v.lastSeen)
-    && (v.patch === undefined || (typeof v.patch === 'string' && v.patch.startsWith('data:image/')));
+    && (v.patch === undefined || (typeof v.patch === 'string' && v.patch.startsWith('data:image/')))
+    && (v.timesSeen === undefined || isNum(v.timesSeen)) && (v.frameId === undefined || isNum(v.frameId))
+    && (v.anchor === undefined || (Array.isArray(v.anchor) && v.anchor.every(isNum)));
 }
 
 /** The stored familiar elements (newest first, at most FAMILIAR_LIMIT); invalid entries are dropped. */
@@ -211,4 +243,73 @@ export function saveElementMap(list: MappedElement[]) {
 export function saveFamiliar(elements: FamiliarElement[]) {
   const kept = elements.slice(0, FAMILIAR_LIMIT);
   if (!writeJson(KEYS.familiar, kept)) writeJson(KEYS.familiar, kept.map(({ patch: _patch, ...e }) => e));
+}
+
+function isLesson(v: unknown): v is HabitLesson {
+  return isObject(v) && PATTERN_KINDS.includes(v.kind as LearnedPattern['kind']) && typeof v.text === 'string' && !!v.text.trim() && isNum(v.time);
+}
+
+function isAnchor(v: unknown): v is HabitAnchor {
+  return isObject(v) && isNum(v.x) && isNum(v.y) && isNum(v.size) && isNum(v.time)
+    && Array.isArray(v.patch) && v.patch.length === v.size * v.size && v.patch.every(isNum);
+}
+
+/** A valid stored habit (invalid lessons and anchor dropped), or null. */
+function parseHabit(v: unknown): Habit | null {
+  if (!isObject(v) || typeof v.id !== 'string' || typeof v.target !== 'string' || !v.target.trim() || typeof v.context !== 'string'
+    || !isNum(v.attempts) || !isNum(v.successes) || v.successes < 0 || v.successes > v.attempts || !isNum(v.lastUsed)) return null;
+  return {
+    id: v.id,
+    target: v.target,
+    context: v.context,
+    attempts: v.attempts,
+    successes: v.successes,
+    lastUsed: v.lastUsed,
+    lessons: Array.isArray(v.lessons) ? v.lessons.filter(isLesson) : [],
+    pinned: v.pinned === true,
+    ...(isAnchor(v.anchor) ? { anchor: v.anchor } : {}),
+  };
+}
+
+/** The stored habits, pruned of stale and low-value ones; invalid entries are dropped. */
+export function loadHabits(now = Date.now()): Habit[] {
+  const stored = readJson(KEYS.habits);
+  return Array.isArray(stored) ? pruneHabits(stored.map(parseHabit).filter((h): h is Habit => h !== null), now) : [];
+}
+
+/** Persists the habits after pruning stale and low-value ones. */
+export function saveHabits(habits: Habit[], now = Date.now()) {
+  writeJson(KEYS.habits, pruneHabits(habits, now));
+}
+
+const isStr = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
+const optNum = (v: unknown) => v === undefined || isNum(v);
+
+function isNote(v: unknown): v is WatchNote {
+  return isObject(v) && isStr(v.id) && isNum(v.time) && NOTE_KINDS.includes(v.kind as NoteKind) && isStr(v.text);
+}
+
+function isProposal(v: unknown): v is WatchProposal {
+  return isObject(v) && isStr(v.id) && isNum(v.time) && PROPOSAL_KINDS.includes(v.kind as ProposalKind) && isStr(v.text)
+    && PROPOSAL_STATUSES.includes(v.status as ProposalStatus) && (v.target === undefined || typeof v.target === 'string')
+    && optNum(v.x) && optNum(v.y) && optNum(v.from) && optNum(v.to);
+}
+
+function isTest(v: unknown): v is WatchTest {
+  return isObject(v) && isStr(v.id) && isNum(v.time) && typeof v.proposalId === 'string' && typeof v.tried === 'string'
+    && typeof v.happened === 'string' && (v.verdict === 'passed' || v.verdict === 'failed') && typeof v.dryRun === 'boolean';
+}
+
+const listOf = <T>(v: unknown, guard: (x: unknown) => x is T, limit: number): T[] => (Array.isArray(v) ? v.filter(guard).slice(0, limit) : []);
+
+/** The stored Screen watcher notes, proposals and test results; invalid entries are dropped. */
+export function loadWatcher(): WatcherState {
+  const stored = readJson(KEYS.watcher);
+  if (!isObject(stored)) return EMPTY_WATCHER;
+  return { notes: listOf(stored.notes, isNote, NOTE_LIMIT), proposals: listOf(stored.proposals, isProposal, PROPOSAL_LIMIT), tests: listOf(stored.tests, isTest, TEST_LIMIT) };
+}
+
+/** Persists the Screen watcher state, capped per list. */
+export function saveWatcher(state: WatcherState) {
+  writeJson(KEYS.watcher, { notes: state.notes.slice(0, NOTE_LIMIT), proposals: state.proposals.slice(0, PROPOSAL_LIMIT), tests: state.tests.slice(0, TEST_LIMIT) });
 }

@@ -39,25 +39,41 @@ export interface DriftResult {
   dy: number;
 }
 
+/** Options of a template search. */
+export interface MatchOptions {
+  size?: number;
+  /** Search radius in sample pixels (bigger = slower, catches larger drift). */
+  radius?: number;
+  stride?: number;
+  /** Normalized point of `live` the search window is centred on (a learned coordinate); defaults to (nx, ny). */
+  seed?: { x: number; y: number };
+}
+
+/** Sample-pixel position of a normalized coordinate, kept far enough inside for a patch. */
+const inner = (n: number, len: number, half: number) => Math.min(len - half - 1, Math.max(half, Math.round(n * len)));
+
 /**
- * Finds where the patch around (nx, ny) in `ref` moved to in `live`.
- * @param radius search radius in sample pixels (bigger = slower, catches larger drift)
+ * Finds where the patch around (nx, ny) in `ref` moved to in `live`, searching a window
+ * centred on `seed` (a learned coordinate) or, without one, on the same spot.
+ * dx/dy are the normalized offset of the best match from the window centre.
  */
-export function matchTemplate(ref: ImageData, live: ImageData, nx: number, ny: number, { size = 16, radius = 24, stride = 2 } = {}): DriftResult {
+export function matchTemplate(ref: ImageData, live: ImageData, nx: number, ny: number, { size = 16, radius = 24, stride = 2, seed }: MatchOptions = {}): DriftResult {
   const half = size >> 1;
-  const x = Math.min(ref.width - half - 1, Math.max(half, Math.round(nx * ref.width)));
-  const y = Math.min(ref.height - half - 1, Math.max(half, Math.round(ny * ref.height)));
-  const region = patchDistance(ref, x, y, live, x, y, size) ?? 1;
+  const x = inner(nx, ref.width, half);
+  const y = inner(ny, ref.height, half);
+  const lx = seed ? inner(seed.x, live.width, half) : x;
+  const ly = seed ? inner(seed.y, live.height, half) : y;
+  const region = patchDistance(ref, x, y, live, lx, ly, size) ?? 1;
   let best = { d: region, dx: 0, dy: 0 };
   if (region > 0.02) {
     for (let dy = -radius; dy <= radius; dy += stride) {
       for (let dx = -radius; dx <= radius; dx += stride) {
-        const d = patchDistance(ref, x, y, live, x + dx, y + dy, size);
+        const d = patchDistance(ref, x, y, live, lx + dx, ly + dy, size);
         if (d !== null && d < best.d) best = { d, dx, dy };
       }
     }
   }
-  return { regionDistance: region, matchDistance: best.d, dx: best.dx / ref.width, dy: best.dy / ref.height };
+  return { regionDistance: region, matchDistance: best.d, dx: best.dx / live.width, dy: best.dy / live.height };
 }
 
 /** Thresholds for the green/yellow/red sync indicator. */

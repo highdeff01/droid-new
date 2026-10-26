@@ -182,3 +182,142 @@ describe('runStep grounding', () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 });
+
+describe('runStep learned', () => {
+  const live = frame(1, image(100, 60));
+  const target: WorkflowStep = { id: 'l', name: 'Click Save', action: 'click', target: 'Save button', x: 0.25, y: 0.5, status: 'pending' };
+  const seen = (visible: boolean, reason = visible ? 'icon is there' : 'empty desktop') => ({ visible, reason, thinking: null });
+  const grounding = (confirm: Grounding['confirm'], relocate: Grounding['relocate'] = vi.fn(async () => null)): Grounding => ({ confirm, relocate });
+  const sentStep = (fetchSpy: ReturnType<typeof vi.fn>) => JSON.parse(fetchSpy.mock.calls[0][1].body).steps[0];
+
+  it('dispatches the learned point without asking the AI grounding pass', async () => {
+    const fetchSpy = completedRun();
+    vi.stubGlobal('fetch', fetchSpy);
+    const confirm = vi.fn(async () => seen(true));
+    const relocate = vi.fn(async () => null);
+    const learned = vi.fn(() => ({ x: 0.5, y: 0.5 }));
+    const { d } = deps([live], { grounding: grounding(confirm, relocate), learned });
+    const out = await runStep(target, d);
+    expect(out).toMatchObject({ ok: true, executed: true });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(relocate).not.toHaveBeenCalled();
+    expect(sentStep(fetchSpy)).toMatchObject({ action: 'click', x: 960, y: 540 });
+  });
+
+  it('falls back to the AI grounding pass when the learner has no point', async () => {
+    const fetchSpy = completedRun();
+    vi.stubGlobal('fetch', fetchSpy);
+    const confirm = vi.fn(async () => seen(true));
+    const learned = vi.fn(() => null);
+    const { d } = deps([live], { grounding: grounding(confirm), learned });
+    const out = await runStep(target, d);
+    expect(out).toMatchObject({ ok: true, executed: true });
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('runStep corrected retry', () => {
+  const live = frame(1, image(100, 60));
+  // The AI re-plans the target 60px right / 36px down of where the template really is: the click misses.
+  const offTarget = (): Grounding => ({
+    confirm: vi.fn<Grounding['confirm']>().mockResolvedValueOnce({ visible: false, reason: 'not here', thinking: null }).mockResolvedValue({ visible: true, reason: 'ok', thinking: null }),
+    relocate: vi.fn(async () => ({ x: 110 / W, y: 66 / H })),
+  });
+  const named = { ...step, target: 'Play button' };
+  const twoRuns = () => vi.fn()
+    .mockResolvedValueOnce(json({ success: true, run: { id: 'r', status: 'running' } }))
+    .mockResolvedValueOnce(json({ success: true, run: { id: 'r', status: 'completed' } }))
+    .mockResolvedValueOnce(json({ success: true, run: { id: 'r2', status: 'running' } }))
+    .mockResolvedValueOnce(json({ success: true, run: { id: 'r2', status: 'completed' } }));
+  const sentAt = (spy: ReturnType<typeof vi.fn>, call: number) => JSON.parse(spy.mock.calls[call][1].body).steps[0];
+
+  it('retries a missed step once with expected − actual applied', async () => {
+    const fetchSpy = twoRuns();
+    vi.stubGlobal('fetch', fetchSpy);
+    const gateRetry = vi.fn(() => null);
+    const { d, lines } = deps([live], { grounding: offTarget(), gateRetry });
+    const out = await runStep(named, d);
+    expect(sentAt(fetchSpy, 0)).toMatchObject({ x: 660, y: 396 });
+    expect(out.retry).toMatchObject({ dxPx: -60, dyPx: -36, ok: true });
+    expect(sentAt(fetchSpy, 2)).toMatchObject({ x: 600, y: 360 });
+    expect(gateRetry).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(lines.some((l) => /missed by \(-60, -36\)px — retrying once/.test(l))).toBe(true);
+  });
+
+  it('sends no retry when the guardrail gate refuses it', async () => {
+    const fetchSpy = twoRuns();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { d, lines } = deps([live], { grounding: offTarget(), gateRetry: () => 'Action budget of 1 exceeded — not sent' });
+    const out = await runStep(named, d);
+    expect(out.retry).toMatchObject({ ok: false, message: 'Action budget of 1 exceeded — not sent' });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(lines.some((l) => /corrected retry not sent: Action budget/.test(l))).toBe(true);
+  });
+
+  it('does not retry a step that hit (screen changed) or when no gate is given', async () => {
+    const fetchSpy = completedRun();
+    vi.stubGlobal('fetch', fetchSpy);
+    const gateRetry = vi.fn(() => null);
+    const { d } = deps([live, frame(2, image(200, 120))], { gateRetry });
+    const out = await runStep(step, d);
+    expect(out.retry).toBeUndefined();
+    expect(gateRetry).not.toHaveBeenCalled();
+    vi.stubGlobal('fetch', completedRun());
+    const again = await runStep(named, deps([live], { grounding: offTarget() }).d);
+    expect(again.retry).toBeUndefined();
+  });
+});
+
+describe('runStep habit seed', () => {
+  const live = frame(1, image(100, 60));
+  const target: WorkflowStep = { id: 'h', name: 'Click Save', action: 'click', target: 'Save button', x: 0.25, y: 0.5, status: 'pending' };
+  const seen = (visible: boolean, reason = visible ? 'icon is there' : 'empty desktop') => ({ visible, reason, thinking: null });
+  const grounding = (confirm: Grounding['confirm'], relocate: Grounding['relocate'] = vi.fn(async () => null)): Grounding => ({ confirm, relocate });
+
+  it('seeds the grounding pass from the habit position and verifies it once confirmed', async () => {
+    const confirm = vi.fn<Grounding['confirm']>(async () => seen(true));
+    const relocate = vi.fn<Grounding['relocate']>(async () => null);
+    const onVerified = vi.fn();
+    const seed = vi.fn(() => ({ x: 0.5, y: 0.5 }));
+    const { d, lines } = deps([live], { dispatch: false, grounding: grounding(confirm, relocate), seed, onVerified });
+    const out = await runStep(target, d);
+    expect(out.ok).toBe(true);
+    expect(confirm.mock.calls[0][2]).toEqual({ x: 0.5, y: 0.5 });
+    expect(relocate).not.toHaveBeenCalled();
+    expect(onVerified).toHaveBeenCalledTimes(1);
+    expect(onVerified).toHaveBeenCalledWith(live, target, { x: 0.5, y: 0.5 });
+    expect(lines.some((l) => l.includes('habit seed'))).toBe(true);
+  });
+
+  it('falls back to the drift-corrected point when the seed finds no match', async () => {
+    const confirm = vi.fn<Grounding['confirm']>(async () => seen(true));
+    const seed = vi.fn(() => null);
+    const { d } = deps([live], { dispatch: false, grounding: grounding(confirm), seed });
+    const out = await runStep(target, d);
+    expect(out.ok).toBe(true);
+    expect(confirm.mock.calls[0][2]).toEqual({ x: target.x, y: target.y });
+  });
+
+  it('re-asks the planner once when the seeded point is rejected, then verifies the relocated point', async () => {
+    const confirm = vi.fn<Grounding['confirm']>().mockResolvedValueOnce(seen(false)).mockResolvedValueOnce(seen(true));
+    const relocate = vi.fn<Grounding['relocate']>(async () => ({ x: 0.4, y: 0.3 }));
+    const onVerified = vi.fn();
+    const seed = vi.fn(() => ({ x: 0.5, y: 0.5 }));
+    const { d } = deps([live], { dispatch: false, grounding: grounding(confirm, relocate), seed, onVerified });
+    const out = await runStep(target, d);
+    expect(out.ok).toBe(true);
+    expect(onVerified).toHaveBeenCalledWith(live, target, { x: 0.4, y: 0.3 });
+  });
+
+  it('never calls onVerified when both the seeded and relocated points are rejected', async () => {
+    const confirm = vi.fn(async () => seen(false));
+    const relocate = vi.fn(async () => ({ x: 0.4, y: 0.3 }));
+    const onVerified = vi.fn();
+    const seed = vi.fn(() => ({ x: 0.5, y: 0.5 }));
+    const { d } = deps([live], { dispatch: false, grounding: grounding(confirm, relocate), seed, onVerified });
+    const out = await runStep(target, d);
+    expect(out.ok).toBe(false);
+    expect(onVerified).not.toHaveBeenCalled();
+  });
+});

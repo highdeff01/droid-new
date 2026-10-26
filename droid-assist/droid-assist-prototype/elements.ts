@@ -28,7 +28,7 @@ const key = (name: string) => name.trim().toLowerCase();
 export function rememberElement(list: FamiliarElement[], el: FamiliarElement): FamiliarElement[] {
   if (!el.name.trim()) return list;
   const prev = list.find((e) => key(e.name) === key(el.name));
-  const merged: FamiliarElement = { ...el, id: prev?.id ?? el.id, patch: el.patch ?? prev?.patch };
+  const merged: FamiliarElement = { ...prev, ...el, id: prev?.id ?? el.id, patch: el.patch ?? prev?.patch };
   return [merged, ...list.filter((e) => e !== prev)].slice(0, FAMILIAR_LIMIT);
 }
 

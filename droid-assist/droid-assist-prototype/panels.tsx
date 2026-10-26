@@ -4,12 +4,99 @@ import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import { AiStatusBadge } from './hud.js';
-import type { LogEntry } from './types.js';
+import type { FamiliarElement, Habit, LogEntry } from './types.js';
+import { isReliable, successRate } from './habits.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
+import type { DeliveryStatus, EndpointStatus, ForwardedError } from './error-forwarding.js';
+import { segmentLine } from './ruler.js';
 import type { ElementSource, ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
-import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map.js';
+import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js';
+import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
+import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
+import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
 import styles from './droid-assist.module.css';
+
+const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity' };
+const clock = (t: number) => new Date(t).toLocaleTimeString();
+
+/** One proposal with Accept / Dismiss (pending) and Test (when it has an on-screen target). */
+function ProposalItem({ engine, p }: { engine: AssistEngine; p: WatchProposal }) {
+  const pending = p.status === 'pending';
+  return (
+    <li data-tone={pending ? 'warn' : p.status === 'accepted' ? 'ok' : 'info'}>
+      <small>{clock(p.time)}</small> {p.text} <small>· {p.status}{p.tested ? ' · tested' : ''}</small>
+      {pending && <button type="button" onClick={() => engine.acceptProposal(p.id)}>Accept</button>}
+      {pending && <button type="button" onClick={() => engine.dismissProposal(p.id)}>Dismiss</button>}
+      {proposalStep(p) && (
+        <button type="button" onClick={() => void engine.testProposal(p.id)} title={engine.armed ? 'Real click (armed, budgeted)' : 'Dry run — nothing is sent'}>Test</button>
+      )}
+    </li>
+  );
+}
+
+/** The Screen watcher: timestamped notes, proposals with Accept / Dismiss / Test, and test results. */
+export function WatcherPanel({ engine }: { engine: AssistEngine }) {
+  const { notes, proposals, tests } = engine.watcher;
+  const on = engine.settings.stages.screenWatcher;
+  return (
+    <section className={styles.panel} aria-label="Watcher">
+      <h3>Watcher <small>{on ? `observing every ${(engine.settings.watchMs / 1000).toFixed(1)} s` : 'off — enable Screen watcher in Agents'}</small></h3>
+      <h4>Proposals <small>{proposals.filter((p) => p.status === 'pending').length} pending</small></h4>
+      <ul className={styles.log}>{proposals.map((p) => <ProposalItem key={p.id} engine={engine} p={p} />)}</ul>
+      <h4>Tests <small>{tests.length}</small></h4>
+      <ul className={styles.log}>
+        {tests.map((t) => (
+          <li key={t.id} data-tone={t.verdict === 'passed' ? 'ok' : 'error'}>
+            <small>{clock(t.time)}</small> <b>{t.verdict}</b> {t.tried} — {t.happened}
+          </li>
+        ))}
+      </ul>
+      <h4>Notes <small>{notes.length}</small></h4>
+      {!notes.length && <p className={styles.muted}>Notes on notable elements, changes and opportunities appear here while the watcher runs.</p>}
+      <ul className={styles.log}>
+        {notes.map((n) => <li key={n.id}><small>{clock(n.time)}</small> <b>{NOTE_LABEL[n.kind]}</b> {n.text}</li>)}
+      </ul>
+    </section>
+  );
+}
+
+/** Ruler: the clicked polyline's per-segment and total distances, saved measurements, baseline and recalibration. */
+export function RulerPanel({ engine }: { engine: AssistEngine }) {
+  const { ruler } = engine;
+  const m = ruler.measurement;
+  const where = ruler.frameId === null ? 'live frame' : `frame #${ruler.frameId}`;
+  return (
+    <section className={styles.panel}>
+      <h3>Ruler <small>{ruler.on ? `measuring the ${where}` : 'off — press 📏 Ruler'}</small></h3>
+      <div className={styles.group}>
+        <button type="button" onClick={ruler.undo} disabled={!ruler.points.length}>↶ Undo point</button>
+        <button type="button" onClick={ruler.clear} disabled={!ruler.points.length}>Clear</button>
+        <button type="button" onClick={ruler.saveRuler} disabled={!m?.segments.length}>Keep measurement</button>
+        {ruler.frameId !== null && <button type="button" onClick={() => ruler.measureFrame(null)}>Back to live</button>}
+        <button type="button" onClick={ruler.setBaseline}>Set baseline</button>
+        <button type="button" onClick={() => ruler.recalibrateNow('manual')} disabled={!ruler.baseline}>⟲ Recalibrate</button>
+      </div>
+      {m && m.segments.length > 0 ? (
+        <ul aria-label="Ruler segments">
+          {m.segments.map((s, i) => <li key={i}>{segmentLine(s, i)}</li>)}
+          <li><b>Total {m.totalPx}px ({m.totalPct}% of screen, {m.srcW}×{m.srcH})</b></li>
+        </ul>
+      ) : (
+        <p className={styles.muted}>{ruler.points.length} point(s) — click at least two points on the screen.</p>
+      )}
+      <p className={styles.muted}>
+        Baseline: {ruler.baseline ? `${ruler.baseline.a && ruler.baseline.b ? `"${ruler.baseline.a.name}" ↔ "${ruler.baseline.b.name}", ` : ''}grid ${Math.round(ruler.baseline.cellW)}×${Math.round(ruler.baseline.cellH)}px` : 'not set'}
+        {ruler.calibration && ` · last recalibration: ${ruler.calibration.detail}${ruler.calibration.drift ? ' (rescaled)' : ''}`}
+      </p>
+      {ruler.measurements.length > 0 && (
+        <ol aria-label="Saved measurements">
+          {ruler.measurements.map((s) => <li key={s.id}><b>{s.by}</b>: {s.line}</li>)}
+        </ol>
+      )}
+    </section>
+  );
+}
 
 /** The N most recent frames with frame-to-frame drift, plus the AI-picked frames shown to the user. */
 export function ComparisonGallery({ engine }: { engine: AssistEngine }) {
@@ -23,7 +110,7 @@ export function ComparisonGallery({ engine }: { engine: AssistEngine }) {
           return (
             <figure key={f.id} className={d > 0.04 ? styles.changed : ''}>
               <img src={f.url} alt={`Frame ${f.id}`} />
-              <figcaption>#{f.id} · Δ {d.toFixed(3)}</figcaption>
+              <figcaption>#{f.id} · Δ {d.toFixed(3)} <button type="button" onClick={() => engine.ruler.measureFrame(f.id)} aria-label={`Measure frame ${f.id}`} title="Measure this frame with the ruler">📏</button></figcaption>
             </figure>
           );
         })}
@@ -59,7 +146,7 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
             <div>
               <input value={s.name} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} aria-label={`Step ${i + 1} name`} />
               <small>
-                {s.action}{s.target ? ` "${s.target}"` : ''} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}% · {s.status}
+                {s.action}{s.target ? ` "${s.target}"` : ''} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}%{s.endX !== undefined && s.endY !== undefined ? ` → ${s.endTarget ? `"${s.endTarget}" ` : ''}${(s.endX * 100).toFixed(0)}%,${(s.endY * 100).toFixed(0)}%` : ''} · {s.status}
                 {s.driftPx !== undefined && ` · drift ${s.driftPx}px`}
                 {s.drift !== undefined && ` · match ${s.drift.toFixed(3)}`}
               </small>
@@ -104,10 +191,38 @@ export function LibraryPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-/** Lessons learned from finished runs; the planner applies the relevant ones to new goals. */
+/** One habit: its counts, rate, last use and lessons; unreliable ones are flagged and not auto-applied. */
+function HabitItem({ habit: h, engine }: { habit: Habit; engine: AssistEngine }) {
+  const reliable = isReliable(h);
+  return (
+    <li data-tone={reliable ? 'ok' : 'warn'}>
+      <b>{h.pinned ? '📌 ' : ''}{h.target}</b>{h.context && <small> · {h.context}</small>}
+      {' '}<span>{h.successes} ok / {h.attempts - h.successes} failed · {Math.round(successRate(h) * 100)}%</span>
+      {!reliable && <strong> · unreliable — not auto-applied</strong>}
+      <small> · last used {new Date(h.lastUsed).toLocaleString()}</small>
+      <button type="button" aria-label={`${h.pinned ? 'Unpin' : 'Pin'} habit ${h.target}`} onClick={() => engine.pinHabit(h.id)}>{h.pinned ? 'Unpin' : 'Pin'}</button>
+      <button type="button" aria-label={`Delete habit ${h.target}`} onClick={() => engine.deleteHabit(h.id)}>✕</button>
+      {h.lessons.length > 0 && (
+        <ul>
+          {h.lessons.map((l) => <li key={`${l.kind}:${l.text}`}><b>{l.kind === 'avoid' ? 'Avoid' : 'Add'}</b> {l.text}</li>)}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Habits learned from every executed step (applied to planning and grounding while reliable),
+ * then the run-level lessons the planner applies to new goals.
+ */
 export function PatternsPanel({ engine }: { engine: AssistEngine }) {
   return (
     <section className={styles.panel}>
+      <h3>Habits <small>{engine.habits.length}</small></h3>
+      {!engine.habits.length && <p className={styles.muted}>Each executed step's verdict builds a habit for its target: success rate, last good position and lessons.</p>}
+      <ul className={styles.log} aria-label="Habits">
+        {engine.habits.map((h) => <HabitItem key={h.id} habit={h} engine={engine} />)}
+      </ul>
       <h3>Learned patterns <small>{engine.patterns.length}</small></h3>
       {!engine.patterns.length && <p className={styles.muted}>After each real run the AI notes what to avoid and what to add next time.</p>}
       <ul className={styles.log}>
@@ -123,19 +238,45 @@ export function PatternsPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-/** Watcher / monitor agents and settings (gallery size, drift checkpoints, capture rate, bridge). */
-export function AgentsPanel({ engine }: { engine: AssistEngine }) {
-  const { agents, setAgents, settings, setSettings } = engine;
+const STAGE_GROUPS: Array<{ group: StageGroup; title: string }> = [
+  { group: 'pipeline', title: 'Pipeline' },
+  { group: 'agent', title: 'Agents' },
+];
+
+/**
+ * Loop control: one checkbox per pipeline stage and agent, with a warning while a verification
+ * stage is off. Guardrails (arm, emergency stop, budget, abort) are not listed — they always apply.
+ */
+export function LoopControlPanel({ engine }: { engine: AssistEngine }) {
+  const { settings, toggleStage } = engine;
+  const unverified = unverifiedStages(settings.stages);
+  return (
+    <section className={styles.panel}>
+      <h3>Loop control <small>guardrails always on</small></h3>
+      {unverified.length > 0 && (
+        <p className={styles.muted} role="alert">⚠ Unverified input: {unverified.map((s) => s.name).join(', ')} off — steps run without these checks.</p>
+      )}
+      {STAGE_GROUPS.map(({ group, title }) => (
+        <div key={group}>
+          <h4>{title}</h4>
+          {STAGES.filter((s) => s.group === group).map((s) => (
+            <label key={s.id} className={styles.agent}>
+              <input type="checkbox" checked={settings.stages[s.id]} onChange={(e) => toggleStage(s.id, e.target.checked)} />
+              <span><strong>{s.name}</strong><small>{s.description}</small></span>
+            </label>
+          ))}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+/** Settings: gallery size, drift checkpoints, capture rate, budget, hotkey, bridge, AI endpoint. */
+export function SettingsPanel({ engine }: { engine: AssistEngine }) {
+  const { settings, setSettings } = engine;
   const [bridge, setBridge] = useState('');
   return (
     <section className={styles.panel}>
-      <h3>Agents</h3>
-      {agents.map((a) => (
-        <label key={a.id} className={styles.agent}>
-          <input type="checkbox" checked={a.on} onChange={(e) => setAgents(agents.map((x) => (x.id === a.id ? { ...x, on: e.target.checked } : x)))} />
-          <span><strong>{a.name}</strong><small>{a.description}</small></span>
-        </label>
-      ))}
       <h3>Settings</h3>
       <label className={styles.setting}>Gallery frames <b>{settings.gallerySize}</b>
         <input type="range" min={4} max={30} value={settings.gallerySize} onChange={(e) => setSettings({ ...settings, gallerySize: +e.target.value })} />
@@ -146,6 +287,12 @@ export function AgentsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>App monitor: capture every <b>{settings.captureMs} ms</b>
         <small>Background monitor is fixed at 1000 ms, advanced at 250 ms. Active: {engine.intervalMs} ms</small>
         <input type="range" min={250} max={2000} step={50} value={settings.captureMs} onChange={(e) => setSettings({ ...settings, captureMs: +e.target.value })} />
+      </label>
+      <label className={styles.setting}>Screen watcher: observe every <b>{(settings.watchMs / 1000).toFixed(1)} s</b>
+        <input type="range" min={WATCH_MS_MIN} max={WATCH_MS_MAX} step={500} value={settings.watchMs} onChange={(e) => setSettings({ ...settings, watchMs: +e.target.value })} />
+      </label>
+      <label className={styles.setting}>Screen-change threshold <b>{settings.changeCells} cells</b>
+        <input type="range" min={2} max={40} value={settings.changeCells} onChange={(e) => setSettings({ ...settings, changeCells: +e.target.value })} aria-label="Screen-change threshold" />
       </label>
       <label className={styles.setting}>Max real input actions per run <b>{settings.actionBudget}</b>
         <input type="number" min={1} value={settings.actionBudget} onChange={(e) => setSettings({ ...settings, actionBudget: sanitizeBudget(e.target.valueAsNumber) })} />
@@ -180,6 +327,62 @@ export function AgentsPanel({ engine }: { engine: AssistEngine }) {
         <input value={settings.aiModel} onChange={(e) => setSettings({ ...settings, aiModel: e.target.value })} aria-label="AI model" />
       </label>
       <AiStatusBadge status={engine.aiStatus} />
+      <ErrorForwardingSettings engine={engine} />
+    </section>
+  );
+}
+
+/** Settings → Error forwarding: endpoint, on/off, optional token and a test send. */
+function ErrorForwardingSettings({ engine }: { engine: AssistEngine }) {
+  const { settings, setSettings } = engine;
+  return (
+    <>
+      <h3>Error forwarding</h3>
+      <label className={styles.agent}>
+        <input type="checkbox" checked={settings.errorForwarding} onChange={(e) => setSettings({ ...settings, errorForwarding: e.target.checked })} />
+        <span><strong>Forward errors</strong><small>POST captured errors to the error-fix app as JSON</small></span>
+      </label>
+      <label className={styles.setting}>Error endpoint URL
+        <input value={settings.errorUrl} onChange={(e) => setSettings({ ...settings, errorUrl: e.target.value })} placeholder="http://127.0.0.1:8787/api/errors" aria-label="Error endpoint URL" />
+      </label>
+      <label className={styles.setting}>Auth token (optional)
+        <input type="password" value={settings.errorToken} onChange={(e) => setSettings({ ...settings, errorToken: e.target.value })} aria-label="Error endpoint auth token" autoComplete="off" />
+        <small>Sent as a Bearer token; never written to the activity log.</small>
+      </label>
+      <button type="button" onClick={() => void engine.sendTestError()} disabled={!settings.errorUrl.trim()}>Send test error</button>
+    </>
+  );
+}
+
+const ENDPOINT_TONE: Record<EndpointStatus['state'], LogEntry['tone']> = { unknown: 'info', ok: 'ok', failed: 'error' };
+const DELIVERY_TONE: Record<DeliveryStatus, LogEntry['tone']> = { 'not sent': 'info', sending: 'info', sent: 'ok', outbox: 'error' };
+
+/** One forwarded error: kind, message, delivery status and a manual send (Resend from the outbox). */
+function ErrorItem({ entry, onSend }: { entry: ForwardedError; onSend: () => void }) {
+  const { report, status, repeats, detail } = entry;
+  return (
+    <li data-tone={DELIVERY_TONE[status]}>
+      <time>{new Date(report.timestamp).toLocaleTimeString()}</time> <b>{report.kind}</b> {report.message}
+      {report.step && <small> · step "{report.step}"</small>}
+      {repeats > 0 && <small> · ×{repeats + 1}</small>}
+      <small> · {status}{detail ? ` (${detail})` : ''}{report.screenshot ? ' · 📷' : ''}</small>
+      <button type="button" onClick={onSend} disabled={status === 'sending'}>{status === 'outbox' ? 'Resend' : 'Send now'}</button>
+    </li>
+  );
+}
+
+/** Errors: everything captured for the error-fix app, with delivery status and the endpoint's last-known status. */
+export function ErrorsPanel({ engine }: { engine: AssistEngine }) {
+  const { errors, errorEndpoint: ep, settings } = engine;
+  const outbox = errors.filter((e) => e.status === 'outbox').length;
+  return (
+    <section className={styles.panel} aria-label="Errors">
+      <h3>Errors <small>{errors.length} captured · {outbox} in outbox · forwarding {settings.errorForwarding ? 'on' : 'off'}</small></h3>
+      <p data-tone={ENDPOINT_TONE[ep.state]}>Endpoint: <b>{ep.state}</b>{ep.time ? ` at ${new Date(ep.time).toLocaleTimeString()}` : ''} — {ep.detail}</p>
+      {!errors.length && <p className={styles.muted}>No errors captured.</p>}
+      <ul className={styles.log}>
+        {errors.map((e) => <ErrorItem key={e.report.id} entry={e} onSend={() => void engine.sendErrorNow(e.report)} />)}
+      </ul>
     </section>
   );
 }
@@ -223,7 +426,7 @@ export function ActionHistoryPanel({ engine }: { engine: AssistEngine }) {
       <ul className={styles.log}>
         {history.slice(0, 200).map((a) => (
           <li key={a.id} data-tone={a.ok ? 'ok' : 'error'}>
-            <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.text ? ` "${a.text}"` : ''} · {a.via}
+            <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.endX !== undefined ? ` → (${a.endX}, ${a.endY})` : ''}{a.text ? ` "${a.text}"` : ''} · {a.via}
           </li>
         ))}
       </ul>
@@ -296,11 +499,40 @@ export function ElementMapPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', reflection: '🔁 Reflection', verdict: '⚖️ Verdict' };
+/** One learned target: grid cell, current coordinates, times seen, last update and Test click. */
+function LearnedItem({ engine, el }: { engine: AssistEngine; el: FamiliarElement }) {
+  return (
+    <li data-tone="info">
+      <b>{el.name}</b> · {gridRef(el)} = ({(el.x * 100).toFixed(1)}%, {(el.y * 100).toFixed(1)}%)
+      <small> · seen {el.timesSeen ?? 0}× · updated {new Date(el.lastSeen).toLocaleTimeString()}{el.frameId !== undefined ? ` on frame #${el.frameId}` : ''}</small>
+      <button type="button" onClick={() => void engine.testClick({ ...el, source: 'familiar' })} title={engine.armed ? 'Clicks this point on the PC (real input, budgeted)' : 'Highlights this point only (disarmed dry run)'}>
+        Test click
+      </button>
+    </li>
+  );
+}
 
-/** Tone of an entry: failures as errors, verdicts by their outcome, the rest informational. */
+/** Targets the coordinate learner learned from cursor dwell and verified actions, with their current coordinates. */
+export function LearnedCoordsPanel({ engine }: { engine: AssistEngine }) {
+  const { learned, agents } = engine;
+  const on = agents.find((a) => a.id === 'coords')?.on ?? false;
+  return (
+    <section className={styles.panel} aria-label="Learned coordinates">
+      <h3>Learned coordinates <small>{learned.length} target(s) · learner {on ? 'on' : 'off'}</small></h3>
+      {!learned.length && <p className={styles.muted}>Rest the cursor on a known target or run a pointer step; its coordinates are learned and re-learned when it moves.</p>}
+      <ul className={styles.log}>
+        {learned.map((el) => <LearnedItem key={el.id} engine={engine} el={el} />)}
+      </ul>
+    </section>
+  );
+}
+
+const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict' };
+
+/** Tone of an entry: failures as errors, verdicts by their outcome, unready proposals as warnings, the rest informational. */
 function entryTone(e: ThinkingEntry): LogEntry['tone'] {
   if (e.error) return 'error';
+  if (e.kind === 'proposal') return e.text.includes('NOT READY') ? 'warn' : 'info';
   if (e.kind !== 'verdict') return 'info';
   return e.text.startsWith('SUCCESS') ? 'ok' : 'warn';
 }

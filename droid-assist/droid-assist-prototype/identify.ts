@@ -3,7 +3,7 @@ import type { Box, Thought } from './assist-ai.js';
 import { GRID_PROMPT, gridRef, replyPoint } from './grid.js';
 import { VIEW_H, VIEW_W, parseJsonReply } from './ai.js';
 import type { AiReply, AskRequest } from './ai.js';
-import { boxCenter, mapCell, mapCells, type MappedElement } from './element-map.js';
+import { boxCenter, mapCell, mapCells, type MappedElement } from './element-map-studio.js';
 
 /** Fallback limits: identification stops after this many failed tries or this much time, whichever comes first. */
 export const IDENTIFY_TRIES = 3;
