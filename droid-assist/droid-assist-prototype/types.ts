@@ -244,6 +244,8 @@ export interface AssistSettings {
   autoContinue: boolean;
   /** Max auto-continue rounds (verify → re-plan → run) after the first run. */
   maxIterations: number;
+  /** Retries of a failed step (re-verify, re-correct, retry) before the planner re-plans it once. */
+  stepRetries: number;
   /** Cap on model calls in flight at once; further calls wait in the shared priority queue. */
   aiMaxInFlight: number;
   /** Loop control: on/off per automation stage and agent (guardrails are never in it). */

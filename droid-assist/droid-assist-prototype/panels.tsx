@@ -17,6 +17,7 @@ import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js
 import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
 import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
+import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import styles from './droid-assist.module.css';
 
@@ -317,6 +318,10 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>Screen-change threshold <b>{settings.changeCells} cells</b>
         <input type="range" min={2} max={40} value={settings.changeCells} onChange={(e) => setSettings({ ...settings, changeCells: +e.target.value })} aria-label="Screen-change threshold" />
       </label>
+      <label className={styles.setting}>Retries per failed step <b>{settings.stepRetries}</b>
+        <small>Each retry re-verifies and re-corrects the target and spends budget; then the planner re-plans the step once.</small>
+        <input type="range" min={STEP_RETRIES_MIN} max={STEP_RETRIES_MAX} value={settings.stepRetries} onChange={(e) => setSettings({ ...settings, stepRetries: +e.target.value })} aria-label="Retries per failed step" />
+      </label>
       <label className={styles.setting}>Max real input actions per run <b>{settings.actionBudget}</b>
         <input type="number" min={1} value={settings.actionBudget} onChange={(e) => setSettings({ ...settings, actionBudget: sanitizeBudget(e.target.valueAsNumber) })} />
       </label>
@@ -557,12 +562,13 @@ export function LearnedCoordsPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement' };
+const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement', attempt: '🔄 Attempt' };
 
 /** Tone of an entry: failures as errors, verdicts and checks by their outcome, unready proposals as warnings, the rest informational. */
 function entryTone(e: ThinkingEntry): LogEntry['tone'] {
   if (e.error) return 'error';
   if (e.kind === 'proposal') return e.text.includes('NOT READY') ? 'warn' : 'info';
+  if (e.kind === 'attempt') return /— OK:/.test(e.text) ? 'ok' : 'warn';
   if (e.kind !== 'verdict' && e.kind !== 'check') return 'info';
   return /^(SUCCESS|PASS)/.test(e.text) ? 'ok' : 'warn';
 }

@@ -9,6 +9,7 @@ import { OUTBOX_LIMIT, isErrorReport, type ErrorReport } from './error-forwardin
 import { EMPTY_WATCHER, NOTE_KINDS, NOTE_LIMIT, PROPOSAL_KINDS, PROPOSAL_LIMIT, PROPOSAL_STATUSES, TEST_LIMIT } from './watcher.js';
 import type { NoteKind, ProposalKind, ProposalStatus, WatchNote, WatchProposal, WatchTest, WatcherState } from './watcher.js';
 import { sanitizeStages } from './loop-control.js';
+import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
@@ -30,13 +31,14 @@ const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'aiMaxInFlight', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
   watchMs: [WATCH_MS_MIN, WATCH_MS_MAX],
   changeCells: [2, 40],
   maxIterations: [1, 20],
+  stepRetries: [STEP_RETRIES_MIN, STEP_RETRIES_MAX],
   aiMaxInFlight: [AI_MAX_IN_FLIGHT_MIN, AI_MAX_IN_FLIGHT_MAX],
 };
 

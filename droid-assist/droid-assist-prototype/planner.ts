@@ -234,16 +234,35 @@ export async function relocateTarget(ask: AskFn, frame: Frame, step: WorkflowSte
  * the model says the element is not visible. Rejects with AiError on an unusable reply.
  */
 export async function replanDrag(ask: AskFn, frame: Frame | null, step: WorkflowStep, feedback: string): Promise<{ step: WorkflowStep; thinking: string | null } | null> {
-  const reply = await ask({
+  const r = await askOneStep(ask, frame, step, {
     system: `${PLAN_SYSTEM}\nThis is a correction of one drag that did not work: reply with exactly one "drag" step for the same element, or {"steps":[]} if it is not visible.`,
     prompt: `Drag "${step.name}" was to move "${step.target ?? step.name}" from ${gridRef(step)} to ${gridRef({ x: step.endX ?? step.x, y: step.endY ?? step.y })} ("${step.endTarget ?? 'drop point'}"). It did not land there: ${feedback}\nLook at the screen as it is now and give the element's current center and the drop point again.`,
-    frame,
-    json: true,
   });
+  if (r && r.step.action !== 'drag') throw new AiError(`AI re-planned the drag as "${r.step.action}"`);
+  return r;
+}
+
+/**
+ * The one re-plan of a step that still failed after its retries (`feedback` says why): the
+ * model looks at the live frame again and gives one replacement step with the same intent,
+ * keeping the step's id and name. Null when the model says the target is not visible.
+ */
+export async function replanStep(ask: AskFn, frame: Frame | null, step: WorkflowStep, feedback: string, patterns: LearnedPattern[] = []): Promise<{ step: WorkflowStep; thinking: string | null } | null> {
+  const what = `${step.action} "${step.target ?? step.name}"${step.text ? ` with "${step.text}"` : ''} at ${gridRef(step)}`;
+  return askOneStep(ask, frame, step, {
+    system: `${PLAN_SYSTEM}\nThis is a re-plan of one step that failed after its retries: reply with exactly one step that achieves the same intent from the current screen, or {"steps":[]} if its target is not visible.`,
+    prompt: `Step "${step.name}" (${what}) failed after its retries: ${feedback}\nLook at the screen as it is now and give one step that does what it was meant to do.`,
+    context: relevantPatterns(step.target ?? step.name, patterns).map(patternLine),
+  });
+}
+
+/** Asks the planner for exactly one step replacing `step` (same id and name); null for an empty reply. */
+async function askOneStep(ask: AskFn, frame: Frame | null, step: WorkflowStep, req: { system: string; prompt: string; context?: string[] }): Promise<{ step: WorkflowStep; thinking: string | null } | null> {
+  const { context, ...rest } = req;
+  const reply = await ask({ ...rest, frame, ...(context?.length ? { context } : {}), json: true });
   const steps = parseJsonReply(reply.content).steps;
   if (!Array.isArray(steps) || !steps.length) return null;
   const next = toStep(steps[0], frame);
-  if (next.action !== 'drag') throw new AiError(`AI re-planned the drag as "${next.action}"`);
   return { step: { ...next, id: step.id, name: step.name }, thinking: reply.thinking };
 }
 

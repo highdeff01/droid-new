@@ -3,7 +3,7 @@ import type { ActionRecord, Annotation, AssistSettings, FamiliarElement, Frame, 
 import { POINTER_ACTIONS } from './types.js';
 import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, correctDrift, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
 import { AD_CYCLE, demoAd, demoDrag, demoFileAt, demoPlayButton, drawDemoDesktop, findIcon, initialDemoFile, initialDemoIcons, moveIcon, type DemoFile, type DemoIcon } from './demo-desktop.js';
-import { AI_PLAN_SOURCE, calculate, generateCard, patternLine, planFromGoal, planRemaining, relevantPatterns, relocateTarget, replanDrag, uid } from './planner.js';
+import { AI_PLAN_SOURCE, calculate, generateCard, patternLine, planFromGoal, planRemaining, relevantPatterns, relocateTarget, replanDrag, replanStep, uid } from './planner.js';
 import { checkMoved, sameElement, verifyArrangement, type Expectation, type MovedElement } from './rearrange.js';
 import { AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, linkSignals, pingAi } from './ai.js';
 import type { AiReply, AiStatus, AskFn, AskRequest } from './ai.js';
@@ -18,6 +18,7 @@ import { localProposal, proposalText, proposeStep, type Proposal, type ProposalC
 import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './thinking-timeline.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd } from './bridge.js';
 import { dragEndError, runStep, type Grounding, type StepOutcome } from './run-step.js';
+import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, zoomBox, zoomFrame } from './grounding.js';
 import { parseCommand } from './commands.js';
 import { createPlanGuard } from './plan-guard.js';
@@ -98,7 +99,7 @@ const LOCAL_ACTIONS: Partial<Record<StepAction, (step: WorkflowStep) => Promise<
 };
 
 /** One step's real result plus whether the run must stop (abort, disarm, budget) and, for a drag, what it grabbed and moved. */
-type Performed = StepOutcome & { halt?: boolean; grabbed?: string; moved?: MovedElement };
+type Performed = StepOutcome & { halt?: boolean; grabbed?: string; moved?: MovedElement; replanned?: boolean };
 
 /** Auto Act's continuation state: the goal it verifies, checks in a row without progress, rounds made. */
 type AutoLoop = { goal: string; stalls: number; iteration: number };
@@ -156,6 +157,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   aiModel: DEFAULT_AI_MODEL,
   autoContinue: true,
   maxIterations: DEFAULT_MAX_ITERATIONS,
+  stepRetries: DEFAULT_STEP_RETRIES,
   aiMaxInFlight: DEFAULT_AI_MAX_IN_FLIGHT,
   stages: DEFAULT_STAGES,
   errorUrl: '',
@@ -989,10 +991,10 @@ export function useAssist() {
    * ran (not a dry run) updates its habit. No step is dispatched without a recorded proposal for
    * it (intent before action). The verdict is returned so subagents can judge their own steps.
    */
-  const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null): Promise<Performed & { verdict?: StepVerdict | null }> => {
+  const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null, ladder = true): Promise<Performed & { verdict?: StepVerdict | null }> => {
     if (!proposal?.ready) return refused(step, `No recorded proposal for "${step.name}" — not executed`);
     const before = framesRef.current[0] ?? null;
-    const out = await performIdentified(step, actor, budget, dryRun);
+    const out = ladder ? await performWithRetries(step, actor, budget, dryRun) : await performIdentified(step, actor, budget, dryRun);
     learnFromOutcome(step, out, before);
     void rememberTarget(step, out);
     if (!out.ok) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
@@ -1001,6 +1003,65 @@ export function useAssist() {
     if (verdict && !dryRun) learnHabit(step, verdict);
     return { ...out, verdict };
     return out;
+  };
+
+  /** Why the retry ladder may not climb another rung (abort, kill-switch, executor unchecked); null when it may. */
+  const ladderStopped = (): string | null => {
+    if (abortedRef.current) return 'Aborted — no further attempts';
+    if (abortRef.current) return 'Run stopped — no further attempts';
+    return stageOn('executor') ? null : `${stageOff('executor')} — no further attempts`;
+  };
+
+  /** The planner's one re-plan of a step that failed after its retries, with its thinking on the step's timeline. */
+  const replanFailed = async (step: WorkflowStep, why: string): Promise<WorkflowStep | null> => {
+    if (!aiOnline() || !stageOn('planner')) {
+      addLog('Planner', `No re-plan for "${step.name}" — ${aiOnline() ? stageOff('planner') : 'AI offline'}`, 'warn');
+      return null;
+    }
+    const frame = await liveFrame().catch(() => framesRef.current[0] ?? null);
+    const { next } = await thought(step.name, async () => {
+      const r = await replanStep(askFor('planner'), frame, step, why, patternsRef.current);
+      return { next: r?.step ?? null, thinking: r?.thinking ?? null };
+    }, (r) => (r.next ? `Re-planned "${step.name}": ${r.next.action} "${r.next.target ?? r.next.name}" at ${at(r.next.x, r.next.y)}` : `Re-plan: "${step.target ?? step.name}" is not visible`));
+    return next;
+  };
+
+  /**
+   * One attempt of the ladder: logged with its verify result and corrected coordinates, and shown
+   * on the step's timeline once the ladder is climbed (a first-try success is not a retry story).
+   */
+  const noteAttempt = (actor: string, step: WorkflowStep, a: Attempt) => {
+    const text = describeAttempt(a, settingsRef.current.stepRetries);
+    addLog(actor, `"${step.name}": ${text}`, a.ok ? 'ok' : 'warn');
+    if (a.n > 1 || !a.ok) note({ step: step.name, kind: 'attempt', text, thinking: null });
+  };
+
+  /** A step that failed after its retries and re-plan teaches its habit an avoid lesson. */
+  const learnFailure = (step: WorkflowStep, attempts: Attempt[]) => {
+    if (!stageOn('coords')) return;
+    commitHabits(recordOutcome(habitsRef.current, { target: habitTarget(step), context: habitContext(), success: false, avoid: avoidPattern(step, attempts) }));
+  };
+
+  /**
+   * performIdentified through the per-step retry ladder: on failure the target is re-verified on
+   * a fresh live frame and re-corrected (drift, grounding) by the same pipeline and retried
+   * (Settings: retries per failed step), then the planner re-plans it once. Every attempt goes
+   * through the run's guardrails and spends budget like any action.
+   */
+  const performWithRetries = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
+    const { out, attempts, exhausted } = await runLadder(step, {
+      retries: settingsRef.current.stepRetries ?? DEFAULT_STEP_RETRIES,
+      run: (s) => performIdentified(s, actor, budget, dryRun),
+      stopped: ladderStopped,
+      replan: replanFailed,
+      onAttempt: (s, a) => noteAttempt(actor, s, a),
+      log: (m, tone) => addLog(actor, m, tone),
+    });
+    const replanned = attempts.some((a) => a.kind === 'replan');
+    if (!exhausted) return { ...out, replanned };
+    addLog(actor, `"${step.name}": failed after ${attempts.length} attempt(s) — marked failed, avoid pattern recorded`, 'error');
+    learnFailure(step, attempts);
+    return { ...out, replanned, message: `${out.message} (failed after ${attempts.length} attempt(s))` };
   };
 
   /** Whether the element identifier may send a request now. */
@@ -1180,12 +1241,14 @@ export function useAssist() {
   /**
    * A drag through the gated pipeline, then the move check on the live frame. A miss is
    * re-planned (or retried) once through the same pipeline, spending budget; a second miss fails.
+   * The retry ladder runs only on the first attempt and its one re-plan is the step's only one:
+   * a drag the ladder already re-planned is not re-planned again.
    */
   const performDrag = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null): Promise<Performed & { verdict?: StepVerdict | null }> => {
     let current = step;
     for (let attempt = 1; ; attempt++) {
       const since = Date.now();
-      const out = await perform(current, actor, budget, dryRun, proposal);
+      const out = await perform(current, actor, budget, dryRun, proposal, attempt === 1);
       if (!out.executed) return out;
       const moved = movedBy(current, out);
       const check = checkDrag(current, moved, out, since);
@@ -1193,6 +1256,7 @@ export function useAssist() {
         void rememberAt(moved.name, check.at ?? moved.to, out.shot);
         return { ...out, moved };
       }
+      if (out.replanned) return missed(out, moved, `${check.detail} (already re-planned once by the retry ladder)`);
       if (attempt === 2 || abortRef.current) return missed(out, moved, `${check.detail}${attempt === 2 ? ' (failed after one retry)' : ' (stopped, no retry)'}`);
       addLog(actor, `"${moved.name}" did not land at its drop point (${check.detail}) — retrying once`, 'warn');
       try {
