@@ -10,7 +10,7 @@ import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotke
 import { LOG_LIMIT, loadCards, loadLog, loadSettings, saveCards, saveLog, saveSettings } from './storage.js';
 import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
-import { DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, pingAi, type AiStatus, type AskRequest } from './ai.js';
+import { DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, pingAi, type AiReply, type AiStatus, type AskRequest } from './ai.js';
 import { describeScreen, decidePopup, decideStep } from './assist-ai.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
 import { parseCommand } from './commands.js';
@@ -236,7 +236,7 @@ export function useAssist() {
    * Every model call: the configured URL/model, the session history and the recent log as
    * context. A failure marks the AI offline and is rethrown — never replaced by a canned answer.
    */
-  const askAi = useCallback(async (req: AskRequest): Promise<string> => {
+  const askAi = useCallback(async (req: AskRequest): Promise<AiReply> => {
     const { aiUrl, aiModel } = settingsRef.current;
     const context = logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
     try {
