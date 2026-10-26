@@ -23,9 +23,32 @@ describe('parseCommand', () => {
     expect(parseCommand('/move')).toMatchObject({ kind: 'error' });
     expect(parseCommand('/move   ')).toMatchObject({ kind: 'error' });
   });
+  it('parses /test with its spec', () => {
+    expect(parseCommand('/test links Files, Notes')).toEqual({ kind: 'test', target: 'links Files, Notes' });
+    expect(parseCommand('/test')).toMatchObject({ kind: 'error' });
+  });
   it('names /move in the unknown-command error', () => {
     const r = parseCommand('/hover icon');
     expect(r).toMatchObject({ kind: 'error' });
     expect(r && 'message' in r ? r.message : '').toMatch(/\/move/);
+  });
+  it('parses /measure with a multi-point query', () => {
+    expect(parseCommand('/measure files icon to game icon to left edge')).toEqual({ kind: 'measure', target: 'files icon to game icon to left edge' });
+  });
+  it('rejects /measure without a query and shows its usage', () => {
+    const r = parseCommand('/measure');
+    expect(r).toMatchObject({ kind: 'error' });
+    expect(r && 'message' in r ? r.message : '').toMatch(/\/measure <a> to <b>/);
+  });
+});
+
+describe('/arrange', () => {
+  it('parses /arrange with a multi-word goal', () => {
+    expect(parseCommand('/arrange move the Files icon below Game')).toEqual({ kind: 'arrange', target: 'move the Files icon below Game' });
+  });
+  it('rejects /arrange without a target', () => {
+    const r = parseCommand('/arrange');
+    expect(r).toMatchObject({ kind: 'error' });
+    expect(r && 'message' in r ? r.message : '').toMatch(/\/arrange/);
   });
 });

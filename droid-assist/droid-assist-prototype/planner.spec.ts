@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PLAN_SYSTEM, findSimilar, planFromGoal, relevantPatterns, relocateTarget, similarity } from './planner.js';
+import { mapContext } from './element-map-studio.js';
+import { PLAN_SYSTEM, findSimilar, parseExpectations, planFromGoal, relevantPatterns, relocateTarget, replanDrag, similarity } from './planner.js';
 import { decidePopup, decideStep, describeScreen, reflectStep } from './assist-ai.js';
 import { AiError } from './ai.js';
 import type { AskFn } from './ai.js';
+import { resolveCell } from './grid.js';
 import type { Frame, LearnedPattern, SavedCard, WorkflowStep } from './types.js';
 
 const frame = { id: 1, url: 'data:image/jpeg;base64,QUJD' } as Frame;
@@ -75,6 +77,47 @@ describe('planFromGoal', () => {
 
   it('tells the model about every action and the target field', () => {
     for (const word of ['"move"', '"double_click"', '"scroll"', '"target"']) expect(PLAN_SYSTEM).toContain(word);
+  });
+
+  it('includes the grid definition and asks for a cell plus in-cell position', () => {
+    for (const word of ['"A1"', '"H12"', '0.000..0.083', '"cell"', '"cx"', '"cy"']) expect(PLAN_SYSTEM).toContain(word);
+  });
+
+  it('resolves a grid cell + in-cell fraction to exact coordinates', async () => {
+    const ask = askReturning('{"steps":[{"name":"Open Docs","action":"click","target":"Docs in sidebar","cell":"C1","cx":0.5,"cy":0.25}]}');
+    const plan = await planFromGoal('open docs folder', [], frame, ask);
+    expect(plan.steps[0].x).toBeCloseTo(0.5 / 12);
+    expect(plan.steps[0].y).toBeCloseTo(2.25 / 8);
+  });
+});
+
+describe('grid in grounding prompts', () => {
+  it('relocateTarget sends the grid, states the rejected cell and resolves the new cell', async () => {
+    const ask = askReturning('{"steps":[{"action":"move","target":"Files icon","cell":"H6","cx":0,"cy":1}]}');
+    const move: WorkflowStep = { id: 'm', name: 'Move', action: 'move', target: 'Files icon', x: 0.06, y: 0.35, status: 'pending' };
+    const p = await relocateTarget(ask, frame, move, 'wrong');
+    expect(p?.x).toBeCloseTo(5 / 12);
+    expect(p?.y).toBeCloseTo(1);
+    expect(ask.mock.calls[0][0].system).toContain('"A1"');
+    expect(ask.mock.calls[0][0].prompt).toContain('C1 (');
+  });
+
+  it('popup, executor and screen-help prompts carry the grid definition', async () => {
+    const popupAsk = askReturning('{"close":true,"cell":"A12","cx":0.5,"cy":0.5,"reason":"ad"}');
+    const d = await decidePopup(popupAsk, frame, { x: 0.3, y: 0.3, w: 0.4, h: 0.3 });
+    expect(d).toMatchObject({ close: true });
+    if (d.close) {
+      expect(d.x).toBeCloseTo(23 / 24);
+      expect(d.y).toBeCloseTo(1 / 16);
+    }
+    const stepAsk = askReturning('{"run":true,"x":0.6,"y":0.7,"reason":"ok"}');
+    await decideStep(stepAsk, frame, step, 'play');
+    const helpAsk = askReturning('{"answer":"ok","items":[]}');
+    await describeScreen(helpAsk, frame, 'q', '');
+    for (const ask of [popupAsk, stepAsk, helpAsk]) {
+      expect(ask.mock.calls[0][0].system).toContain('"A1"');
+      expect(ask.mock.calls[0][0].system).toContain('0.000..0.083');
+    }
   });
 });
 
@@ -210,5 +253,95 @@ describe('learned patterns in planning', () => {
     expect(context.some((l) => l.includes('spreadsheet'))).toBe(false);
     expect(context).toContain('[You] hi');
     expect(plan.source).toMatch(/1 learned pattern/);
+  });
+});
+
+describe('rearrangement planning', () => {
+  const REARRANGE_REPLY = '{"steps":[' +
+    '{"name":"Drag Files below Game","action":"drag","target":"Files icon","cell":"B1","cx":0.5,"cy":0.5,"endTarget":"empty space below Game","endCell":"G1","endCx":0.5,"endCy":0.3},' +
+    '{"name":"Drag Notes below Files","action":"drag","target":"Notes icon","x":0.3,"y":0.4,"endTarget":"empty space below Files","endX":0.3,"endY":0.55}' +
+    '],"expect":[{"element":"Files","relation":"below","anchor":"Game"},{"element":"Notes","relation":"below","anchor":"Files"}]}';
+  /** A stub ask returning a fixed two-drag rearrangement reply (plus its "expect"). */
+  const rearrangeAsk = askReturning(REARRANGE_REPLY);
+  const dragStep: WorkflowStep = { id: 'd1', name: 'Drag Files', action: 'drag', x: 0.1, y: 0.1, endX: 0.5, endY: 0.5, target: 'Files icon', endTarget: 'empty spot', status: 'pending' };
+
+  describe('parseExpectations', () => {
+    it('returns [] when the reply has no expect', () => {
+      expect(parseExpectations('{"steps":[]}')).toEqual([]);
+    });
+
+    it('parses a relation entry', () => {
+      expect(parseExpectations('{"steps":[],"expect":[{"element":"Files","relation":"below","anchor":"Game"}]}')).toEqual([{ element: 'Files', relation: 'below', anchor: 'Game' }]);
+    });
+
+    it('throws AiError for an unknown relation', () => {
+      expect(() => parseExpectations('{"steps":[],"expect":[{"element":"Files","relation":"beside","anchor":"Game"}]}')).toThrow(AiError);
+    });
+
+    it('throws AiError for a missing anchor', () => {
+      expect(() => parseExpectations('{"steps":[],"expect":[{"element":"Files","relation":"below"}]}')).toThrow(AiError);
+    });
+  });
+
+  describe('planFromGoal with a rearrangement reply', () => {
+    it('yields expect relations and drag end points from endCell/endCx/endCy and explicit endX/endY', async () => {
+      const plan = await planFromGoal('rearrange the sidebar to Calc, Game, Notes, Files', [], frame, rearrangeAsk);
+      expect(plan.expect).toEqual([
+        { element: 'Files', relation: 'below', anchor: 'Game' },
+        { element: 'Notes', relation: 'below', anchor: 'Files' },
+      ]);
+      const cellEnd = resolveCell('G1', 0.5, 0.3)!;
+      expect(plan.steps[0]).toMatchObject({ action: 'drag', target: 'Files icon', endTarget: 'empty space below Game', endX: cellEnd.x, endY: cellEnd.y });
+      expect(plan.steps[1]).toMatchObject({ action: 'drag', target: 'Notes icon', endTarget: 'empty space below Files', endX: 0.3, endY: 0.55 });
+    });
+  });
+
+  describe('replanDrag', () => {
+    it('returns the corrected drag keeping the original id and name', async () => {
+      const ask = askReturning('{"steps":[{"name":"Drag Files again","action":"drag","target":"Files icon","cell":"B1","cx":0.5,"cy":0.5,"endCell":"G1","endCx":0.5,"endCy":0.3}]}');
+      const result = await replanDrag(ask, frame, dragStep, 'landed at the wrong spot');
+      expect(result?.step.id).toBe('d1');
+      expect(result?.step.name).toBe('Drag Files');
+      expect(result?.step.action).toBe('drag');
+      const start = resolveCell('B1', 0.5, 0.5)!;
+      const end = resolveCell('G1', 0.5, 0.3)!;
+      expect(result?.step.x).toBeCloseTo(start.x);
+      expect(result?.step.y).toBeCloseTo(start.y);
+      expect(result?.step.endX).toBeCloseTo(end.x);
+      expect(result?.step.endY).toBeCloseTo(end.y);
+    });
+
+    it('returns null for {"steps":[]}', async () => {
+      expect(await replanDrag(askReturning('{"steps":[]}'), frame, dragStep, 'landed at the wrong spot')).toBeNull();
+    });
+
+    it('throws AiError when the model returns a non-drag action', async () => {
+      const ask = askReturning('{"steps":[{"name":"Click somewhere","action":"click","x":0.5,"y":0.5}]}');
+      await expect(replanDrag(ask, frame, dragStep, 'landed at the wrong spot')).rejects.toBeInstanceOf(AiError);
+    });
+
+    it('sends the feedback text in the prompt', async () => {
+      const ask = askReturning('{"steps":[{"name":"Drag Files again","action":"drag","target":"Files icon","x":0.2,"y":0.2,"endX":0.5,"endY":0.6}]}');
+      await replanDrag(ask, frame, dragStep, 'ended up above Game instead of below it');
+      expect(ask.mock.calls[0][0].prompt).toContain('ended up above Game instead of below it');
+    });
+  });
+});
+
+describe('user-mapped elements in planning', () => {
+  it('sends mapped boundaries as planning context and flags steps with no point', async () => {
+    const ask = askReturning('{"steps":[{"name":"Press OK","action":"click","target":"OK button"},{"name":"Go","action":"click","cell":"B2"}]}');
+    const lines = mapContext([{ id: 'm', name: 'OK button', box: { x: 0.4, y: 0.5, w: 0.2, h: 0.1 }, mappedAt: 0 }]);
+    const plan = await planFromGoal('press ok', [], null, ask, lines);
+    const ctx = ask.mock.calls[0][0].context!.join('\n');
+    expect(ctx).toContain('"OK button" boundary x=40.0%..60.0%, y=50.0%..60.0%');
+    expect(plan.steps[0].unlocated).toBe(true);
+    expect(plan.steps[1].unlocated).toBeUndefined();
+  });
+
+  it('relocateTarget passes mapped context', async () => {
+    const ask = askReturning('{"steps":[]}');
+    await relocateTarget(ask, { url: 'data:image/jpeg;base64,QQ==' } as Frame, { id: 's', name: 'n', action: 'click', x: 0.5, y: 0.5, status: 'pending' }, 'missed', ['[Mapped element] "X"']);
+    expect(ask.mock.calls[0][0].context).toEqual(['[Mapped element] "X"']);
   });
 });

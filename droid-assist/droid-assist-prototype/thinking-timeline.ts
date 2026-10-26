@@ -1,8 +1,12 @@
 import type { StepVerdict } from './assist-ai.js';
 import { uid } from './planner.js';
 
-/** What an entry records: the model's initial thought, its follow-up reflection, the final verdict, a supervisor review, or a movement the supervisor performed. */
-export type ThoughtKind = 'thought' | 'reflection' | 'verdict' | 'review' | 'movement';
+/**
+ * What an entry records: the model's initial thought, its assessment of a screen change, the
+ * what/why proposal made before a step runs, its follow-up reflection, the final verdict, a
+ * verification check, or a supervisor review / movement.
+ */
+export type ThoughtKind = 'thought' | 'change' | 'proposal' | 'reflection' | 'verdict' | 'check' | 'review' | 'movement';
 
 /** One timestamped AI call on the per-step thinking timeline. */
 export interface ThinkingEntry {

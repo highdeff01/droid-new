@@ -2,6 +2,8 @@ import type { Frame, LearnedPattern, SavedCard, StepAction, WorkflowStep } from 
 import { POINTER_ACTIONS, STEP_ACTIONS } from './types.js';
 import { AiError, VIEW_H, VIEW_W, parseJsonReply, toUnit } from './ai.js';
 import type { AskFn } from './ai.js';
+import { GRID_PROMPT, gridRef, parseCell, replyPoint, resolveCell } from './grid.js';
+import { RELATIONS, type Expectation, type Relation } from './rearrange.js';
 
 let seq = 0;
 /** A short unique id. */
@@ -62,11 +64,15 @@ const ACTION_LIST = STEP_ACTIONS.map((a) => `"${a}"`).join('|');
 /** System prompt for the planner: the reply contract the model must follow. */
 export const PLAN_SYSTEM = `You are Droid Assist, an agent that controls a computer screen. You see a screenshot (${VIEW_W}x${VIEW_H}) of the user's screen.
 Plan the concrete steps that achieve the user's goal on THIS screen. Look at the screenshot and target real visible controls.
-Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"x":number,"y":number,"text"?:string}]}
-x and y are the target's center as fractions 0..1 of the screenshot width/height. "target" names the on-screen thing the step points at (e.g. "Files icon in the taskbar").
-"move" only moves (hovers) the mouse cursor onto the target without clicking — use it for "move the mouse to X" / "hover over X", e.g. {"name":"Move to Files icon","action":"move","target":"Files icon","x":0.42,"y":0.97}.
+${GRID_PROMPT}
+Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"cell":string,"cx":number,"cy":number,"text"?:string,"endTarget"?:string,"endCell"?:string,"endCx"?:number,"endCy"?:number,"endX"?:number,"endY"?:number}],"expect"?:[{"element":string,"relation":"below"|"above"|"left_of"|"right_of","anchor":string}]}
+"cell","cx","cy" locate the target's center on the grid. "target" names the on-screen thing the step points at (e.g. "Files icon in the taskbar").
+"move" only moves (hovers) the mouse cursor onto the target without clicking — use it for "move the mouse to X" / "hover over X", e.g. {"name":"Move to Files icon","action":"move","target":"Files icon","cell":"H6","cx":0.04,"cy":0.76}.
 "click" clicks the target once, "double_click" double-clicks it (open a desktop icon or file), "scroll" scrolls over the target with "text" "up" or "down".
+"drag" presses the mouse on the target, drags it and releases it at a drop point: locate the drop point with "endCell","endCx","endCy" (or "endX","endY" as fractions 0..1) and name what is there in "endTarget" (an empty spot is named by where it is, e.g. "empty space below Game"), e.g. {"name":"Drag Files below Game","action":"drag","target":"Files icon","cell":"B1","cx":0.5,"cy":0.5,"endTarget":"empty space below Game","endCell":"G1","endCx":0.5,"endCy":0.3}.
+To move or rearrange several elements ("move the Files icon below Game", "rearrange the sidebar to Calc, Game, Notes, Files") plan one "drag" per element, in an order where every drop point is free when that drag runs, and list the arrangement the goal asks for in "expect": one relation per requested placement; an order "A, B, C" top to bottom is {"element":"B","relation":"below","anchor":"A"},{"element":"C","relation":"below","anchor":"B"}.
 "text" is the text to type, the key to press, the search query, the arithmetic expression or the scroll direction.
+"measure" sends no input: it measures on-screen distances; "text" lists the endpoints joined by " to " — element names from the element map, "x,y" coordinates or a screen edge ("left edge", "right edge", "top edge", "bottom edge"), e.g. {"name":"Files to Game","action":"measure","target":"Files icon","x":0.42,"y":0.97,"text":"Files icon to Game icon"}. The measured distances are returned to you in the log.
 Never substitute another action for the one the goal asks for; if the target is not visible, return {"steps":[]}.`;
 
 /** A plan the assistant proposes, with where it came from and the model's thinking (null when reused or absent). */
@@ -74,6 +80,24 @@ export interface PlanResult {
   steps: WorkflowStep[];
   source: string;
   thinking: string | null;
+  /** The arrangement a rearrangement goal asks for; empty for other goals and reused flows. */
+  expect: Expectation[];
+}
+
+const RELATION_SET: ReadonlySet<string> = new Set(RELATIONS);
+const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+
+/** The "expect" relations of a planner reply; a malformed entry is an AiError, never dropped silently. */
+export function parseExpectations(reply: string): Expectation[] {
+  const raw = parseJsonReply(reply).expect;
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new AiError('AI "expect" is not a list of relations');
+  return raw.map((r: unknown) => {
+    const e = (r ?? {}) as Record<string, unknown>;
+    const relation = text(e.relation);
+    if (!text(e.element) || !text(e.anchor) || !RELATION_SET.has(relation)) throw new AiError(`AI proposed an unusable arrangement relation ${JSON.stringify(r)}`);
+    return { element: text(e.element), relation: relation as Relation, anchor: text(e.anchor) };
+  });
 }
 
 /** Converts one model step into a WorkflowStep; throws AiError when it breaks the contract. */
@@ -85,16 +109,27 @@ function toStep(raw: unknown, frame: Frame | null): WorkflowStep {
     id: uid('step'),
     name: typeof s.name === 'string' && s.name.trim() ? s.name.trim() : action,
     action,
-    x: toUnit(s.x ?? 0.5, VIEW_W),
-    y: toUnit(s.y ?? 0.5, VIEW_H),
+    ...replyPoint(s, { x: 0.5, y: 0.5 }),
     status: 'pending',
   };
   if (s.text !== undefined && s.text !== null) step.text = String(s.text);
   if (POINTER_ACTIONS.has(action)) {
     step.target = typeof s.target === 'string' && s.target.trim() ? s.target.trim() : step.name;
     if (frame) step.refFrame = frame;
+    if (!parseCell(s.cell) && (s.x === undefined || s.x === null || s.y === undefined || s.y === null)) step.unlocated = true;
   }
+  if (action === 'drag') Object.assign(step, dropPoint(s, step.name));
   return step;
+}
+
+/** A drag's drop point and target from a model step; throws AiError when the end point is missing. */
+function dropPoint(s: Record<string, unknown>, name: string): Pick<WorkflowStep, 'endX' | 'endY' | 'endTarget'> {
+  const end = { cell: s.endCell, cx: s.endCx, cy: s.endCy, x: s.endX, y: s.endY };
+  const hasEnd = resolveCell(end.cell, end.cx, end.cy) !== null || (end.x !== undefined && end.x !== null && end.y !== undefined && end.y !== null);
+  if (!hasEnd) throw new AiError(`AI proposed drag "${name}" without an end point (endCell/endCx/endCy or endX/endY)`);
+  const endTarget = typeof s.endTarget === 'string' && s.endTarget.trim() ? s.endTarget.trim() : name;
+  const p = replyPoint(end);
+  return { endX: p.x, endY: p.y, endTarget };
 }
 
 /** Parses the planner's JSON reply into steps; throws AiError on malformed or empty plans. */
@@ -141,35 +176,75 @@ export const AI_PLAN_SOURCE = 'AI planned from the goal and the live screen';
  * to this goal. Rejects with AiError when the model is unreachable or its reply is unusable.
  */
 export async function planFromGoal(goal: string, cards: SavedCard[], frame: Frame | null, ask: AskFn, context: string[] = [], patterns: LearnedPattern[] = []): Promise<PlanResult> {
-  const similar = findSimilar(goal, cards);
+  // A flow with drags is a rearrangement whose requested relations are not saved with it, so it is always planned fresh.
+  const similar = findSimilar(goal, cards.filter((c) => !c.steps.some((s) => s.action === 'drag')));
   if (similar) {
     return {
       source: `Reused saved workflow "${similar.name}" (similar goal, drift-corrected coordinates)`,
       steps: similar.steps.map(reuseStep),
       thinking: null,
+      expect: [],
     };
   }
   const lessons = relevantPatterns(goal, patterns).map(patternLine);
   const reply = await ask({ system: PLAN_SYSTEM, prompt: `Goal: ${goal}`, frame, context: [...lessons, ...context], json: true });
   const source = lessons.length ? `${AI_PLAN_SOURCE}, applying ${lessons.length} learned pattern(s)` : AI_PLAN_SOURCE;
-  return { steps: parsePlan(reply.content, frame), source, thinking: reply.thinking };
+  return { steps: parsePlan(reply.content, frame), source, thinking: reply.thinking, expect: parseExpectations(reply.content) };
+}
+
+/**
+ * Auto-continue re-plan: the model plans only the steps still needed for `goal` from the live
+ * frame, told what already ran and why the goal is not yet verified. Never reuses a saved flow.
+ */
+export async function planRemaining(ask: AskFn, goal: string, frame: Frame | null, ran: WorkflowStep[], why: string, patterns: LearnedPattern[] = []): Promise<PlanResult> {
+  const lessons = relevantPatterns(goal, patterns).map(patternLine);
+  const done = ran.map((s) => `- ${s.action} "${s.target ?? s.name}": ${s.status}`).join('\n') || '(none)';
+  const reply = await ask({
+    system: `${PLAN_SYSTEM}\nThis is a continuation: plan ONLY the remaining steps from the current screen.`,
+    prompt: `Goal: ${goal}\nSteps already run:\n${done}\nNot complete yet: ${why}`,
+    frame,
+    context: lessons,
+    json: true,
+  });
+  return { steps: parsePlan(reply.content, frame), source: AI_PLAN_SOURCE, thinking: reply.thinking, expect: [] };
 }
 /**
  * Re-asks the planner, once, where `step`'s target is after its proposed point was rejected
  * (`feedback` says why). Resolves the new point, or null when the model says it is not visible.
  */
-export async function relocateTarget(ask: AskFn, frame: Frame, step: WorkflowStep, feedback: string): Promise<{ x: number; y: number; thinking: string | null } | null> {
-  const at = `(${(step.x * 100).toFixed(1)}%, ${(step.y * 100).toFixed(1)}%)`;
+export async function relocateTarget(ask: AskFn, frame: Frame, step: WorkflowStep, feedback: string, context: string[] = []): Promise<{ x: number; y: number; thinking: string | null } | null> {
+  const at = `${gridRef(step)} = (${(step.x * 100).toFixed(1)}%, ${(step.y * 100).toFixed(1)}%)`;
   const reply = await ask({
     system: `${PLAN_SYSTEM}\nThis is a correction: reply with exactly one step for the named target, or {"steps":[]} if it is not visible.`,
     prompt: `Step "${step.name}" (${step.action}) targets "${step.target ?? step.name}". Your previous point ${at} was rejected: ${feedback}\nLook again and give the target's true center.`,
     frame,
+    ...(context.length ? { context } : {}),
     json: true,
   });
   const steps = parseJsonReply(reply.content).steps;
   if (!Array.isArray(steps) || !steps.length) return null;
   const s = (steps[0] ?? {}) as Record<string, unknown>;
-  return { x: toUnit(s.x, VIEW_W), y: toUnit(s.y, VIEW_H), thinking: reply.thinking };
+  return { ...replyPoint(s), thinking: reply.thinking };
+}
+
+/**
+ * The one re-plan of a drag whose element did not land where intended (`feedback` says where
+ * it ended up): the model looks at the live frame again and gives one corrected drag for the
+ * same element. Resolves the corrected step (start + end grounded on the grid), or null when
+ * the model says the element is not visible. Rejects with AiError on an unusable reply.
+ */
+export async function replanDrag(ask: AskFn, frame: Frame | null, step: WorkflowStep, feedback: string): Promise<{ step: WorkflowStep; thinking: string | null } | null> {
+  const reply = await ask({
+    system: `${PLAN_SYSTEM}\nThis is a correction of one drag that did not work: reply with exactly one "drag" step for the same element, or {"steps":[]} if it is not visible.`,
+    prompt: `Drag "${step.name}" was to move "${step.target ?? step.name}" from ${gridRef(step)} to ${gridRef({ x: step.endX ?? step.x, y: step.endY ?? step.y })} ("${step.endTarget ?? 'drop point'}"). It did not land there: ${feedback}\nLook at the screen as it is now and give the element's current center and the drop point again.`,
+    frame,
+    json: true,
+  });
+  const steps = parseJsonReply(reply.content).steps;
+  if (!Array.isArray(steps) || !steps.length) return null;
+  const next = toStep(steps[0], frame);
+  if (next.action !== 'drag') throw new AiError(`AI re-planned the drag as "${next.action}"`);
+  return { step: { ...next, id: step.id, name: step.name }, thinking: reply.thinking };
 }
 
 /** A generated name + description for a workflow. */
