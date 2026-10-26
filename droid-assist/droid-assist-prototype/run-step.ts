@@ -130,6 +130,16 @@ export async function groundTarget(step: WorkflowStep, live: Frame, p: Point, g:
 /** Whether a step's point must pass the AI grounding pass before input is sent. */
 const needsGrounding = (step: WorkflowStep) => POINTER_ACTIONS.has(step.action) && !!step.target;
 
+const onScreen = (v: number | undefined) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+
+/** Why a drag's release point cannot be used (missing or off-screen); null for a valid one or a non-drag step. */
+export function dragEndError(step: WorkflowStep): string | null {
+  if (step.action !== 'drag') return null;
+  if (step.endX === undefined || step.endY === undefined) return `Drag "${step.name}" has no end point — a drag needs both a start and an end; not executed`;
+  if (!onScreen(step.endX) || !onScreen(step.endY)) return `Drag "${step.name}" ends off-screen at (${(step.endX * 100).toFixed(1)}%, ${(step.endY * 100).toFixed(1)}%) — not executed`;
+  return null;
+}
+
 /**
  * The point a pointer step starts from: a matching habit's remembered position when it is
  * found on the live frame, otherwise the drift-corrected one.
@@ -146,9 +156,12 @@ function startPoint(step: WorkflowStep, live: Frame, correction: DriftCorrection
 /**
  * The single real-input pipeline: verify the target on a live desktop frame, correct its
  * drift (or start from a learned habit's remembered position), confirm a named target with
- * the AI, perform the input through the bridge at that position, then re-verify.
+ * the AI, perform the input through the bridge at that position, then re-verify. A drag
+ * grounds its start this way; its end must be on-screen.
  */
 export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepOutcome> {
+  const badEnd = dragEndError(step);
+  if (badEnd) return { ok: false, executed: false, message: badEnd, target: { x: step.x, y: step.y } };
   const found = await locateTarget(step, deps);
   if ('error' in found) return { ok: false, executed: false, message: found.error, target: { x: step.x, y: step.y } };
   const { live, correction } = found;

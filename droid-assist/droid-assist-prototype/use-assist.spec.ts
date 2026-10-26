@@ -149,6 +149,61 @@ describe('useAssist Qwen thinking timeline', () => {
     expect(result.current.timeline[0]).toMatchObject({ kind: 'thought', text: '', thinking: null });
     expect(result.current.timeline[0].error).toMatch(/unreachable.*Failed to fetch/);
   });
+
+  it('records the plan thought, reflection and verdict of a planned drag replayed on the demo desktop', async () => {
+    const replies: Record<string, Record<string, unknown>> = {
+      plan: { content: '{"steps":[{"name":"Drag Report to Archive","action":"drag","target":"Report file","x":0.9,"y":0.2,"endTarget":"Archive folder","endX":0.9,"endY":0.7}]}', thinking: 'Report is top-right.' },
+      reflect: { content: 'The file is in the archive.', thinking: 'Filed.' },
+      verdict: { content: '{"success":true,"pattern_avoid":null,"pattern_add":null}', thinking: 'Drag worked.' },
+    };
+    const pick = (body: string) => (body.includes('final verdict') ? 'verdict' : body.includes('reviewing a step') ? 'reflect' : 'plan');
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => new Response(JSON.stringify({ message: { role: 'assistant', ...replies[pick(String(init.body))] } }), { status: 200 })));
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.setGoal('drag the report file onto the archive folder'));
+    await act(() => result.current.autoPlan());
+    expect(result.current.steps[0]).toMatchObject({ action: 'drag', target: 'Report file', endTarget: 'Archive folder', endX: 0.9, endY: 0.7 });
+    act(() => result.current.toggleArmed());
+    await act(() => result.current.replay());
+    const kinds = result.current.timeline.filter((e) => e.step === 'Drag Report to Archive').map((e) => e.kind);
+    expect(kinds).toEqual(['verdict', 'reflection']);
+    expect(result.current.timeline.some((e) => e.kind === 'thought' && e.thinking === 'Report is top-right.')).toBe(true);
+    expect(result.current.history[0]).toMatchObject({ action: 'drag', via: 'demo', ok: true, x: 864, y: 108, endX: 864, endY: 378 });
+  });
+});
+
+describe('useAssist drag recorder and guardrails', () => {
+  async function recordDrag() {
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.toggleRecording());
+    act(() => result.current.onStageDrag({ x: 0.9, y: 0.2 }, { x: 0.4, y: 0.5 }));
+    act(() => result.current.toggleRecording());
+    return result;
+  }
+
+  it('records a real drag as one drag step with both endpoints', async () => {
+    const result = await recordDrag();
+    expect(result.current.steps).toHaveLength(1);
+    expect(result.current.steps[0]).toMatchObject({ action: 'drag', x: 0.9, y: 0.2, endX: 0.4, endY: 0.5 });
+  });
+
+  it('replays a recorded drag on the demo desktop and logs both coordinates', async () => {
+    const result = await recordDrag();
+    act(() => result.current.toggleArmed());
+    await act(() => result.current.replay());
+    expect(result.current.steps[0].status).toBe('done');
+    expect(result.current.history[0]).toMatchObject({ action: 'drag', via: 'demo', x: 864, y: 108, endX: 384, endY: 270 });
+    expect(result.current.log.some((l) => /Dragged "Report"/.test(l.message))).toBe(true);
+  });
+
+  it('sends nothing when aborted', async () => {
+    const result = await recordDrag();
+    act(() => result.current.toggleArmed());
+    act(() => result.current.triggerAbort('test'));
+    await act(() => result.current.replay());
+    expect(result.current.history).toHaveLength(0);
+  });
 });
 
 describe('useAssist re-plan loop guard and parse failures', () => {

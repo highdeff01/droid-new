@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ActionRecord, Annotation, AssistSettings, FamiliarElement, Frame, Habit, InputAction, LearnedPattern, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
 import { POINTER_ACTIONS } from './types.js';
 import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
-import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
+import { AD_CYCLE, demoAd, demoDrag, demoPlayButton, drawDemoDesktop, initialDemoFile, type DemoFile } from './demo-desktop.js';
 import { AI_PLAN_SOURCE, calculate, generateCard, planFromGoal, planRemaining, relocateTarget, uid } from './planner.js';
 import { AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, linkSignals, pingAi } from './ai.js';
 import type { AiReply, AiStatus, AskFn, AskRequest } from './ai.js';
@@ -10,8 +10,8 @@ import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type S
 import { confirmTarget, decidePopup, decideStep, describeScreen, judgeStep, reflectOn, verifyGoal, type GoalCheck, type PopupDecision, type StepDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
 import { DEFAULT_MAX_ITERATIONS, autoContinue, type ContinueStop, type RunReport } from './auto-continue.js';
 import { addEntry, verdictText, type ThinkingEntry } from './thinking-timeline.js';
-import { BRIDGE_REQUIRED, captureDesktop, checkBridge } from './bridge.js';
-import { runStep, type Grounding, type StepOutcome } from './run-step.js';
+import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd } from './bridge.js';
+import { dragEndError, runStep, type Grounding, type StepOutcome } from './run-step.js';
 import { patchAt, zoomFrame } from './grounding.js';
 import { parseCommand } from './commands.js';
 import { createPlanGuard } from './plan-guard.js';
@@ -60,7 +60,7 @@ async function desktopFrame(bridgeUrl: string, id: number): Promise<Frame> {
 }
 
 /** Workflow actions that are real mouse/keyboard input, as recorded in the action history. */
-const INPUT_ACTIONS: Partial<Record<StepAction, InputAction>> = { click: 'click', double_click: 'double_click', move: 'move', scroll: 'scroll', type: 'type', key: 'key' };
+const INPUT_ACTIONS: Partial<Record<StepAction, InputAction>> = { click: 'click', double_click: 'double_click', move: 'move', drag: 'drag', scroll: 'scroll', type: 'type', key: 'key' };
 
 /** Steps the browser itself answers on the demo desktop (no screen input). */
 const LOCAL_ACTIONS: Partial<Record<StepAction, (step: WorkflowStep) => Promise<{ ok: boolean; message: string }>>> = {
@@ -169,6 +169,8 @@ export function useAssist() {
   const demoCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const captureRef = useRef<ScreenCapture | null>(null);
   const tickRef = useRef(0);
+  /** The demo desktop's draggable Report file. */
+  const demoFileRef = useRef<DemoFile>(initialDemoFile());
   const dismissedCycleRef = useRef(-1);
   const framesRef = useRef<Frame[]>([]);
   const stepsRef = useRef<WorkflowStep[]>([]);
@@ -523,7 +525,8 @@ export function useAssist() {
   const recordAction = useCallback((step: WorkflowStep, out: StepOutcome, actor: string, via: ActionRecord['via'], srcW: number, srcH: number) => {
     const kind = INPUT_ACTIONS[step.action];
     if (!kind) return;
-    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, x: Math.round(out.target.x * srcW), y: Math.round(out.target.y * srcH), text: step.text, source: actor, via, ok: out.ok, message: out.message };
+    const end = kind === 'drag' ? dragEnd(step, srcW, srcH) : null;
+    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, x: Math.round(out.target.x * srcW), y: Math.round(out.target.y * srcH), ...(end ? { endX: end.x, endY: end.y } : {}), text: step.text, source: actor, via, ok: out.ok, message: out.message };
     setHistory((h) => appendHistory(h, rec));
   }, []);
 
@@ -546,10 +549,27 @@ export function useAssist() {
     return 'Click hit nothing interactive';
   }, []);
 
+  /** Applies a drag to the demo desktop: grabbing the Report file moves (or archives) it. */
+  const applyDemoDrag = useCallback((from: { x: number; y: number }, to: { x: number; y: number }): string => {
+    const r = demoDrag(demoFileRef.current, from, to);
+    demoFileRef.current = r.file;
+    return r.message;
+  }, []);
+
+  /** The simulated effect of a pointer step on the demo desktop at `p`. */
+  const demoEffect = (step: WorkflowStep, p: { x: number; y: number }): string => {
+    if (step.action === 'click' || step.action === 'double_click') return demoClick(p.x, p.y);
+    if (step.action === 'move') return `Moved the cursor to (${pct(p.x)}, ${pct(p.y)})`;
+    if (step.action === 'drag') return applyDemoDrag(p, { x: step.endX ?? p.x, y: step.endY ?? p.y });
+    return `${step.action} simulated on the demo desktop`;
+  };
+
   /** Performs a step on the demo desktop: template-checked against the latest frame, then simulated. */
   const performOnDemo = async (step: WorkflowStep, dryRun: boolean): Promise<Performed> => {
     const local = LOCAL_ACTIONS[step.action];
     if (local) return { ...(await local(step)), executed: true, target: { x: step.x, y: step.y } };
+    const badEnd = dragEndError(step);
+    if (badEnd) return { ok: false, executed: false, message: badEnd, target: { x: step.x, y: step.y } };
     const live = framesRef.current[0];
     let p = { x: step.x, y: step.y };
     const seeded = live && POINTER_ACTIONS.has(step.action) ? habitSeed(live, step) : null;
@@ -561,8 +581,7 @@ export function useAssist() {
     }
     if (dryRun) return { ok: true, executed: false, message: 'verified on the demo screen — dry run, not dispatched', target: p };
     setCursor(p);
-    const clicks = step.action === 'click' || step.action === 'double_click';
-    const message = clicks ? demoClick(p.x, p.y) : step.action === 'move' ? `Moved the cursor to (${pct(p.x)}, ${pct(p.y)})` : `${step.action} simulated on the demo desktop`;
+    const message = demoEffect(step, p);
     const ok = !/blocked|nothing/.test(message);
     if (ok && live && POINTER_ACTIONS.has(step.action)) strengthen(live, step, p);
     return { ok, executed: ok, message, target: p };
@@ -793,7 +812,7 @@ export function useAssist() {
     const id = setInterval(() => {
       tickRef.current += 1;
       const c = demoCanvasRef.current;
-      if (c) drawDemoDesktop(c.getContext('2d')!, DEMO_W, DEMO_H, tickRef.current, adDismissed());
+      if (c) drawDemoDesktop(c.getContext('2d')!, DEMO_W, DEMO_H, tickRef.current, adDismissed(), demoFileRef.current);
     }, 400);
     return () => clearInterval(id);
   }, [source]);
@@ -853,6 +872,23 @@ export function useAssist() {
     }
     if (sourceRef.current === 'demo' && !hover) addLog('You', demoClick(x, y));
   }, [addLog, demoClick]);
+
+  /**
+   * Stage drag (mousedown → move → mouseup): while recording becomes a drag step with both
+   * endpoints and the latest screenshot as the template of its start region; on the demo it acts.
+   */
+  const onStageDrag = useCallback((from: { x: number; y: number }, to: { x: number; y: number }) => {
+    if (recordingRef.current) {
+      const n = stepsRef.current.length + 1;
+      setTrail((t) => [...t, { x: from.x, y: from.y, t: Date.now(), click: true }, { x: to.x, y: to.y, t: Date.now(), click: true }].slice(-1500));
+      const step: WorkflowStep = { id: uid('step'), name: `Drag ${n}`, action: 'drag', x: from.x, y: from.y, endX: to.x, endY: to.y, refFrame: framesRef.current[0], status: 'pending' };
+      stepsRef.current = [...stepsRef.current, step];
+      setSteps(stepsRef.current);
+      addLog('Recorder', `Captured drag from (${pct(from.x)}, ${pct(from.y)}) to (${pct(to.x)}, ${pct(to.y)}) with screenshot`, 'info');
+      return;
+    }
+    if (sourceRef.current === 'demo') addLog('You', applyDemoDrag(from, to));
+  }, [addLog, applyDemoDrag]);
 
   /** Live-write while recording: typed text becomes a "type" step. */
   const onStageType = useCallback((text: string) => {
@@ -1283,7 +1319,7 @@ export function useAssist() {
     familiar, forgetFamiliar, elements, highlight, testClick,
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
-    onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
+    onStageMove, onStageClick, onStageDrag, onStageType, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
   };
 }
