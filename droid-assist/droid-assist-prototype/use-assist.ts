@@ -643,7 +643,8 @@ export function useAssist() {
       addLog('Test click', `"${el.name}" highlighted at ${where} — real input disarmed, dry run (nothing sent)`, 'info');
       return;
     }
-    if (!stageOn('subagents')) {
+    // Guardrails first: an aborted engine reports the abort from performStep, never the stage.
+    if (!abortedRef.current && !stageOn('subagents')) {
       addLog('Test click', `"${el.name}" highlighted at ${where} — ${stageOff('subagents')}, nothing sent`, 'warn');
       return;
     }

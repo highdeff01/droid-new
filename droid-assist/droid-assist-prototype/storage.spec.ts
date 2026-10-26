@@ -33,6 +33,15 @@ describe('settings', () => {
       expect(loadSettings(DEFAULTS)).toEqual(DEFAULTS);
     }
   });
+
+  it('round-trips loop-control stages and sanitizes a stored stage map', () => {
+    saveSettings({ ...DEFAULTS, stages: { ...DEFAULT_STAGES, popup: false, verdict: false } });
+    expect(loadSettings(DEFAULTS).stages).toEqual({ ...DEFAULT_STAGES, popup: false, verdict: false });
+    localStorage.setItem('droid-assist.settings', '{"stages":{"reflect":false,"drift":"off","nope":false}}');
+    expect(loadSettings(DEFAULTS).stages).toEqual({ ...DEFAULT_STAGES, reflect: false });
+    localStorage.setItem('droid-assist.settings', '{"stages":[1]}');
+    expect(loadSettings(DEFAULTS).stages).toEqual(DEFAULT_STAGES);
+  });
 });
 
 describe('log', () => {
