@@ -32,6 +32,7 @@ import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, newPattern, runVerdict, upsertCard } from './flow-memory.js';
+import { SUPERVISOR_INTERVAL_MS, SUPERVISOR_TICK_MS, applyFixes, executorBusy as supervisorExecutorBusy, habitPatterns, isConfident, reviewRun, reviewText, staleFixes, type PendingFix, type SupervisorReview, type SupervisorState } from './supervisor.js';
 import { BUS_AGENTS, elementLine, forward, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
 import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
@@ -205,7 +206,7 @@ export function useAssist() {
     { id: 'identify', name: 'Element identifier', description: 'Sends missed, unproposed, new or changing elements to the AI and agent-tests the answer (3 tries / 30 s)', on: true },
     { id: 'screen', name: BUS_AGENTS.screen, description: 'Observes forwarded elements on the live screen', on: true },
     { id: 'coords', name: 'Coordinate learner', description: 'Learns target coordinates from cursor dwell and verified actions; seeds grounding with them', on: true },
-    { id: 'supervisor', name: BUS_AGENTS.supervisor, description: 'Splits link/route tests into subagents and aggregates their report', on: true },
+    { id: 'supervisor', name: 'Supervisor', description: 'Reviews all agents, screenshots and thinking; applies confident fixes, performs them if the executor does not, and splits link/route tests into subagents', on: true },
   ]);
   /** The inter-agent message bus: every forwarded element in each recipient's inbox, newest first. */
   const [bus, setBus] = useState<BusMessage[]>([]);
@@ -227,6 +228,7 @@ export function useAssist() {
   /** Per-step Qwen thinking timeline, newest first: thought, reflection and verdict of every AI call. */
   const [timeline, setTimeline] = useState<ThinkingEntry[]>([]);
   const [captureLost, setCaptureLost] = useState<string | null>(null);
+  const [supervisor, setSupervisor] = useState<SupervisorState>({ status: 'idle', detail: 'No review yet', review: null, applied: false });
 
   const demoCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const captureRef = useRef<ScreenCapture | null>(null);
@@ -285,6 +287,16 @@ export function useAssist() {
   const targetRef = useRef(target);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
+  const timelineRef = useRef(timeline);
+  const syncRef = useRef(sync);
+  const progressRef = useRef(progress);
+  /** Corrections the supervisor applied that the executor has not carried out yet. */
+  const pendingFixesRef = useRef<PendingFix[]>([]);
+  const supervisorBusyRef = useRef(false);
+  /** Set while the supervisor itself moves the pointer; Auto Act waits for it. */
+  const supervisorMovingRef = useRef(false);
+  const lastReviewAt = useRef(Date.now());
+  const supervisorRef = useRef(supervisor);
   const busRef = useRef<BusMessage[]>([]);
   const knownRef = useRef<ForwardedElement[]>([]);
   /** True while link/route subagents hold the screen; Auto Act pauses meanwhile. */
@@ -314,6 +326,10 @@ export function useAssist() {
   /** Steps that already used their one re-proposal. */
   const reproposedRef = useRef(new Set<string>());
 
+  supervisorRef.current = supervisor;
+  timelineRef.current = timeline;
+  syncRef.current = sync;
+  progressRef.current = progress;
   settingsRef.current = settings;
   sourceRef.current = source;
   aiStatusRef.current = aiStatus;
@@ -1205,6 +1221,98 @@ export function useAssist() {
     if (stageOn('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
   };
 
+  /** Shows the supervisor's state in its panel and logs it. */
+  const superviseReport = (state: SupervisorState, tone: LogEntry['tone']) => {
+    supervisorRef.current = state;
+    setSupervisor(state);
+    addLog('Supervisor', state.detail, tone);
+  };
+
+  /** Applies a confident review: step fixes onto the plan (awaiting the executor) and habits into the pattern store. */
+  const applyReview = (review: SupervisorReview) => {
+    stepsRef.current = applyFixes(stepsRef.current, review.stepFixes);
+    setSteps(stepsRef.current);
+    const now = Date.now();
+    const fixed = new Set(review.stepFixes.map((f) => f.stepId));
+    pendingFixesRef.current = [...pendingFixesRef.current.filter((p) => !fixed.has(p.stepId)), ...[...fixed].map((stepId) => ({ stepId, appliedAt: now }))];
+    if (review.habits.length) addPatterns(habitPatterns(review.habits, goalRef.current, now));
+  };
+
+  /**
+   * The supervisor's review: consolidates every agent's output, the gallery screenshots and the
+   * thinking timeline into one structured AI question. With the AI down it says so and does nothing.
+   */
+  const superviseRun = async () => {
+    if (!agentsRef.current('supervisor') || supervisorBusyRef.current || abortedRef.current) return;
+    lastReviewAt.current = Date.now();
+    if (aiStatusRef.current.state === 'offline') {
+      superviseReport({ status: 'offline', detail: `AI endpoint is down — no supervisor review was made, nothing applied (${aiStatusRef.current.detail})`, review: null, applied: false }, 'error');
+      return;
+    }
+    supervisorBusyRef.current = true;
+    setSupervisor((s) => ({ ...s, status: 'reviewing', detail: 'Reviewing agents, screenshots and thinking…' }));
+    try {
+      const input = { goal: goalRef.current, steps: stepsRef.current, log: logRef.current, timeline: timelineRef.current, frames: framesRef.current, sync: syncRef.current, progress: progressRef.current };
+      const review = await reviewRun(askFor('supervisor'), input);
+      const applied = isConfident(review);
+      if (applied) applyReview(review);
+      const text = reviewText(review, applied);
+      note({ step: 'Supervisor', kind: 'review', text, thinking: review.thinking });
+      superviseReport({ status: 'done', detail: text, review, applied }, review.planOk ? 'ok' : 'warn');
+    } catch (error) {
+      note({ step: 'Supervisor', kind: 'review', text: '', thinking: null, error: errorText(error) });
+      superviseReport({ status: aiOnline() ? 'error' : 'offline', detail: `AI unavailable — no supervisor review, nothing applied: ${errorText(error)}`, review: null, applied: false }, 'error');
+    } finally {
+      supervisorBusyRef.current = false;
+    }
+  };
+
+  /** Performs one correction the executor left unapplied; dry run unless armed, inside the run budget. */
+  const superviseMove = async (fix: PendingFix, budget: ActionBudget): Promise<boolean> => {
+    pendingFixesRef.current = pendingFixesRef.current.filter((p) => p.stepId !== fix.stepId);
+    const idx = stepsRef.current.findIndex((s) => s.id === fix.stepId);
+    const step = stepsRef.current[idx];
+    const dry = !armedRef.current;
+    updateStep(idx, { status: 'running' });
+    const out = await perform(step, 'Supervisor', budget, dry, recordLocal('Supervisor', step, `the executor left "${step.name}" unapplied, so the supervisor performs it`));
+    applyOutcome(idx, out, dry);
+    const message = `Executor left "${step.name}" unapplied — supervisor ${dry ? 'dry run' : 'performed it'} at ${at(out.target.x, out.target.y)}: ${out.message}`;
+    note({ step: step.name, kind: 'movement', text: message, thinking: null });
+    addLog(dry ? 'Supervisor (dry run)' : 'Supervisor', message, out.ok ? 'ok' : 'error');
+    return !out.halt;
+  };
+
+  /** Carries out corrections the executor has not applied within the window; pauses while it is mid-step. */
+  const superviseMovement = async () => {
+    pendingFixesRef.current = pendingFixesRef.current.filter((p) => stepsRef.current.some((s) => s.id === p.stepId && s.status !== 'done'));
+    const stale = staleFixes(pendingFixesRef.current, stepsRef.current, Date.now());
+    if (!stale.length || supervisorMovingRef.current || abortedRef.current) return;
+    if (supervisorExecutorBusy({ autoBusy: autoBusyRef.current, replaying: replayingRef.current, recording: recordingRef.current, steps: stepsRef.current })) return;
+    supervisorMovingRef.current = true;
+    const budget = createBudget(settingsRef.current.actionBudget);
+    try {
+      for (const fix of stale) {
+        if (abortedRef.current || !(await superviseMove(fix, budget))) break;
+      }
+    } finally {
+      supervisorMovingRef.current = false;
+    }
+  };
+
+  /** One supervisor tick: movement for unapplied corrections, then a periodic review when due. */
+  const superviseTick = () => {
+    if (!agentsRef.current('supervisor')) return;
+    void superviseMovement();
+    if (stepsRef.current.length && Date.now() - lastReviewAt.current >= SUPERVISOR_INTERVAL_MS) void superviseRun();
+  };
+  const superviseTickRef = useRef(superviseTick);
+  superviseTickRef.current = superviseTick;
+
+  useEffect(() => {
+    const id = setInterval(() => superviseTickRef.current(), SUPERVISOR_TICK_MS);
+    return () => clearInterval(id);
+  }, []);
+
   /** Flags `box` as a popup: the popup watcher's special case, which the AI then rules on (decidePopup). */
   const flagPopup = useCallback((prev: Frame, cur: Frame, box: ScreenChange['box']) => {
     popupBaseRef.current = prev;
@@ -1409,13 +1517,14 @@ export function useAssist() {
       const dryRun = autoDryRef.current;
       autoDryRef.current = false;
       void learnFromRun(stepsRef.current, { dryRun, stopped: false });
+      void superviseRun();
     }
   };
 
   /** Auto Act: with the AI online, the model handles popups and runs the next pending step. Disarmed = dry run. */
   const autoAct = async (frame: Frame) => {
     const { autoAct: on } = settingsRef.current;
-    if (!on || abortedRef.current || autoBusyRef.current || watchBusyRef.current || replayingRef.current || recordingRef.current || subRunningRef.current || !stageOn('screenResponder')) return;
+    if (!on || abortedRef.current || autoBusyRef.current || watchBusyRef.current || replayingRef.current || recordingRef.current || supervisorMovingRef.current || subRunningRef.current || !stageOn('screenResponder')) return;
     if (!aiOnline() || Date.now() - lastStepAt.current < 1500) return;
     autoBusyRef.current = true;
     try {
@@ -1671,6 +1780,7 @@ export function useAssist() {
       addLog('Goal reviewer', ok === total ? `All ${total} steps ${what}${goal ? ` for "${goal}"` : ''}` : `${ok}/${total} ${what} — re-plan the failed steps or let AI help clear blockers`, ok === total ? 'ok' : 'warn');
     }
     await learnFromRun(ran, { dryRun, stopped: abortRef.current });
+    await superviseRun();
   };
 
   /** One pass over the current steps in order, checking abortRef between steps. */
@@ -2241,7 +2351,8 @@ export function useAssist() {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
-    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, ruler, continuing, habits, deleteHabit, pinHabit,
+    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
+    ruler, continuing, habits, deleteHabit, pinHabit,
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     watcher, acceptProposal, dismissProposal, testProposal,

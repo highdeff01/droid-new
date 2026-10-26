@@ -240,6 +240,8 @@ export interface AskRequest {
   system: string;
   prompt: string;
   frame?: Frame | null;
+  /** Further screenshots sent after `frame` (e.g. older gallery frames). */
+  frames?: Frame[];
   /** Extra images sent after the frame (e.g. a zoomed crop of a changed region). */
   crops?: Frame[];
   /** Recent log / action lines sent as context. */
@@ -275,7 +277,7 @@ export function createAiSession(store: HistoryStore | null) {
   const ask = async (cfg: AiConfig, req: AskRequest): Promise<AiReply> => {
     const context = req.context?.length ? `\n\nRecent activity (newest first):\n${req.context.join('\n')}` : '';
     const content = `${req.prompt}${context}`;
-    const images = [...(req.frame ? [req.frame] : []), ...(req.crops ?? [])].map(frameToBase64);
+    const images = [...(req.frame ? [req.frame] : []), ...(req.frames ?? []), ...(req.crops ?? [])].map(frameToBase64);
     const user: ChatMessage = { role: 'user', content, ...(images.length ? { images } : {}) };
     const reply = await chat(cfg, [{ role: 'system', content: req.system }, ...history, user], req.json, undefined, linkSignals(controller.signal, req.signal));
     history = [...history, { role: 'user' as const, content }, { role: 'assistant' as const, content: reply.content }].slice(-HISTORY_MAX);
