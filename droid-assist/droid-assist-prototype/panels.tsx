@@ -3,6 +3,7 @@ import type { AssistEngine } from './use-assist.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
+import { AiStatusBadge } from './hud.js';
 import styles from './droid-assist.module.css';
 
 /** The N most recent frames with frame-to-frame drift, plus the AI-picked frames shown to the user. */

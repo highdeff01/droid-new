@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistSettings, LogEntry, SavedCard } from './types.js';
 import { LOG_LIMIT, loadCards, loadLog, loadSettings, saveCards, saveLog, saveSettings } from './storage.js';
 
-const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, autoAct: false, aiHelp: true, showTrail: true, bridgeUrl: '' };
+const DEFAULTS: AssistSettings = {
+  gallerySize: 10, checkpoints: 6, captureMs: 500, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, bridgeUrl: '',
+  abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://quantumclaw.net/ollama/api/chat', aiModel: 'qwen3.5:2b',
+};
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
 
 describe('settings', () => {
