@@ -101,16 +101,34 @@ async function post(cfg: AiConfig, messages: ChatMessage[], json: boolean, signa
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: cfg.model, messages, stream: false, think: true, ...(json ? { format: 'json' } : {}) }),
-      signal,
+      signal: req.signal,
     });
   } catch (error) {
+    if (req.cancelled()) throw new AiError('AI request cancelled');
     throw new AiError(`AI endpoint unreachable (${cfg.url}): ${error instanceof Error ? error.message : String(error)}`);
   }
   const body = (await res.json().catch(() => null)) as { message?: { content?: unknown; thinking?: unknown }; error?: unknown } | null;
   if (!res.ok) throw new AiError(`AI endpoint HTTP ${res.status}${body?.error ? `: ${String(body.error)}` : ''}`);
   const content = body?.message?.content;
-  if (typeof content !== 'string' || !content.trim()) throw new AiError('AI endpoint returned no message content');
-  return { content: content.trim(), thinking: thinkingOf(body?.message?.thinking) };
+  return { content: typeof content === 'string' ? content.trim() : '', thinking: thinkingOf(body?.message?.thinking) };
+}
+
+/**
+ * One non-streaming chat with thinking enabled; resolves with message.content and message.thinking.
+ * A reply whose content is empty but whose thinking is not is retried once with an instruction to
+ * answer in content; a still-empty answer, or one with neither content nor thinking, rejects with an
+ * AiError naming the cause. HTTP errors, network errors and cancellation reject with AiError.
+ * @param json ask the server for a JSON-formatted reply
+ * @param cancel aborts the request (alongside the per-request timeout)
+ */
+export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = 90_000, cancel?: AbortSignal): Promise<AiReply> {
+  const first = await post(cfg, messages, json, timeoutMs, cancel);
+  if (first.content) return first;
+  if (!first.thinking) throw new AiError('AI endpoint returned no message content and no thinking');
+  const instruction = `${CONTENT_RETRY_INSTRUCTION}${json ? CONTENT_RETRY_JSON : ''}`;
+  const retry = await post(cfg, [...messages, { role: 'user', content: instruction }], json, timeoutMs, cancel);
+  if (retry.content) return { content: retry.content, thinking: retry.thinking ?? first.thinking };
+  throw new AiError('AI model spent its whole reply on thinking and returned no message content, even after a retry asking for the answer in content');
 }
 
 /** Startup / settings-change health check: a minimal chat against the configured URL and model. */
@@ -128,19 +146,74 @@ export function frameToBase64(frame: Frame): string {
   return frame.url.slice(frame.url.indexOf(',') + 1);
 }
 
-/** Parses a model reply as a JSON object, tolerating a ```json fence; throws AiError otherwise. */
-export function parseJsonReply(raw: string): Record<string, unknown> {
-  const text = raw.replace(/<think>[\s\S]*?<\/think>/g, '');
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start < 0 || end <= start) throw new AiError(`AI reply was not JSON: "${text.slice(0, 80)}"`);
-  try {
-    const value = JSON.parse(text.slice(start, end + 1)) as unknown;
-    if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
-  } catch {
-    // reported below
+/** How much of an unparseable reply a parse failure keeps for the log. */
+export const RAW_REPLY_MAX = 200;
+
+/** A model reply that held no JSON object; `raw` is the reply truncated to RAW_REPLY_MAX for the log. */
+export class AiParseError extends AiError {
+  override name = 'AiParseError';
+  constructor(readonly raw: string) {
+    super('AI reply was not a JSON object (model returned prose)');
   }
-  throw new AiError(`AI reply was not a JSON object: "${text.slice(0, 80)}"`);
+}
+
+/** The reply truncated to RAW_REPLY_MAX characters, marked with … when cut. */
+export function truncateRaw(raw: string): string {
+  const text = raw.trim();
+  return text.length > RAW_REPLY_MAX ? `${text.slice(0, RAW_REPLY_MAX)}…` : text;
+}
+
+/** The reply without <think>…</think> blocks or stray think tags. */
+export function stripThinking(raw: string): string {
+  return raw.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<\/?think>/g, '').trim();
+}
+
+/** Index of the '}' closing the '{' at `start` (string- and escape-aware), or -1. */
+function closingBrace(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (c === '\\') i++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** Every balanced {...} span, latest-ending first and outermost first on ties. */
+function balancedSpans(text: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  for (let i = text.indexOf('{'); i >= 0; i = text.indexOf('{', i + 1)) {
+    const end = closingBrace(text, i);
+    if (end > i) spans.push([i, end]);
+  }
+  return spans.sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+}
+
+function asObject(json: string): Record<string, unknown> | null {
+  try {
+    const value = JSON.parse(json) as unknown;
+    return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parses the LAST balanced JSON object in a model reply: <think> blocks, fences and any prose
+ * around it are ignored. A reply with no JSON object throws AiParseError carrying the truncated raw reply.
+ */
+export function parseJsonReply(raw: string): Record<string, unknown> {
+  const text = stripThinking(raw);
+  for (const [start, end] of balancedSpans(text)) {
+    const value = asObject(text.slice(start, end + 1));
+    if (value) return value;
+  }
+  throw new AiParseError(truncateRaw(raw));
 }
 
 /**
@@ -183,10 +256,11 @@ function loadHistory(store: HistoryStore | null): ChatMessage[] {
 /**
  * A per-session conversation: every ask sends system + history + the new user turn
  * (with the frame), and on success appends the text of both turns (content only, no thinking)
- * to the persisted history.
+ * to the persisted history. `cancel()` aborts every request in flight (they reject with AiError).
  */
 export function createAiSession(store: HistoryStore | null) {
   let history = loadHistory(store);
+  let controller = new AbortController();
   const ask = async (cfg: AiConfig, req: AskRequest): Promise<AiReply> => {
     const context = req.context?.length ? `\n\nRecent activity (newest first):\n${req.context.join('\n')}` : '';
     const content = `${req.prompt}${context}`;
@@ -196,5 +270,9 @@ export function createAiSession(store: HistoryStore | null) {
     store?.setItem(HISTORY_KEY, JSON.stringify(history));
     return reply;
   };
-  return { ask, history: () => history };
+  const cancel = () => {
+    controller.abort();
+    controller = new AbortController();
+  };
+  return { ask, cancel, history: () => history };
 }

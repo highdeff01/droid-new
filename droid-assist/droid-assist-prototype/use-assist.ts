@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ActionRecord, Annotation, AssistSettings, Frame, InputAction, LearnedPattern, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
 import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
-import { AI_PLAN_SOURCE, calculate, generateCard, planFromGoal, planRemaining, relocateTarget, uid } from './planner.js';
-import { AiCancelled, DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, pingAi } from './ai.js';
+import { AI_PLAN_SOURCE, calculate, generateCard, planFromGoal, relocateTarget, uid } from './planner.js';
+import { AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, pingAi } from './ai.js';
 import type { AiReply, AiStatus, AskRequest } from './ai.js';
 import { confirmTarget, decidePopup, decideStep, describeScreen, reflectStep, verifyGoal, type GoalCheck, type PopupDecision, type StepDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
 import { DEFAULT_MAX_ITERATIONS, autoContinue, type ContinueStop, type RunReport } from './auto-continue.js';
@@ -12,6 +12,7 @@ import { BRIDGE_REQUIRED, captureDesktop, checkBridge } from './bridge.js';
 import { runStep, type Grounding, type StepOutcome } from './run-step.js';
 import { zoomFrame } from './grounding.js';
 import { parseCommand } from './commands.js';
+import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction, type ActionBudget } from './safety.js';
 import { LOG_LIMIT, loadCards, loadLog, loadPatterns, loadSettings, saveCards, saveLog, savePatterns, saveSettings } from './storage.js';
@@ -203,6 +204,10 @@ export function useAssist() {
   const recordingRef = useRef(false);
   const cardsRef = useRef<SavedCard[]>([]);
   const patternsRef = useRef<LearnedPattern[]>(patterns);
+  /** Re-plan loop guard for autoPlan, the plan in flight, and step status changes made by execution. */
+  const planGuardRef = useRef(createPlanGuard());
+  const planningRef = useRef(false);
+  const statusChangesRef = useRef(0);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
 
@@ -297,6 +302,11 @@ export function useAssist() {
 
   const note = useCallback((entry: Omit<ThinkingEntry, 'id' | 'time'>) => setTimeline((t) => addEntry(t, entry)), []);
 
+  /** A reply that held no JSON is logged as an AI parse failure with its truncated raw text — never shown as an answer. */
+  const reportParseFailure = useCallback((step: string, error: unknown) => {
+    if (error instanceof AiParseError) addLog('AI parse', `Unparseable reply for "${step}" (raw, truncated): ${error.raw}`, 'error');
+  }, [addLog]);
+
   /**
    * Runs one AI decision and records its initial thinking on the timeline, or the failure
    * when the call fails (rethrown). `summary` returning null means no model call was made.
@@ -309,9 +319,10 @@ export function useAssist() {
       return r;
     } catch (error) {
       note({ step, kind: 'thought', text: '', thinking: null, error: errorText(error) });
+      reportParseFailure(step, error);
       throw error;
     }
-  }, [note]);
+  }, [note, reportParseFailure]);
 
   /**
    * Reflect-after-step: the model's reflection and final verdict on an executed step go on the
@@ -326,9 +337,10 @@ export function useAssist() {
       addLog(logSource, `Verdict on "${step.name}": ${text}`, verdict.success ? 'ok' : 'warn');
     } catch (error) {
       note({ step: step.name, kind: 'verdict', text: '', thinking: null, error: errorText(error) });
-      addLog(logSource, aiFailure(`No verdict for "${step.name}" — AI reflection failed`, error), 'error');
+      reportParseFailure(step.name, error);
+      addLog(logSource, `No verdict for "${step.name}" — AI reflection failed: ${errorText(error)}`, 'error');
     }
-  }, [addLog, askAi, note]);
+  }, [addLog, askAi, note, reportParseFailure]);
 
   /**
    * The AI grounding pass run-step uses: confirm on a zoomed crop, re-ask the planner once.
@@ -534,6 +546,7 @@ export function useAssist() {
   };
 
   const updateStep = (index: number, patch: Partial<WorkflowStep>) => {
+    if (patch.status && patch.status !== stepsRef.current[index]?.status) statusChangesRef.current++;
     stepsRef.current = stepsRef.current.map((st, i) => (i === index ? { ...st, ...patch } : st));
     setSteps(stepsRef.current);
   };
@@ -917,25 +930,50 @@ export function useAssist() {
     }
   };
 
+  /** What the re-plan guard compares: the newest frame and how many step statuses execution changed. */
+  const screenState = () => `${framesRef.current[0]?.id ?? 'none'}:${statusChangesRef.current}`;
+
+  /** Applies a plan's steps as the current workflow and logs them. */
+  const applyPlan = (text: string, planned: WorkflowStep[], why: string) => {
+    stepsRef.current = planned;
+    setSteps(planned);
+    setDraftCard(generateCard(planned, text));
+    addLog('Planner', `${why}: ${planned.length} step(s) — ${planned.map((s) => `${s.action} "${s.target ?? s.name}"`).join(' → ')}${armedRef.current ? '' : ' (real input disarmed: replay / Auto Act run it as a dry run)'}`, 'ok');
+  };
+
   /**
    * AI plan: reuse a similar saved flow (drift-corrected), otherwise the model plans from the
-   * goal + live frame with the learned patterns relevant to this goal as context.
+   * goal + live frame with the learned patterns relevant to this goal as context. The re-plan
+   * guard skips a plan already in flight, a goal whose re-plan came back identical, and re-plans
+   * past the cap while the screen is unchanged.
    */
   const autoPlan = async (text = goal) => {
     if (!text.trim()) {
       addLog('Planner', 'Type a goal first', 'warn');
       return;
     }
+    if (planningRef.current) {
+      addLog('Planner', `Re-plan guard: a plan for "${text.trim()}" is still being thought out — not starting another`, 'warn');
+      return;
+    }
+    const gate = planGuardRef.current.before(text, screenState());
+    if (!gate.run) {
+      if (gate.log) addLog('Planner', `Re-plan guard: ${gate.log}`, 'warn');
+      return;
+    }
+    planningRef.current = true;
     await withAi(async () => {
       try {
         const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askAi, [], patternsRef.current), planSummary);
-        const { steps: planned, source: why } = plan;
-        stepsRef.current = planned;
-        setSteps(planned);
-        setDraftCard(generateCard(planned, text));
-        addLog('Planner', `${why}: ${planned.length} step(s) — ${planned.map((s) => `${s.action} "${s.target ?? s.name}"`).join(' → ')}${armedRef.current ? '' : ' (real input disarmed: replay / Auto Act run it as a dry run)'}`, 'ok');
+        if (planGuardRef.current.after(plan.steps) === 'duplicate') {
+          addLog('Planner', `Re-plan guard: the plan for "${text.trim()}" is identical to the previous one — kept the current steps and will not ask the model again until the screen or a step changes`, 'warn');
+          return;
+        }
+        applyPlan(text, plan.steps, plan.source);
       } catch (error) {
-        addLog('Planner', aiFailure('AI plan failed — no steps created', error), 'error');
+        addLog('Planner', `AI plan failed — no steps created: ${errorText(error)}`, 'error');
+      } finally {
+        planningRef.current = false;
       }
     });
   };

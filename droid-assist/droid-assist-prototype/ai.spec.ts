@@ -56,9 +56,42 @@ describe('chat', () => {
     await expect(chat(cfg, [])).rejects.toThrow(/unreachable.*Failed to fetch/);
   });
 
-  it('rejects an empty or missing message.content', async () => {
-    stubFetch(reply(''));
-    await expect(chat(cfg, [])).rejects.toBeInstanceOf(AiError);
+  it('rejects an empty message.content without thinking, with no retry', async () => {
+    const fn = stubFetch(reply(''));
+    await expect(chat(cfg, [])).rejects.toThrow(/no message content and no thinking/);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries once with an answer-in-content instruction when the reply was thinking only', async () => {
+    const fn = stubFetch(reply('   ', 200, 'Thinking Process: the user wants a...'), reply('{"a":1}', 200, 'Answering now.'));
+    await expect(chat(cfg, [{ role: 'user', content: 'hi' }], true)).resolves.toEqual({ content: '{"a":1}', thinking: 'Answering now.' });
+    expect(fn).toHaveBeenCalledTimes(2);
+    const retried = bodyOf(fn, 1).messages;
+    expect(retried[0]).toEqual({ role: 'user', content: 'hi' });
+    expect(retried[1].role).toBe('user');
+    expect(retried[1].content).toMatch(/content/);
+    expect(retried[1].content).toMatch(/JSON/);
+  });
+
+  it('keeps the first thinking when the retry carries none', async () => {
+    stubFetch(reply('', 200, 'first thoughts'), reply('ok'));
+    await expect(chat(cfg, [])).resolves.toEqual({ content: 'ok', thinking: 'first thoughts' });
+  });
+
+  it('fails naming the cause when the retry is still thinking only', async () => {
+    const fn = stubFetch(reply('', 200, 'hmm'), reply('', 200, 'still hmm'));
+    await expect(chat(cfg, [])).rejects.toThrow(/thinking.*no message content.*retry/);
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects as cancelled when the cancel signal aborts the request', async () => {
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => new Promise((_, reject) => {
+      init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    })));
+    const ctrl = new AbortController();
+    const pending = chat(cfg, [], false, 60_000, ctrl.signal);
+    ctrl.abort();
+    await expect(pending).rejects.toThrow('AI request cancelled');
   });
 });
 
@@ -137,6 +170,39 @@ describe('parseJsonReply / toUnit', () => {
     expect(() => parseJsonReply('hello')).toThrow(AiError);
   });
 
+  it('takes the last JSON object after reasoning prose', () => {
+    const raw = 'Thinking Process:\n1. The user asked {"maybe": "this"}.\n2. Final answer below.\n{"success": true, "pattern_add": "wait {briefly}"}';
+    expect(parseJsonReply(raw)).toEqual({ success: true, pattern_add: 'wait {briefly}' });
+  });
+
+  it('returns the whole last object, not a nested one', () => {
+    expect(parseJsonReply('plan: {"steps":[{"action":"click","x":1}]} done')).toEqual({ steps: [{ action: 'click', x: 1 }] });
+  });
+
+  it('skips a trailing brace group that is not JSON', () => {
+    expect(parseJsonReply('ans {"a":1} (note {not json})')).toEqual({ a: 1 });
+  });
+
+  it('ignores JSON inside think blocks and stray think tags', () => {
+    expect(parseJsonReply('<think>{"no":1}</think>Sure. {"yes":2}</think>')).toEqual({ yes: 2 });
+  });
+
+  it('throws an AiParseError with the raw reply truncated when there is no JSON object', () => {
+    const prose = `Thinking Process: ${'the user wants me to decide. '.repeat(30)}`;
+    let caught: unknown;
+    try {
+      parseJsonReply(prose);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AiParseError);
+    expect(caught).toBeInstanceOf(AiError);
+    const raw = (caught as AiParseError).raw;
+    expect(raw.length).toBeLessThanOrEqual(RAW_REPLY_MAX + 1);
+    expect(raw.startsWith('Thinking Process:')).toBe(true);
+    expect((caught as Error).message).not.toContain('Thinking Process');
+  });
+
   it('keeps fractions, scales pixels and clamps', () => {
     expect(toUnit(0.25, 480)).toBe(0.25);
     expect(toUnit(240, 480)).toBe(0.5);
@@ -167,5 +233,17 @@ describe('createAiSession', () => {
     const session = createAiSession(null);
     await expect(session.ask(cfg, { system: 's', prompt: 'p' })).rejects.toThrow(AiError);
     expect(session.history()).toHaveLength(0);
+  });
+
+  it('cancel() aborts the request in flight and later asks still work', async () => {
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => new Promise((_, reject) => {
+      init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    })));
+    const session = createAiSession(null);
+    const pending = session.ask(cfg, { system: 's', prompt: 'p' });
+    session.cancel();
+    await expect(pending).rejects.toThrow('AI request cancelled');
+    stubFetch(reply('again'));
+    await expect(session.ask(cfg, { system: 's', prompt: 'p' })).resolves.toMatchObject({ content: 'again' });
   });
 });
