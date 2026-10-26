@@ -55,13 +55,18 @@ export function findSimilar(text: string, cards: SavedCard[], min = 0.5): SavedC
   return best;
 }
 
-const ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(['click', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media']);
+const ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(STEP_ACTIONS);
+const ACTION_LIST = STEP_ACTIONS.map((a) => `"${a}"`).join('|');
 
 /** System prompt for the planner: the reply contract the model must follow. */
 export const PLAN_SYSTEM = `You are Droid Assist, an agent that controls a computer screen. You see a screenshot (${VIEW_W}x${VIEW_H}) of the user's screen.
 Plan the concrete steps that achieve the user's goal on THIS screen. Look at the screenshot and target real visible controls.
-Reply ONLY with JSON: {"steps":[{"name":string,"action":"click"|"type"|"key"|"open_app"|"wait"|"search"|"calc"|"media","x":number,"y":number,"text"?:string}]}
-x and y are the target's center as fractions 0..1 of the screenshot width/height. "text" is the text to type, the key to press, the search query or the arithmetic expression.`;
+Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"x":number,"y":number,"text"?:string}]}
+x and y are the target's center as fractions 0..1 of the screenshot width/height. "target" names the on-screen thing the step points at (e.g. "Files icon in the taskbar").
+"move" only moves (hovers) the mouse cursor onto the target without clicking — use it for "move the mouse to X" / "hover over X", e.g. {"name":"Move to Files icon","action":"move","target":"Files icon","x":0.42,"y":0.97}.
+"click" clicks the target once, "double_click" double-clicks it (open a desktop icon or file), "scroll" scrolls over the target with "text" "up" or "down".
+"text" is the text to type, the key to press, the search query, the arithmetic expression or the scroll direction.
+Never substitute another action for the one the goal asks for; if the target is not visible, return {"steps":[]}.`;
 
 /** A plan the assistant proposes, with where it came from. */
 export interface PlanResult {
@@ -83,7 +88,10 @@ function toStep(raw: unknown, frame: Frame | null): WorkflowStep {
     status: 'pending',
   };
   if (s.text !== undefined && s.text !== null) step.text = String(s.text);
-  if (action === 'click' && frame) step.refFrame = frame;
+  if (POINTER_ACTIONS.has(action)) {
+    step.target = typeof s.target === 'string' && s.target.trim() ? s.target.trim() : step.name;
+    if (frame) step.refFrame = frame;
+  }
   return step;
 }
 
@@ -139,6 +147,24 @@ export async function planFromGoal(goal: string, cards: SavedCard[], frame: Fram
   const reply = await ask({ system: PLAN_SYSTEM, prompt: `Goal: ${goal}`, frame, context: [...lessons, ...context], json: true });
   const source = lessons.length ? `AI planned from the goal and the live screen, applying ${lessons.length} learned pattern(s)` : 'AI planned from the goal and the live screen';
   return { steps: parsePlan(reply, frame), source };
+}
+
+/**
+ * Re-asks the planner, once, where `step`'s target is after its proposed point was rejected
+ * (`feedback` says why). Resolves the new point, or null when the model says it is not visible.
+ */
+export async function relocateTarget(ask: AskFn, frame: Frame, step: WorkflowStep, feedback: string): Promise<{ x: number; y: number } | null> {
+  const at = `(${(step.x * 100).toFixed(1)}%, ${(step.y * 100).toFixed(1)}%)`;
+  const reply = await ask({
+    system: `${PLAN_SYSTEM}\nThis is a correction: reply with exactly one step for the named target, or {"steps":[]} if it is not visible.`,
+    prompt: `Step "${step.name}" (${step.action}) targets "${step.target ?? step.name}". Your previous point ${at} was rejected: ${feedback}\nLook again and give the target's true center.`,
+    frame,
+    json: true,
+  });
+  const steps = parseJsonReply(reply).steps;
+  if (!Array.isArray(steps) || !steps.length) return null;
+  const s = (steps[0] ?? {}) as Record<string, unknown>;
+  return { x: toUnit(s.x, VIEW_W), y: toUnit(s.y, VIEW_H) };
 }
 
 /** A generated name + description for a workflow. */
