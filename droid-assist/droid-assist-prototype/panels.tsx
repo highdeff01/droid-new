@@ -1,9 +1,21 @@
 import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
+import type { AiStatus } from './ai.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import styles from './droid-assist.module.css';
+
+const AI_STATE_LABEL: Record<AiStatus['state'], string> = { checking: '⏳ AI connecting', online: '🟢 AI online', offline: '🔴 AI offline' };
+
+/** Live reachability of the AI endpoint. */
+export function AiStatusBadge({ status }: { status: AiStatus }) {
+  return (
+    <p className={styles.muted} data-ai={status.state} title={status.detail} aria-live="polite">
+      <strong>{AI_STATE_LABEL[status.state]}</strong> · {status.detail}
+    </p>
+  );
+}
 
 /** The N most recent frames with frame-to-frame drift, plus the AI-picked frames shown to the user. */
 export function ComparisonGallery({ engine }: { engine: AssistEngine }) {
@@ -53,16 +65,10 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
             <div>
               <input value={s.name} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} aria-label={`Step ${i + 1} name`} />
               <small>
-                {s.action} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}% · {s.status}
+                {s.action}{s.target ? ` "${s.target}"` : ''} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}% · {s.status}
                 {s.driftPx !== undefined && ` · drift ${s.driftPx}px`}
                 {s.drift !== undefined && ` · match ${s.drift.toFixed(3)}`}
               </small>
-              {(s.beforeFrame || s.afterFrame) && (
-                <span className={styles.evidence} aria-label={`Step ${i + 1} evidence`}>
-                  {s.beforeFrame && <img src={s.beforeFrame.url} alt={`Step ${i + 1} before`} title="Before" />}
-                  {s.afterFrame && <img src={s.afterFrame.url} alt={`Step ${i + 1} after`} title="After" />}
-                </span>
-              )}
             </div>
             <button type="button" aria-label="Remove step" onClick={() => setSteps(steps.filter((_, j) => j !== i))}>✕</button>
           </li>
@@ -144,7 +150,7 @@ export function AgentsPanel({ engine }: { engine: AssistEngine }) {
         <span className={styles.row}>
           <input value={settings.bridgeUrl} onChange={(e) => setSettings({ ...settings, bridgeUrl: e.target.value })} placeholder="/bridge or http://127.0.0.1:3000" />
           <button type="button" onClick={async () => setBridge((await checkBridge(settings.bridgeUrl)).message)} disabled={!settings.bridgeUrl}>Test</button>
-          <button type="button" onClick={engine.connectBridge} disabled={!settings.bridgeUrl}>Connect</button>
+          <button type="button" onClick={() => void engine.connectBridge()} disabled={!settings.bridgeUrl}>Connect</button>
         </span>
         {bridge && <small>{bridge}</small>}
       </label>

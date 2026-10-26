@@ -1,6 +1,18 @@
 import type { Frame, LogEntry, WorkflowStep } from './types.js';
+import { POINTER_ACTIONS } from './types.js';
 import { correctDrift, reverify, type DriftCorrection, type Reverify } from './drift.js';
 import { sendToBridge } from './bridge.js';
+import type { TargetCheck } from './assist-ai.js';
+
+type Point = { x: number; y: number };
+
+/** The AI grounding pass: confirm a proposed point on the live frame, or re-ask for it once. */
+export interface Grounding {
+  /** Is the step's named target at `p` on `live`? (asked on a zoomed crop around `p`) */
+  confirm: (live: Frame, step: WorkflowStep, p: Point) => Promise<TargetCheck>;
+  /** The planner re-asked once with why the last point was rejected; null when it cannot see the target. */
+  relocate: (live: Frame, step: WorkflowStep, feedback: string) => Promise<Point | null>;
+}
 
 /** What the real-input pipeline needs from its host. */
 export interface StepDeps {
@@ -14,6 +26,8 @@ export interface StepDeps {
   /** False for the self-test: verify and correct, but send no input. */
   dispatch: boolean;
   log: (message: string, tone: LogEntry['tone']) => void;
+  /** Present while the AI is online: every named pointer target is confirmed before input is sent. */
+  grounding?: Grounding;
 }
 
 /** The real result of one step. `executed` is true only when the PC confirmed the input. */
@@ -79,16 +93,55 @@ async function verifyAfter(step: WorkflowStep, before: Frame, target: { x: numbe
   return { shot, check };
 }
 
+/** A point as native pixels on `live`, for messages. */
+const px = (p: Point, live: Frame) => `(${Math.round(p.x * live.srcW)}, ${Math.round(p.y * live.srcH)})px`;
+
+/**
+ * The AI grounding pass for a named pointer target: confirm the target is at the proposed
+ * point on a zoomed crop; if not, re-ask the planner once with why and confirm its new point.
+ * Never resolves a point the model did not confirm.
+ */
+export async function groundTarget(step: WorkflowStep, live: Frame, p: Point, g: Grounding, log: StepDeps['log']): Promise<{ point: Point } | { error: string }> {
+  const name = step.target ?? step.name;
+  try {
+    const first = await g.confirm(live, step, p);
+    if (first.visible) {
+      log(`"${step.name}": AI confirmed "${name}" at ${px(p, live)} — ${first.reason}`, 'ok');
+      return { point: p };
+    }
+    log(`"${step.name}": AI did not see "${name}" at ${px(p, live)} (${first.reason}) — re-asking the planner once`, 'warn');
+    const next = await g.relocate(live, step, `"${name}" is not at that point: ${first.reason}`);
+    if (!next) return { error: `Target "${name}" not located: AI rejected ${px(p, live)} (${first.reason}) and the re-plan found no such target — not executed` };
+    const second = await g.confirm(live, step, next);
+    if (second.visible) {
+      log(`"${step.name}": AI confirmed "${name}" at the re-planned ${px(next, live)} — ${second.reason}`, 'ok');
+      return { point: next };
+    }
+    return { error: `Target "${name}" not located: AI rejected ${px(p, live)} (${first.reason}) and the re-planned ${px(next, live)} (${second.reason}) — not executed` };
+  } catch (error) {
+    return { error: `Target "${name}" could not be verified (AI unavailable: ${errorText(error)}) — not executed` };
+  }
+}
+
+/** Whether a step's point must pass the AI grounding pass before input is sent. */
+const needsGrounding = (step: WorkflowStep) => POINTER_ACTIONS.has(step.action) && !!step.target;
+
 /**
  * The single real-input pipeline: verify the target on a live desktop frame, correct its
- * drift, perform the input through the bridge at the corrected position, then re-verify.
+ * drift, confirm a named target with the AI, perform the input through the bridge at that
+ * position, then re-verify.
  */
 export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepOutcome> {
   const found = await locateTarget(step, deps);
   if ('error' in found) return { ok: false, executed: false, message: found.error, target: { x: step.x, y: step.y } };
   const { live, correction } = found;
-  const target = { x: correction.x, y: correction.y };
+  let target = { x: correction.x, y: correction.y };
   deps.log(describeCorrection(step, correction, live), correction.driftPx ? 'warn' : 'info');
+  if (needsGrounding(step) && deps.grounding) {
+    const grounded = await groundTarget(step, live, target, deps.grounding, deps.log);
+    if ('error' in grounded) return { ok: false, executed: false, message: grounded.error, target, correction };
+    target = grounded.point;
+  }
   if (!deps.dispatch) return { ok: true, executed: false, message: 'verified on the live screen — self-test, not dispatched', target, correction };
   const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y }, live.srcW, live.srcH);
   if (!sent.ok) return { ok: false, executed: false, message: sent.message, target, correction };

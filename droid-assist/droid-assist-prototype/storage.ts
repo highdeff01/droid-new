@@ -1,4 +1,5 @@
-import type { AssistSettings, LogEntry, SavedCard, StepAction, WorkflowStep } from './types.js';
+import type { AssistSettings, LogEntry, MonitorMode, SavedCard, StepAction, WorkflowStep } from './types.js';
+import { MONITOR_MODES, STEP_ACTIONS } from './types.js';
 import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 
 /** Most recent log entries kept, in memory and in storage. */
@@ -6,7 +7,7 @@ export const LOG_LIMIT = 200;
 
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log' } as const;
 
-const ACTIONS: readonly StepAction[] = ['click', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media'];
+const ACTIONS: readonly StepAction[] = STEP_ACTIONS;
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
@@ -56,7 +57,11 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   for (const key of ['autoAct', 'aiHelp', 'showTrail'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
-  if (typeof stored.bridgeUrl === 'string') out.bridgeUrl = stored.bridgeUrl;
+  for (const key of ['bridgeUrl', 'abortHotkey', 'aiUrl', 'aiModel'] as const) {
+    if (typeof stored[key] === 'string' && (key === 'bridgeUrl' || stored[key])) out[key] = stored[key] as string;
+  }
+  if (isNum(stored.actionBudget) && stored.actionBudget >= 1) out.actionBudget = stored.actionBudget;
+  if (typeof stored.monitorMode === 'string' && stored.monitorMode in MONITOR_MODES) out.monitorMode = stored.monitorMode as MonitorMode;
   return out;
 }
 

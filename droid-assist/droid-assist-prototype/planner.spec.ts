@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { planFromGoal } from './planner.js';
+import { PLAN_SYSTEM, planFromGoal, relocateTarget } from './planner.js';
 import { decidePopup, decideStep, describeScreen } from './assist-ai.js';
 import { AiError } from './ai.js';
 import type { AskFn } from './ai.js';
@@ -51,6 +51,47 @@ describe('planFromGoal', () => {
       throw new AiError('AI endpoint unreachable');
     });
     await expect(planFromGoal('x', [], frame, ask)).rejects.toThrow(/unreachable/);
+  });
+
+  it('plans "move mouse to the files icon" as a move step on its named target', async () => {
+    const ask = askReturning('{"steps":[{"name":"Move to Files icon","action":"move","target":"Files icon","x":0.42,"y":0.97}]}');
+    const plan = await planFromGoal('move mouse to the files icon', [], frame, ask);
+    expect(plan.steps).toMatchObject([{ action: 'move', target: 'Files icon', x: 0.42, y: 0.97, refFrame: frame }]);
+  });
+
+  it('accepts double_click and scroll, naming the step as the target when none is given', async () => {
+    const ask = askReturning('{"steps":[{"name":"Open readme","action":"double_click","x":0.2,"y":0.3},{"name":"Page","action":"scroll","x":0.5,"y":0.5,"text":"up"}]}');
+    const plan = await planFromGoal('open the readme file and scroll up', [], frame, ask);
+    expect(plan.steps).toMatchObject([
+      { action: 'double_click', target: 'Open readme' },
+      { action: 'scroll', target: 'Page', text: 'up' },
+    ]);
+  });
+
+  it('gives no target to non-pointer steps', async () => {
+    const plan = await planFromGoal('type hi', [], frame, askReturning('{"steps":[{"name":"Type","action":"type","target":"box","text":"hi"}]}'));
+    expect(plan.steps[0].target).toBeUndefined();
+  });
+
+  it('tells the model about every action and the target field', () => {
+    for (const word of ['"move"', '"double_click"', '"scroll"', '"target"']) expect(PLAN_SYSTEM).toContain(word);
+  });
+});
+
+describe('relocateTarget', () => {
+  const move: WorkflowStep = { id: 'm', name: 'Move to Files icon', action: 'move', target: 'Files icon', x: 0.1, y: 0.1, status: 'pending' };
+
+  it('re-asks with the rejection feedback and returns the new point', async () => {
+    const ask = askReturning('{"steps":[{"action":"move","target":"Files icon","x":0.6,"y":0.95}]}');
+    expect(await relocateTarget(ask, frame, move, 'crop shows an empty desktop')).toEqual({ x: 0.6, y: 0.95 });
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(ask.mock.calls[0][0].prompt).toContain('crop shows an empty desktop');
+    expect(ask.mock.calls[0][0].prompt).toContain('Files icon');
+    expect(ask.mock.calls[0][0].frame).toBe(frame);
+  });
+
+  it('returns null when the model cannot see the target', async () => {
+    expect(await relocateTarget(askReturning('{"steps":[]}'), frame, move, 'nope')).toBeNull();
   });
 });
 
