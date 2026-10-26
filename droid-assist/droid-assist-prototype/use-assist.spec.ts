@@ -44,6 +44,8 @@ describe('useAssist flow and pattern memory', () => {
     const { result } = renderHook(() => useAssist());
     await act(async () => {});
     expect(result.current.cards.map((c) => c.id)).toContain('f1');
+    // The engine pings the AI endpoint on mount; only the planning itself must make no model call.
+    fetchSpy.mockClear();
     act(() => result.current.setGoal('dismiss the ads and play the videos'));
     await act(() => result.current.autoPlan());
     const planned = result.current.log.find((l) => l.source === 'Planner');
@@ -87,6 +89,26 @@ describe('useAssist Qwen thinking timeline', () => {
   it('records null thinking when the response carries none', async () => {
     const result = await askWith(chatReply({ content: '{"answer":"Top bar","items":[]}' }));
     expect(result.current.timeline[0]).toMatchObject({ kind: 'thought', text: 'Top bar', thinking: null });
+  });
+
+  it('records the plan thought, reflection and verdict of a /move step run through the pipeline', async () => {
+    const replies: Record<string, Record<string, unknown>> = {
+      plan: { content: '{"steps":[{"name":"Hover Files","action":"move","target":"files icon","x":0.1,"y":0.9}]}', thinking: 'Files sits bottom-left.' },
+      reflect: { content: 'The cursor is on the files icon.', thinking: 'Looks right.' },
+      verdict: { content: '{"success":true,"pattern_avoid":null,"pattern_add":"hover before clicking"}', thinking: 'It worked.' },
+    };
+    const pick = (body: string) => (body.includes('final verdict') ? 'verdict' : body.includes('reviewing a step') ? 'reflect' : 'plan');
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => new Response(JSON.stringify({ message: { role: 'assistant', ...replies[pick(String(init.body))] } }), { status: 200 })));
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.setGoal('/move files icon'));
+    await act(() => result.current.submitInput());
+    expect(result.current.steps[0]).toMatchObject({ action: 'move', target: 'files icon' });
+    const kinds = result.current.timeline.map((e) => [e.step, e.kind]);
+    expect(kinds).toEqual([['Hover Files', 'verdict'], ['Hover Files', 'reflection'], ['/move files icon', 'thought']]);
+    expect(result.current.timeline[0]).toMatchObject({ thinking: 'It worked.' });
+    expect(result.current.timeline[2]).toMatchObject({ thinking: 'Files sits bottom-left.' });
+    expect(result.current.log.some((l) => l.source === '/move' && /Verdict on "Hover Files"/.test(l.message))).toBe(true);
   });
 
   it('records the endpoint failure instead of reasoning', async () => {

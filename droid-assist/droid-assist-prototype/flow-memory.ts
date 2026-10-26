@@ -75,7 +75,7 @@ export async function learnPatterns(ask: AskFn, goal: string, steps: WorkflowSte
     prompt: `Goal: ${goal || '(none)'}\nRun ${verdict === 'success' ? 'SUCCEEDED' : 'FAILED'}:\n${steps.map(stepLine).join('\n')}`,
     json: true,
   });
-  const raw = parseJsonReply(reply).patterns;
+  const raw = parseJsonReply(reply.content).patterns;
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((p) => {
     const e = (p ?? {}) as Record<string, unknown>;

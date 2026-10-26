@@ -24,7 +24,16 @@ export interface TrailPoint {
   click?: boolean;
 }
 
-/** Capture cadence: the app interval setting, background (1 s) or advanced (0.25 s). */
+/** Actions a workflow step can perform. `move` hovers the cursor over its target without clicking. */
+export type StepAction = 'click' | 'double_click' | 'move' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media';
+
+/** Every step action, in the order the planner contract lists them. */
+export const STEP_ACTIONS: readonly StepAction[] = ['click', 'double_click', 'move', 'scroll', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media'];
+
+/** Step actions that point the mouse at an on-screen target, so their coordinates must be grounded. */
+export const POINTER_ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(['click', 'double_click', 'move', 'scroll']);
+
+/** Monitor modes, each with its own capture interval. */
 export type MonitorMode = 'app' | 'background' | 'advanced';
 
 /** Real mouse/keyboard actions recorded in the persistent action history. */
@@ -57,9 +66,6 @@ export interface LearnedPattern {
   time: number;
 }
 
-/** Actions a workflow step can perform. */
-export type StepAction = 'click' | 'double_click' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media';
-
 /** Status of a step during replay. */
 export type StepStatus = 'pending' | 'running' | 'done' | 'drift' | 'failed';
 
@@ -71,6 +77,8 @@ export interface WorkflowStep {
   x: number;
   y: number;
   text?: string;
+  /** The on-screen thing a pointer step acts on ("files icon"); its coordinates are confirmed against it before dispatch. */
+  target?: string;
   /** Screenshot captured when the step was recorded — the template for drift matching. */
   refFrame?: Frame;
   status: StepStatus;
@@ -86,29 +94,6 @@ export interface WorkflowStep {
   /** Visual evidence from the last execution: screenshots just before and just after the action. */
   beforeFrame?: Frame;
   afterFrame?: Frame;
-}
-
-/** Monitor modes, each with its own capture interval. */
-export type MonitorMode = 'app' | 'background' | 'advanced';
-
-/** Real mouse/keyboard actions recorded in the persistent action history. */
-export type InputAction = 'move' | 'click' | 'double_click' | 'type' | 'key' | 'scroll';
-
-/** One executed mouse or keyboard action, persisted for viewing and export. */
-export interface ActionRecord {
-  id: string;
-  time: number;
-  action: InputAction;
-  /** Native screen pixels the action targeted. */
-  x: number;
-  y: number;
-  text?: string;
-  /** Who performed it: Replay, Auto-Actor, AI help, ... */
-  source: string;
-  /** Where it was dispatched: the desktop bridge or the demo desktop. */
-  via: 'bridge' | 'demo';
-  ok: boolean;
-  message: string;
 }
 
 /** Alignment between the live screen and the active step. */
