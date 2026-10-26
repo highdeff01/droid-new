@@ -182,3 +182,84 @@ describe('runStep grounding', () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 });
+
+describe('drag grounding of both points', () => {
+  /** Two distinct bright squares on one frame, so a drag's start and end are each a locatable template. */
+  function dragImage(x1: number, y1: number, x2: number, y2: number): ImageData {
+    const data = new Uint8ClampedArray(W * H * 4);
+    const onSquare = (cx: number, cy: number, x: number, y: number) => Math.abs(x - cx) < 6 && Math.abs(y - cy) < 6;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        const v = onSquare(x1, y1, x, y) || onSquare(x2, y2, x, y) ? 240 : 20;
+        data.set([v, v, v, 255], i);
+      }
+    }
+    return { width: W, height: H, data, colorSpace: 'srgb' } as ImageData;
+  }
+
+  const START = { x: 100, y: 60 };
+  const END = { x: 220, y: 120 };
+
+  /** A drag WorkflowStep whose start and end are each a distinct bright square in its reference frame. */
+  function dragStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+    return {
+      id: 'drag1',
+      name: 'Drag Files below Game',
+      action: 'drag',
+      x: START.x / W,
+      y: START.y / H,
+      endX: END.x / W,
+      endY: END.y / H,
+      target: 'Files icon',
+      endTarget: 'empty space below Game',
+      refFrame: frame(0, dragImage(START.x, START.y, END.x, END.y)),
+      status: 'pending',
+      ...overrides,
+    };
+  }
+
+  const seen = (visible: boolean, reason = visible ? 'icon is there' : 'empty desktop') => ({ visible, reason, thinking: null });
+  const grounding = (confirm: Grounding['confirm'], relocate: Grounding['relocate'] = vi.fn(async () => null)): Grounding => ({ confirm, relocate });
+  const sentStep = (fetchSpy: ReturnType<typeof vi.fn>) => JSON.parse(fetchSpy.mock.calls[0][1].body).steps[0];
+
+  it('confirms the start then the end (with the endTarget as its target) and sends the confirmed end in native pixels', async () => {
+    const fetchSpy = completedRun();
+    vi.stubGlobal('fetch', fetchSpy);
+    const live = frame(1, dragImage(START.x, START.y, END.x, END.y));
+    const confirm = vi.fn<Grounding['confirm']>(async () => seen(true));
+    const { d } = deps([live], { grounding: grounding(confirm) });
+    const step = dragStep();
+    const out = await runStep(step, d);
+    expect(out).toMatchObject({ ok: true, executed: true });
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(confirm.mock.calls[0][1].target).toBe(step.target);
+    expect(confirm.mock.calls[1][1].target).toBe(step.endTarget);
+    const sent = sentStep(fetchSpy);
+    expect(sent.endX).toBe(Math.round(step.endX! * 1920));
+    expect(sent.endY).toBe(Math.round(step.endY! * 1080));
+  });
+
+  it('never dispatches when confirm rejects the end point and the re-plan finds nothing', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const live = frame(1, dragImage(START.x, START.y, END.x, END.y));
+    const confirm = vi.fn().mockResolvedValueOnce(seen(true)).mockResolvedValueOnce(seen(false));
+    const relocate = vi.fn(async () => null);
+    const { d } = deps([live], { grounding: grounding(confirm, relocate) });
+    const out = await runStep(dragStep(), d);
+    expect(out).toMatchObject({ ok: false, executed: false });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('drift-corrects the end point when the live frame is shifted', async () => {
+    const shiftX = 10;
+    const shiftY = 6;
+    const live = frame(1, dragImage(START.x + shiftX, START.y + shiftY, END.x + shiftX, END.y + shiftY));
+    const { d } = deps([live], { dispatch: false });
+    const step = dragStep();
+    const out = await runStep(step, d);
+    expect(out.end!.x - step.endX!).toBeCloseTo(shiftX / W, 2);
+    expect(out.end!.y - step.endY!).toBeCloseTo(shiftY / H, 2);
+  });
+});

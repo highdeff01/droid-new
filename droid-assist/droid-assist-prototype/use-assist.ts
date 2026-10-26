@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ActionRecord, Annotation, AssistSettings, FamiliarElement, Frame, InputAction, LearnedPattern, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
 import { POINTER_ACTIONS } from './types.js';
 import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
-import { AD_CYCLE, demoAd, demoDrag, demoPlayButton, drawDemoDesktop, initialDemoFile, type DemoFile } from './demo-desktop.js';
-import { AI_PLAN_SOURCE, calculate, generateCard, planFromGoal, relocateTarget, uid } from './planner.js';
+import { AD_CYCLE, demoAd, demoDrag, demoFileAt, demoPlayButton, drawDemoDesktop, findIcon, initialDemoFile, initialDemoIcons, moveIcon, type DemoFile, type DemoIcon } from './demo-desktop.js';
+import { AI_PLAN_SOURCE, calculate, generateCard, planFromGoal, relocateTarget, replanDrag, uid } from './planner.js';
+import { checkMoved, sameElement, verifyArrangement, type Expectation, type MovedElement } from './rearrange.js';
 import { DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, pingAi } from './ai.js';
 import type { AiReply, AiStatus, AskRequest } from './ai.js';
 import { confirmTarget, decidePopup, decideStep, describeScreen, reflectStep, type PopupDecision, type StepDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
@@ -71,8 +72,8 @@ const LOCAL_ACTIONS: Partial<Record<StepAction, (step: WorkflowStep) => Promise<
   },
 };
 
-/** One step's real result plus whether the run must stop (abort, disarm, budget). */
-type Performed = StepOutcome & { halt?: boolean };
+/** One step's real result plus whether the run must stop (abort, disarm, budget) and, for a drag, what it grabbed and moved. */
+type Performed = StepOutcome & { halt?: boolean; grabbed?: string; moved?: MovedElement };
 
 const refused = (step: WorkflowStep, message: string): Performed => ({ ok: false, executed: false, halt: true, message, target: { x: step.x, y: step.y } });
 
@@ -163,6 +164,10 @@ export function useAssist() {
   const tickRef = useRef(0);
   /** The demo desktop's draggable Report file. */
   const demoFileRef = useRef<DemoFile>(initialDemoFile());
+  /** The demo desktop's rearrangeable sidebar icons. */
+  const demoIconsRef = useRef<DemoIcon[]>(initialDemoIcons());
+  /** The arrangement the current plan asks for (from the planner's "expect"). */
+  const expectRef = useRef<Expectation[]>([]);
   const dismissedCycleRef = useRef(-1);
   const framesRef = useRef<Frame[]>([]);
   const stepsRef = useRef<WorkflowStep[]>([]);
@@ -194,6 +199,7 @@ export function useAssist() {
   const recordingRef = useRef(false);
   const cardsRef = useRef<SavedCard[]>([]);
   const patternsRef = useRef<LearnedPattern[]>(patterns);
+  const familiarRef = useRef<FamiliarElement[]>(familiar);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
 
@@ -209,6 +215,7 @@ export function useAssist() {
   recordingRef.current = recording;
   cardsRef.current = cards;
   patternsRef.current = patterns;
+  familiarRef.current = familiar;
 
   const intervalMs = monitorInterval(settings.monitorMode, settings.captureMs);
 
@@ -241,8 +248,8 @@ export function useAssist() {
     };
   }, []);
 
-  const addLog = useCallback((from: string, message: string, tone: LogEntry['tone'] = 'info') => {
-    setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone }, ...l].slice(0, LOG_LIMIT));
+  const addLog = useCallback((from: string, message: string, tone: LogEntry['tone'] = 'info', shots?: string[]) => {
+    setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}) }, ...l].slice(0, LOG_LIMIT));
   }, []);
 
   // AI endpoint health: at startup and whenever the endpoint or model changes.
@@ -453,19 +460,40 @@ export function useAssist() {
     return 'Click hit nothing interactive';
   }, []);
 
-  /** Applies a drag to the demo desktop: grabbing the Report file moves (or archives) it. */
-  const applyDemoDrag = useCallback((from: { x: number; y: number }, to: { x: number; y: number }): string => {
+  /** Applies a drag to the demo desktop: grabbing a sidebar icon moves it; grabbing the Report file moves (or archives) it. Names what it grabbed. */
+  const applyDemoDrag = useCallback((from: { x: number; y: number }, to: { x: number; y: number }): { message: string; grabbed: string | null } => {
+    const icon = moveIcon(demoIconsRef.current, from, to);
+    if (icon.moved) {
+      demoIconsRef.current = icon.icons;
+      return { message: `Dragged "${icon.moved.label}" to (${pct(icon.moved.x)}, ${pct(icon.moved.y)})`, grabbed: icon.moved.label };
+    }
     const r = demoDrag(demoFileRef.current, from, to);
     demoFileRef.current = r.file;
-    return r.message;
+    return { message: r.message, grabbed: r.moved ? 'Report' : null };
   }, []);
 
-  /** The simulated effect of a pointer step on the demo desktop at `p`. */
+  /** A fresh frame of the demo desktop as it is right now; null when there is no canvas to draw on. */
+  const demoSnapshot = (): Frame | null => {
+    const c = demoCanvasRef.current;
+    const ctx = c?.getContext('2d');
+    if (!c || !ctx) return null;
+    drawDemoDesktop(ctx, DEMO_W, DEMO_H, tickRef.current, adDismissed(), demoFileRef.current, demoIconsRef.current);
+    return toFrame(c, DEMO_W, DEMO_H, ++frameId.current, 'demo');
+  };
+
+  /** The simulated effect of a non-drag pointer step on the demo desktop at `p`. */
   const demoEffect = (step: WorkflowStep, p: { x: number; y: number }): string => {
     if (step.action === 'click' || step.action === 'double_click') return demoClick(p.x, p.y);
     if (step.action === 'move') return `Moved the cursor to (${pct(p.x)}, ${pct(p.y)})`;
-    if (step.action === 'drag') return applyDemoDrag(p, { x: step.endX ?? p.x, y: step.endY ?? p.y });
     return `${step.action} simulated on the demo desktop`;
+  };
+
+  /** A drag on the demo desktop, with the frames around it and the element it grabbed. */
+  const demoDragStep = (step: WorkflowStep, p: { x: number; y: number }, live: Frame | undefined): Performed => {
+    const pre = demoSnapshot() ?? live;
+    const end = { x: step.endX!, y: step.endY! };
+    const { message, grabbed } = applyDemoDrag(p, end);
+    return { ok: !!grabbed, executed: !!grabbed, message, target: p, end, live: pre, shot: demoSnapshot() ?? undefined, grabbed: grabbed ?? undefined };
   };
 
   /** Performs a step on the demo desktop: template-checked against the latest frame, then simulated. */
@@ -483,6 +511,7 @@ export function useAssist() {
     }
     if (dryRun) return { ok: true, executed: false, message: 'verified on the demo screen — dry run, not dispatched', target: p };
     setCursor(p);
+    if (step.action === 'drag') return demoDragStep(step, p, live);
     const message = demoEffect(step, p);
     const ok = !/blocked|nothing/.test(message);
     return { ok, executed: ok, message, target: p };
@@ -522,15 +551,21 @@ export function useAssist() {
     return out;
   };
 
+  /** Remembers the element `name` at `p` in the familiar-elements memory, with a patch of `frame` around it. */
+  const rememberAt = async (name: string, p: { x: number; y: number }, frame: Frame | null | undefined) => {
+    const patch = frame ? await patchAt(frame, p).catch(() => undefined) : undefined;
+    familiarRef.current = rememberElement(familiarRef.current, { id: uid('el'), name, x: p.x, y: p.y, patch, lastSeen: Date.now() });
+    setFamiliar(familiarRef.current);
+  };
+
   /**
    * Familiar-elements memory: a pointer step whose target was verified or used is remembered
-   * by name with its point, a small patch of the screen around it and the time.
+   * by name with its point, a small patch of the screen around it and the time. A drag is
+   * remembered at its drop point, and only once the move was verified (see performDrag).
    */
   const rememberTarget = async (step: WorkflowStep, out: Performed) => {
-    if (!out.ok || !POINTER_ACTIONS.has(step.action)) return;
-    const frame = out.shot ?? framesRef.current[0];
-    const patch = frame ? await patchAt(frame, out.target).catch(() => undefined) : undefined;
-    setFamiliar((list) => rememberElement(list, { id: uid('el'), name: step.target ?? step.name, x: out.target.x, y: out.target.y, patch, lastSeen: Date.now() }));
+    if (!out.ok || !POINTER_ACTIONS.has(step.action) || step.action === 'drag') return;
+    await rememberAt(step.target ?? step.name, out.target, out.shot ?? framesRef.current[0]);
   };
 
   const forgetFamiliar = (id: string) => setFamiliar((list) => forgetElement(list, id));
@@ -541,6 +576,105 @@ export function useAssist() {
     void rememberTarget(step, out);
     if (!out.halt && aiOnline()) await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
     return out;
+  };
+
+  /**
+   * Where the element map puts `name`: the live layout on the demo desktop (sidebar icons, the
+   * Report file), else a familiar element seen at or after `since` (an older entry predates the drag being checked).
+   */
+  const mapAt = (name: string, since = 0): { x: number; y: number } | null => {
+    if (sourceRef.current === 'demo') {
+      const icon = findIcon(demoIconsRef.current, name);
+      if (icon) return { x: icon.x, y: icon.y };
+      if (/\breport\b/i.test(name)) return demoFileAt(demoFileRef.current);
+    }
+    const el = familiarRef.current.find((f) => sameElement(f.name, name) && (f.lastSeen ?? 0) >= since);
+    return el ? { x: el.x, y: el.y } : null;
+  };
+
+  /** The element a performed drag was meant to move: grabbed at its start, intended at its drop point. */
+  const movedBy = (step: WorkflowStep, out: Performed): MovedElement => ({ name: step.target ?? out.grabbed ?? step.name, from: out.target, to: out.end ?? { x: step.endX ?? out.target.x, y: step.endY ?? out.target.y }, before: out.live ?? null });
+
+  /** The move check after a drag, on the post-drag frame plus the element map; recorded as a 'check' entry. */
+  const checkDrag = (step: WorkflowStep, moved: MovedElement, out: Performed, since: number) => {
+    const r = checkMoved(moved, out.shot ?? null, mapAt(moved.name, since));
+    note({ step: step.name, kind: 'check', text: `${r.moved ? 'PASS' : 'FAIL'} — "${moved.name}" ${r.moved ? 'is at' : 'is not at'} the drop point ${at(moved.to.x, moved.to.y)}: ${r.detail}`, thinking: null });
+    return r;
+  };
+
+  /**
+   * The one retry of a drag that missed: re-planned by the AI on the post-drag frame, or, with the
+   * AI offline, the same drop regrabbing the element where it was sighted. Null: the AI no longer sees it.
+   */
+  const retryDrag = async (step: WorkflowStep, feedback: string, frame: Frame | null, sighted: { x: number; y: number } | null): Promise<WorkflowStep | null> => {
+    if (!aiOnline()) return sighted ? { ...step, x: sighted.x, y: sighted.y, refFrame: undefined } : step;
+    const { next } = await thought(step.name, async () => {
+      const r = await replanDrag(askAi, frame, step, feedback);
+      return { next: r?.step ?? null, thinking: r?.thinking ?? null };
+    }, (r) => (r.next ? `Re-planned the drag: ${at(r.next.x, r.next.y)} → ${at(r.next.endX ?? r.next.x, r.next.endY ?? r.next.y)}` : `Re-plan: "${step.target ?? step.name}" is not visible`));
+    return next;
+  };
+
+  /** A drag that did not land after its retry: failed, with why. */
+  const missed = (out: Performed, moved: MovedElement, why: string): Performed => ({ ...out, ok: false, executed: false, moved, message: `${out.message} — but "${moved.name}" did not land at ${at(moved.to.x, moved.to.y)}: ${why}` });
+
+  /**
+   * A drag through the gated pipeline, then the move check on the live frame. A miss is
+   * re-planned (or retried) once through the same pipeline, spending budget; a second miss fails.
+   */
+  const performDrag = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
+    let current = step;
+    for (let attempt = 1; ; attempt++) {
+      const since = Date.now();
+      const out = await perform(current, actor, budget, dryRun);
+      if (!out.executed) return out;
+      const moved = movedBy(current, out);
+      const check = checkDrag(current, moved, out, since);
+      if (check.moved) {
+        void rememberAt(moved.name, check.at ?? moved.to, out.shot);
+        return { ...out, moved };
+      }
+      if (attempt === 2 || abortRef.current) return missed(out, moved, `${check.detail}${attempt === 2 ? ' (failed after one retry)' : ' (stopped, no retry)'}`);
+      addLog(actor, `"${moved.name}" did not land at its drop point (${check.detail}) — retrying once`, 'warn');
+      try {
+        const next = await retryDrag(current, check.detail, out.shot ?? framesRef.current[0] ?? null, check.at);
+        if (!next) return missed(out, moved, 'the re-plan no longer sees the element');
+        current = next;
+      } catch (error) {
+        return missed(out, moved, `re-plan failed (AI unavailable: ${errorText(error)})`);
+      }
+    }
+  };
+
+  /** Runs a step: a drag with its move check and retry, anything else as is. */
+  const execute = (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean) => (step.action === 'drag' ? performDrag : perform)(step, actor, budget, dryRun);
+
+  /** A fresh frame for the final verification pass: the demo canvas, or a bridge screenshot (null with the reason logged). */
+  const finalFrame = async (label: string): Promise<Frame | null> => {
+    if (sourceRef.current === 'demo') return demoSnapshot();
+    try {
+      return await desktopFrame(settingsRef.current.bridgeUrl, ++frameId.current);
+    } catch (error) {
+      addLog(label, `Verification has no final screenshot: ${errorText(error)}`, 'error');
+      return null;
+    }
+  };
+
+  /**
+   * The verification pass after a rearrangement: every moved element is re-detected on a fresh
+   * frame and the requested arrangement checked, one PASS/FAIL log entry (before/after screenshots)
+   * and one 'check' entry per element.
+   */
+  const verifyRearrangement = async (moved: MovedElement[], label: string) => {
+    const final = await finalFrame(label);
+    const verdicts = verifyArrangement(moved, expectRef.current, final, (name) => mapAt(name));
+    for (const v of verdicts) {
+      const text = `${v.pass ? 'PASS' : 'FAIL'} "${v.element}" — ${v.detail}`;
+      addLog('Verify', text, v.pass ? 'ok' : 'error', [v.before?.url, final?.url].filter((u): u is string => !!u));
+      note({ step: `Verify "${v.element}"`, kind: 'check', text, thinking: null });
+    }
+    const passed = verdicts.filter((v) => v.pass).length;
+    addLog('Verify', `Arrangement ${passed === verdicts.length ? 'confirmed' : 'NOT confirmed'}: ${passed}/${verdicts.length} element(s) pass`, passed === verdicts.length ? 'ok' : 'error');
   };
 
   /**
@@ -699,7 +833,7 @@ export function useAssist() {
     const id = setInterval(() => {
       tickRef.current += 1;
       const c = demoCanvasRef.current;
-      if (c) drawDemoDesktop(c.getContext('2d')!, DEMO_W, DEMO_H, tickRef.current, adDismissed(), demoFileRef.current);
+      if (c) drawDemoDesktop(c.getContext('2d')!, DEMO_W, DEMO_H, tickRef.current, adDismissed(), demoFileRef.current, demoIconsRef.current);
     }, 400);
     return () => clearInterval(id);
   }, [source]);
@@ -774,7 +908,7 @@ export function useAssist() {
       addLog('Recorder', `Captured drag from (${pct(from.x)}, ${pct(from.y)}) to (${pct(to.x)}, ${pct(to.y)}) with screenshot`, 'info');
       return;
     }
-    if (sourceRef.current === 'demo') addLog('You', applyDemoDrag(from, to));
+    if (sourceRef.current === 'demo') addLog('You', applyDemoDrag(from, to).message);
   }, [addLog, applyDemoDrag]);
 
   /** Live-write while recording: typed text becomes a "type" step. */
@@ -835,7 +969,7 @@ export function useAssist() {
       return out;
     }
     const before = framesRef.current[0] ?? null;
-    const out = await perform(step, label, budget, dryRun);
+    const out = await execute(step, label, budget, dryRun);
     applyOutcome(i, out, dryRun, before);
     addLog(label, `${step.name}: ${out.message}`, out.ok ? 'ok' : 'error');
     return out;
@@ -870,14 +1004,17 @@ export function useAssist() {
     stepsRef.current = stepsRef.current.map((st) => ({ ...st, status: 'pending' as const }));
     setSteps(stepsRef.current);
     const shots: Frame[] = [];
+    const moved: MovedElement[] = [];
     let ok = 0;
     addLog(label, dryRun ? `Verifying ${stepsRef.current.length} step(s) on the live screen — no input is sent` : `Performing ${stepsRef.current.length} step(s) as real input`);
     for (let i = 0; i < stepsRef.current.length && !abortRef.current; i++) {
       const out = await replayStep(i, budget, dryRun, label);
       if (out.ok) ok++;
       if (out.shot) shots.push(out.shot);
+      if (out.moved) moved.push(out.moved);
       if (out.halt) break;
     }
+    if (moved.length) await verifyRearrangement(moved, label);
     setActiveIndex(null);
     setReplaying(false);
     const picks = shots.map((f, i) => ({ f, score: i === 0 ? 1 : frameDistance(shots[i - 1].data, f.data) })).sort((a, b) => b.score - a.score).slice(0, 3).map((p) => p.f);
@@ -909,23 +1046,33 @@ export function useAssist() {
    * AI plan: reuse a similar saved flow (drift-corrected), otherwise the model plans from the
    * goal + live frame with the learned patterns relevant to this goal as context.
    */
-  const autoPlan = async (text = goal) => {
+  const autoPlan = async (text = goal): Promise<boolean> => {
     if (!text.trim()) {
       addLog('Planner', 'Type a goal first', 'warn');
-      return;
+      return false;
     }
+    let planned = false;
     await withAi(async () => {
       try {
         const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askAi, [], patternsRef.current), planSummary);
-        const { steps: planned, source: why } = plan;
-        stepsRef.current = planned;
-        setSteps(planned);
-        setDraftCard(generateCard(planned, text));
-        addLog('Planner', `${why}: ${planned.length} step(s) — ${planned.map((s) => `${s.action} "${s.target ?? s.name}"`).join(' → ')}${armedRef.current ? '' : ' (real input disarmed: replay / Auto Act run it as a dry run)'}`, 'ok');
+        const { steps: next, source: why, expect } = plan;
+        stepsRef.current = next;
+        expectRef.current = expect;
+        setSteps(next);
+        setDraftCard(generateCard(next, text));
+        const arrangement = expect.length ? `; arrangement: ${expect.map((e) => `"${e.element}" ${e.relation.replace('_', ' ')} "${e.anchor}"`).join(', ')}` : '';
+        addLog('Planner', `${why}: ${next.length} step(s) — ${next.map((s) => `${s.action} "${s.target ?? s.name}"`).join(' → ')}${arrangement}${armedRef.current ? '' : ' (real input disarmed: replay / Auto Act run it as a dry run)'}`, 'ok');
+        planned = next.length > 0;
       } catch (error) {
         addLog('Planner', `AI plan failed — no steps created: ${errorText(error)}`, 'error');
       }
     });
+    return planned;
+  };
+
+  /** "/arrange <goal>": the model plans the rearrangement as drags, which replay at once with the move checks and the final verification pass. */
+  const arrange = async (text: string) => {
+    if (await autoPlan(text)) await replay();
   };
 
   /** "/move <target>": the model plans one move onto the target, which runs at once through the grounded pipeline. */
@@ -1055,7 +1202,7 @@ export function useAssist() {
     if (await shareScreen()) setTarget(name);
   };
 
-  /** Submits the assist input: /use and /move run, anything else is planned as a goal. */
+  /** Submits the assist input: /use, /move and /arrange run, anything else is planned as a goal. */
   const submitInput = async () => {
     const command = parseCommand(goal);
     if (!command) {
@@ -1067,8 +1214,8 @@ export function useAssist() {
       return;
     }
     setGoal('');
-    if (command.kind === 'use') await attachTarget(command.target);
-    else await moveTo(command.target);
+    const run: Record<typeof command.kind, (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, arrange };
+    await run[command.kind](command.target);
   };
 
   /** Explicit demo mode. */
@@ -1096,6 +1243,7 @@ export function useAssist() {
   };
 
   const loadCard = (card: SavedCard) => {
+    expectRef.current = [];
     setSteps(card.steps.map((s) => ({ ...s, status: 'pending' as const })));
     addLog('Library', `Loaded "${card.name}"`);
   };

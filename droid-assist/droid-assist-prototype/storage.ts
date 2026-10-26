@@ -92,7 +92,8 @@ export function loadLog(): LogEntry[] {
 
 /** Persists the newest LOG_LIMIT log entries. */
 export function saveLog(log: LogEntry[]) {
-  writeJson(KEYS.log, log.slice(0, LOG_LIMIT));
+  // Screenshot evidence is too large for localStorage; JSON drops the undefined field.
+  writeJson(KEYS.log, log.slice(0, LOG_LIMIT).map((l) => (l.shots ? { ...l, shots: undefined } : l)));
 }
 
 /** A valid stored step normalised to a pending one, or null. */

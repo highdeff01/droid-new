@@ -29,3 +29,14 @@ describe('parseCommand', () => {
     expect(r && 'message' in r ? r.message : '').toMatch(/\/move/);
   });
 });
+
+describe('/arrange', () => {
+  it('parses /arrange with a multi-word goal', () => {
+    expect(parseCommand('/arrange move the Files icon below Game')).toEqual({ kind: 'arrange', target: 'move the Files icon below Game' });
+  });
+  it('rejects /arrange without a target', () => {
+    const r = parseCommand('/arrange');
+    expect(r).toMatchObject({ kind: 'error' });
+    expect(r && 'message' in r ? r.message : '').toMatch(/\/arrange/);
+  });
+});

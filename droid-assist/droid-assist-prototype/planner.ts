@@ -3,6 +3,7 @@ import { POINTER_ACTIONS, STEP_ACTIONS } from './types.js';
 import { AiError, VIEW_H, VIEW_W, parseJsonReply } from './ai.js';
 import type { AskFn } from './ai.js';
 import { GRID_PROMPT, gridRef, replyPoint, resolveCell } from './grid.js';
+import { RELATIONS, type Expectation, type Relation } from './rearrange.js';
 
 let seq = 0;
 /** A short unique id. */
@@ -78,6 +79,24 @@ export interface PlanResult {
   steps: WorkflowStep[];
   source: string;
   thinking: string | null;
+  /** The arrangement a rearrangement goal asks for; empty for other goals and reused flows. */
+  expect: Expectation[];
+}
+
+const RELATION_SET: ReadonlySet<string> = new Set(RELATIONS);
+const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+
+/** The "expect" relations of a planner reply; a malformed entry is an AiError, never dropped silently. */
+export function parseExpectations(reply: string): Expectation[] {
+  const raw = parseJsonReply(reply).expect;
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new AiError('AI "expect" is not a list of relations');
+  return raw.map((r: unknown) => {
+    const e = (r ?? {}) as Record<string, unknown>;
+    const relation = text(e.relation);
+    if (!text(e.element) || !text(e.anchor) || !RELATION_SET.has(relation)) throw new AiError(`AI proposed an unusable arrangement relation ${JSON.stringify(r)}`);
+    return { element: text(e.element), relation: relation as Relation, anchor: text(e.anchor) };
+  });
 }
 
 /** Converts one model step into a WorkflowStep; throws AiError when it breaks the contract. */
@@ -161,12 +180,13 @@ export async function planFromGoal(goal: string, cards: SavedCard[], frame: Fram
       source: `Reused saved workflow "${similar.name}" (similar goal, drift-corrected coordinates)`,
       steps: similar.steps.map(reuseStep),
       thinking: null,
+      expect: [],
     };
   }
   const lessons = relevantPatterns(goal, patterns).map(patternLine);
   const reply = await ask({ system: PLAN_SYSTEM, prompt: `Goal: ${goal}`, frame, context: [...lessons, ...context], json: true });
   const source = lessons.length ? `${AI_PLAN_SOURCE}, applying ${lessons.length} learned pattern(s)` : AI_PLAN_SOURCE;
-  return { steps: parsePlan(reply.content, frame), source, thinking: reply.thinking };
+  return { steps: parsePlan(reply.content, frame), source, thinking: reply.thinking, expect: parseExpectations(reply.content) };
 }
 /**
  * Re-asks the planner, once, where `step`'s target is after its proposed point was rejected
@@ -184,6 +204,26 @@ export async function relocateTarget(ask: AskFn, frame: Frame, step: WorkflowSte
   if (!Array.isArray(steps) || !steps.length) return null;
   const s = (steps[0] ?? {}) as Record<string, unknown>;
   return { ...replyPoint(s), thinking: reply.thinking };
+}
+
+/**
+ * The one re-plan of a drag whose element did not land where intended (`feedback` says where
+ * it ended up): the model looks at the live frame again and gives one corrected drag for the
+ * same element. Resolves the corrected step (start + end grounded on the grid), or null when
+ * the model says the element is not visible. Rejects with AiError on an unusable reply.
+ */
+export async function replanDrag(ask: AskFn, frame: Frame | null, step: WorkflowStep, feedback: string): Promise<{ step: WorkflowStep; thinking: string | null } | null> {
+  const reply = await ask({
+    system: `${PLAN_SYSTEM}\nThis is a correction of one drag that did not work: reply with exactly one "drag" step for the same element, or {"steps":[]} if it is not visible.`,
+    prompt: `Drag "${step.name}" was to move "${step.target ?? step.name}" from ${gridRef(step)} to ${gridRef({ x: step.endX ?? step.x, y: step.endY ?? step.y })} ("${step.endTarget ?? 'drop point'}"). It did not land there: ${feedback}\nLook at the screen as it is now and give the element's current center and the drop point again.`,
+    frame,
+    json: true,
+  });
+  const steps = parseJsonReply(reply.content).steps;
+  if (!Array.isArray(steps) || !steps.length) return null;
+  const next = toStep(steps[0], frame);
+  if (next.action !== 'drag') throw new AiError(`AI re-planned the drag as "${next.action}"`);
+  return { step: { ...next, id: step.id, name: step.name }, thinking: reply.thinking };
 }
 
 /** A generated name + description for a workflow. */
