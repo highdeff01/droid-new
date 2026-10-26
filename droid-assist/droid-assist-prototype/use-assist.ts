@@ -17,7 +17,10 @@ import { LOG_LIMIT, loadCards, loadLog, loadPatterns, loadSettings, saveCards, s
 import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
-import { failurePattern, flowCard, learnPatterns, mergePatterns, runVerdict, upsertCard } from './flow-memory.js';
+import { failurePattern, flowCard, learnPatterns, mergePatterns, newPattern, runVerdict, upsertCard } from './flow-memory.js';
+import { BUS_AGENTS, elementLine, forward, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
+import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
+import type { StepVerdict } from './assist-ai.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -99,9 +102,9 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   aiModel: DEFAULT_AI_MODEL,
 };
 
-/** A background agent the user can toggle. */
+/** A background agent the user can toggle; each also has an inbox on the inter-agent bus. */
 export interface Agent {
-  id: 'popup' | 'drift' | 'progress' | 'goal';
+  id: Exclude<BusAgentId, 'habits'>;
   name: string;
   description: string;
   on: boolean;
@@ -141,7 +144,17 @@ export function useAssist() {
     { id: 'drift', name: 'Drift monitor', description: 'Cross-checks every frame against the active step', on: true },
     { id: 'progress', name: 'Progress tracker', description: 'Counts verified steps toward the goal', on: true },
     { id: 'goal', name: 'Goal reviewer', description: 'Reviews the goal after each run and suggests what is next', on: true },
+    { id: 'screen', name: BUS_AGENTS.screen, description: 'Observes forwarded elements on the live screen', on: true },
+    { id: 'coords', name: BUS_AGENTS.coords, description: 'Predefines the coordinates of forwarded elements for planning', on: true },
+    { id: 'supervisor', name: BUS_AGENTS.supervisor, description: 'Splits link/route tests into subagents and aggregates their report', on: true },
   ]);
+  /** The inter-agent message bus: every forwarded element in each recipient's inbox, newest first. */
+  const [bus, setBus] = useState<BusMessage[]>([]);
+  /** Elements the coordinate learner predefined from forwards, newest first. */
+  const [knownElements, setKnownElements] = useState<ForwardedElement[]>([]);
+  /** The latest link/route subagent test report; null before the first. */
+  const [subReport, setSubReport] = useState<SubagentReport | null>(null);
+  const [subRunning, setSubRunning] = useState(false);
   const [plays, setPlays] = useState(0);
   const [armed, setArmed] = useState(false);
   const [aborted, setAborted] = useState(false);
@@ -188,6 +201,10 @@ export function useAssist() {
   const patternsRef = useRef<LearnedPattern[]>(patterns);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
+  const busRef = useRef<BusMessage[]>([]);
+  const knownRef = useRef<ForwardedElement[]>([]);
+  /** True while link/route subagents hold the screen; Auto Act pauses meanwhile. */
+  const subRunningRef = useRef(false);
 
   settingsRef.current = settings;
   sourceRef.current = source;
@@ -288,16 +305,18 @@ export function useAssist() {
    * Reflect-after-step: the model's reflection and final verdict on an executed step go on the
    * timeline and the verdict into the activity log. A failure is logged as such — never invented.
    */
-  const reflectAfter = useCallback(async (step: WorkflowStep, frame: Frame | null, result: StepResult, logSource: string) => {
+  const reflectAfter = useCallback(async (step: WorkflowStep, frame: Frame | null, result: StepResult, logSource: string): Promise<StepVerdict | null> => {
     try {
       const { reflection, verdict } = await reflectStep(askAi, frame, step, result, goalRef.current);
       const text = verdictText(verdict);
       note({ step: step.name, kind: 'reflection', text: reflection.text, thinking: reflection.thinking });
       note({ step: step.name, kind: 'verdict', text, thinking: verdict.thinking });
       addLog(logSource, `Verdict on "${step.name}": ${text}`, verdict.success ? 'ok' : 'warn');
+      return verdict;
     } catch (error) {
       note({ step: step.name, kind: 'verdict', text: '', thinking: null, error: errorText(error) });
       addLog(logSource, `No verdict for "${step.name}" — AI reflection failed: ${errorText(error)}`, 'error');
+      return null;
     }
   }, [addLog, askAi, note]);
 
@@ -308,7 +327,9 @@ export function useAssist() {
   const grounding: Grounding = {
     confirm: async (live, step, p) => {
       const crop = await zoomFrame(live, p);
-      return thought(step.name, () => confirmTarget(askAi, crop, step), checkSummary(step, p));
+      const check = await thought(step.name, () => confirmTarget(askAi, crop, step), checkSummary(step, p));
+      if (check.visible) forwardElement('drift', { name: step.target ?? step.name, x: p.x, y: p.y });
+      return check;
     },
     relocate: async (live, step, feedback) => {
       const { point } = await thought(step.name, async () => {
@@ -414,6 +435,47 @@ export function useAssist() {
   const agentsRef = useRef(agentOn);
   agentsRef.current = agentOn;
 
+  /** What each recipient does with a forwarded element; the returned note is shown on its inbox message. */
+  const busHandlers: Record<BusAgentId, (e: ForwardedElement, from: BusAgentId) => string> = {
+    coords: (e) => {
+      knownRef.current = predefine(knownRef.current, e);
+      setKnownElements(knownRef.current);
+      return `Predefined "${e.name}" at ${at(e.x, e.y)} — fed into planning`;
+    },
+    habits: (e, from) => {
+      addPatterns([newPattern('add', `"${e.name}" is at ${at(e.x, e.y)} (found by ${BUS_AGENTS[from]})`, goalRef.current)]);
+      return `Recorded "${e.name}" as a habit`;
+    },
+    screen: (e) => {
+      const box: Annotation = { id: uid('ann'), x: Math.max(0, e.x - (e.w ?? 0.04) / 2), y: Math.max(0, e.y - (e.h ?? 0.04) / 2), w: e.w ?? 0.04, h: e.h ?? 0.04, label: `Watching: ${e.name}`, tone: 'info', actX: e.x, actY: e.y };
+      setAnnotations((a) => [box, ...a.filter((x) => x.label !== box.label)].slice(0, 6));
+      return `Observing "${e.name}" on the live screen`;
+    },
+    popup: (e) => `Noted "${e.name}" — not a popup to flag`,
+    drift: (e) => `Will cross-check "${e.name}" at ${at(e.x, e.y)}`,
+    progress: (e) => `Noted "${e.name}" as reachable`,
+    goal: (e) => `Noted "${e.name}" for goal review`,
+    supervisor: (e) => `Noted "${e.name}" for link/route tests`,
+  };
+
+  /**
+   * Forwards a discovered element from one agent into the inboxes of the others (all of them by
+   * default) for forward testing and predefining. Each recipient that is on handles it at once;
+   * an off agent keeps it queued.
+   */
+  const forwardElement = useCallback((from: BusAgentId, element: ForwardedElement, to?: BusAgentId[]) => {
+    const { bus: next, queued } = forward(busRef.current, from, element, to);
+    let updated = next;
+    queued.forEach((m) => {
+      if (m.to !== 'habits' && !agentsRef.current(m.to)) return;
+      updated = markHandled(updated, m.id, busHandlers[m.to](element, from));
+    });
+    busRef.current = updated;
+    setBus(updated);
+    addLog('Agent bus', `${BUS_AGENTS[from]} forwarded "${element.name}" at ${at(element.x, element.y)} to ${queued.length} agent(s)`, 'info');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addLog]);
+
   const adDismissed = () => Math.floor(tickRef.current / AD_CYCLE) === dismissedCycleRef.current;
 
   /** Appends one performed mouse/keyboard action to the persistent history. */
@@ -497,9 +559,9 @@ export function useAssist() {
   };
 
   /** performStep, then reflect-after-step: every step the pipeline ran gets the model's reflection and verdict. */
-  const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
+  const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed & { verdict?: StepVerdict | null }> => {
     const out = await performStep(step, actor, budget, dryRun);
-    if (!out.halt && aiOnline()) await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
+    if (!out.halt && aiOnline()) return { ...out, verdict: await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor) };
     return out;
   };
 
@@ -558,6 +620,7 @@ export function useAssist() {
       return;
     }
     const close: WorkflowStep = { id: uid('close'), name: 'Close popup', action: 'click', target: 'close (X) button of the popup', x: d.x, y: d.y, status: 'pending' };
+    forwardElement('popup', { name: close.target!, x: d.x, y: d.y });
     const out = await perform(close, 'Auto-Actor', autoBudgetRef.current, dry);
     addLog('Auto-Actor', `Close popup (${d.reason}): ${out.message}`, out.ok ? 'ok' : 'error');
     if (out.halt) setSettings((s) => ({ ...s, autoAct: false }));
@@ -592,7 +655,7 @@ export function useAssist() {
   /** Auto Act: with the AI online, the model handles popups and runs the next pending step. Disarmed = dry run. */
   const autoAct = async (frame: Frame) => {
     const { autoAct: on } = settingsRef.current;
-    if (!on || abortedRef.current || autoBusyRef.current || replayingRef.current || recordingRef.current) return;
+    if (!on || abortedRef.current || autoBusyRef.current || replayingRef.current || recordingRef.current || subRunningRef.current) return;
     if (!aiOnline() || Date.now() - lastStepAt.current < 1500) return;
     autoBusyRef.current = true;
     try {
@@ -815,7 +878,7 @@ export function useAssist() {
 
   const stop = () => {
     abortRef.current = true;
-    addLog('Replay', 'Stopped by user', 'warn');
+    addLog(subRunningRef.current ? 'Supervisor' : 'Replay', subRunningRef.current ? 'Stopped by user — the running subagent ends and the rest are aborted' : 'Stopped by user', 'warn');
   };
 
   /** Runs `fn` with the AI busy flag set. */
@@ -839,7 +902,7 @@ export function useAssist() {
     }
     await withAi(async () => {
       try {
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askAi, [], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askAi, knownRef.current.map(elementLine), patternsRef.current), planSummary);
         const { steps: planned, source: why } = plan;
         stepsRef.current = planned;
         setSteps(planned);
@@ -873,6 +936,78 @@ export function useAssist() {
     });
   };
 
+  /**
+   * One subagent: its slice goes through the same pipeline as every run — plan from the slice's
+   * goal on the live frame, grounded execution under its own budget slice and the guardrails,
+   * reflect and verdict. It passes only when every step ran ok and every verdict says success.
+   */
+  const runSubagent = async (task: SubagentTask, dryRun: boolean): Promise<SubagentOutcome> => {
+    const label = `Subagent ${task.index + 1}`;
+    const base = { dry: dryRun, shots: [] as Frame[], thinking: [] as string[] };
+    const stopped = () => abortRef.current || abortedRef.current;
+    const plan = await thought(`${label}: ${task.label}`, () => planFromGoal(task.goal, [], framesRef.current[0] ?? null, askAi, knownRef.current.map(elementLine), patternsRef.current), planSummary);
+    if (plan.thinking) base.thinking.push(plan.thinking);
+    const budget = createBudget(task.budget);
+    let last: { x: number; y: number } | undefined;
+    let verdict: StepVerdict | null | undefined;
+    for (const step of plan.steps) {
+      if (stopped()) return { ...base, status: 'aborted', message: `Stopped before "${step.name}" — nothing more sent` };
+      const out = await perform(step, label, budget, dryRun);
+      if (out.shot) base.shots.push(out.shot);
+      verdict = out.verdict;
+      if (verdict?.thinking) base.thinking.push(verdict.thinking);
+      if (!out.ok) return { ...base, status: stopped() ? 'aborted' : 'fail', message: `${step.name}: ${out.message}`, avoid: verdict?.pattern_avoid, add: verdict?.pattern_add };
+      last = out.target;
+      if (!verdict) return { ...base, status: 'fail', message: `${step.name}: no AI verdict — not counted as a pass`, point: last };
+      if (!verdict.success) return { ...base, status: 'fail', message: `${step.name}: AI verdict FAILED`, avoid: verdict.pattern_avoid, add: verdict.pattern_add, point: last };
+    }
+    return { ...base, status: 'pass', message: `${plan.steps.length} step(s) ${dryRun ? 'verified (dry run, nothing sent)' : 'executed'} and verified`, avoid: verdict?.pattern_avoid, add: verdict?.pattern_add, point: last };
+  };
+
+  /** The links or route stops of a request: as given, or listed by the model on the live frame. */
+  const sectionsOf = async (req: TestRequest): Promise<string[]> => {
+    if (req.items.length) return req.items;
+    const { items } = await thought(`Supervisor: ${req.goal}`, () => listSections(askAi, framesRef.current[0] ?? null, req), (r) => `${r.items.length} ${req.kind === 'link' ? 'link(s)' : 'route stop(s)'}: ${r.items.join(', ')}`);
+    return items;
+  };
+
+  /**
+   * Thorough link/route testing: the supervisor subsections the work into one subagent per link
+   * or route segment, each with its slice of the action budget, run one at a time (Auto Act
+   * pauses) and stoppable by Stop or the emergency abort. Results aggregate into a pass/fail
+   * report; its lessons go to the habit system and passed elements to the agent bus.
+   */
+  const testRoutes = async (req: TestRequest) => {
+    if (abortedRef.current) return addLog('Supervisor', 'Link/route test refused — ABORTED is active; clear the abort first', 'error');
+    if (subRunningRef.current) return addLog('Supervisor', 'A link/route test is already running', 'warn');
+    if (!agentsRef.current('supervisor')) return addLog('Supervisor', 'Supervisor agent is off — enable it to run link/route tests', 'warn');
+    const dryRun = !armedRef.current;
+    abortRef.current = false;
+    subRunningRef.current = true;
+    setSubRunning(true);
+    const report = (results: SubagentReport['results'], finished: boolean): SubagentReport => ({ goal: req.goal, kind: req.kind, time: Date.now(), finished, results });
+    try {
+      await withAi(async () => {
+        const items = await sectionsOf(req);
+        const tasks = planSubagents(req.kind, items, settingsRef.current.actionBudget);
+        addLog('Supervisor', `${tasks.length} subagent(s) for "${req.goal}" — budget slices ${tasks.map((t) => t.budget).join('/')}${dryRun ? ' (real input disarmed: dry run)' : ''}`, 'info');
+        setSubReport(report([], false));
+        const results = await runSubagents(tasks, (t) => runSubagent(t, dryRun), () => abortRef.current || abortedRef.current, (r) => setSubReport(report(r, false)));
+        setSubReport(report(results, true));
+        addPatterns(reportPatterns(results, req.goal));
+        results.forEach((r) => {
+          if (r.status === 'pass' && r.point) forwardElement('supervisor', { name: r.target, x: r.point.x, y: r.point.y });
+        });
+        addLog('Supervisor', `Link/route test "${req.goal}": ${summaryText(results)}`, results.every((r) => r.status === 'pass') ? 'ok' : 'warn');
+      });
+    } catch (error) {
+      addLog('Supervisor', `AI unavailable — no subagents run: ${errorText(error)}`, 'error');
+    } finally {
+      subRunningRef.current = false;
+      setSubRunning(false);
+    }
+  };
+
   /** AI help: the model answers a question about the live screen and points out what it means. */
   const askScreen = async (question = 'What on this screen needs my attention, and what should I do next?') => {
     const f = framesRef.current[0];
@@ -886,6 +1021,7 @@ export function useAssist() {
         setAiAnswer(answer);
         setAnnotations(items);
         addLog('AI help', answer, 'info');
+        items.filter((a) => a.actX !== undefined && a.actY !== undefined).forEach((a) => forwardElement('screen', { name: a.label, x: a.actX!, y: a.actY!, w: a.w, h: a.h }));
       } catch (error) {
         setAiAnswer('');
         addLog('AI help', `AI unavailable — no answer: ${errorText(error)}`, 'error');
@@ -982,7 +1118,8 @@ export function useAssist() {
   const submitInput = async () => {
     const command = parseCommand(goal);
     if (!command) {
-      await autoPlan(goal);
+      if (isTestGoal(goal)) await testRoutes(parseTestSpec(goal));
+      else await autoPlan(goal);
       return;
     }
     if (command.kind === 'error') {
@@ -991,6 +1128,7 @@ export function useAssist() {
     }
     setGoal('');
     if (command.kind === 'use') await attachTarget(command.target);
+    else if (command.kind === 'test') await testRoutes(parseTestSpec(command.target));
     else await moveTo(command.target);
   };
 
@@ -1028,6 +1166,7 @@ export function useAssist() {
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
     armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern,
+    bus, knownElements, forwardElement, subReport, subRunning, testRoutes,
     onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
   };
