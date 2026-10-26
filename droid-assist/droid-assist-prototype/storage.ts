@@ -2,11 +2,12 @@ import type { AssistSettings, LearnedPattern, LogEntry, MonitorMode, SavedCard, 
 import { STEP_ACTIONS } from './types.js';
 import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 import { sanitizeBudget } from './safety.js';
+import { OUTBOX_LIMIT, isErrorReport, type ErrorReport } from './error-forwarding.js';
 
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -60,10 +61,13 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     const v = stored[key];
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
-  for (const key of ['autoAct', 'aiHelp', 'showTrail'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
-  if (typeof stored.bridgeUrl === 'string') out.bridgeUrl = stored.bridgeUrl;
+  for (const key of ['bridgeUrl', 'errorUrl', 'errorToken'] as const) {
+    const v = stored[key];
+    if (typeof v === 'string') out[key] = v;
+  }
   for (const key of ['abortHotkey', 'aiUrl', 'aiModel'] as const) {
     const v = stored[key];
     if (typeof v === 'string' && v.trim()) out[key] = v;
@@ -150,6 +154,18 @@ function isPattern(v: unknown): v is LearnedPattern {
 export function loadPatterns(): LearnedPattern[] {
   const stored = readJson(KEYS.patterns);
   return Array.isArray(stored) ? stored.filter(isPattern).slice(0, PATTERN_LIMIT) : [];
+}
+
+/** The persisted error outbox (newest first, at most OUTBOX_LIMIT); invalid entries are dropped. */
+export function loadOutbox(): ErrorReport[] {
+  const stored = readJson(KEYS.outbox);
+  return Array.isArray(stored) ? stored.filter(isErrorReport).slice(0, OUTBOX_LIMIT) : [];
+}
+
+/** Persists the newest OUTBOX_LIMIT reports; when they do not fit, retries without screenshots. */
+export function saveOutbox(outbox: ErrorReport[]) {
+  const kept = outbox.slice(0, OUTBOX_LIMIT);
+  if (!writeJson(KEYS.outbox, kept)) writeJson(KEYS.outbox, kept.map((r) => ({ ...r, screenshot: null })));
 }
 
 /** Persists the newest PATTERN_LIMIT learned patterns. */

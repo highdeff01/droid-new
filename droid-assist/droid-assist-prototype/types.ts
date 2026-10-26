@@ -153,4 +153,10 @@ export interface AssistSettings {
   aiUrl: string;
   /** Model name sent with every AI request. */
   aiModel: string;
+  /** Error forwarding: the error-fix app's HTTP endpoint captured errors are POSTed to. */
+  errorUrl: string;
+  /** Whether captured errors are forwarded automatically. */
+  errorForwarding: boolean;
+  /** Optional bearer token for the error endpoint; never written to the activity log. */
+  errorToken: string;
 }

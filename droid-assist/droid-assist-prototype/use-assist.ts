@@ -18,6 +18,7 @@ import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, runVerdict, upsertCard } from './flow-memory.js';
+import { useErrorForwarding } from './use-error-forwarding.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -97,6 +98,9 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   actionBudget: DEFAULT_ACTION_BUDGET,
   aiUrl: DEFAULT_AI_URL,
   aiModel: DEFAULT_AI_MODEL,
+  errorUrl: '',
+  errorForwarding: false,
+  errorToken: '',
 };
 
 /** A background agent the user can toggle. */
@@ -236,6 +240,10 @@ export function useAssist() {
     setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone }, ...l].slice(0, LOG_LIMIT));
   }, []);
 
+  /** Error forwarding: reports carry the recent log and the current frame. */
+  const errorForwarding = useErrorForwarding(settings, addLog, () => ({ log: logRef.current, frame: framesRef.current[0] ?? null }));
+  const captureError = errorForwarding.capture;
+
   // AI endpoint health: at startup and whenever the endpoint or model changes.
   useEffect(() => {
     let live = true;
@@ -244,11 +252,12 @@ export function useAssist() {
       if (!live) return;
       setAiStatus(status);
       addLog('AI', status.detail, status.state === 'online' ? 'ok' : 'error');
+      if (status.state !== 'online') captureError({ kind: 'ai', message: status.detail });
     });
     return () => {
       live = false;
     };
-  }, [settings.aiUrl, settings.aiModel, addLog]);
+  }, [settings.aiUrl, settings.aiModel, addLog, captureError]);
 
   /** Every model call, with session history and the recent log; a failure marks the AI offline and is rethrown. */
   const askAi = useCallback(async (req: AskRequest): Promise<AiReply> => {
@@ -260,9 +269,10 @@ export function useAssist() {
       return reply;
     } catch (error) {
       setAiStatus({ state: 'offline', detail: `AI unavailable — ${errorText(error)}` });
+      captureError({ kind: 'ai', message: `AI unavailable — ${errorText(error)}`, goal: goalRef.current });
       throw error;
     }
-  }, []);
+  }, [captureError]);
 
   const aiOnline = () => aiStatusRef.current.state === 'online';
 
@@ -499,6 +509,7 @@ export function useAssist() {
   /** performStep, then reflect-after-step: every step the pipeline ran gets the model's reflection and verdict. */
   const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     const out = await performStep(step, actor, budget, dryRun);
+    if (!out.ok) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
     if (!out.halt && aiOnline()) await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
     return out;
   };
@@ -622,6 +633,7 @@ export function useAssist() {
       const r = matchTemplate(next.refFrame.data, frame.data, next.x, next.y);
       const level = syncLevelFor(r);
       setSync({ level, detail: `"${next.name}": region ${r.regionDistance.toFixed(3)}, best ${r.matchDistance.toFixed(3)}${level === 'yellow' ? `, drift (${(r.dx * 100).toFixed(1)}%, ${(r.dy * 100).toFixed(1)}%)` : ''}` });
+      if (level === 'red') captureError({ kind: 'drift', message: `Drift red: target of "${next.name}" not found on the live screen`, goal: goalRef.current, step: next.name });
     } else if (!next) {
       setSync({ level: 'idle', detail: 'No active step' });
     }
@@ -666,13 +678,14 @@ export function useAssist() {
           if (Date.now() - lastPollErrorAt.current < 5000) return;
           lastPollErrorAt.current = Date.now();
           addLog('Monitor', `Desktop screenshot failed: ${errorText(error)}`, 'error');
+          captureError({ kind: 'bridge', message: `Desktop screenshot failed: ${errorText(error)}` });
         })
         .finally(() => {
           pollBusyRef.current = false;
         });
     }, intervalMs);
     return () => clearInterval(id);
-  }, [addLog, intervalMs, source]);
+  }, [addLog, captureError, intervalMs, source]);
 
   // The running screen capture follows the monitor mode's interval live.
   useEffect(() => {
@@ -782,6 +795,7 @@ export function useAssist() {
       const health = await checkBridge(settingsRef.current.bridgeUrl);
       if (!health.ok) {
         addLog(label, `${health.message} — no step was executed`, 'error');
+        captureError({ kind: 'bridge', message: health.message, goal: goalRef.current });
         return;
       }
     }
@@ -942,6 +956,7 @@ export function useAssist() {
     const health = await checkBridge(settingsRef.current.bridgeUrl);
     if (!health.ok) {
       addLog('Bridge', health.message, 'error');
+      captureError({ kind: 'bridge', message: health.message });
       return false;
     }
     attachSource('bridge');
@@ -1030,6 +1045,7 @@ export function useAssist() {
     armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern,
     onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
+    errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
   };
 }
 
