@@ -1,4 +1,5 @@
-import type { AssistSettings, LearnedPattern, LogEntry, SavedCard, StepAction, WorkflowStep } from './types.js';
+import type { AssistSettings, LearnedPattern, LogEntry, MonitorMode, SavedCard, StepAction, WorkflowStep } from './types.js';
+import { STEP_ACTIONS } from './types.js';
 import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 import { sanitizeBudget } from './safety.js';
 
@@ -11,7 +12,7 @@ const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', l
 export const PATTERN_LIMIT = 100;
 const PATTERN_KINDS: ReadonlyArray<LearnedPattern['kind']> = ['avoid', 'add'];
 
-const ACTIONS: readonly StepAction[] = ['click', 'double_click', 'scroll', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media'];
+const ACTIONS: readonly StepAction[] = STEP_ACTIONS;
 const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
@@ -105,6 +106,7 @@ function parseStep(v: unknown): StoredStep | null {
     status: 'pending',
     ...(typeof v.text === 'string' ? { text: v.text } : {}),
     ...(isNum(v.correctedX) && isNum(v.correctedY) ? { correctedX: v.correctedX, correctedY: v.correctedY } : {}),
+    ...(typeof v.target === 'string' && v.target ? { target: v.target } : {}),
     ...(isStoredFrame(v.refFrame) ? { refFrame: v.refFrame } : {}),
   };
 }

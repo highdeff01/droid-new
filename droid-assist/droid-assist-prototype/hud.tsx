@@ -101,11 +101,17 @@ export function Hud({ engine }: { engine: AssistEngine }) {
               <button type="button" onClick={() => engine.replay(true)} disabled={recording || !total} title="Verifies each step on the live desktop; sends no input">🧪 AI self-test (no input)</button>
             </>
           )}
-          <button type="button" onClick={engine.explainScreen} disabled={aiOff || aiBusy} title={aiTitle}>👁 Point out</button>
+          <button type="button" onClick={() => void engine.explainScreen()} disabled={aiOff || aiBusy} title={aiTitle}>👁 Point out</button>
         </div>
-        <form className={styles.goal} onSubmit={(e) => { e.preventDefault(); void engine.submitInput(); }}>
-          <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder='Goal or command, e.g. "/use notepad", "calculate 12*7", "search ad blocker"' aria-label="Goal" />
-          <button type="submit" className={styles.primary} disabled={aiBusy || (aiOff && !goal.trim().startsWith('/'))} title={aiTitle}>{aiBusy ? '… thinking' : '✨ AI plan'}</button>
+        <form
+          className={styles.goal}
+          onSubmit={(e) => {
+            e.preventDefault();
+            void engine.submitInput();
+          }}
+        >
+          <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder='Goal or command, e.g. "move mouse to the files icon", "/move files icon", "/use notepad"' aria-label="Goal" />
+          <button type="submit" className={styles.primary} disabled={aiBusy || (aiOff && !goal.trim().startsWith('/'))} title={aiTitle}>{aiBusy ? '… thinking' : '✨ AI plan / run'}</button>
         </form>
       </div>
       <MonitorStatus engine={engine} />

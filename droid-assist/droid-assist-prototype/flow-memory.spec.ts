@@ -70,7 +70,7 @@ describe('failurePattern', () => {
 });
 
 describe('learnPatterns', () => {
-  const ask = (text: string) => vi.fn<AskFn>(async () => text);
+  const ask = (text: string) => vi.fn<AskFn>(async () => ({ content: text, thinking: null }));
 
   it('keeps only well-formed avoid/add entries and tells the model the outcome', async () => {
     const fn = ask('{"patterns":[{"kind":"add","pattern":"wait for the window","context":"notepad"},{"kind":"maybe","pattern":"x"},{"kind":"avoid","pattern":"  "},{"kind":"avoid","pattern":"clicking the taskbar"}]}');

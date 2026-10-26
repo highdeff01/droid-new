@@ -113,7 +113,7 @@ export function Stage({ engine }: { engine: AssistEngine }) {
         }}
         onClick={(e) => {
           const p = norm(e);
-          engine.onStageClick(p.x, p.y);
+          engine.onStageClick(p.x, p.y, e.altKey);
         }}
       >
         <canvas ref={demoCanvasRef} width={DEMO_W} height={DEMO_H} className={styles.screen} style={{ display: source === 'demo' ? 'block' : 'none' }} />

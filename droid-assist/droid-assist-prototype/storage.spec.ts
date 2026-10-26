@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistSettings, LearnedPattern, LogEntry, SavedCard } from './types.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadLog, loadPatterns, loadSettings, savePatterns, saveCards, saveLog, saveSettings } from './storage.js';
 
-const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50 };
+const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b' };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
 
 describe('settings', () => {
@@ -69,6 +69,12 @@ describe('cards', () => {
     const [loaded] = await loadCards();
     expect(loaded).toMatchObject({ id: 'card_1', name: 'Close ad and play', description: '2 steps', savedAt: 123 });
     expect(loaded.steps.map((s) => [s.id, s.action, s.status, s.text])).toEqual([['s1', 'click', 'pending', undefined], ['s2', 'type', 'pending', 'hi']]);
+  });
+
+  it('keeps a step\'s named target so a reloaded step is still grounded', async () => {
+    saveCards([{ ...card, steps: [{ id: 'm', name: 'Move to Files icon', action: 'move', target: 'Files icon', x: 0.4, y: 0.9, status: 'done' }] }]);
+    const [loaded] = await loadCards();
+    expect(loaded.steps[0]).toMatchObject({ action: 'move', target: 'Files icon' });
   });
 
   it('stores a step screenshot without its pixel buffer', () => {

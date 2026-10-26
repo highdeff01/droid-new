@@ -18,26 +18,33 @@ export const BRIDGE_REQUIRED = 'Desktop bridge not connected — connect the bri
 
 /** One native action as the Droid replay engine (python-service/replay.py, pyautogui) accepts it. */
 export interface NativeAction {
-  action: 'click' | 'type_text' | 'press_key' | 'hotkey' | 'wait';
+  action: 'click' | 'double_click' | 'move' | 'scroll' | 'type_text' | 'press_key' | 'hotkey' | 'wait';
   x: number;
   y: number;
   text?: string;
   keyPayload?: string;
+  /** pyautogui.moveTo duration for a `move`, in ms (humanized, never instant). */
+  durationMs?: number;
   delayMs: number;
 }
 
 type Point = { x: number; y: number };
 
+/** A human-looking cursor travel time for pyautogui.moveTo: 250–550 ms. */
+export const humanMoveMs = (random: () => number = Math.random) => Math.round(250 + random() * 300);
+
 const at = (p: Point, action: NativeAction['action'], extra: Partial<NativeAction> = {}): NativeAction => ({ action, x: p.x, y: p.y, delayMs: 200, ...extra });
 const keys = (p: Point, combo: string) => at(p, combo.includes('+') ? 'hotkey' : 'press_key', { keyPayload: combo.toLowerCase() });
 const write = (p: Point, text: string) => at(p, 'type_text', { text });
 const appName = (step: WorkflowStep) => step.text ?? step.name.replace(/^open\s+/i, '');
+const scrollDir = (step: WorkflowStep) => (/^\s*up\s*$/i.test(step.text ?? '') ? 'up' : 'down');
 
 /** Every step action as the real mouse/keyboard input it performs on the PC. */
 const NATIVE: Record<StepAction, (step: WorkflowStep, p: Point) => NativeAction[]> = {
   click: (_s, p) => [at(p, 'click')],
-  double_click: (_s, p) => [at(p, 'click', { delayMs: 60 }), at(p, 'click')],
-  scroll: (s, p) => [at(p, 'click'), keys(p, s.text === 'up' ? 'pageup' : 'pagedown')],
+  double_click: (_s, p) => [at(p, 'double_click')],
+  move: (_s, p) => [at(p, 'move', { durationMs: humanMoveMs() })],
+  scroll: (s, p) => [at(p, 'scroll', { keyPayload: scrollDir(s) })],
   type: (s, p) => [write(p, s.text ?? '')],
   key: (s, p) => [keys(p, s.text ?? 'enter')],
   open_app: (s, p) => [keys(p, 'win'), at(p, 'wait', { delayMs: 600 }), write(p, appName(s)), keys(p, 'enter')],
