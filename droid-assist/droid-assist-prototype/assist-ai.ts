@@ -1,5 +1,5 @@
 import type { Annotation, Frame, WorkflowStep } from './types.js';
-import { AiError, VIEW_H, VIEW_W, parseJsonReply, toUnit } from './ai.js';
+import { AiError, VIEW_H, VIEW_W, parseJsonReply, stripThinking, toUnit } from './ai.js';
 import type { AiReply, AskFn } from './ai.js';
 import { GRID_PROMPT, gridRef, replyPoint } from './grid.js';
 import { uid } from './planner.js';
@@ -107,6 +107,34 @@ export async function describeScreen(ask: AskFn, frame: Frame, question: string,
   return { answer: r.answer.trim(), annotations: items.map(toAnnotation), thinking };
 }
 
+/** The model's check of the goal against the live screen after a run. */
+export interface GoalCheck extends Thought {
+  /** The goal is verifiably achieved on the screen. */
+  complete: boolean;
+  /** The last run moved the screen closer to the goal. */
+  progress: boolean;
+  reason: string;
+}
+
+/** One line per step of the run just finished: what it was and how it ended. */
+const runLine = (s: WorkflowStep) => `- ${stepText(s)}: ${s.status}`;
+
+/**
+ * Auto-continue verification: shown the live screen and the run's steps, the model says whether
+ * the goal is complete and whether the run made progress. Non-boolean fields are an AiError.
+ */
+export async function verifyGoal(ask: AskFn, frame: Frame | null, goal: string, ran: WorkflowStep[]): Promise<GoalCheck> {
+  const reply = await ask({
+    system: 'You are Droid Assist verifying whether the user\'s goal is achieved. The screenshot shows the screen now. Reply ONLY with JSON {"complete":boolean,"progress":boolean,"reason":string}: complete=true only if the screen shows the goal achieved; progress=true if the last steps moved the screen closer to it.',
+    prompt: `Goal: ${goal}\nSteps just run:\n${ran.map(runLine).join('\n') || '(none)'}`,
+    frame,
+    json: true,
+  });
+  const r = parseJsonReply(reply.content);
+  if (typeof r.complete !== 'boolean') throw new AiError(`AI goal check had no boolean "complete": ${String(r.complete)}`);
+  return { complete: r.complete, progress: r.progress === true, reason: String(r.reason ?? ''), thinking: reply.thinking };
+}
+
 /** What actually happened when a step ran. */
 export interface StepResult {
   ok: boolean;
@@ -135,22 +163,35 @@ export function parseVerdict(reply: AiReply): StepVerdict {
   return { success: r.success, pattern_avoid: optionalText(r.pattern_avoid), pattern_add: optionalText(r.pattern_add), thinking: reply.thinking };
 }
 
+const stepFacts = (step: WorkflowStep, result: StepResult, goal: string) =>
+  `Goal: ${goal || '(none)'}\nStep: ${stepText(step)}\nExecution result: ${result.ok ? 'reported ok' : 'reported failure'} — ${result.message}`;
+
+/** The reflect stage: the model reflects in free text on the executed step and the screen after it. */
+export async function reflectOn(ask: AskFn, frame: Frame | null, step: WorkflowStep, result: StepResult, goal: string): Promise<StepReflection['reflection'] & { raw: string }> {
+  const first = await ask({
+    system: 'You are Droid Assist reviewing a step it just executed. The screenshot shows the screen after the step. Reflect briefly in plain text: did the step achieve its purpose, and what should be done differently next time?',
+    prompt: stepFacts(step, result, goal),
+    frame,
+  });
+  return { text: stripThinking(first.content), thinking: first.thinking, raw: first.content };
+}
+
+/** The verdict stage: given the reflection, the model gives the final JSON verdict {success, pattern_avoid, pattern_add}. */
+export async function judgeStep(ask: AskFn, frame: Frame | null, step: WorkflowStep, result: StepResult, goal: string, reflection: string): Promise<StepVerdict> {
+  const second = await ask({
+    system: 'You are Droid Assist giving the final verdict on an executed step. Reply ONLY with JSON {"success":boolean,"pattern_avoid":string|null,"pattern_add":string|null} where pattern_avoid is a behaviour to avoid next time and pattern_add a behaviour to add, or null.',
+    prompt: `${stepFacts(step, result, goal)}\nYour reflection: ${reflection}`,
+    frame,
+    json: true,
+  });
+  return parseVerdict(second);
+}
+
 /**
  * Reflect-after-step: first asks the model to reflect in free text on the executed step and the
  * screen after it, then asks for the final JSON verdict {success, pattern_avoid, pattern_add}.
  */
 export async function reflectStep(ask: AskFn, frame: Frame | null, step: WorkflowStep, result: StepResult, goal: string): Promise<StepReflection> {
-  const facts = `Goal: ${goal || '(none)'}\nStep: ${stepText(step)}\nExecution result: ${result.ok ? 'reported ok' : 'reported failure'} — ${result.message}`;
-  const first = await ask({
-    system: 'You are Droid Assist reviewing a step it just executed. The screenshot shows the screen after the step. Reflect briefly in plain text: did the step achieve its purpose, and what should be done differently next time?',
-    prompt: facts,
-    frame,
-  });
-  const second = await ask({
-    system: 'You are Droid Assist giving the final verdict on an executed step. Reply ONLY with JSON {"success":boolean,"pattern_avoid":string|null,"pattern_add":string|null} where pattern_avoid is a behaviour to avoid next time and pattern_add a behaviour to add, or null.',
-    prompt: `${facts}\nYour reflection: ${first.content}`,
-    frame,
-    json: true,
-  });
-  return { reflection: { text: first.content, thinking: first.thinking }, verdict: parseVerdict(second) };
+  const { raw, ...reflection } = await reflectOn(ask, frame, step, result, goal);
+  return { reflection, verdict: await judgeStep(ask, frame, step, result, goal, raw) };
 }

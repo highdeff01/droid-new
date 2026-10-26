@@ -216,6 +216,59 @@ describe('runStep learned', () => {
   });
 });
 
+describe('runStep corrected retry', () => {
+  const live = frame(1, image(100, 60));
+  // The AI re-plans the target 60px right / 36px down of where the template really is: the click misses.
+  const offTarget = (): Grounding => ({
+    confirm: vi.fn<Grounding['confirm']>().mockResolvedValueOnce({ visible: false, reason: 'not here', thinking: null }).mockResolvedValue({ visible: true, reason: 'ok', thinking: null }),
+    relocate: vi.fn(async () => ({ x: 110 / W, y: 66 / H })),
+  });
+  const named = { ...step, target: 'Play button' };
+  const twoRuns = () => vi.fn()
+    .mockResolvedValueOnce(json({ success: true, run: { id: 'r', status: 'running' } }))
+    .mockResolvedValueOnce(json({ success: true, run: { id: 'r', status: 'completed' } }))
+    .mockResolvedValueOnce(json({ success: true, run: { id: 'r2', status: 'running' } }))
+    .mockResolvedValueOnce(json({ success: true, run: { id: 'r2', status: 'completed' } }));
+  const sentAt = (spy: ReturnType<typeof vi.fn>, call: number) => JSON.parse(spy.mock.calls[call][1].body).steps[0];
+
+  it('retries a missed step once with expected − actual applied', async () => {
+    const fetchSpy = twoRuns();
+    vi.stubGlobal('fetch', fetchSpy);
+    const gateRetry = vi.fn(() => null);
+    const { d, lines } = deps([live], { grounding: offTarget(), gateRetry });
+    const out = await runStep(named, d);
+    expect(sentAt(fetchSpy, 0)).toMatchObject({ x: 660, y: 396 });
+    expect(out.retry).toMatchObject({ dxPx: -60, dyPx: -36, ok: true });
+    expect(sentAt(fetchSpy, 2)).toMatchObject({ x: 600, y: 360 });
+    expect(gateRetry).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(lines.some((l) => /missed by \(-60, -36\)px — retrying once/.test(l))).toBe(true);
+  });
+
+  it('sends no retry when the guardrail gate refuses it', async () => {
+    const fetchSpy = twoRuns();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { d, lines } = deps([live], { grounding: offTarget(), gateRetry: () => 'Action budget of 1 exceeded — not sent' });
+    const out = await runStep(named, d);
+    expect(out.retry).toMatchObject({ ok: false, message: 'Action budget of 1 exceeded — not sent' });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(lines.some((l) => /corrected retry not sent: Action budget/.test(l))).toBe(true);
+  });
+
+  it('does not retry a step that hit (screen changed) or when no gate is given', async () => {
+    const fetchSpy = completedRun();
+    vi.stubGlobal('fetch', fetchSpy);
+    const gateRetry = vi.fn(() => null);
+    const { d } = deps([live, frame(2, image(200, 120))], { gateRetry });
+    const out = await runStep(step, d);
+    expect(out.retry).toBeUndefined();
+    expect(gateRetry).not.toHaveBeenCalled();
+    vi.stubGlobal('fetch', completedRun());
+    const again = await runStep(named, deps([live], { grounding: offTarget() }).d);
+    expect(again.retry).toBeUndefined();
+  });
+});
+
 describe('runStep habit seed', () => {
   const live = frame(1, image(100, 60));
   const target: WorkflowStep = { id: 'h', name: 'Click Save', action: 'click', target: 'Save button', x: 0.25, y: 0.5, status: 'pending' };
