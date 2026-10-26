@@ -319,6 +319,9 @@ describe('useAssist Screen watcher', () => {
     expect(result.current.history).toHaveLength(0);
     expect(result.current.cursor).toBeNull();
     expect(result.current.patterns).toHaveLength(0);
+    // Only Accept saves the element; a test leaves the proposal pending and memory untouched.
+    expect(result.current.familiar).toHaveLength(0);
+    expect(result.current.watcher.proposals[0].status).toBe('pending');
   });
 
   it('armed test is a real click through the gate; aborted refuses it', async () => {

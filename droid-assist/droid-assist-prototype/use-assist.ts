@@ -1092,7 +1092,10 @@ export function useAssist() {
     }
     const dryRun = !armedRef.current;
     const tried = `${dryRun ? 'Dry-run' : 'Real'} click on "${step.target}" at ${gridRef(step)}`;
-    const out = await perform(step, dryRun ? 'Screen watcher (dry run)' : 'Screen watcher', watchBudgetRef.current, dryRun);
+    const actor = dryRun ? 'Screen watcher (dry run)' : 'Screen watcher';
+    // performStep, not perform: a test must not remember its target as familiar — only Accept does.
+    const out = await performStep(step, actor, watchBudgetRef.current, dryRun);
+    if (!out.halt && aiOnline()) await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
     const verdict = out.ok ? 'passed' : 'failed';
     updateWatcher((w) => ({ ...w, tests: addTest(w.tests, { proposalId: p.id, tried, happened: out.message, verdict, dryRun }), proposals: patchProposal(w.proposals, p.id, { tested: true }) }));
     addLog('Screen watcher', `Test ${verdict}: ${tried} — ${out.message}`, out.ok ? 'ok' : 'warn');
