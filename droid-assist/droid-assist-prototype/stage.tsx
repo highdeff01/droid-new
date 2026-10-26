@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { COLUMN_LABELS, GRID_COLS, GRID_ROWS, ROW_LABELS, cellLabel } from './grid.js';
+import { MAP_COLS, MAP_ROWS, dragBox } from './element-map.js';
 import styles from './droid-assist.module.css';
 
 /** The labeled spatial grid: light gridlines, column numbers / row letters on the edges, cell labels. */
@@ -30,6 +31,36 @@ function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number) {
   }
 }
 
+/** The element-map grid (R1C1..R16C24): finer cyan lines, separate from the A1..H12 planner grid. */
+function drawMapGrid(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  ctx.strokeStyle = 'rgba(34, 211, 238, 0.22)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let c = 1; c < MAP_COLS; c++) {
+    ctx.moveTo((c * w) / MAP_COLS, 0);
+    ctx.lineTo((c * w) / MAP_COLS, h);
+  }
+  for (let r = 1; r < MAP_ROWS; r++) {
+    ctx.moveTo(0, (r * h) / MAP_ROWS);
+    ctx.lineTo(w, (r * h) / MAP_ROWS);
+  }
+  ctx.stroke();
+}
+
+/** One mapped element (or the box being drawn): its boundary and name. */
+function drawMapBox(ctx: CanvasRenderingContext2D, b: { x: number; y: number; w: number; h: number }, label: string, w: number, h: number, draft = false) {
+  ctx.strokeStyle = draft ? '#facc15' : '#22d3ee';
+  ctx.lineWidth = 2;
+  ctx.setLineDash(draft ? [5, 3] : []);
+  ctx.strokeRect(b.x * w, b.y * h, b.w * w, b.h * h);
+  ctx.setLineDash([]);
+  ctx.fillStyle = draft ? 'rgba(250, 204, 21, 0.12)' : 'rgba(34, 211, 238, 0.1)';
+  ctx.fillRect(b.x * w, b.y * h, b.w * w, b.h * h);
+  ctx.fillStyle = draft ? '#facc15' : '#22d3ee';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.fillText(label, b.x * w + 3, Math.max(12, b.y * h - 4));
+}
+
 /** A test-click target: crosshair, ring and its label. */
 function drawHighlight(ctx: CanvasRenderingContext2D, x: number, y: number, label: string) {
   ctx.strokeStyle = '#f43f5e';
@@ -51,10 +82,11 @@ function drawHighlight(ctx: CanvasRenderingContext2D, x: number, y: number, labe
  * step markers (recorded vs drift-corrected), AI annotations and the AI cursor.
  */
 export function Stage({ engine }: { engine: AssistEngine }) {
-  const { source, demoCanvasRef, frames, captureLost, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex, highlight } = engine;
+  const { source, demoCanvasRef, frames, captureLost, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex, highlight, mapMode, elementMap, mapDraft } = engine;
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [typed, setTyped] = useState('');
+  const dragRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     const c = overlayRef.current;
@@ -64,6 +96,13 @@ export function Stage({ engine }: { engine: AssistEngine }) {
     const h = (c.height = wrap.clientHeight);
     const ctx = c.getContext('2d')!;
     ctx.clearRect(0, 0, w, h);
+
+    if (mapMode) {
+      drawMapGrid(ctx, w, h);
+      elementMap.forEach((el) => drawMapBox(ctx, el.box, el.name, w, h));
+      if (mapDraft) drawMapBox(ctx, mapDraft, 'new element', w, h, true);
+      return;
+    }
 
     if (settings.showGrid) drawGrid(ctx, w, h);
 
@@ -155,11 +194,26 @@ export function Stage({ engine }: { engine: AssistEngine }) {
       <div
         ref={wrapRef}
         className={`${styles.stage} ${recording ? styles.recording : ''}`}
+        onMouseDown={(e) => {
+          if (!mapMode) return;
+          dragRef.current = norm(e);
+          engine.setMapDraft(null);
+        }}
         onMouseMove={(e) => {
           const p = norm(e);
+          if (mapMode) {
+            if (dragRef.current) engine.setMapDraft(dragBox(dragRef.current, p));
+            return;
+          }
           engine.onStageMove(p.x, p.y);
         }}
+        onMouseUp={(e) => {
+          if (!mapMode || !dragRef.current) return;
+          engine.setMapDraft(dragBox(dragRef.current, norm(e)));
+          dragRef.current = null;
+        }}
         onClick={(e) => {
+          if (mapMode) return;
           const p = norm(e);
           engine.onStageClick(p.x, p.y, e.altKey);
         }}
@@ -170,6 +224,7 @@ export function Stage({ engine }: { engine: AssistEngine }) {
         {captureLost && <div className={styles.captureLost} role="alert">⚠ CAPTURE LOST — {captureLost}. Monitoring halted: restart capture or switch to the demo desktop.</div>}
         {recording && <span className={styles.recBadge}>● LIVE RECORDING</span>}
         {replaying && <span className={styles.replayBadge}>▶ REPLAYING</span>}
+        {mapMode && <span className={styles.recBadge}>▦ ELEMENT MAP — drag to draw a boundary</span>}
       </div>
       {recording && (
         <form

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mapContext } from './element-map.js';
 import { PLAN_SYSTEM, findSimilar, planFromGoal, relevantPatterns, relocateTarget, similarity } from './planner.js';
 import { decidePopup, decideStep, describeScreen, reflectStep } from './assist-ai.js';
 import { AiError } from './ai.js';
@@ -251,5 +252,23 @@ describe('learned patterns in planning', () => {
     expect(context.some((l) => l.includes('spreadsheet'))).toBe(false);
     expect(context).toContain('[You] hi');
     expect(plan.source).toMatch(/1 learned pattern/);
+  });
+});
+
+describe('user-mapped elements in planning', () => {
+  it('sends mapped boundaries as planning context and flags steps with no point', async () => {
+    const ask = askReturning('{"steps":[{"name":"Press OK","action":"click","target":"OK button"},{"name":"Go","action":"click","cell":"B2"}]}');
+    const lines = mapContext([{ id: 'm', name: 'OK button', box: { x: 0.4, y: 0.5, w: 0.2, h: 0.1 }, mappedAt: 0 }]);
+    const plan = await planFromGoal('press ok', [], null, ask, lines);
+    const ctx = ask.mock.calls[0][0].context!.join('\n');
+    expect(ctx).toContain('"OK button" boundary x=40.0%..60.0%, y=50.0%..60.0%');
+    expect(plan.steps[0].unlocated).toBe(true);
+    expect(plan.steps[1].unlocated).toBeUndefined();
+  });
+
+  it('relocateTarget passes mapped context', async () => {
+    const ask = askReturning('{"steps":[]}');
+    await relocateTarget(ask, { url: 'data:image/jpeg;base64,QQ==' } as Frame, { id: 's', name: 'n', action: 'click', x: 0.5, y: 0.5, status: 'pending' }, 'missed', ['[Mapped element] "X"']);
+    expect(ask.mock.calls[0][0].context).toEqual(['[Mapped element] "X"']);
   });
 });

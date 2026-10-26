@@ -92,6 +92,8 @@ export interface WorkflowStep {
   text?: string;
   /** The on-screen thing a pointer step acts on ("files icon"); its coordinates are confirmed against it before dispatch. */
   target?: string;
+  /** Set when the planner gave no point for this pointer step's target (it ran at a default). */
+  unlocated?: boolean;
   /** Screenshot captured when the step was recorded — the template for drift matching. */
   refFrame?: Frame;
   status: StepStatus;

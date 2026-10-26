@@ -2,7 +2,7 @@ import type { Frame, LearnedPattern, SavedCard, StepAction, WorkflowStep } from 
 import { POINTER_ACTIONS, STEP_ACTIONS } from './types.js';
 import { AiError, VIEW_H, VIEW_W, parseJsonReply } from './ai.js';
 import type { AskFn } from './ai.js';
-import { GRID_PROMPT, gridRef, replyPoint } from './grid.js';
+import { GRID_PROMPT, gridRef, parseCell, replyPoint } from './grid.js';
 
 let seq = 0;
 /** A short unique id. */
@@ -94,6 +94,7 @@ function toStep(raw: unknown, frame: Frame | null): WorkflowStep {
   if (POINTER_ACTIONS.has(action)) {
     step.target = typeof s.target === 'string' && s.target.trim() ? s.target.trim() : step.name;
     if (frame) step.refFrame = frame;
+    if (!parseCell(s.cell) && (s.x === undefined || s.x === null || s.y === undefined || s.y === null)) step.unlocated = true;
   }
   return step;
 }
@@ -159,12 +160,13 @@ export async function planFromGoal(goal: string, cards: SavedCard[], frame: Fram
  * Re-asks the planner, once, where `step`'s target is after its proposed point was rejected
  * (`feedback` says why). Resolves the new point, or null when the model says it is not visible.
  */
-export async function relocateTarget(ask: AskFn, frame: Frame, step: WorkflowStep, feedback: string): Promise<{ x: number; y: number; thinking: string | null } | null> {
+export async function relocateTarget(ask: AskFn, frame: Frame, step: WorkflowStep, feedback: string, context: string[] = []): Promise<{ x: number; y: number; thinking: string | null } | null> {
   const at = `${gridRef(step)} = (${(step.x * 100).toFixed(1)}%, ${(step.y * 100).toFixed(1)}%)`;
   const reply = await ask({
     system: `${PLAN_SYSTEM}\nThis is a correction: reply with exactly one step for the named target, or {"steps":[]} if it is not visible.`,
     prompt: `Step "${step.name}" (${step.action}) targets "${step.target ?? step.name}". Your previous point ${at} was rejected: ${feedback}\nLook again and give the target's true center.`,
     frame,
+    ...(context.length ? { context } : {}),
     json: true,
   });
   const steps = parseJsonReply(reply.content).steps;

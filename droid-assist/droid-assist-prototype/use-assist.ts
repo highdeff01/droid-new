@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ActionRecord, Annotation, AssistSettings, FamiliarElement, Frame, InputAction, LearnedPattern, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
 import { POINTER_ACTIONS } from './types.js';
-import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
+import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, correctDrift, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
 import { AI_PLAN_SOURCE, calculate, generateCard, planFromGoal, relocateTarget, uid } from './planner.js';
 import { DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, pingAi } from './ai.js';
@@ -10,13 +10,16 @@ import { confirmTarget, decidePopup, decideStep, describeScreen, reflectStep, ty
 import { addEntry, verdictText, type ThinkingEntry } from './thinking-timeline.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge } from './bridge.js';
 import { runStep, type Grounding, type StepOutcome } from './run-step.js';
-import { patchAt, zoomFrame } from './grounding.js';
+import { patchAt, zoomBox, zoomFrame } from './grounding.js';
 import { parseCommand } from './commands.js';
 import { createScreenCapture, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction, type ActionBudget } from './safety.js';
-import { LOG_LIMIT, loadCards, loadFamiliar, loadLog, loadPatterns, loadSettings, saveCards, saveFamiliar, saveLog, savePatterns, saveSettings } from './storage.js';
+import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadLog, loadPatterns, loadSettings, saveCards, saveElementMap, saveFamiliar, saveLog, savePatterns, saveSettings } from './storage.js';
 import { forgetElement, listElements, rememberElement, type ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
+import { boxCenter, mapContext, mapElement, toFamiliar, unmapElement, type MappedElement } from './element-map.js';
+import { cropFrame, identifyAndVerify, identifyRequest, noteChange, parseIdentification, recentlySent, type AgentCheck, type ChangeHit, type IdentifyInput, type IdentifyOutcome, type IdentifyReason, type Identification } from './identify.js';
+import type { Box } from './assist-ai.js';
 import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
@@ -105,7 +108,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
 
 /** A background agent the user can toggle. */
 export interface Agent {
-  id: 'popup' | 'drift' | 'progress' | 'goal';
+  id: 'popup' | 'drift' | 'progress' | 'goal' | 'identify';
   name: string;
   description: string;
   on: boolean;
@@ -138,6 +141,9 @@ export function useAssist() {
   /** Lessons learned from finished runs, fed into future planning. */
   const [patterns, setPatterns] = useState<LearnedPattern[]>(loadPatterns);
   const [familiar, setFamiliar] = useState<FamiliarElement[]>(loadFamiliar);
+  const [elementMap, setElementMap] = useState<MappedElement[]>([]);
+  const [mapMode, setMapMode] = useState(false);
+  const [mapDraft, setMapDraft] = useState<Box | null>(null);
   const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
@@ -147,6 +153,7 @@ export function useAssist() {
     { id: 'drift', name: 'Drift monitor', description: 'Cross-checks every frame against the active step', on: true },
     { id: 'progress', name: 'Progress tracker', description: 'Counts verified steps toward the goal', on: true },
     { id: 'goal', name: 'Goal reviewer', description: 'Reviews the goal after each run and suggests what is next', on: true },
+    { id: 'identify', name: 'Element identifier', description: 'Sends missed, unproposed, new or changing elements to the AI and agent-tests the answer (3 tries / 30 s)', on: true },
   ]);
   const [plays, setPlays] = useState(0);
   const [armed, setArmed] = useState(false);
@@ -194,6 +201,11 @@ export function useAssist() {
   const patternsRef = useRef<LearnedPattern[]>(patterns);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
+  const elementMapRef = useRef<MappedElement[]>([]);
+  const mapHydratedRef = useRef(false);
+  const changeHitsRef = useRef<ChangeHit[]>([]);
+  const identifySentRef = useRef<Array<{ box: Box; time: number }>>([]);
+  const identifyBusyRef = useRef(false);
 
   settingsRef.current = settings;
   sourceRef.current = source;
@@ -218,10 +230,19 @@ export function useAssist() {
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
   }, [cards]);
+  useEffect(() => {
+    if (mapHydratedRef.current) saveElementMap(elementMap);
+  }, [elementMap]);
 
-  // Hydrate saved cards and the recent frame gallery.
+  // Hydrate saved cards, the element map and the recent frame gallery.
   useEffect(() => {
     let live = true;
+    void loadElementMap().then((stored) => {
+      if (!live) return;
+      mapHydratedRef.current = true;
+      elementMapRef.current = [...elementMapRef.current, ...stored.filter((s) => !elementMapRef.current.some((x) => x.id === s.id))];
+      setElementMap(elementMapRef.current);
+    });
     void loadCards().then((stored) => {
       if (!live) return;
       cardsHydratedRef.current = true;
@@ -319,7 +340,7 @@ export function useAssist() {
     },
     relocate: async (live, step, feedback) => {
       const { point } = await thought(step.name, async () => {
-        const next = await relocateTarget(askAi, live, step, feedback);
+        const next = await relocateTarget(askAi, live, step, feedback, mapContext(elementMapRef.current));
         return { point: next, thinking: next?.thinking ?? null };
       }, (r) => (r.point ? `Re-planned "${step.target ?? step.name}" at ${at(r.point.x, r.point.y)}` : `Re-planned: "${step.target ?? step.name}" is not visible`));
       return point;
@@ -516,13 +537,144 @@ export function useAssist() {
 
   const forgetFamiliar = (id: string) => setFamiliar((list) => forgetElement(list, id));
 
-  /** performStep, then reflect-after-step: every step the pipeline ran gets the model's reflection and verdict. */
+  /** performStep (with element identification on a miss), then reflect-after-step: every step the pipeline ran gets the model's reflection and verdict. */
   const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
-    const out = await performStep(step, actor, budget, dryRun);
+    const out = await performIdentified(step, actor, budget, dryRun);
     void rememberTarget(step, out);
     if (!out.halt && aiOnline()) await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
     return out;
   };
+
+  /** Whether the element identifier may send a request now. */
+  const identifierReady = () => agentsRef.current('identify') && aiOnline() && !abortedRef.current;
+
+  /** A live frame to verify against: a fresh desktop screenshot via the bridge, else the latest monitor frame. */
+  const liveFrame = async (): Promise<Frame | null> => {
+    const { bridgeUrl } = settingsRef.current;
+    if (sourceRef.current === 'bridge' && bridgeUrl) return desktopFrame(bridgeUrl, ++frameId.current);
+    return framesRef.current[0] ?? null;
+  };
+
+  /**
+   * The agent test of a proposal: a dry-run move to the proposed point, verified against the
+   * live frame by drift/template matching (template = the frame the AI saw). With the bridge it
+   * runs through the gated pipeline (real move only when `dryRun` is false: armed, not aborted,
+   * within budget); otherwise it is verify-only against the latest captured frame.
+   */
+  const agentTest = async (input: IdentifyInput, id: Extract<Identification, { found: true }>, budget: ActionBudget, dryRun: boolean): Promise<AgentCheck & { live?: Frame }> => {
+    const move: WorkflowStep = { id: uid('agent'), name: `Agent test "${id.name}"`, action: 'move', target: id.name, x: id.x, y: id.y, refFrame: input.frame, status: 'pending' };
+    if (sourceRef.current === 'demo' || (sourceRef.current === 'bridge' && settingsRef.current.bridgeUrl)) {
+      const out = await performStep(move, 'Element identifier', budget, dryRun);
+      if (!out.ok) return { ok: false, message: out.message };
+      return { ok: true, x: out.target.x, y: out.target.y, message: `${dryRun ? 'dry-run move' : 'move'} verified at ${gridRef(out.target)} — ${out.message}`, live: out.shot ?? framesRef.current[0] };
+    }
+    const live = await liveFrame();
+    if (!live) return { ok: false, message: 'no live frame to verify against' };
+    const c = correctDrift(input.frame.data, live.data, id.x, id.y, live.srcW, live.srcH);
+    if (c.level === 'red') return { ok: false, message: `no template match on the live frame (best ${c.matchDistance.toFixed(3)})` };
+    return { ok: true, x: c.x, y: c.y, message: `dry-run move verified on the live frame at ${gridRef(c)} (drift ${c.driftPx}px, match ${c.matchDistance.toFixed(3)})`, live };
+  };
+
+  /**
+   * Sends the AI an identification request for `box` (crop, size, colour stats, text, boundary,
+   * distances to mapped elements and grid cells) and agent-tests each proposal: at most 3 tries
+   * within 30 s. A verified element is remembered as familiar; a miss is logged plainly.
+   */
+  const identifyElement = async (reason: IdentifyReason, box: Box, text: string | undefined, budget: ActionBudget, dryRun: boolean): Promise<(IdentifyOutcome & { live?: Frame }) | null> => {
+    const frame = framesRef.current[0];
+    if (!frame) return null;
+    const label = text ?? `region at ${gridRef(boxCenter(box))}`;
+    const input: IdentifyInput = { reason, box, frame, crop: await cropFrame(frame, box).catch(() => frame), text, mapped: elementMapRef.current };
+    const log = (m: string, tone: LogEntry['tone']) => addLog('Element identifier', `"${label}": ${m}`, tone);
+    log(`sending an identification request to the AI (${reason.replace('_', ' ')})`, 'info');
+    let live: Frame | undefined;
+    const outcome = await identifyAndVerify({
+      identify: (feedback) => thought(`Identify: ${label}`, async () => parseIdentification(await askAi(identifyRequest(input, feedback)), label), (r) => (r.found ? `Identified "${r.name}" at ${gridRef(r)} — ${r.reason}` : `Not identified — ${r.reason}`)),
+      verify: async (id) => {
+        const check = await agentTest(input, id, budget, dryRun);
+        live = check.live;
+        return check;
+      },
+      aborted: () => abortedRef.current,
+      log,
+    });
+    if (outcome.verified) setFamiliar((list) => rememberElement(list, { id: uid('el'), name: outcome.name, x: outcome.x, y: outcome.y, lastSeen: Date.now() }));
+    return { ...outcome, live };
+  };
+
+  /** The box to describe for a step's target: the mapped element under its point, else a small square around it. */
+  const stepBox = (step: WorkflowStep): Box => {
+    const p = { x: step.x, y: step.y };
+    const mapped = elementMapRef.current.find((e) => p.x >= e.box.x && p.x <= e.box.x + e.box.w && p.y >= e.box.y && p.y <= e.box.y + e.box.h);
+    const f = framesRef.current[0];
+    return mapped?.box ?? zoomBox(p, f ? f.srcW / f.srcH : 16 / 9, 0.08);
+  };
+
+  /**
+   * performStep with identification: a pointer step the planner gave no point for is identified
+   * first; a pointer step that was not clicked / not accepted is identified and, once verified,
+   * re-run at the corrected coordinates. A miss returns the original outcome (the plan continues).
+   */
+  const performIdentified = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
+    let run = step;
+    if (step.unlocated && POINTER_ACTIONS.has(step.action) && identifierReady()) {
+      const found = await identifyElement('not_proposed', stepBox(step), step.target ?? step.name, budget, true);
+      if (found?.verified) run = { ...step, x: found.x, y: found.y, unlocated: false, refFrame: found.live ?? step.refFrame };
+    }
+    const out = await performStep(run, actor, budget, dryRun);
+    if (out.ok || out.halt || !POINTER_ACTIONS.has(step.action) || !identifierReady()) return out;
+    const reason: IdentifyReason = /not located|not be verified|not found/.test(out.message) ? 'not_accepted' : 'not_clicked';
+    const found = await identifyElement(reason, stepBox(run), step.target ?? step.name, budget, true);
+    if (!found?.verified) return out;
+    addLog(actor, `"${step.name}": continuing at the verified point ${gridRef(found)} (${pct(found.x)}, ${pct(found.y)})`, 'ok');
+    return performStep({ ...run, x: found.x, y: found.y, correctedX: undefined, correctedY: undefined, refFrame: found.live ?? run.refFrame }, actor, budget, dryRun);
+  };
+
+  /**
+   * New or constantly-changing content (same frame-diff clusters as the popup watcher): sent
+   * for identification once per region per 30 s. The agent test only moves the real mouse while
+   * Auto Act runs armed; otherwise it is a dry run.
+   */
+  const watchChanges = (prev: Frame, cur: Frame) => {
+    const cells = largestCluster(diffCells(prev.data, cur.data));
+    const box = cells.length >= 6 ? boundingBox(cells) : null;
+    if (!box) return;
+    const now = Date.now();
+    const noted = noteChange(changeHitsRef.current, box, now);
+    changeHitsRef.current = noted.hits;
+    if (noted.kind === 'repeat' || identifyBusyRef.current || !identifierReady() || recentlySent(identifySentRef.current, box, now)) return;
+    identifySentRef.current = [{ box, time: now }, ...identifySentRef.current].slice(0, 20);
+    identifyBusyRef.current = true;
+    const dry = !(armedRef.current && settingsRef.current.autoAct);
+    void identifyElement(noted.kind === 'new' ? 'new_element' : 'changing_element', box, undefined, autoBudgetRef.current, dry).finally(() => {
+      identifyBusyRef.current = false;
+    });
+  };
+
+  /** Element map: the user's drawn boxes, persisted and fed into the familiar-elements memory. */
+  const setMap = (next: MappedElement[]) => {
+    elementMapRef.current = next;
+    setElementMap(next);
+  };
+
+  const toggleMapMode = () => {
+    setMapMode((m) => !m);
+    setMapDraft(null);
+  };
+
+  /** Names the drawn box and maps it on the current frame; also remembered as a familiar element. */
+  const saveMapped = async (name: string) => {
+    if (!mapDraft || !name.trim()) return;
+    const frame = framesRef.current[0];
+    const el: MappedElement = { id: uid('map'), name: name.trim(), box: mapDraft, mappedAt: Date.now(), ...(frame ? { frame } : {}) };
+    setMap(mapElement(elementMapRef.current, el));
+    setMapDraft(null);
+    const patch = frame ? await patchAt(frame, boxCenter(el.box)).catch(() => undefined) : undefined;
+    setFamiliar((list) => rememberElement(list, toFamiliar(el, Date.now(), patch)));
+    addLog('Element map', `Mapped "${el.name}" at ${gridRef(boxCenter(el.box))} (${pct(el.box.w)} x ${pct(el.box.h)} of the screen)`, 'ok');
+  };
+
+  const deleteMapped = (id: string) => setMap(unmapElement(elementMapRef.current, id));
 
   /**
    * Test click: highlights the element on the preview; while armed, clicks its exact point
@@ -657,7 +809,10 @@ export function useAssist() {
     setFrames(framesRef.current);
     setShotCount((n) => n + 1);
     void putStoredFrame(toStoredFrame(frame), settingsRef.current.gallerySize).catch(() => undefined);
-    if (prev) detectErrors(prev, frame);
+    if (prev) {
+      detectErrors(prev, frame);
+      watchChanges(prev, frame);
+    }
     const next = stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running');
     if (next?.refFrame && agentsRef.current('drift')) {
       const r = matchTemplate(next.refFrame.data, frame.data, next.x, next.y);
@@ -880,7 +1035,7 @@ export function useAssist() {
     }
     await withAi(async () => {
       try {
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askAi, [], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askAi, mapContext(elementMapRef.current), patternsRef.current), planSummary);
         const { steps: planned, source: why } = plan;
         stepsRef.current = planned;
         setSteps(planned);
@@ -896,7 +1051,7 @@ export function useAssist() {
   const moveTo = async (name: string) => {
     await withAi(async () => {
       try {
-        const { steps: planned } = await thought(`/move ${name}`, () => planFromGoal(`Move the mouse cursor onto the ${name} (hover, do not click)`, [], framesRef.current[0] ?? null, askAi), planSummary);
+        const { steps: planned } = await thought(`/move ${name}`, () => planFromGoal(`Move the mouse cursor onto the ${name} (hover, do not click)`, [], framesRef.current[0] ?? null, askAi, mapContext(elementMapRef.current)), planSummary);
         const move = planned.find((s) => s.action === 'move');
         if (!move) {
           addLog('/move', `AI did not plan a mouse move to "${name}" (it proposed ${planned.map((s) => s.action).join(', ')}) — nothing executed`, 'error');
@@ -1070,6 +1225,7 @@ export function useAssist() {
     agents, setAgents, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
     armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern,
     familiar, forgetFamiliar, elements, highlight, testClick,
+    elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
   };

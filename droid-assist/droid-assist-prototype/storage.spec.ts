@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistSettings, FamiliarElement, LearnedPattern, LogEntry, SavedCard } from './types.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadFamiliar, loadLog, loadPatterns, loadSettings, saveFamiliar, savePatterns, saveCards, saveLog, saveSettings } from './storage.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadLog, loadPatterns, loadSettings, saveElementMap, saveFamiliar, savePatterns, saveCards, saveLog, saveSettings } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 
 const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, showGrid: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b' };
@@ -178,5 +178,19 @@ describe('familiar elements', () => {
     spy.mockRestore();
     expect(loadFamiliar()).toEqual([fam(1)]);
     expect(loadPatterns()).toHaveLength(1);
+  });
+});
+
+describe('element map', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('round-trips mapped elements under its own key and drops invalid ones', async () => {
+    saveElementMap([{ id: 'm1', name: 'OK', box: { x: 0.1, y: 0.2, w: 0.3, h: 0.1 }, mappedAt: 5 }]);
+    expect(localStorage.getItem('droid-assist.element-map')).not.toBeNull();
+    expect(await loadElementMap()).toEqual([{ id: 'm1', name: 'OK', box: { x: 0.1, y: 0.2, w: 0.3, h: 0.1 }, mappedAt: 5 }]);
+    localStorage.setItem('droid-assist.element-map', JSON.stringify([null, { id: 'a', name: ' ', box: { x: 0, y: 0, w: 0.1, h: 0.1 } }, { id: 'b', name: 'B', box: { x: 0.9, y: 0, w: 0.5, h: 0.1 } }, { id: 'c', name: 'C', box: { x: 0, y: 0, w: 0.1, h: 0.1 } }]));
+    expect((await loadElementMap()).map((m) => m.id)).toEqual(['c']);
+    localStorage.setItem('droid-assist.element-map', 'nope');
+    expect(await loadElementMap()).toEqual([]);
   });
 });

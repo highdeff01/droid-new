@@ -3,11 +3,12 @@ import { STEP_ACTIONS } from './types.js';
 import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 import { sanitizeBudget } from './safety.js';
 import { FAMILIAR_LIMIT } from './elements.js';
+import { MAP_LIMIT, type MappedElement } from './element-map.js';
 
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', familiar: 'droid-assist.familiar' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', familiar: 'droid-assist.familiar', elementMap: 'droid-assist.element-map' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -168,6 +169,42 @@ function isFamiliar(v: unknown): v is FamiliarElement {
 export function loadFamiliar(): FamiliarElement[] {
   const stored = readJson(KEYS.familiar);
   return Array.isArray(stored) ? stored.filter(isFamiliar).slice(0, FAMILIAR_LIMIT) : [];
+}
+
+type StoredMapped = Omit<MappedElement, 'frame'> & { frame?: StoredFrame };
+
+const isUnit = (v: unknown) => isNum(v) && v >= 0 && v <= 1;
+
+/** A valid stored mapped element (box inside the screen), or null. */
+function parseMapped(v: unknown): StoredMapped | null {
+  if (!isObject(v) || typeof v.id !== 'string' || typeof v.name !== 'string' || !v.name.trim() || !isObject(v.box)) return null;
+  const { x, y, w, h } = v.box;
+  if (!isUnit(x) || !isUnit(y) || !isUnit(w) || !isUnit(h) || (x as number) + (w as number) > 1.0001 || (y as number) + (h as number) > 1.0001) return null;
+  return {
+    id: v.id,
+    name: v.name,
+    box: { x: x as number, y: y as number, w: w as number, h: h as number },
+    mappedAt: isNum(v.mappedAt) ? v.mappedAt : 0,
+    ...(isStoredFrame(v.frame) ? { frame: v.frame } : {}),
+  };
+}
+
+/** The stored element map (newest first, at most MAP_LIMIT) with frames decoded; invalid entries are dropped. */
+export async function loadElementMap(): Promise<MappedElement[]> {
+  const stored = readJson(KEYS.elementMap);
+  if (!Array.isArray(stored)) return [];
+  const items = stored.map(parseMapped).filter((m): m is StoredMapped => m !== null).slice(0, MAP_LIMIT);
+  return Promise.all(items.map(async ({ frame, ...m }) => {
+    const decoded = frame ? await decodeFrame(frame) : null;
+    return decoded ? { ...m, frame: decoded } : m;
+  }));
+}
+
+/** Persists the element map; when it does not fit, retries without the frames. */
+export function saveElementMap(list: MappedElement[]) {
+  const kept = list.slice(0, MAP_LIMIT);
+  const withFrames: StoredMapped[] = kept.map(({ frame, ...m }) => (frame ? { ...m, frame: toStoredFrame(frame) } : m));
+  if (!writeJson(KEYS.elementMap, withFrames)) writeJson(KEYS.elementMap, kept.map(({ frame: _frame, ...m }) => m));
 }
 
 /** Persists the familiar elements; when they do not fit, retries without their screenshot patches. */
