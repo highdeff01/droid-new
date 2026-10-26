@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BRIDGE_REQUIRED, captureDesktop, checkBridge, humanMoveMs, nativeActions, sendToBridge } from './bridge.js';
+import { BRIDGE_REQUIRED, captureDesktop, checkBridge, nativeActions, sendToBridge } from './bridge.js';
 import type { WorkflowStep } from './types.js';
 
 const step = (patch: Partial<WorkflowStep>): WorkflowStep => ({ id: 's1', name: 'Step', action: 'click', x: 0.5, y: 0.25, status: 'pending', ...patch });
@@ -22,22 +22,6 @@ describe('nativeActions', () => {
     expect(kinds(step({ action: 'calc', text: '2+3' }))).toContain('2+3');
     expect(kinds(step({ action: 'media' }))).toEqual(['playpause']);
     expect(kinds(step({ action: 'wait' }))).toEqual(['wait']);
-  });
-
-  it('moves the cursor without clicking, over a humanized duration', () => {
-    const [move, ...rest] = nativeActions(step({ action: 'move', correctedX: 0.1, correctedY: 0.9 }), 1000, 500);
-    expect(rest).toEqual([]);
-    expect(move).toMatchObject({ action: 'move', x: 100, y: 450 });
-    expect(move.durationMs).toBeGreaterThanOrEqual(250);
-    expect(move.durationMs).toBeLessThanOrEqual(550);
-    expect(humanMoveMs(() => 0)).toBe(250);
-    expect(humanMoveMs(() => 1)).toBe(550);
-  });
-
-  it('maps double_click and scroll to real pointer input at the target', () => {
-    expect(nativeActions(step({ action: 'double_click' }), 1000, 500)).toEqual([expect.objectContaining({ action: 'double_click', x: 500, y: 125 })]);
-    expect(nativeActions(step({ action: 'scroll', text: 'up' }), 1000, 500)[0]).toMatchObject({ action: 'scroll', x: 500, y: 125, keyPayload: 'up' });
-    expect(nativeActions(step({ action: 'scroll' }), 1000, 500)[0]).toMatchObject({ action: 'scroll', keyPayload: 'down' });
   });
 });
 

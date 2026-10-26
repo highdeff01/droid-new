@@ -24,16 +24,7 @@ export interface TrailPoint {
   click?: boolean;
 }
 
-/** Actions a workflow step can perform. `move` hovers the cursor over its target without clicking. */
-export type StepAction = 'click' | 'double_click' | 'move' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media';
-
-/** Every step action, in the order the planner contract lists them. */
-export const STEP_ACTIONS: readonly StepAction[] = ['click', 'double_click', 'move', 'scroll', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media'];
-
-/** Step actions that point the mouse at an on-screen target, so their coordinates must be grounded. */
-export const POINTER_ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(['click', 'double_click', 'move', 'scroll']);
-
-/** Monitor modes, each with its own capture interval. */
+/** Capture cadence: the app interval setting, background (1 s) or advanced (0.25 s). */
 export type MonitorMode = 'app' | 'background' | 'advanced';
 
 /** Real mouse/keyboard actions recorded in the persistent action history. */
@@ -80,8 +71,6 @@ export interface WorkflowStep {
   x: number;
   y: number;
   text?: string;
-  /** The on-screen thing a pointer step acts on ("files icon"); its coordinates are confirmed against it before dispatch. */
-  target?: string;
   /** Screenshot captured when the step was recorded — the template for drift matching. */
   refFrame?: Frame;
   status: StepStatus;
@@ -149,20 +138,4 @@ export interface AssistSettings {
   abortHotkey: string;
   /** Max real (bridge-dispatched) input actions per Auto Act / replay run. */
   actionBudget: number;
-  /** Ollama-compatible /api/chat URL every AI feature calls. */
-  aiUrl: string;
-  /** Model name sent with every AI request. */
-  aiModel: string;
-}
-
-/** Each monitor mode's label and capture interval (null: the user's captureMs). */
-export const MONITOR_MODES: Record<MonitorMode, { label: string; ms: number | null }> = {
-  app: { label: 'App capture & monitor', ms: null },
-  background: { label: 'Background monitor & control (1 s)', ms: 1000 },
-  advanced: { label: 'Advanced monitor (0.25 s)', ms: 250 },
-};
-
-/** The capture interval a monitor mode runs at. */
-export function monitorInterval(mode: MonitorMode, captureMs: number): number {
-  return MONITOR_MODES[mode].ms ?? captureMs;
 }

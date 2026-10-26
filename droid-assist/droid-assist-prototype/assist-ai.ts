@@ -50,27 +50,6 @@ export async function decideStep(ask: AskFn, frame: Frame, step: WorkflowStep, g
   return { run: true, x: toUnit(r.x ?? step.x, VIEW_W), y: toUnit(r.y ?? step.y, VIEW_H), reason };
 }
 
-/** The model's ruling on whether a step's named target is under the proposed point. */
-export interface TargetCheck {
-  visible: boolean;
-  reason: string;
-}
-
-/**
- * The second, easier grounding question: shown a zoomed crop with a red ring on the proposed
- * point, the model only says whether `step`'s named target is under the ring.
- */
-export async function confirmTarget(ask: AskFn, crop: Frame, step: WorkflowStep): Promise<TargetCheck> {
-  const reply = await ask({
-    system: 'You are Droid Assist\'s target checker. You see a zoomed crop of the screen; a red ring marks where the mouse will go. Reply ONLY with JSON {"visible":boolean,"reason":string}.',
-    prompt: `Is "${step.target ?? step.name}" under or touching the red ring? Set visible=true only if the ring is on that exact thing, not on something else nearby or on empty space.`,
-    frame: crop,
-    json: true,
-  });
-  const r = parseJsonReply(reply);
-  return { visible: r.visible === true, reason: String(r.reason ?? '') };
-}
-
 /** The model's answer about the screen plus the items it points out. */
 export interface ScreenAnswer {
   answer: string;
