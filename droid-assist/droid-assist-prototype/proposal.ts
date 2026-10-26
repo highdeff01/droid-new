@@ -1,7 +1,7 @@
 import type { StepAction, WorkflowStep } from './types.js';
 import { POINTER_ACTIONS } from './types.js';
-import { AiError, VIEW_H, VIEW_W, parseJsonReply, toUnit } from './ai.js';
-import type { AskFn } from './ai.js';
+import { AiError, SAMPLE_VIEW, parseJsonReply, toUnit } from './ai.js';
+import type { AskFn, ViewSize } from './ai.js';
 import type { Thought } from './assist-ai.js';
 import type { ChangeAssessment } from './screen-change.js';
 import type { Frame } from './types.js';
@@ -49,7 +49,11 @@ function withChange(change: ChangeAssessment | null, what: string, why: string):
   return change ? `The screen now shows ${change.summary}, so I will ${what}: ${why}` : why;
 }
 
-export const PROPOSE_SYSTEM = `You are Droid Assist's executor. Before running the next step you state WHAT you will do and WHY. Look at the screenshot. Coordinates are fractions 0..1 of the screenshot (${VIEW_W}x${VIEW_H}) width/height. Reply ONLY with JSON {"ready":boolean,"x":number,"y":number,"why":string}.`;
+/** The proposal system prompt for a `view`-sized screenshot. */
+export const proposeSystem = (view: ViewSize) => `You are Droid Assist's executor. Before running the next step you state WHAT you will do and WHY. Look at the screenshot. Coordinates are fractions 0..1 of the screenshot (${view.w}x${view.h}) width/height. Reply ONLY with JSON {"ready":boolean,"x":number,"y":number,"why":string}.`;
+
+/** The proposal system prompt for a sample-space (480x270) screenshot. */
+export const PROPOSE_SYSTEM = proposeSystem(SAMPLE_VIEW);
 
 /** The prompt a proposal is asked with: goal, step, planned target, latest change, patterns and any redo reason. */
 function proposePrompt(step: WorkflowStep, ctx: ProposalContext): string {
@@ -67,14 +71,14 @@ function proposePrompt(step: WorkflowStep, ctx: ProposalContext): string {
 
 /** Asks the model for the what/why of `step` on the live frame (null before the first frame is captured). */
 export async function proposeStep(ask: AskFn, frame: Frame | null, step: WorkflowStep, ctx: ProposalContext): Promise<Proposal> {
-  const { content, thinking } = await ask({ system: PROPOSE_SYSTEM, prompt: proposePrompt(step, ctx), frame, json: true });
+  const { content, thinking, view = SAMPLE_VIEW } = await ask({ system: proposeSystem, prompt: proposePrompt(step, ctx), frame, json: true });
   const r = parseJsonReply(content);
   const why = typeof r.why === 'string' ? r.why.trim() : '';
   if (!why) throw new AiError('AI proposal had no "why"');
   const p = planned(step);
   const pointer = POINTER_ACTIONS.has(step.action);
-  const x = pointer && r.x !== undefined ? toUnit(r.x, VIEW_W) : p.x;
-  const y = pointer && r.y !== undefined ? toUnit(r.y, VIEW_H) : p.y;
+  const x = pointer && r.x !== undefined ? toUnit(r.x, view.w) : p.x;
+  const y = pointer && r.y !== undefined ? toUnit(r.y, view.h) : p.y;
   const what = whatText(step.action, targetOf(step), x, y, step.text);
   return { ready: r.ready === true, action: step.action, target: targetOf(step), x, y, what, why: withChange(ctx.change, what, why), source: 'ai', thinking };
 }

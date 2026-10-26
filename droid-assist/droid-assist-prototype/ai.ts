@@ -4,10 +4,12 @@ import type { Frame } from './types.js';
 export const DEFAULT_AI_URL = 'https://quantumclaw.net/ollama/api/chat';
 export const DEFAULT_AI_MODEL = 'qwen3.5:2b';
 
-/** Where the model is reached. */
+/** Where the model is reached, and the pixel size screenshots are sent to it at. */
 export interface AiConfig {
   url: string;
   model: string;
+  /** Size each screenshot is rendered at for the model; absent means SAMPLE_VIEW. */
+  view?: ViewSize;
 }
 
 /** Live reachability of the model endpoint. */
@@ -28,16 +30,46 @@ export class AiError extends Error {
   override name = 'AiError';
 }
 
-/** Width/height of the JPEG the model sees (Frame.url). */
+/** Width/height of the sample space: Frame.url, the UI, the bridge and the drift math. */
 export const VIEW_W = 480;
 export const VIEW_H = 270;
 const HISTORY_KEY = 'droid-assist.ai-history';
 const HISTORY_MAX = 20;
 
+/** Pixel size of an image sent to the model. */
+export interface ViewSize {
+  w: number;
+  h: number;
+}
+
+/** The AI view resolutions Settings offers. */
+export type AiView = '480x270' | '960x540' | '1280x720';
+export const AI_VIEWS: Record<AiView, ViewSize> = {
+  '480x270': { w: 480, h: 270 },
+  '960x540': { w: 960, h: 540 },
+  '1280x720': { w: 1280, h: 720 },
+};
+export const DEFAULT_AI_VIEW: AiView = '960x540';
+/** The sample-space view: what a frame's display JPEG is, and how a reply without a view is read. */
+export const SAMPLE_VIEW: ViewSize = { w: VIEW_W, h: VIEW_H };
+
+/** A system prompt, fixed or written for the view the screenshots are sent at. */
+export type SystemPrompt = string | ((view: ViewSize) => string);
+
+/** The text of `system` for screenshots sent at `view`. */
+export const systemText = (system: SystemPrompt, view: ViewSize) => (typeof system === 'string' ? system : system(view));
+
 /** A model reply: its content plus the reasoning it returned (null when the response carried none). */
 export interface AiReply {
   content: string;
   thinking: string | null;
+  /** Pixel size the screenshots of this request were sent at; absent means SAMPLE_VIEW. */
+  view?: ViewSize;
+}
+
+/** Pixel coordinates of `view` read back as a point in the 0..1 sample space. */
+export function viewPoint(x: unknown, y: unknown, view: ViewSize = SAMPLE_VIEW): { x: number; y: number } {
+  return { x: toUnit(x, view.w), y: toUnit(y, view.h) };
 }
 
 /** message.thinking when it is a non-empty string; null otherwise (never invented). */
@@ -150,9 +182,12 @@ export async function pingAi(cfg: AiConfig): Promise<AiStatus> {
   }
 }
 
+/** A data URL as bare base64, as Ollama's images[] expects. */
+const toBase64 = (url: string) => url.slice(url.indexOf(',') + 1);
+
 /** The frame's display JPEG as bare base64, as Ollama's images[] expects. */
 export function frameToBase64(frame: Frame): string {
-  return frame.url.slice(frame.url.indexOf(',') + 1);
+  return toBase64(frame.url);
 }
 
 /** How much of an unparseable reply a parse failure keeps for the log. */
@@ -237,12 +272,13 @@ export function toUnit(value: unknown, size: number): number {
 
 /** One question to the model about the current screen. */
 export interface AskRequest {
-  system: string;
+  /** The reply contract; a function is resolved for the view the screenshots are sent at. */
+  system: SystemPrompt;
   prompt: string;
   frame?: Frame | null;
   /** Further screenshots sent after `frame` (e.g. older gallery frames). */
   frames?: Frame[];
-  /** Extra images sent after the frame (e.g. a zoomed crop of a changed region). */
+  /** Extra images sent after the frame as they are (e.g. a zoomed crop of the target region). */
   crops?: Frame[];
   /** Recent log / action lines sent as context. */
   context?: string[];
@@ -253,6 +289,9 @@ export interface AskRequest {
 
 /** The asker every AI feature goes through. */
 export type AskFn = (req: AskRequest) => Promise<AiReply>;
+
+/** Draws a frame at `view` pixels for the model; resolves with a JPEG data URL. */
+export type RenderFn = (frame: Frame, view: ViewSize) => Promise<string>;
 
 /** Minimal storage the session persists history to (sessionStorage in the browser). */
 export type HistoryStore = Pick<Storage, 'getItem' | 'setItem'>;
@@ -267,22 +306,40 @@ function loadHistory(store: HistoryStore | null): ChatMessage[] {
 }
 
 /**
- * A per-session conversation: every ask sends system + history + the new user turn
- * (with the frame), and on success appends the text of both turns (content only, no thinking)
- * to the persisted history. `cancel()` aborts every request in flight (they reject with AiError).
+ * The screenshots as sent and the view they were sent at: each rendered at `view` when a view and
+ * a renderer are given; the frames' own display JPEGs in SAMPLE_VIEW otherwise, or when rendering fails.
  */
-export function createAiSession(store: HistoryStore | null) {
+export async function screenshots(frames: Frame[], view: ViewSize | undefined, render: RenderFn | undefined): Promise<{ urls: string[]; view: ViewSize }> {
+  const own = { urls: frames.map((f) => f.url), view: SAMPLE_VIEW };
+  if (!view || !render) return own;
+  try {
+    return { urls: await Promise.all(frames.map((f) => render(f, view))), view };
+  } catch {
+    return own;
+  }
+}
+
+/**
+ * A per-session conversation: every ask sends system + history + the new user turn
+ * (with the frame rendered at cfg.view by `render`), and on success appends the text of both turns
+ * (content only, no thinking) to the persisted history. The reply carries the view its screenshots
+ * were sent at. `cancel()` aborts every request in flight (they reject with AiError).
+ */
+export function createAiSession(store: HistoryStore | null, render?: RenderFn) {
   let history = loadHistory(store);
   let controller = new AbortController();
   const ask = async (cfg: AiConfig, req: AskRequest): Promise<AiReply> => {
+    const signal = linkSignals(controller.signal, req.signal);
     const context = req.context?.length ? `\n\nRecent activity (newest first):\n${req.context.join('\n')}` : '';
     const content = `${req.prompt}${context}`;
-    const images = [...(req.frame ? [req.frame] : []), ...(req.frames ?? []), ...(req.crops ?? [])].map(frameToBase64);
+    const shots = await screenshots([...(req.frame ? [req.frame] : []), ...(req.frames ?? [])], cfg.view, render);
+    const images = [...shots.urls, ...(req.crops ?? []).map((c) => c.url)].map(toBase64);
     const user: ChatMessage = { role: 'user', content, ...(images.length ? { images } : {}) };
-    const reply = await chat(cfg, [{ role: 'system', content: req.system }, ...history, user], req.json, undefined, linkSignals(controller.signal, req.signal));
+    const system = systemText(req.system, shots.view);
+    const reply = await chat(cfg, [{ role: 'system', content: system }, ...history, user], req.json, undefined, signal);
     history = [...history, { role: 'user' as const, content }, { role: 'assistant' as const, content: reply.content }].slice(-HISTORY_MAX);
     store?.setItem(HISTORY_KEY, JSON.stringify(history));
-    return reply;
+    return { ...reply, view: shots.view };
   };
   const cancel = () => {
     controller.abort();

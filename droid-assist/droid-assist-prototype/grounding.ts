@@ -1,5 +1,22 @@
 import type { Frame } from './types.js';
 import type { Box } from './assist-ai.js';
+import type { ViewSize } from './ai.js';
+
+/** The frame's highest-resolution image: its full capture when it has one, else its display JPEG. */
+export const fullUrl = (frame: Frame) => frame.full ?? frame.url;
+
+/** A derived image of `live` (a crop or a boxed copy): its own JPEG is all it has. */
+const derived = (live: Frame, url: string): Frame => ({ ...live, url, full: undefined });
+
+/** The frame drawn from its full-resolution image at `view` pixels: the screenshot the model sees. */
+export async function renderView(frame: Frame, view: ViewSize): Promise<string> {
+  const img = await decode(fullUrl(frame));
+  const canvas = document.createElement('canvas');
+  canvas.width = view.w;
+  canvas.height = view.h;
+  canvas.getContext('2d')!.drawImage(img, 0, 0, view.w, view.h);
+  return canvas.toDataURL('image/jpeg', 0.8);
+}
 
 /** Width of the zoomed crop as a share of the screen width. */
 export const ZOOM_SHARE = 0.18;
@@ -18,13 +35,11 @@ export function zoomBox(p: { x: number; y: number }, aspect = 16 / 9, share = ZO
 }
 
 /**
- * Crops a zoomed region around `p` out of the live frame's display image and marks the
- * proposed point with a red ring, so the model only has to say whether the target is under it.
+ * Crops a zoomed region around `p` out of the live frame's full-resolution image and marks the
+ * proposed point with a red ring, so the model can read the target and say whether it is under it.
  */
 export async function zoomFrame(live: Frame, p: { x: number; y: number }): Promise<Frame> {
-  const img = new Image();
-  img.src = live.url;
-  await img.decode();
+  const img = await decode(fullUrl(live));
   const box = zoomBox(p, live.srcW / live.srcH);
   const canvas = document.createElement('canvas');
   canvas.width = ZOOM_PX;
@@ -36,7 +51,7 @@ export async function zoomFrame(live: Frame, p: { x: number; y: number }): Promi
   ctx.beginPath();
   ctx.arc(((p.x - box.x) / box.w) * ZOOM_PX, ((p.y - box.y) / box.h) * ZOOM_PX, 14, 0, Math.PI * 2);
   ctx.stroke();
-  return { ...live, url: canvas.toDataURL('image/jpeg', 0.85) };
+  return derived(live, canvas.toDataURL('image/jpeg', 0.85));
 }
 
 /** Longest side, in pixels, of the zoomed crop of a changed region. */
@@ -54,7 +69,7 @@ async function decode(url: string): Promise<HTMLImageElement> {
  * and a zoomed crop of just that region.
  */
 export async function boxedFrames(live: Frame, box: Box): Promise<{ full: Frame; crop: Frame }> {
-  const img = await decode(live.url);
+  const img = await decode(fullUrl(live));
   const W = img.naturalWidth;
   const H = img.naturalHeight;
   const full = document.createElement('canvas');
@@ -72,7 +87,7 @@ export async function boxedFrames(live: Frame, box: Box): Promise<{ full: Frame;
   crop.width = Math.max(1, Math.round(sw * scale));
   crop.height = Math.max(1, Math.round(sh * scale));
   crop.getContext('2d')!.drawImage(img, box.x * W, box.y * H, sw, sh, 0, 0, crop.width, crop.height);
-  return { full: { ...live, url: full.toDataURL('image/jpeg', 0.85) }, crop: { ...live, url: crop.toDataURL('image/jpeg', 0.85) } };
+  return { full: derived(live, full.toDataURL('image/jpeg', 0.85)), crop: derived(live, crop.toDataURL('image/jpeg', 0.85)) };
 }
 
 /** Pixel size of the square screenshot patch kept with a familiar element. */

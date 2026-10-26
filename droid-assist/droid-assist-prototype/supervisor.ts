@@ -1,6 +1,6 @@
 import type { Frame, LearnedPattern, LogEntry, SyncLevel, WorkflowStep } from './types.js';
-import { AiError, VIEW_H, VIEW_W, parseJsonReply, toUnit } from './ai.js';
-import type { AskFn } from './ai.js';
+import { AiError, SAMPLE_VIEW, parseJsonReply, viewPoint } from './ai.js';
+import type { AskFn, ViewSize } from './ai.js';
 import type { Thought } from './assist-ai.js';
 import type { ThinkingEntry } from './thinking-timeline.js';
 import { uid } from './planner.js';
@@ -97,11 +97,11 @@ export function supervisorDigest(input: SupervisorInput): string {
 const optionalText = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
 
 /** One step fix from the reply; null when it names no existing step. */
-function toFix(raw: unknown, steps: WorkflowStep[]): StepFix | null {
+function toFix(raw: unknown, steps: WorkflowStep[], view: ViewSize): StepFix | null {
   const r = (raw ?? {}) as Record<string, unknown>;
   const index = Number(r.step);
   if (!Number.isInteger(index) || index < 1 || index > steps.length) return null;
-  const point = r.x !== undefined && r.x !== null && r.y !== undefined && r.y !== null ? { x: toUnit(r.x, VIEW_W), y: toUnit(r.y, VIEW_H) } : {};
+  const point = r.x !== undefined && r.x !== null && r.y !== undefined && r.y !== null ? viewPoint(r.x, r.y, view) : {};
   const fields = { name: optionalText(r.name), target: optionalText(r.target), text: optionalText(r.text) };
   const set = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined));
   return { stepId: steps[index - 1].id, index, ...set, ...point, reason: String(r.reason ?? '') };
@@ -113,13 +113,16 @@ function toHabit(raw: unknown): HabitUpdate | null {
   return pattern && (r.kind === 'avoid' || r.kind === 'add') ? { kind: r.kind, pattern } : null;
 }
 
-/** Reads the review JSON; a missing assessment is an AiError, never a made-up review. */
-export function parseReview(content: string, thinking: string | null, steps: WorkflowStep[], now = Date.now()): SupervisorReview {
+/**
+ * Reads the review JSON; a missing assessment is an AiError, never a made-up review. Pixel
+ * coordinates in step fixes are read in the `view` the screenshots were sent at.
+ */
+export function parseReview(content: string, thinking: string | null, steps: WorkflowStep[], now = Date.now(), view: ViewSize = SAMPLE_VIEW): SupervisorReview {
   const r = parseJsonReply(content);
   const assessment = optionalText(r.assessment);
   if (!assessment) throw new AiError('Supervisor reply had no assessment');
   const c = typeof r.confidence === 'number' && Number.isFinite(r.confidence) ? Math.min(1, Math.max(0, r.confidence)) : 0;
-  const stepFixes = (Array.isArray(r.step_fixes) ? r.step_fixes : []).map((f) => toFix(f, steps)).filter((f): f is StepFix => f !== null);
+  const stepFixes = (Array.isArray(r.step_fixes) ? r.step_fixes : []).map((f) => toFix(f, steps, view)).filter((f): f is StepFix => f !== null);
   const habits = (Array.isArray(r.habits) ? r.habits : []).map(toHabit).filter((h): h is HabitUpdate => h !== null);
   return { time: now, planOk: r.plan_ok === true, assessment, confidence: c, stepFixes, habits, thinking };
 }
@@ -128,13 +131,13 @@ export function parseReview(content: string, thinking: string | null, steps: Wor
 export async function reviewRun(ask: AskFn, input: SupervisorInput): Promise<SupervisorReview> {
   const [frame, ...rest] = input.frames.slice(0, SUPERVISOR_FRAMES);
   const reply = await ask({
-    system: `You are Droid Assist's supervisor. You review every other agent, the screenshots and the model's thinking, then rule on the plan. The first screenshot is the newest. Coordinates are fractions 0..1 of the screenshot (${VIEW_W}x${VIEW_H}). Reply ONLY with JSON {"plan_ok":boolean,"assessment":string,"confidence":number,"step_fixes":[{"step":number,"x":number,"y":number,"target":string,"name":string,"text":string,"reason":string}],"habits":[{"kind":"avoid"|"add","pattern":string}]} where step is the 1-based step number, confidence is 0..1, and you omit any field you would not change.`,
+    system: (view) => `You are Droid Assist's supervisor. You review every other agent, the screenshots and the model's thinking, then rule on the plan. The first screenshot is the newest. Coordinates are fractions 0..1 of the screenshot (${view.w}x${view.h}). Reply ONLY with JSON {"plan_ok":boolean,"assessment":string,"confidence":number,"step_fixes":[{"step":number,"x":number,"y":number,"target":string,"name":string,"text":string,"reason":string}],"habits":[{"kind":"avoid"|"add","pattern":string}]} where step is the 1-based step number, confidence is 0..1, and you omit any field you would not change.`,
     prompt: `${supervisorDigest(input)}\n\nGiven all this, is the current plan and coordinate set still correct, and what final updates should be applied?`,
     frame: frame ?? null,
     frames: rest,
     json: true,
   });
-  return parseReview(reply.content, reply.thinking, input.steps);
+  return parseReview(reply.content, reply.thinking, input.steps, Date.now(), reply.view);
 }
 
 /** True when the review may be applied without the user: confident and it actually suggests something. */

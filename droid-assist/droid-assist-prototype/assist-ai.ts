@@ -1,7 +1,7 @@
 import type { Annotation, Frame, WorkflowStep } from './types.js';
-import { AiError, VIEW_H, VIEW_W, parseJsonReply, stripThinking, toUnit } from './ai.js';
-import type { AiReply, AskFn } from './ai.js';
-import { GRID_PROMPT, gridRef, replyPoint } from './grid.js';
+import { AiError, SAMPLE_VIEW, parseJsonReply, stripThinking, viewPoint } from './ai.js';
+import type { AiReply, AskFn, ViewSize } from './ai.js';
+import { gridPrompt, gridRef, replyPoint } from './grid.js';
 import { uid } from './planner.js';
 
 /** A normalized box on the screen. */
@@ -19,7 +19,8 @@ export interface Thought {
 
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
 const boxText = (b: Box) => `x=${pct(b.x)}..${pct(b.x + b.w)}, y=${pct(b.y)}..${pct(b.y + b.h)}`;
-const COORDS = `${GRID_PROMPT}\nBoxes (x,y,w,h) are fractions 0..1 of the screenshot (${VIEW_W}x${VIEW_H}) width/height; use the grid ranges above to measure them.`;
+/** The coordinate contract for a `view`-sized screenshot: the grid plus how boxes are measured. */
+const coords = (view: ViewSize) => `${gridPrompt(view)}\nBoxes (x,y,w,h) are fractions 0..1 of the screenshot (${view.w}x${view.h}) width/height; use the grid ranges above to measure them.`;
 const stepText = (step: WorkflowStep) => `"${step.name}" — action ${step.action}${step.text ? ` with "${step.text}"` : ''}`;
 
 /** The model's ruling on a changed region: close it at (x, y), or leave it. */
@@ -27,8 +28,8 @@ export type PopupDecision = ({ close: true; x: number; y: number; reason: string
 
 /** Asks the model whether the flagged region is an intrusive popup and where its close control is. */
 export async function decidePopup(ask: AskFn, frame: Frame, box: Box): Promise<PopupDecision> {
-  const { content, thinking } = await ask({
-    system: `You are Droid Assist's popup handler. Look at the screenshot. ${COORDS} Reply ONLY with JSON {"close":boolean,"cell":string,"cx":number,"cy":number,"reason":string}.`,
+  const { content, thinking, view } = await ask({
+    system: (v) => `You are Droid Assist's popup handler. Look at the screenshot. ${coords(v)} Reply ONLY with JSON {"close":boolean,"cell":string,"cx":number,"cy":number,"reason":string}.`,
     prompt: `New content appeared in the region ${boxText(box)} (from cell ${gridRef(box)}). If it is an ad, dialog or popup that blocks the user, set close=true and give the center of its close/dismiss control as cell + cx,cy. Otherwise close=false.`,
     frame,
     json: true,
@@ -36,7 +37,7 @@ export async function decidePopup(ask: AskFn, frame: Frame, box: Box): Promise<P
   const r = parseJsonReply(content);
   const reason = String(r.reason ?? '');
   if (r.close !== true) return { close: false, reason, thinking };
-  return { close: true, ...replyPoint(r), reason, thinking };
+  return { close: true, ...replyPoint(r, undefined, view), reason, thinking };
 }
 
 /** The model's ruling on the next step: run it now (at a possibly corrected target) or wait. */
@@ -46,8 +47,8 @@ export type StepDecision = ({ run: true; x: number; y: number; reason: string } 
 export async function decideStep(ask: AskFn, frame: Frame, step: WorkflowStep, goal: string): Promise<StepDecision> {
   const planned = { x: step.correctedX ?? step.x, y: step.correctedY ?? step.y };
   const target = `cell ${gridRef(planned)} = (${pct(planned.x)}, ${pct(planned.y)})`;
-  const { content, thinking } = await ask({
-    system: `You are Droid Assist's executor. Look at the screenshot and decide whether the next step can run now. ${COORDS} Reply ONLY with JSON {"run":boolean,"cell":string,"cx":number,"cy":number,"reason":string}.`,
+  const { content, thinking, view } = await ask({
+    system: (v) => `You are Droid Assist's executor. Look at the screenshot and decide whether the next step can run now. ${coords(v)} Reply ONLY with JSON {"run":boolean,"cell":string,"cx":number,"cy":number,"reason":string}.`,
     prompt: `Goal: ${goal || '(none)'}\nNext step: ${stepText(step)}, planned target ${target}.\nSet run=true only if the screen is ready for it, with cell + cx,cy the target's current center. Set run=false if something blocks it or the screen is not ready.`,
     frame,
     json: true,
@@ -55,7 +56,7 @@ export async function decideStep(ask: AskFn, frame: Frame, step: WorkflowStep, g
   const r = parseJsonReply(content);
   const reason = String(r.reason ?? '');
   if (r.run !== true) return { run: false, reason, thinking };
-  return { run: true, ...replyPoint(r, step), reason, thinking };
+  return { run: true, ...replyPoint(r, step, view), reason, thinking };
 }
 
 /** The model's ruling on whether a step's named target is under the proposed point. */
@@ -65,14 +66,15 @@ export interface TargetCheck extends Thought {
 }
 
 /**
- * The second, easier grounding question: shown a zoomed crop with a red ring on the proposed
- * point, the model only says whether `step`'s named target is under the ring.
+ * Grounding check: shown the full live screen and a zoomed full-resolution crop around the
+ * proposed point (red ring), the model says whether the step's named target is under the ring.
  */
-export async function confirmTarget(ask: AskFn, crop: Frame, step: WorkflowStep): Promise<TargetCheck> {
+export async function confirmTarget(ask: AskFn, live: Frame, crop: Frame, step: WorkflowStep): Promise<TargetCheck> {
   const reply = await ask({
-    system: 'You are Droid Assist\'s target checker. You see a zoomed crop of the screen; a red ring marks where the mouse will go. Reply ONLY with JSON {"visible":boolean,"reason":string}.',
-    prompt: `Is "${step.target ?? step.name}" under or touching the red ring? Set visible=true only if the ring is on that exact thing, not on something else nearby or on empty space.`,
-    frame: crop,
+    system: 'You are Droid Assist\'s target checker. The first image is the full screen; the second is a zoomed crop of the full-resolution screen around where the mouse will go, marked by a red ring. Reply ONLY with JSON {"visible":boolean,"reason":string}.',
+    prompt: `Is "${step.target ?? step.name}" under or touching the red ring in the zoomed crop? Set visible=true only if the ring is on that exact thing, not on something else nearby or on empty space.`,
+    frame: live,
+    crops: [crop],
     json: true,
   });
   const r = parseJsonReply(reply.content);
@@ -87,16 +89,19 @@ export interface ScreenAnswer extends Thought {
 
 const TONES = new Set<Annotation['tone']>(['info', 'warn', 'error']);
 
-function toAnnotation(raw: unknown): Annotation {
+/** One model box as an annotation in the sample space; pixel values are read in the `view` the model saw. */
+export function toAnnotation(raw: unknown, view: ViewSize = SAMPLE_VIEW): Annotation {
   const a = (raw ?? {}) as Record<string, unknown>;
   const tone = TONES.has(a.tone as Annotation['tone']) ? (a.tone as Annotation['tone']) : 'info';
-  return { id: uid('ann'), x: toUnit(a.x, VIEW_W), y: toUnit(a.y, VIEW_H), w: toUnit(a.w ?? 0.1, VIEW_W), h: toUnit(a.h ?? 0.08, VIEW_H), label: String(a.label ?? ''), tone };
+  const at = viewPoint(a.x, a.y, view);
+  const size = viewPoint(a.w ?? 0.1, a.h ?? 0.08, view);
+  return { id: uid('ann'), ...at, w: size.x, h: size.y, label: String(a.label ?? ''), tone };
 }
 
 /** AI help: answers `question` from the live screen and boxes what it refers to. */
 export async function describeScreen(ask: AskFn, frame: Frame, question: string, goal: string): Promise<ScreenAnswer> {
-  const { content, thinking } = await ask({
-    system: `You are Droid Assist, a helper that sees the user's screen. ${COORDS} Reply ONLY with JSON {"answer":string,"items":[{"label":string,"x":number,"y":number,"w":number,"h":number,"tone":"info"|"warn"|"error"}]} where items box the on-screen things your answer refers to (x,y = top-left).`,
+  const { content, thinking, view } = await ask({
+    system: (v) => `You are Droid Assist, a helper that sees the user's screen. ${coords(v)} Reply ONLY with JSON {"answer":string,"items":[{"label":string,"x":number,"y":number,"w":number,"h":number,"tone":"info"|"warn"|"error"}]} where items box the on-screen things your answer refers to (x,y = top-left).`,
     prompt: `Goal: ${goal || '(none)'}\nQuestion: ${question}`,
     frame,
     json: true,
@@ -104,7 +109,7 @@ export async function describeScreen(ask: AskFn, frame: Frame, question: string,
   const r = parseJsonReply(content);
   if (typeof r.answer !== 'string' || !r.answer.trim()) throw new AiError('AI reply had no answer');
   const items = Array.isArray(r.items) ? r.items : [];
-  return { answer: r.answer.trim(), annotations: items.map(toAnnotation), thinking };
+  return { answer: r.answer.trim(), annotations: items.map((item) => toAnnotation(item, view)), thinking };
 }
 
 /** The model's check of the goal against the live screen after a run. */

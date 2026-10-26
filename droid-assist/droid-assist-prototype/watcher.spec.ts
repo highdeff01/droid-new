@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AiError } from './ai.js';
+import { AiError, SAMPLE_VIEW, systemText } from './ai.js';
 import type { AskFn } from './ai.js';
 import type { Frame, WorkflowStep } from './types.js';
 import {
@@ -24,7 +24,8 @@ describe('observeScreen', () => {
   it('sends the watch system prompt, the frame and json:true, and returns the thinking', async () => {
     const fn = ask('{"notes":[],"proposals":[]}', 'looked around the screen');
     const result = await observeScreen(fn, frame, [], [], 'Open settings');
-    expect(fn.mock.calls[0][0]).toMatchObject({ system: WATCH_SYSTEM, frame, json: true });
+    expect(fn.mock.calls[0][0]).toMatchObject({ frame, json: true });
+    expect(systemText(fn.mock.calls[0][0].system, SAMPLE_VIEW)).toBe(WATCH_SYSTEM);
     expect(result.thinking).toBe('looked around the screen');
   });
 

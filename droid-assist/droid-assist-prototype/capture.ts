@@ -26,6 +26,8 @@ export interface CapturedImage {
   time: number;
   /** JPEG data URL for display. */
   url: string;
+  /** JPEG data URL of the capture at its highest resolution, for the AI view and zoomed crops. */
+  full?: string;
   /** SAMPLE_W × SAMPLE_H pixel buffer. */
   data: ImageData;
   srcW: number;
@@ -52,7 +54,7 @@ export interface ScreenCapture {
 
 function toImage(frame: NativeFrame): CapturedImage {
   const data = new ImageData(Uint8ClampedArray.from(frame.pixels), SAMPLE_W, SAMPLE_H);
-  return { time: frame.time, url: frame.url, data, srcW: frame.srcW, srcH: frame.srcH };
+  return { time: frame.time, url: frame.url, full: frame.url, data, srcW: frame.srcW, srcH: frame.srcH };
 }
 
 /** Electron capture: the main process screenshots the display and pushes frames, unthrottled. */
@@ -65,7 +67,20 @@ export function nativeCapture(api: NativeCaptureApi): ScreenCapture {
   };
 }
 
-/** Draws a video frame into an image: a 480×270 display JPEG plus the sample buffer. */
+/** Widest full-resolution JPEG a frame keeps for the model (enough to zoom sidebar text). */
+export const FULL_MAX_W = 1920;
+
+/** The source drawn at its own resolution (capped at FULL_MAX_W wide) as a JPEG data URL. */
+export function fullJpeg(src: CanvasImageSource, srcW: number, srcH: number): string {
+  const scale = Math.min(1, FULL_MAX_W / srcW);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(srcW * scale));
+  canvas.height = Math.max(1, Math.round(srcH * scale));
+  canvas.getContext('2d')!.drawImage(src, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.8);
+}
+
+/** Draws a video frame into an image: a 480×270 display JPEG, the full-resolution JPEG and the sample buffer. */
 function grabVideo(video: HTMLVideoElement): CapturedImage | null {
   const srcW = video.videoWidth;
   const srcH = video.videoHeight;
@@ -79,7 +94,7 @@ function grabVideo(video: HTMLVideoElement): CapturedImage | null {
   view.width = 480;
   view.height = 270;
   view.getContext('2d')!.drawImage(video, 0, 0, 480, 270);
-  return { time: Date.now(), url: view.toDataURL('image/jpeg', 0.7), data: sctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H), srcW, srcH };
+  return { time: Date.now(), url: view.toDataURL('image/jpeg', 0.7), full: fullJpeg(video, srcW, srcH), data: sctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H), srcW, srcH };
 }
 
 /** Browser fallback: getDisplayMedia (shows the share prompt) sampled by a page timer. */

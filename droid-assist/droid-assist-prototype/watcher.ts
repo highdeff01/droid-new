@@ -1,7 +1,7 @@
 import type { Frame, WorkflowStep } from './types.js';
-import { parseJsonReply } from './ai.js';
-import type { AskFn } from './ai.js';
-import { GRID_PROMPT, replyPoint } from './grid.js';
+import { SAMPLE_VIEW, parseJsonReply } from './ai.js';
+import type { AskFn, ViewSize } from './ai.js';
+import { gridPrompt, replyPoint } from './grid.js';
 import { uid } from './planner.js';
 import type { Thought } from './assist-ai.js';
 
@@ -83,12 +83,15 @@ export interface Observation extends Thought {
   proposals: ProposalDraft[];
 }
 
-/** System prompt of the screen watcher. */
-export const WATCH_SYSTEM = `You are Droid Assist's screen watcher. You observe the user's screen in the background and take short structured notes.
-${GRID_PROMPT}
+/** System prompt of the screen watcher for a `view`-sized screenshot. */
+export const watchSystem = (view: ViewSize) => `You are Droid Assist's screen watcher. You observe the user's screen in the background and take short structured notes.
+${gridPrompt(view)}
 Reply ONLY with JSON {"notes":[{"kind":"element"|"change"|"unusual"|"opportunity","text":string}],"proposals":[{"kind":"close_popup"|"familiar"|"pattern"|"reorder","text":string,"target":string,"cell":string,"cx":number,"cy":number,"from":number,"to":number}]}.
 Notes: at most 4, each under 15 words: notable UI elements, what changed since the previous notes, anything unusual, opportunities to help. Do not repeat a previous note.
 Proposals (optional, at most 2): close_popup = a popup keeps returning, give its close control as target + cell; familiar = an element sits at a stable position, give its name as target + cell; pattern = a lesson to remember ("avoid ..." or "add ..." in text); reorder = the workflow keeps failing at a step, move step "from" to position "to" (1-based).`;
+
+/** The watcher's system prompt for a sample-space (480x270) screenshot. */
+export const WATCH_SYSTEM = watchSystem(SAMPLE_VIEW);
 
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
 const int = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : undefined);
@@ -100,15 +103,15 @@ function toNote(raw: unknown): NoteDraft[] {
 }
 
 /** A point-bearing proposal needs its target and a valid point; otherwise it is dropped. */
-function pointOf(p: Record<string, unknown>): { x: number; y: number } | null {
+function pointOf(p: Record<string, unknown>, view: ViewSize): { x: number; y: number } | null {
   try {
-    return replyPoint(p);
+    return replyPoint(p, undefined, view);
   } catch {
     return null;
   }
 }
 
-function toProposal(raw: unknown): ProposalDraft[] {
+function toProposal(raw: unknown, view: ViewSize): ProposalDraft[] {
   const p = (raw ?? {}) as Record<string, unknown>;
   const text = str(p.text);
   const kind = p.kind as ProposalKind;
@@ -120,7 +123,7 @@ function toProposal(raw: unknown): ProposalDraft[] {
     const to = int(p.to);
     return from && to && from !== to ? [{ kind, text, from, to }] : [];
   }
-  const point = target ? pointOf(p) : null;
+  const point = target ? pointOf(p, view) : null;
   return point ? [{ kind, text, target, ...point }] : [];
 }
 
@@ -131,15 +134,15 @@ function toProposal(raw: unknown): ProposalDraft[] {
 export async function observeScreen(ask: AskFn, frame: Frame, recent: WatchNote[], steps: WorkflowStep[], goal: string): Promise<Observation> {
   const previous = recent.slice(0, 8).map((n) => `- [${n.kind}] ${n.text}`).join('\n') || '(none)';
   const flow = steps.map((s, i) => `${i + 1}. ${s.name} [${s.action}] → ${s.status}`).join('\n') || '(none)';
-  const { content, thinking } = await ask({
-    system: WATCH_SYSTEM,
+  const { content, thinking, view = SAMPLE_VIEW } = await ask({
+    system: watchSystem,
     prompt: `Goal: ${goal || '(none)'}\nPrevious notes:\n${previous}\nCurrent workflow steps:\n${flow}`,
     frame,
     json: true,
   });
   const r = parseJsonReply(content);
   const notes = Array.isArray(r.notes) ? r.notes.flatMap(toNote) : [];
-  const proposals = Array.isArray(r.proposals) ? r.proposals.flatMap(toProposal) : [];
+  const proposals = Array.isArray(r.proposals) ? r.proposals.flatMap((p) => toProposal(p, view)) : [];
   return { notes, proposals, thinking };
 }
 

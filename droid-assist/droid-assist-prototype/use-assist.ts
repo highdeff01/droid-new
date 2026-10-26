@@ -5,7 +5,7 @@ import { MATCHED, SAMPLE_H, SAMPLE_W, SEARCH_RADIUS, STABLE, boundingBox, boxDis
 import { AD_CYCLE, demoAd, demoDrag, demoFileAt, demoPlayButton, drawDemoDesktop, findIcon, initialDemoFile, initialDemoIcons, moveIcon, type DemoFile, type DemoIcon } from './demo-desktop.js';
 import { AI_PLAN_SOURCE, calculate, generateCard, patternLine, planFromGoal, planRemaining, relevantPatterns, relocateTarget, replanDrag, replanStep, uid } from './planner.js';
 import { checkMoved, sameElement, verifyArrangement, type Expectation, type MovedElement } from './rearrange.js';
-import { AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, linkSignals, pingAi } from './ai.js';
+import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi } from './ai.js';
 import type { AiReply, AiStatus, AskFn, AskRequest } from './ai.js';
 import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type StageId } from './loop-control.js';
 import { DEFAULT_AI_MAX_IN_FLIGHT, createAiQueue, type AiQueue, type AiQueueStats } from './ai-queue.js';
@@ -55,7 +55,7 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 const aiFailure = (what: string, error: unknown) => (error instanceof AiCancelled ? `AI call cancelled by the user — ${what.replace(/^AI unavailable — /, '')}` : `${what}: ${errorText(error)}`);
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
 
-/** Draws a source into a Frame: a 480×270 display JPEG plus the 320×180 drift buffer. */
+/** Draws a source into a Frame: a 480×270 display JPEG, the full-resolution JPEG for the model and the 320×180 drift buffer. */
 function toFrame(src: CanvasImageSource, srcW: number, srcH: number, id: number, source: Frame['source']): Frame {
   const small = document.createElement('canvas');
   small.width = SAMPLE_W;
@@ -66,7 +66,7 @@ function toFrame(src: CanvasImageSource, srcW: number, srcH: number, id: number,
   view.width = 480;
   view.height = 270;
   view.getContext('2d')!.drawImage(src, 0, 0, 480, 270);
-  return { id, time: Date.now(), url: view.toDataURL('image/jpeg', 0.7), data: sctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H), srcW, srcH, source };
+  return { id, time: Date.now(), url: view.toDataURL('image/jpeg', 0.7), full: fullJpeg(src, srcW, srcH), data: sctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H), srcW, srcH, source };
 }
 
 /** A real desktop screenshot from the bridge as a Frame; throws with the bridge's reason. */
@@ -291,7 +291,7 @@ export function useAssist() {
   const armedRef = useRef(armed);
   const abortedRef = useRef(aborted);
   const autoBudgetRef = useRef<ActionBudget>(createBudget(settings.actionBudget));
-  const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage));
+  const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage, renderView));
   /** Cancels every in-flight model call when aborted; replaced by a fresh one after each cancel. */
   const aiCtrlRef = useRef(new AbortController());
   /** Loop control: one controller per stage, so unchecking a stage cancels only its in-flight calls. */
@@ -485,10 +485,12 @@ export function useAssist() {
    */
   const askAi = useCallback(async (req: AskRequest, stage: StageId): Promise<AiReply> => {
     if (!settingsRef.current.stages[stage]) throw new AiCancelled(stageOff(stage));
+    const { aiUrl, aiModel, aiView } = settingsRef.current;
     const context = req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
     const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage), req.signal);
     setAiCalls((n) => n + 1);
     try {
+      const reply = await aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView] }, { ...req, context, signal });
       const reply = await aiQueueRef.current.run(stage, () => {
         const { aiUrl, aiModel } = settingsRef.current;
         return aiSessionRef.current.ask({ url: aiUrl, model: aiModel }, { ...req, context, signal });
@@ -606,13 +608,14 @@ export function useAssist() {
   const grounding: Grounding = {
     confirm: async (live, step, p) => {
       const crop = await zoomFrame(live, p);
-      const check = await thought(step.name, () => confirmTarget(askFor('grounding'), crop, step), checkSummary(step, p));
+      const check = await thought(step.name, () => confirmTarget(askFor('grounding'), live, crop, step), checkSummary(step, p));
       if (check.visible) forwardElement('drift', { name: step.target ?? step.name, x: p.x, y: p.y });
       return check;
     },
     relocate: async (live, step, feedback) => {
       const { point } = await thought(step.name, async () => {
-        const next = await relocateTarget(askFor('grounding'), live, step, feedback, mapContext(elementMapRef.current));
+        const crop = await zoomFrame(live, step).catch(() => undefined);
+        const next = await relocateTarget(askFor('grounding'), live, step, feedback, mapContext(elementMapRef.current), crop);
         return { point: next, thinking: next?.thinking ?? null };
       }, (r) => (r.point ? `Re-planned "${step.target ?? step.name}" at ${at(r.point.x, r.point.y)}` : `Re-planned: "${step.target ?? step.name}" is not visible`));
       return point;
