@@ -65,8 +65,8 @@ function toFrame(src: CanvasImageSource, srcW: number, srcH: number, id: number,
 }
 
 /** A real desktop screenshot from the bridge as a Frame; throws with the bridge's reason. */
-async function desktopFrame(bridgeUrl: string, id: number): Promise<Frame> {
-  const shot = await captureDesktop(bridgeUrl);
+async function desktopFrame(bridgeUrl: string, token: string, id: number): Promise<Frame> {
+  const shot = await captureDesktop(bridgeUrl, token);
   if (!shot.ok) throw new Error(shot.message);
   const img = new Image();
   img.src = shot.frame.image;
@@ -140,6 +140,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   showTrail: true,
   showGrid: true,
   bridgeUrl: '',
+  bridgeToken: '',
   abortHotkey: DEFAULT_ABORT_HOTKEY,
   actionBudget: DEFAULT_ACTION_BUDGET,
   aiUrl: DEFAULT_AI_URL,
@@ -872,15 +873,16 @@ export function useAssist() {
       if (out.executed) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
       return out;
     }
-    const { bridgeUrl, checkpoints } = settingsRef.current;
+    const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
     if (!bridgeUrl) return refused(step, BRIDGE_REQUIRED);
     const gate = dryRun ? null : gateRealInput(budget);
     if (gate) return refused(step, gate);
     let size = { w: 1920, h: 1080 };
     const out = await runStep(step, {
       bridgeUrl,
+      bridgeToken,
       capture: async () => {
-        const f = await desktopFrame(bridgeUrl, ++frameId.current);
+        const f = await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current);
         size = { w: f.srcW, h: f.srcH };
         return f;
       },
@@ -942,8 +944,8 @@ export function useAssist() {
 
   /** A live frame to verify against: a fresh desktop screenshot via the bridge, else the latest monitor frame. */
   const liveFrame = async (): Promise<Frame | null> => {
-    const { bridgeUrl } = settingsRef.current;
-    if (sourceRef.current === 'bridge' && bridgeUrl) return desktopFrame(bridgeUrl, ++frameId.current);
+    const { bridgeUrl, bridgeToken } = settingsRef.current;
+    if (sourceRef.current === 'bridge' && bridgeUrl) return desktopFrame(bridgeUrl, bridgeToken, ++frameId.current);
     return framesRef.current[0] ?? null;
   };
 
@@ -1143,7 +1145,7 @@ export function useAssist() {
   const finalFrame = async (label: string): Promise<Frame | null> => {
     if (sourceRef.current === 'demo') return demoSnapshot();
     try {
-      return await desktopFrame(settingsRef.current.bridgeUrl, ++frameId.current);
+      return await desktopFrame(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken, ++frameId.current);
     } catch (error) {
       addLog(label, `Verification has no final screenshot: ${errorText(error)}`, 'error');
       return null;
@@ -1597,7 +1599,7 @@ export function useAssist() {
     const id = setInterval(() => {
       if (pollBusyRef.current || pausedWhileHidden()) return;
       pollBusyRef.current = true;
-      desktopFrame(settingsRef.current.bridgeUrl, ++frameId.current)
+      desktopFrame(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken, ++frameId.current)
         .then((f) => processRef.current(f))
         .catch((error) => {
           if (Date.now() - lastPollErrorAt.current < 5000) return;
@@ -1753,7 +1755,7 @@ export function useAssist() {
       return;
     }
     if (sourceRef.current !== 'demo') {
-      const health = await checkBridge(settingsRef.current.bridgeUrl);
+      const health = await checkBridge(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken);
       if (!health.ok) {
         addLog(label, `${health.message} — no step was executed`, 'error');
         captureError({ kind: 'bridge', message: health.message, goal: goalRef.current });
@@ -2115,7 +2117,7 @@ export function useAssist() {
 
   /** Switches the monitor to real desktop screenshots from the bridge, after a health check. */
   const connectBridge = async (): Promise<boolean> => {
-    const health = await checkBridge(settingsRef.current.bridgeUrl);
+    const health = await checkBridge(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken);
     if (!health.ok) {
       addLog('Bridge', health.message, 'error');
       captureError({ kind: 'bridge', message: health.message });
@@ -2131,7 +2133,7 @@ export function useAssist() {
     const url = settings.bridgeUrl;
     if (!url) return undefined;
     let cancelled = false;
-    void checkBridge(url).then((r) => {
+    void checkBridge(url, settings.bridgeToken).then((r) => {
       if (cancelled || !r.ok || demoChosenRef.current || sourceRef.current !== 'demo') return;
       attachSource('bridge');
       addLog('Monitor', 'Desktop bridge online — screenshots now come from the real screen', 'ok');
@@ -2140,7 +2142,7 @@ export function useAssist() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.bridgeUrl, addLog]);
+  }, [settings.bridgeUrl, settings.bridgeToken, addLog]);
 
   /** "/use <target>": launch/focus the app on the PC via the bridge, or attach to its window via screen share. */
   const attachTarget = async (name: string) => {

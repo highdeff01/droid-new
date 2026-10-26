@@ -2,6 +2,7 @@ import type { AssistEngine } from './use-assist.js';
 import type { MonitorMode, ScreenSource, SyncLevel } from './types.js';
 import type { AiStatus } from './ai.js';
 import { MONITOR_MODES } from './capture.js';
+import { insecureBridgeUrl } from './bridge.js';
 import styles from './droid-assist.module.css';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
@@ -16,6 +17,16 @@ export function AiStatusBadge({ status }: { status: AiStatus }) {
       <span className={styles.syncDot} />
       <strong>{AI_LABEL[status.state]}</strong>
       <span className={styles.syncDetail}>{status.detail}</span>
+    </div>
+  );
+}
+
+/** Loud warning shown while the bridge URL is plain http to a non-localhost host. */
+export function InsecureBridgeWarning({ bridgeUrl }: { bridgeUrl: string }) {
+  if (!insecureBridgeUrl(bridgeUrl)) return null;
+  return (
+    <div className={styles.insecure} role="alert">
+      ⚠ INSECURE BRIDGE: {bridgeUrl} is plain http on a non-localhost address — the bridge token and every mouse/keyboard command cross the network unencrypted. Use https or a localhost URL.
     </div>
   );
 }
@@ -128,6 +139,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
         </form>
       </div>
       <MonitorStatus engine={engine} />
+      <InsecureBridgeWarning bridgeUrl={settings.bridgeUrl} />
       <div className={styles.hud2}>
         <SafetyControls engine={engine} />
         <AiStatusBadge status={aiStatus} />

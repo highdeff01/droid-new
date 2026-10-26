@@ -3,7 +3,7 @@ import type { AssistEngine } from './use-assist.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
-import { AiStatusBadge } from './hud.js';
+import { AiStatusBadge, InsecureBridgeWarning } from './hud.js';
 import type { FamiliarElement, Habit, LogEntry } from './types.js';
 import { isReliable, successRate } from './habits.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
@@ -335,10 +335,15 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>Desktop bridge URL (pyautogui)
         <span className={styles.row}>
           <input value={settings.bridgeUrl} onChange={(e) => setSettings({ ...settings, bridgeUrl: e.target.value })} placeholder="/bridge or http://127.0.0.1:3000" />
-          <button type="button" onClick={async () => setBridge((await checkBridge(settings.bridgeUrl)).message)} disabled={!settings.bridgeUrl}>Test</button>
+          <button type="button" onClick={async () => setBridge((await checkBridge(settings.bridgeUrl, settings.bridgeToken)).message)} disabled={!settings.bridgeUrl}>Test</button>
           <button type="button" onClick={() => void engine.connectBridge()} disabled={!settings.bridgeUrl}>Connect</button>
         </span>
         {bridge && <small>{bridge}</small>}
+      </label>
+      <InsecureBridgeWarning bridgeUrl={settings.bridgeUrl} />
+      <label className={styles.setting}>Bridge auth token
+        <input type="password" value={settings.bridgeToken} onChange={(e) => setSettings({ ...settings, bridgeToken: e.target.value })} aria-label="Bridge auth token" autoComplete="off" />
+        <small>Must match DROID_BRIDGE_TOKEN on the bridge; sent as a Bearer token on every bridge call and never written to the activity log.</small>
       </label>
       <label className={styles.setting}>AI endpoint (Ollama /api/chat)
         <input value={settings.aiUrl} onChange={(e) => setSettings({ ...settings, aiUrl: e.target.value })} aria-label="AI endpoint URL" />

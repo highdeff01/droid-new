@@ -222,6 +222,8 @@ export interface AssistSettings {
   showGrid: boolean;
   /** Base URL of the Droid desktop bridge (pyautogui replay endpoint). */
   bridgeUrl: string;
+  /** Shared secret the bridge requires on every call (Authorization: Bearer); masked in the UI, never logged. */
+  bridgeToken: string;
   /** Emergency-stop key combo, e.g. "Shift+Escape". */
   abortHotkey: string;
   /** Max real (bridge-dispatched) input actions per Auto Act / replay run. */

@@ -17,6 +17,8 @@ export interface Grounding {
 /** What the real-input pipeline needs from its host. */
 export interface StepDeps {
   bridgeUrl: string;
+  /** Bridge auth token sent with every bridge call; never logged. */
+  bridgeToken: string;
   /** A fresh real desktop screenshot; throws with the reason when there is none. */
   capture: () => Promise<Frame>;
   /** Live-frame checks before giving up on a target that cannot be found. */
@@ -221,7 +223,7 @@ export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepO
     end = e.point;
   }
   if (!deps.dispatch) return { ok: true, executed: false, message: 'verified on the live screen — self-test, not dispatched', target, end, correction, live };
-  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH);
+  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, { token: deps.bridgeToken });
   if (!sent.ok) return { ok: false, executed: false, message: sent.message, target, end, correction, live };
   const after = await verifyAfter(step, live, target, deps);
   const done: StepOutcome = { ok: true, executed: true, message: sent.message, target, end, correction, live, ...after };
@@ -258,7 +260,7 @@ async function retryMissed(step: WorkflowStep, out: StepOutcome, deps: StepDeps)
   }
   const shot = out.shot!;
   deps.log(`"${step.name}": missed by ${delta} — retrying once at ${px(miss.at, shot)}`, 'warn');
-  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: miss.at.x, correctedY: miss.at.y }, shot.srcW, shot.srcH);
+  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: miss.at.x, correctedY: miss.at.y }, shot.srcW, shot.srcH, { token: deps.bridgeToken });
   const retry = { dxPx: miss.dxPx, dyPx: miss.dyPx, at: miss.at, ok: sent.ok, message: sent.message };
   if (!sent.ok) return { ...out, retry };
   const after = await verifyAfter(step, shot, miss.at, deps);

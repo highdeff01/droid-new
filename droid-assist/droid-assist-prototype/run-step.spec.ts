@@ -26,6 +26,7 @@ function deps(frames: Frame[], patch: Partial<StepDeps> = {}) {
   const queue = [...frames];
   const d: StepDeps = {
     bridgeUrl: 'http://pc',
+    bridgeToken: '',
     capture: async () => queue.shift() ?? frames[frames.length - 1],
     attempts: 2,
     retryMs: 1,
