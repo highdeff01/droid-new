@@ -21,9 +21,9 @@ export function AiStatusBadge({ status }: { status: AiStatus }) {
   );
 }
 
-/** Monitor HUD: mode picker, capture interval, screenshot count, source and /use target. */
+/** Monitor HUD: mode picker, capture interval, screenshot count, source, /use target and the shared AI queue. */
 export function MonitorStatus({ engine }: { engine: AssistEngine }) {
-  const { settings, setSettings, intervalMs, shotCount, source, target } = engine;
+  const { settings, setSettings, intervalMs, shotCount, source, target, aiQueue } = engine;
   return (
     <div className={styles.hud2} aria-label="Monitor status">
       <label>Monitor
@@ -35,6 +35,7 @@ export function MonitorStatus({ engine }: { engine: AssistEngine }) {
       <span>📸 <b>{shotCount}</b> screenshots</span>
       <span>Source: <b>{SOURCE_LABEL[source]}</b></span>
       {target && <span>Using: <b>{target}</b></span>}
+      <span aria-label="AI queue" title={`At most ${settings.aiMaxInFlight} AI call(s) run at once; the rest wait by priority`}>🧠 AI <b>{aiQueue.inFlight}/{settings.aiMaxInFlight}</b> in flight · <b>{aiQueue.queued}</b> queued</span>
     </div>
   );
 }

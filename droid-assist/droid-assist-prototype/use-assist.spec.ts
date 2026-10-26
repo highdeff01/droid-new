@@ -598,6 +598,22 @@ describe('useAssist loop control', () => {
     expect(JSON.parse(localStorage.getItem('droid-assist.settings')!).stages.reflect).toBe(false);
   });
 
+  it('routes calls through the shared queue: the HUD stats count the running call and free it when its stage is unchecked', async () => {
+    const m = hangingReflect();
+    const result = await mount();
+    expect(result.current.settings.aiMaxInFlight).toBe(2);
+    act(() => result.current.setSteps([{ id: 's1', name: 'Calc', action: 'calc', text: '2+2', x: 0.5, y: 0.5, status: 'pending' }]));
+    let run!: Promise<void>;
+    act(() => {
+      run = result.current.replay(false);
+    });
+    await vi.waitFor(() => expect(m.count('reviewing a step')).toBe(1));
+    expect(result.current.aiQueue).toEqual({ queued: 0, inFlight: 1 });
+    act(() => result.current.toggleStage('reflect', false));
+    await act(() => run);
+    expect(result.current.aiQueue).toEqual({ queued: 0, inFlight: 0 });
+  });
+
   it('cancelling one stage leaves the other stages\' calls alone, and re-checking logs an enable', async () => {
     hangingReflect();
     const result = await mount();
