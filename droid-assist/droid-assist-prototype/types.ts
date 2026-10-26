@@ -216,6 +216,12 @@ export interface AssistSettings {
   captureMs: number;
   /** Size (cells of the 16x9 diff grid) the largest changed cluster must reach to count as a material screen change. */
   changeCells: number;
+  /** Drift: distance at the recorded spot up to which a target counts as unchanged (green). */
+  driftStable: number;
+  /** Drift: best-match distance up to which a moved target counts as found (yellow). */
+  driftMatched: number;
+  /** Drift: template search radius, in sample pixels of the 320x180 drift buffer. */
+  driftRadius: number;
   monitorMode: MonitorMode;
   /** How often the Screen watcher observes the live frame, in ms. */
   watchMs: number;

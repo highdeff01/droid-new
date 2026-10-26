@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ActionRecord, Annotation, AssistSettings, FamiliarElement, Frame, Habit, InputAction, LearnedPattern, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
 import { POINTER_ACTIONS } from './types.js';
-import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, correctDrift, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
+import { MATCHED, SAMPLE_H, SAMPLE_W, SEARCH_RADIUS, STABLE, boundingBox, boxDistance, correctDrift, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor, type DriftThresholds } from './drift.js';
 import { AD_CYCLE, demoAd, demoDrag, demoFileAt, demoPlayButton, drawDemoDesktop, findIcon, initialDemoFile, initialDemoIcons, moveIcon, type DemoFile, type DemoIcon } from './demo-desktop.js';
 import { AI_PLAN_SOURCE, calculate, generateCard, patternLine, planFromGoal, planRemaining, relevantPatterns, relocateTarget, replanDrag, replanStep, uid } from './planner.js';
 import { checkMoved, sameElement, verifyArrangement, type Expectation, type MovedElement } from './rearrange.js';
@@ -141,6 +141,9 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   checkpoints: 6,
   captureMs: 500,
   changeCells: DEFAULT_CHANGE_CELLS,
+  driftStable: STABLE,
+  driftMatched: MATCHED,
+  driftRadius: SEARCH_RADIUS,
   monitorMode: 'app',
   watchMs: 5000,
   autoAct: false,
@@ -462,6 +465,18 @@ export function useAssist() {
 
   /** Whether a loop-control stage is checked; read live so a toggle applies mid-run. */
   const stageOn = (id: StageId) => settingsRef.current.stages[id];
+
+  /** The drift thresholds and search radius from Settings; read live so a change applies mid-run. */
+  const driftThresholds = (): DriftThresholds => {
+    const { driftStable, driftMatched, driftRadius } = settingsRef.current;
+    return { stable: driftStable, matched: driftMatched, radius: driftRadius };
+  };
+  /** The step's template matched on `live` at its recorded point with the Settings radius, and its sync level. */
+  const driftCheck = (step: WorkflowStep, live: Frame) => {
+    const t = driftThresholds();
+    const r = matchTemplate(step.refFrame!.data, live.data, step.x, step.y, { radius: t.radius });
+    return { r, level: syncLevelFor(r, t) };
+  };
 
   /**
    * Every model call, made on behalf of a loop-control `stage`: with session history and the recent
@@ -868,8 +883,8 @@ export function useAssist() {
     const seeded = live && POINTER_ACTIONS.has(step.action) ? learnedPoint(live, step) ?? habitSeed(live, step) : null;
     if (seeded) p = seeded;
     else if (step.refFrame && live) {
-      const r = matchTemplate(step.refFrame.data, live.data, step.x, step.y);
-      if (syncLevelFor(r) === 'red') return { ok: false, executed: false, message: `Target of "${step.name}" not found on the demo screen (best match ${r.matchDistance.toFixed(3)}) — not executed`, target: p };
+      const { r, level } = driftCheck(step, live);
+      if (level === 'red') return { ok: false, executed: false, message: `Target of "${step.name}" not found on the demo screen (best match ${r.matchDistance.toFixed(3)}) — not executed`, target: p };
       p = { x: step.x + r.dx, y: step.y + r.dy };
     }
     if (POINTER_ACTIONS.has(step.action)) {
@@ -953,6 +968,7 @@ export function useAssist() {
       },
       attempts: Math.max(1, checkpoints),
       retryMs: 400,
+      drift: driftThresholds(),
       dispatch: !dryRun,
       log: (m, tone) => addLog(actor, m, tone),
       grounding: aiOnline() && stageOn('grounding') ? grounding : undefined,
@@ -1551,7 +1567,7 @@ export function useAssist() {
   /** Why the pending step must be re-proposed (drift monitor red, or the responder says the plan is stale), or null. */
   const redoReason = (step: WorkflowStep): string | null => {
     const live = framesRef.current[0];
-    if (step.refFrame && live && stageOn('drift') && syncLevelFor(matchTemplate(step.refFrame.data, live.data, step.x, step.y)) === 'red') {
+    if (step.refFrame && live && stageOn('drift') && driftCheck(step, live).level === 'red') {
       return 'the drift monitor reports RED — the recorded target is no longer where the plan put it';
     }
     const change = currentChange();
@@ -1725,8 +1741,7 @@ export function useAssist() {
     learnFromDwell(frame);
     const next = stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running');
     if (next?.refFrame && stageOn('drift')) {
-      const r = matchTemplate(next.refFrame.data, frame.data, next.x, next.y);
-      const level = syncLevelFor(r);
+      const { r, level } = driftCheck(next, frame);
       setSync({ level, detail: `"${next.name}": region ${r.regionDistance.toFixed(3)}, best ${r.matchDistance.toFixed(3)}${level === 'yellow' ? `, drift (${(r.dx * 100).toFixed(1)}%, ${(r.dy * 100).toFixed(1)}%)` : ''}` });
       if (level === 'red') captureError({ kind: 'drift', message: `Drift red: target of "${next.name}" not found on the live screen`, goal: goalRef.current, step: next.name });
     } else if (!next) {
