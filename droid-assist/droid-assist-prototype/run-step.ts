@@ -1,6 +1,6 @@
 import type { Frame, LogEntry, WorkflowStep } from './types.js';
 import { POINTER_ACTIONS } from './types.js';
-import { correctDrift, reverify, type DriftCorrection, type Reverify } from './drift.js';
+import { correctDrift, reverify, type DriftCorrection, type DriftThresholds, type Reverify } from './drift.js';
 import { sendToBridge } from './bridge.js';
 import type { TargetCheck } from './assist-ai.js';
 
@@ -23,6 +23,8 @@ export interface StepDeps {
   attempts: number;
   /** Pause between those checks, in ms. */
   retryMs: number;
+  /** Drift thresholds and search radius (Settings); the drift defaults when omitted. */
+  drift?: DriftThresholds;
   /** False for the self-test: verify and correct, but send no input. */
   dispatch: boolean;
   log: (message: string, tone: LogEntry['tone']) => void;
@@ -97,7 +99,7 @@ async function locateTarget(step: WorkflowStep, deps: StepDeps): Promise<{ live:
       return { error: `Could not capture the live screen: ${errorText(error)}` };
     }
     if (!step.refFrame) return { live, correction: noTemplate(step) };
-    const correction = correctDrift(step.refFrame.data, live.data, step.x, step.y, live.srcW, live.srcH);
+    const correction = correctDrift(step.refFrame.data, live.data, step.x, step.y, live.srcW, live.srcH, deps.drift);
     if (correction.level !== 'red') return { live, correction };
     best = Math.min(best, correction.matchDistance);
     deps.log(`"${step.name}": target not found on live check ${k}/${n} (best match ${correction.matchDistance.toFixed(3)})`, 'warn');
@@ -171,7 +173,7 @@ export function dragEndError(step: WorkflowStep): string | null {
  */
 async function groundEnd(step: WorkflowStep, live: Frame, deps: StepDeps): Promise<{ point: Point } | { error: string }> {
   const planned = { x: step.endX!, y: step.endY! };
-  const c = step.refFrame ? correctDrift(step.refFrame.data, live.data, planned.x, planned.y, live.srcW, live.srcH) : null;
+  const c = step.refFrame ? correctDrift(step.refFrame.data, live.data, planned.x, planned.y, live.srcW, live.srcH, deps.drift) : null;
   const end = c && c.level !== 'red' ? { x: c.x, y: c.y } : planned;
   const how = !c ? 'no reference screenshot, as planned' : c.level === 'red' ? 'reference no longer matches there, kept as planned' : `drift ${c.driftPx}px`;
   deps.log(`"${step.name}": drop point ${px(end, live)} (${how})`, c?.driftPx ? 'warn' : 'info');
@@ -234,10 +236,10 @@ export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepO
  * hit is where the input was sent. Returns expected − actual (native px) and the corrected
  * point actual + delta. Null when there is nothing to measure or correct.
  */
-export function missOffset(step: WorkflowStep, out: StepOutcome): { dxPx: number; dyPx: number; at: Point } | null {
+export function missOffset(step: WorkflowStep, out: StepOutcome, drift?: DriftThresholds): { dxPx: number; dyPx: number; at: Point } | null {
   if (!POINTER_ACTIONS.has(step.action) || !step.refFrame || !out.executed || !out.shot || !out.check || out.check.changed) return null;
   const shot = out.shot;
-  const expected = correctDrift(step.refFrame.data, shot.data, step.x, step.y, shot.srcW, shot.srcH);
+  const expected = correctDrift(step.refFrame.data, shot.data, step.x, step.y, shot.srcW, shot.srcH, drift);
   if (expected.level === 'red') return null;
   const dxPx = Math.round((expected.x - out.target.x) * shot.srcW);
   const dyPx = Math.round((expected.y - out.target.y) * shot.srcH);
@@ -248,7 +250,7 @@ export function missOffset(step: WorkflowStep, out: StepOutcome): { dxPx: number
 
 /** At most one corrected retry per step, through the host's guardrail gate, with the measured delta applied. */
 async function retryMissed(step: WorkflowStep, out: StepOutcome, deps: StepDeps): Promise<StepOutcome> {
-  const miss = missOffset(step, out);
+  const miss = missOffset(step, out, deps.drift);
   if (!miss || !deps.gateRetry) return out;
   const delta = `(${miss.dxPx >= 0 ? '+' : ''}${miss.dxPx}, ${miss.dyPx >= 0 ? '+' : ''}${miss.dyPx})px`;
   const refusal = deps.gateRetry();

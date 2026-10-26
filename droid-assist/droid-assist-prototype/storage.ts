@@ -28,13 +28,16 @@ const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'driftStable' | 'driftMatched' | 'driftRadius', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
   watchMs: [WATCH_MS_MIN, WATCH_MS_MAX],
   changeCells: [2, 40],
   maxIterations: [1, 20],
+  driftStable: [0.01, 0.3],
+  driftMatched: [0.02, 0.5],
+  driftRadius: [4, 64],
 };
 
 /** A step as persisted: its screenshot without the pixel buffer. */

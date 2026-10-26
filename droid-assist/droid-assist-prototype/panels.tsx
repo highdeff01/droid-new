@@ -314,6 +314,18 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>Screen-change threshold <b>{settings.changeCells} cells</b>
         <input type="range" min={2} max={40} value={settings.changeCells} onChange={(e) => setSettings({ ...settings, changeCells: +e.target.value })} aria-label="Screen-change threshold" />
       </label>
+      <label className={styles.setting}>Drift STABLE threshold <b>{settings.driftStable.toFixed(2)}</b>
+        <small>Distance at the recorded spot up to which a target counts as unchanged (green)</small>
+        <input type="range" min={0.01} max={0.3} step={0.01} value={settings.driftStable} onChange={(e) => setSettings({ ...settings, driftStable: +e.target.value })} aria-label="Drift STABLE threshold" />
+      </label>
+      <label className={styles.setting}>Drift MATCHED threshold <b>{settings.driftMatched.toFixed(2)}</b>
+        <small>Best-match distance up to which a moved target counts as found (yellow)</small>
+        <input type="range" min={0.02} max={0.5} step={0.01} value={settings.driftMatched} onChange={(e) => setSettings({ ...settings, driftMatched: +e.target.value })} aria-label="Drift MATCHED threshold" />
+      </label>
+      <label className={styles.setting}>Drift search radius <b>{settings.driftRadius} px</b>
+        <small>In 320×180 sample pixels; the wide fallback search is 8/3 of it</small>
+        <input type="range" min={4} max={64} step={2} value={settings.driftRadius} onChange={(e) => setSettings({ ...settings, driftRadius: +e.target.value })} aria-label="Drift search radius" />
+      </label>
       <label className={styles.setting}>Max real input actions per run <b>{settings.actionBudget}</b>
         <input type="number" min={1} value={settings.actionBudget} onChange={(e) => setSettings({ ...settings, actionBudget: sanitizeBudget(e.target.valueAsNumber) })} />
       </label>

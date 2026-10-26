@@ -1,5 +1,5 @@
 import type { FamiliarElement, Frame, TrailPoint } from './types.js';
-import { MATCHED, matchTemplate } from './drift.js';
+import { MATCHED, matchTemplate, toGrayscale } from './drift.js';
 import { ANCHOR_PATCH, anchorPatch } from './habits.js';
 import { rememberElement } from './elements.js';
 import { uid } from './planner.js';
@@ -84,14 +84,16 @@ function anchorImage(anchor: number[]): ImageData {
 
 /**
  * Where a learned target is on `live`: its anchor patch template-matched with the search window
- * seeded at `around` (its learned point by default), widened once when not found there.
+ * seeded at `around` (its learned point by default), widened once when not found there. The anchor
+ * is luminance, so it is matched against a grayscale copy of `live`.
  * Null when it has no anchor or nothing within MATCHED is found.
  */
 export function learnedSeed(el: FamiliarElement, live: ImageData, around: Point = el): (Point & { distance: number }) | null {
   if (!el.anchor) return null;
   const ref = anchorImage(el.anchor);
+  const gray = toGrayscale(live);
   const c = (ANCHOR_PATCH + 2) >> 1;
-  const search = (radius: number) => matchTemplate(ref, live, c / ref.width, c / ref.height, { size: ANCHOR_PATCH, radius, seed: around });
+  const search = (radius: number) => matchTemplate(ref, gray, c / ref.width, c / ref.height, { size: ANCHOR_PATCH, radius, seed: around });
   let r = search(NEAR_RADIUS);
   if (r.matchDistance > MATCHED) r = search(WIDE_RADIUS);
   if (r.matchDistance > MATCHED) return null;
