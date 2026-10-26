@@ -76,6 +76,9 @@ export function parsePlan(reply: string, frame: Frame | null): WorkflowStep[] {
   return steps.map((s) => toStep(s, frame));
 }
 
+/** PlanResult.source of a plan the model made (as opposed to a reused saved workflow). */
+export const AI_PLAN_SOURCE = 'AI planned from the goal and the live screen';
+
 /**
  * Fills a workflow from a goal: reuses a similar saved workflow when one exists (no model
  * call); otherwise the model plans the steps from the goal and the live frame.
@@ -91,7 +94,7 @@ export async function planFromGoal(goal: string, cards: SavedCard[], frame: Fram
     };
   }
   const reply = await ask({ system: PLAN_SYSTEM, prompt: `Goal: ${goal}`, frame, context, json: true });
-  return { steps: parsePlan(reply.content, frame), source: 'AI planned from the goal and the live screen', thinking: reply.thinking };
+  return { steps: parsePlan(reply.content, frame), source: AI_PLAN_SOURCE, thinking: reply.thinking };
 }
 
 /** A generated name + description for a workflow. */

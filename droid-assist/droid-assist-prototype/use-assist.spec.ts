@@ -30,6 +30,39 @@ afterEach(() => {
   delete window.droidNative;
 });
 
+describe('useAssist Qwen thinking timeline', () => {
+  const chatReply = (message: Record<string, unknown>) => vi.fn(async () => new Response(JSON.stringify({ message: { role: 'assistant', ...message } }), { status: 200 }));
+
+  async function askWith(fetchImpl: ReturnType<typeof vi.fn>) {
+    vi.stubGlobal('fetch', fetchImpl);
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(frame()));
+    await act(() => result.current.askScreen('Where is search?'));
+    return result;
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('records the model thinking for an AI call', async () => {
+    const result = await askWith(chatReply({ content: '{"answer":"Top bar","items":[]}', thinking: 'The search box is at the top.' }));
+    expect(result.current.timeline[0]).toMatchObject({ step: 'Ask: Where is search?', kind: 'thought', text: 'Top bar', thinking: 'The search box is at the top.' });
+    expect(typeof result.current.timeline[0].time).toBe('number');
+  });
+
+  it('records null thinking when the response carries none', async () => {
+    const result = await askWith(chatReply({ content: '{"answer":"Top bar","items":[]}' }));
+    expect(result.current.timeline[0]).toMatchObject({ kind: 'thought', text: 'Top bar', thinking: null });
+  });
+
+  it('records the endpoint failure instead of reasoning', async () => {
+    const result = await askWith(vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    expect(result.current.timeline[0]).toMatchObject({ kind: 'thought', text: '', thinking: null });
+    expect(result.current.timeline[0].error).toMatch(/unreachable.*Failed to fetch/);
+  });
+});
+
 describe('useAssist screen capture', () => {
   it('starts native capture at the configured rate and analyses every pushed frame', async () => {
     const { api, hooks } = installNative();

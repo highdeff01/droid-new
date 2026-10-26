@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ActionRecord, Annotation, AssistSettings, Frame, InputAction, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
 import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
-import { calculate, generateCard, planFromGoal, uid } from './planner.js';
+import { AI_PLAN_SOURCE, calculate, generateCard, planFromGoal, uid } from './planner.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge, sendToBridge } from './bridge.js';
 import { runStep, type StepOutcome } from './run-step.js';
 import { createScreenCapture, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
@@ -11,7 +11,8 @@ import { LOG_LIMIT, loadCards, loadLog, loadSettings, saveCards, saveLog, saveSe
 import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, pingAi, type AiReply, type AiStatus, type AskRequest } from './ai.js';
-import { describeScreen, decidePopup, decideStep } from './assist-ai.js';
+import { describeScreen, decidePopup, decideStep, reflectStep, type PopupDecision, type StepDecision, type StepResult, type Thought } from './assist-ai.js';
+import { addEntry, verdictText, type ThinkingEntry } from './thinking-timeline.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
 import { parseCommand } from './commands.js';
 
@@ -65,6 +66,12 @@ const closePopupStep = (x: number, y: number): WorkflowStep => ({ id: uid('close
 
 /** True when the step's target lies inside the annotation's box. */
 const covers = (a: Annotation, step: WorkflowStep) => step.x >= a.x && step.x <= a.x + a.w && step.y >= a.y && step.y <= a.y + a.h;
+
+const at = (x: number, y: number) => `(${(x * 100).toFixed(1)}%, ${(y * 100).toFixed(1)}%)`;
+/** Timeline text of a popup decision. */
+const popupSummary = (d: PopupDecision) => (d.close ? `Close the popup at ${at(d.x, d.y)} — ${d.reason}` : `Leave it — ${d.reason}`);
+/** Timeline text of a step decision. */
+const stepSummary = (d: StepDecision) => (d.run ? `Run now at ${at(d.x, d.y)} — ${d.reason}` : `Wait — ${d.reason}`);
 
 /** Default settings. */
 export const DEFAULT_SETTINGS: AssistSettings = {
@@ -131,6 +138,8 @@ export function useAssist() {
   const [aiStatus, setAiStatus] = useState<AiStatus>({ state: 'checking', detail: 'Connecting to the AI endpoint…' });
   const [aiAnswer, setAiAnswer] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
+  /** Per-step Qwen thinking timeline, newest first: thought, reflection and verdict of every AI call. */
+  const [timeline, setTimeline] = useState<ThinkingEntry[]>([]);
   /** Why the screen capture stopped on its own; null while healthy. */
   const [captureLost, setCaptureLost] = useState<string | null>(null);
 
@@ -250,6 +259,41 @@ export function useAssist() {
   }, []);
 
   const aiOnline = () => aiStatusRef.current.state === 'online';
+
+  const note = useCallback((entry: Omit<ThinkingEntry, 'id' | 'time'>) => setTimeline((t) => addEntry(t, entry)), []);
+
+  /**
+   * Runs one AI decision and records its initial thinking on the timeline, or the failure
+   * when the call fails (rethrown). `summary` returning null means no model call was made.
+   */
+  const thought = useCallback(async <T extends Thought>(step: string, call: () => Promise<T>, summary: (r: T) => string | null): Promise<T> => {
+    try {
+      const r = await call();
+      const text = summary(r);
+      if (text !== null) note({ step, kind: 'thought', text, thinking: r.thinking });
+      return r;
+    } catch (error) {
+      note({ step, kind: 'thought', text: '', thinking: null, error: errorText(error) });
+      throw error;
+    }
+  }, [note]);
+
+  /**
+   * Reflect-after-step: the model's reflection and final verdict on an executed step go on the
+   * timeline and the verdict into the activity log. A failure is logged as such — never invented.
+   */
+  const reflectAfter = useCallback(async (step: WorkflowStep, frame: Frame | null, result: StepResult, logSource: string) => {
+    try {
+      const { reflection, verdict } = await reflectStep(askAi, frame, step, result, goalRef.current);
+      const text = verdictText(verdict);
+      note({ step: step.name, kind: 'reflection', text: reflection.text, thinking: reflection.thinking });
+      note({ step: step.name, kind: 'verdict', text, thinking: verdict.thinking });
+      addLog(logSource, `Verdict on "${step.name}": ${text}`, verdict.success ? 'ok' : 'warn');
+    } catch (error) {
+      note({ step: step.name, kind: 'verdict', text: '', thinking: null, error: errorText(error) });
+      addLog(logSource, `No verdict for "${step.name}" — AI reflection failed: ${errorText(error)}`, 'error');
+    }
+  }, [addLog, askAi, note]);
 
   /** Emergency stop: latches ABORTED, sets abortRef and switches Auto Act off. */
   const triggerAbort = useCallback((reason: string) => {
@@ -453,25 +497,27 @@ export function useAssist() {
   /** Auto-Actor popup handling: the model rules once per flagged region on whether and where to close it. */
   const autoClosePopup = async (frame: Frame, popup: Annotation, dry: boolean) => {
     popupDecidedRef.current = popup.id;
-    const d = await decidePopup(askAi, frame, popup);
+    const d = await thought('Popup', () => decidePopup(askAi, frame, popup), popupSummary);
     if (!d.close) {
       addLog('Auto-Actor', `AI left the new content alone: ${d.reason}`, 'info');
       return;
     }
-    const where = `(${(d.x * 100).toFixed(1)}%, ${(d.y * 100).toFixed(1)}%)`;
+    const where = at(d.x, d.y);
     if (dry) {
       addLog('Auto-Actor', `Dry run (real input disarmed): AI would close the popup at ${where} — ${d.reason}; not dispatched`, 'warn');
       return;
     }
-    const r = await execute(closePopupStep(d.x, d.y), frame, autoBudgetRef.current, 'Auto-Actor');
+    const close = closePopupStep(d.x, d.y);
+    const r = await execute(close, frame, autoBudgetRef.current, 'Auto-Actor');
     haltAutoAct(r);
     addLog('Auto-Actor', `AI closed popup at ${where} — ${d.reason}: ${r.message}`, r.ok ? 'ok' : 'warn');
+    if (!r.halt) await reflectAfter(close, framesRef.current[0] ?? frame, r, 'Auto-Actor');
   };
 
   /** Auto-Actor step execution: the model decides whether the next step runs now and where its target is. */
   const autoRunStep = async (frame: Frame, idx: number, dry: boolean) => {
     const next = stepsRef.current[idx];
-    const d = await decideStep(askAi, frame, next, goalRef.current);
+    const d = await thought(next.name, () => decideStep(askAi, frame, next, goalRef.current), stepSummary);
     if (!d.run) {
       setSync({ level: 'yellow', detail: `AI is waiting on "${next.name}": ${d.reason}` });
       return;
@@ -488,6 +534,7 @@ export function useAssist() {
     updateStep(idx, { status: out.ok ? 'done' : 'failed', correctedX: d.x, correctedY: d.y, drift, beforeFrame: frame, afterFrame: dry ? undefined : framesRef.current[0] });
     addLog(dry ? 'Auto-Actor (dry run)' : 'Auto-Actor', `${next.name}: ${out.message} (AI: ${d.reason})`, out.ok ? 'ok' : 'error');
     if (out.ok && !dry && agentsRef.current('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
+    await reflectAfter(corrected, framesRef.current[0] ?? frame, out, 'Auto-Actor');
   };
 
   /**
@@ -646,21 +693,23 @@ export function useAssist() {
       return false;
     }
     try {
-      const d = await decidePopup(askAi, live, popup);
+      const d = await thought(step.name, () => decidePopup(askAi, live, popup), popupSummary);
       if (!d.close) {
         addLog('AI help', `AI says the region over "${step.name}" is not a popup to close: ${d.reason}`, 'warn');
         return false;
       }
-      addLog('AI help', `Popup covers "${step.name}" — AI closes it at (${(d.x * 100).toFixed(1)}%, ${(d.y * 100).toFixed(1)}%): ${d.reason}`, 'warn');
+      addLog('AI help', `Popup covers "${step.name}" — AI closes it at ${at(d.x, d.y)}: ${d.reason}`, 'warn');
       setCursor({ x: d.x, y: d.y });
       if (dryRun) {
         popupRef.current = null;
         setAnnotations((a) => a.filter((x) => x.tone !== 'error'));
         return true;
       }
-      const r = await execute(closePopupStep(d.x, d.y), live, budget, 'AI help');
+      const close = closePopupStep(d.x, d.y);
+      const r = await execute(close, live, budget, 'AI help');
       addLog('AI help', r.message, r.ok ? 'ok' : 'warn');
       await sleep(settingsRef.current.captureMs * 2 + 200);
+      if (!r.halt) await reflectAfter(close, framesRef.current[0] ?? live, r, 'AI help');
       return r.ok;
     } catch (error) {
       addLog('AI help', `AI unavailable — popup not cleared: ${errorText(error)}`, 'error');
@@ -691,6 +740,7 @@ export function useAssist() {
     applyOutcome(i, step, out, dryRun);
     if (out.executed && agentsRef.current('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
     addLog(label, `${step.name}: ${out.message}`, out.ok ? 'ok' : 'error');
+    if (aiOnline()) await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, label);
     return out;
   };
 
@@ -765,7 +815,8 @@ export function useAssist() {
     setAiBusy(true);
     try {
       const context = logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
-      const { steps: planned, source: why } = await planFromGoal(goal, cards, framesRef.current[0] ?? null, askAi, context);
+      const plan = await thought(`Plan: ${goal}`, () => planFromGoal(goal, cards, framesRef.current[0] ?? null, askAi, context), (r) => (r.source === AI_PLAN_SOURCE ? `${r.steps.length} step(s): ${r.steps.map((s) => s.name).join(' → ')}` : null));
+      const { steps: planned, source: why } = plan;
       setSteps(planned);
       setDraftCard(generateCard(planned, goal));
       addLog('Planner', `${why}: ${planned.length} step(s) — ${planned.map((s) => s.name).join(' → ')}${armedRef.current ? '' : ' — real input disarmed, Auto Act / replay will run it as a dry run'}`, 'ok');
@@ -785,7 +836,7 @@ export function useAssist() {
     }
     setAiBusy(true);
     try {
-      const { answer, annotations: items } = await describeScreen(askAi, f, question, goal);
+      const { answer, annotations: items } = await thought(`Ask: ${question}`, () => describeScreen(askAi, f, question, goal), (r) => r.answer);
       setAiAnswer(answer);
       setAnnotations(items);
       addLog('AI help', answer, 'info');
@@ -951,7 +1002,7 @@ export function useAssist() {
     settings, setSettings, source, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, target, history,
-    armed, aborted, aiStatus, aiAnswer, aiBusy,
+    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline,
     onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, useDemo, connectBridge, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
   };
