@@ -1,4 +1,4 @@
-import { VIEW_H, VIEW_W, toUnit } from './ai.js';
+import { SAMPLE_VIEW, viewPoint, type ViewSize } from './ai.js';
 
 /** Columns (numbered 1..12, left to right) and rows (lettered A..H, top to bottom) of the spatial grid. */
 export const GRID_COLS = 12;
@@ -68,21 +68,27 @@ export function gridRef(p: Point): string {
 
 const range = (i: number, n: number, px: number) => `${(i / n).toFixed(3)}..${((i + 1) / n).toFixed(3)} (${Math.round((i * px) / n)}-${Math.round(((i + 1) * px) / n)}px)`;
 
-/** The grid definition sent with every prompt that asks the model for a point. */
-export const GRID_PROMPT = [
-  `Spatial grid: the ${VIEW_W}x${VIEW_H} screenshot is divided into ${GRID_COLS} columns x ${GRID_ROWS} rows. Rows are letters A..H from top to bottom, columns are numbers 1..12 from left to right; cell "A1" is the top-left, "H12" the bottom-right.`,
-  `Columns (x): ${COLUMN_LABELS.map((c, i) => `${c}=${range(i, GRID_COLS, VIEW_W)}`).join(', ')}.`,
-  `Rows (y): ${ROW_LABELS.map((r, i) => `${r}=${range(i, GRID_ROWS, VIEW_H)}`).join(', ')}.`,
-  'Give every point as "cell" (e.g. "C5") plus "cx","cy": the position inside that cell as fractions 0..1 from its top-left (0.5,0.5 is the cell centre). First pick the cell containing the target, then refine inside it.',
-].join('\n');
+/** The grid definition sent with every prompt that asks the model for a point, for a `view`-sized screenshot. */
+export function gridPrompt(view: ViewSize): string {
+  return [
+    `Spatial grid: the ${view.w}x${view.h} screenshot is divided into ${GRID_COLS} columns x ${GRID_ROWS} rows. Rows are letters A..H from top to bottom, columns are numbers 1..12 from left to right; cell "A1" is the top-left, "H12" the bottom-right.`,
+    `Columns (x): ${COLUMN_LABELS.map((c, i) => `${c}=${range(i, GRID_COLS, view.w)}`).join(', ')}.`,
+    `Rows (y): ${ROW_LABELS.map((r, i) => `${r}=${range(i, GRID_ROWS, view.h)}`).join(', ')}.`,
+    'Give every point as "cell" (e.g. "C5") plus "cx","cy": the position inside that cell as fractions 0..1 from its top-left (0.5,0.5 is the cell centre). First pick the cell containing the target, then refine inside it.',
+  ].join('\n');
+}
+
+/** The grid definition for a sample-space (480x270) screenshot. */
+export const GRID_PROMPT = gridPrompt(SAMPLE_VIEW);
 
 /**
- * The point a model reply gives: its "cell" + "cx","cy" when the cell is valid, otherwise the
- * legacy global "x","y" (fractions, or pixels of the image), falling back to `fallback` when
- * those are missing. Throws AiError when there is no usable point and no fallback.
+ * The point a model reply gives, in the 0..1 sample space: its "cell" + "cx","cy" when the cell
+ * is valid (resolution independent), otherwise the legacy global "x","y" (fractions, or pixels of
+ * the `view`-sized image the model saw), falling back to `fallback` when those are missing.
+ * Throws AiError when there is no usable point and no fallback.
  */
-export function replyPoint(r: Record<string, unknown>, fallback?: Point): Point {
+export function replyPoint(r: Record<string, unknown>, fallback?: Point, view: ViewSize = SAMPLE_VIEW): Point {
   const fromCell = resolveCell(r.cell, r.cx, r.cy);
   if (fromCell) return fromCell;
-  return { x: toUnit(r.x ?? fallback?.x, VIEW_W), y: toUnit(r.y ?? fallback?.y, VIEW_H) };
+  return viewPoint(r.x ?? fallback?.x, r.y ?? fallback?.y, view);
 }

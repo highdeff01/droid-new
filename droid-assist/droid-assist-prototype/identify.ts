@@ -1,7 +1,8 @@
 import type { Frame } from './types.js';
 import type { Box, Thought } from './assist-ai.js';
-import { GRID_PROMPT, gridRef, replyPoint } from './grid.js';
-import { VIEW_H, VIEW_W, parseJsonReply } from './ai.js';
+import { gridPrompt, gridRef, replyPoint } from './grid.js';
+import { SAMPLE_VIEW, parseJsonReply, type ViewSize } from './ai.js';
+import { fullUrl } from './grounding.js';
 import type { AiReply, AskRequest } from './ai.js';
 import { boxCenter, mapCell, mapCells, type MappedElement } from './element-map-studio.js';
 
@@ -105,9 +106,9 @@ export interface IdentifyInput {
   reason: IdentifyReason;
   /** The element's boundary box on the screen (normalized). */
   box: Box;
-  /** A crop of the region (sent as the request's image). */
+  /** A zoomed crop of the region from the full-resolution frame (sent after the full frame). */
   crop: Frame;
-  /** The full frame the region was taken from (for its pixel buffer and native size). */
+  /** The full frame the region was taken from (sent first; also its pixel buffer and native size). */
   frame: Frame;
   /** The element's name or text when known; omitted otherwise (never invented). */
   text?: string;
@@ -134,16 +135,19 @@ export function characteristics(input: IdentifyInput): string[] {
   ];
 }
 
-/** System prompt of the identification request: the reply contract. */
-export const IDENTIFY_SYSTEM = `You are Droid Assist's element identifier. You see a crop of one region of the user's screen (the full screenshot is ${VIEW_W}x${VIEW_H}) and its measured characteristics.
-${GRID_PROMPT}
+/** System prompt of the identification request for a `view`-sized screenshot: the reply contract. */
+export const identifySystem = (view: ViewSize) => `You are Droid Assist's element identifier. The first image is the user's full screen (${view.w}x${view.h}); the second is a zoomed crop of one region of it, taken from the full-resolution screen, followed by that region's measured characteristics.
+${gridPrompt(view)}
 Identify the element and give its clickable centre on the FULL screen. Use the boundary box, the grid cells and the distances from the user's mapped elements to measure it.
 Reply ONLY with JSON {"found":boolean,"name":string,"cell":string,"cx":number,"cy":number,"reason":string}. Set found=false if the element cannot be identified.`;
+
+/** The identification system prompt for a sample-space (480x270) screenshot. */
+export const IDENTIFY_SYSTEM = identifySystem(SAMPLE_VIEW);
 
 /** The identification request for one element; `feedback` says why the previous proposal failed. */
 export function identifyRequest(input: IdentifyInput, feedback?: string): AskRequest {
   const lines = [`Why: ${REASON_TEXT[input.reason]}.`, ...characteristics(input), ...(feedback ? [`Your previous proposal failed: ${feedback}`] : [])];
-  return { system: IDENTIFY_SYSTEM, prompt: lines.join('\n'), frame: input.crop, context: [], json: true };
+  return { system: identifySystem, prompt: lines.join('\n'), frame: input.frame, crops: [input.crop], context: [], json: true };
 }
 
 /** The model's identification: the element's name and a point on the full screen, or not found. */
@@ -155,7 +159,7 @@ export function parseIdentification(reply: AiReply, fallbackName: string): Ident
   const reason = String(r.reason ?? '');
   if (r.found !== true) return { found: false, reason, thinking: reply.thinking };
   const name = typeof r.name === 'string' && r.name.trim() ? r.name.trim() : fallbackName;
-  return { found: true, name, ...replyPoint(r), reason, thinking: reply.thinking };
+  return { found: true, name, ...replyPoint(r, undefined, reply.view), reason, thinking: reply.thinking };
 }
 
 /** One verification of a proposed point by the agent test. */
@@ -273,10 +277,10 @@ export function noteChange(hits: ChangeHit[], box: Box, now: number): { hits: Ch
 /** True when a region overlapping `box` was sent for identification within IDENTIFY_WINDOW_MS. */
 export const recentlySent = (sent: Array<{ box: Box; time: number }>, box: Box, now: number) => sent.some((s) => now - s.time < IDENTIFY_WINDOW_MS && iou(s.box, box) >= 0.5);
 
-/** A crop of `box` out of the frame's display image, as a JPEG frame (at least 32px a side). */
+/** A crop of `box` out of the frame's full-resolution image, as a JPEG frame (at least 32px a side). */
 export async function cropFrame(live: Frame, box: Box): Promise<Frame> {
   const img = new Image();
-  img.src = live.url;
+  img.src = fullUrl(live);
   await img.decode();
   const sw = Math.max(1, box.w * img.naturalWidth);
   const sh = Math.max(1, box.h * img.naturalHeight);
@@ -285,5 +289,5 @@ export async function cropFrame(live: Frame, box: Box): Promise<Frame> {
   canvas.width = Math.round(sw * scale);
   canvas.height = Math.round(sh * scale);
   canvas.getContext('2d')!.drawImage(img, box.x * img.naturalWidth, box.y * img.naturalHeight, sw, sh, 0, 0, canvas.width, canvas.height);
-  return { ...live, url: canvas.toDataURL('image/jpeg', 0.85) };
+  return { ...live, url: canvas.toDataURL('image/jpeg', 0.85), full: undefined };
 }

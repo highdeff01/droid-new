@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Frame } from './types.js';
 import { CHANGE_HITS, IDENTIFY_SYSTEM, characteristics, identifyAndVerify, identifyRequest, iou, mappedDistances, noteChange, parseIdentification, recentlySent, regionStats, type IdentifyInput, type IdentifyLoop } from './identify.js';
 import type { MappedElement } from './element-map-studio.js';
+import { SAMPLE_VIEW, systemText } from './ai.js';
 
 /** A w x h buffer filled with one colour, with an optional coloured rectangle (pixel coords). */
 function buffer(w: number, h: number, bg: [number, number, number], rect?: { x: number; y: number; w: number; h: number; c: [number, number, number] }): ImageData {
@@ -46,8 +47,9 @@ describe('identification request', () => {
 
   it('carries crop, boundary, size, colour, grid cells and distances nearest first; no text when none', () => {
     const req = identifyRequest(input);
-    expect(req.system).toBe(IDENTIFY_SYSTEM);
-    expect(req.frame?.url).toBe('data:image/jpeg;base64,Q1JPUA==');
+    expect(systemText(req.system, SAMPLE_VIEW)).toBe(IDENTIFY_SYSTEM);
+    expect(req.frame).toBe(input.frame);
+    expect(req.crops?.[0]?.url).toBe('data:image/jpeg;base64,Q1JPUA==');
     expect(req.json).toBe(true);
     expect(req.prompt).toContain('Boundary box: x=0.500, y=0.500, w=0.100, h=0.100');
     expect(req.prompt).toContain('(960, 540)px to (1152, 648)px');

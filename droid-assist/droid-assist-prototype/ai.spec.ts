@@ -217,7 +217,7 @@ describe('createAiSession', () => {
     const store = { getItem: (k: string) => saved.get(k) ?? null, setItem: (k: string, v: string) => void saved.set(k, v) };
     const fn = stubFetch(reply('first', 200, 'secret reasoning'), reply('second'));
     const session = createAiSession(store);
-    await expect(session.ask(cfg, { system: 'sys', prompt: 'look', frame, context: ['[You] clicked'] })).resolves.toEqual({ content: 'first', thinking: 'secret reasoning' });
+    await expect(session.ask(cfg, { system: 'sys', prompt: 'look', frame, context: ['[You] clicked'] })).resolves.toEqual({ content: 'first', thinking: 'secret reasoning', view: { w: 480, h: 270 } });
     await session.ask(cfg, { system: 'sys', prompt: 'again' });
     const first = bodyOf(fn, 0).messages;
     expect(first[1]).toMatchObject({ role: 'user', images: ['QUJD'] });

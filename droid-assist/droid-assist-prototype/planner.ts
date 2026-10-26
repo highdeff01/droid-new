@@ -1,8 +1,8 @@
 import type { Frame, LearnedPattern, SavedCard, StepAction, WorkflowStep } from './types.js';
 import { POINTER_ACTIONS, STEP_ACTIONS } from './types.js';
-import { AiError, VIEW_H, VIEW_W, parseJsonReply, toUnit } from './ai.js';
-import type { AskFn } from './ai.js';
-import { GRID_PROMPT, gridRef, parseCell, replyPoint, resolveCell } from './grid.js';
+import { AiError, SAMPLE_VIEW, parseJsonReply } from './ai.js';
+import type { AskFn, ViewSize } from './ai.js';
+import { gridPrompt, gridRef, parseCell, replyPoint, resolveCell } from './grid.js';
 import { RELATIONS, type Expectation, type Relation } from './rearrange.js';
 
 let seq = 0;
@@ -61,10 +61,10 @@ export function findSimilar(text: string, cards: SavedCard[], min = 0.5): SavedC
 const ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(STEP_ACTIONS);
 const ACTION_LIST = STEP_ACTIONS.map((a) => `"${a}"`).join('|');
 
-/** System prompt for the planner: the reply contract the model must follow. */
-export const PLAN_SYSTEM = `You are Droid Assist, an agent that controls a computer screen. You see a screenshot (${VIEW_W}x${VIEW_H}) of the user's screen.
+/** System prompt for the planner, for a `view`-sized screenshot: the reply contract the model must follow. */
+export const planSystem = (view: ViewSize) => `You are Droid Assist, an agent that controls a computer screen. You see a screenshot (${view.w}x${view.h}) of the user's screen.
 Plan the concrete steps that achieve the user's goal on THIS screen. Look at the screenshot and target real visible controls.
-${GRID_PROMPT}
+${gridPrompt(view)}
 Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"cell":string,"cx":number,"cy":number,"text"?:string,"endTarget"?:string,"endCell"?:string,"endCx"?:number,"endCy"?:number,"endX"?:number,"endY"?:number}],"expect"?:[{"element":string,"relation":"below"|"above"|"left_of"|"right_of","anchor":string}]}
 "cell","cx","cy" locate the target's center on the grid. "target" names the on-screen thing the step points at (e.g. "Files icon in the taskbar").
 "move" only moves (hovers) the mouse cursor onto the target without clicking — use it for "move the mouse to X" / "hover over X", e.g. {"name":"Move to Files icon","action":"move","target":"Files icon","cell":"H6","cx":0.04,"cy":0.76}.
@@ -74,6 +74,9 @@ To move or rearrange several elements ("move the Files icon below Game", "rearra
 "text" is the text to type, the key to press, the search query, the arithmetic expression or the scroll direction.
 "measure" sends no input: it measures on-screen distances; "text" lists the endpoints joined by " to " — element names from the element map, "x,y" coordinates or a screen edge ("left edge", "right edge", "top edge", "bottom edge"), e.g. {"name":"Files to Game","action":"measure","target":"Files icon","x":0.42,"y":0.97,"text":"Files icon to Game icon"}. The measured distances are returned to you in the log.
 Never substitute another action for the one the goal asks for; if the target is not visible, return {"steps":[]}.`;
+
+/** The planner's system prompt for a sample-space (480x270) screenshot. */
+export const PLAN_SYSTEM = planSystem(SAMPLE_VIEW);
 
 /** A plan the assistant proposes, with where it came from and the model's thinking (null when reused or absent). */
 export interface PlanResult {
@@ -101,7 +104,7 @@ export function parseExpectations(reply: string): Expectation[] {
 }
 
 /** Converts one model step into a WorkflowStep; throws AiError when it breaks the contract. */
-function toStep(raw: unknown, frame: Frame | null): WorkflowStep {
+function toStep(raw: unknown, frame: Frame | null, view: ViewSize): WorkflowStep {
   const s = (raw ?? {}) as Record<string, unknown>;
   const action = s.action as StepAction;
   if (!ACTIONS.has(action)) throw new AiError(`AI proposed an unknown action "${String(s.action)}"`);
@@ -109,7 +112,7 @@ function toStep(raw: unknown, frame: Frame | null): WorkflowStep {
     id: uid('step'),
     name: typeof s.name === 'string' && s.name.trim() ? s.name.trim() : action,
     action,
-    ...replyPoint(s, { x: 0.5, y: 0.5 }),
+    ...replyPoint(s, { x: 0.5, y: 0.5 }, view),
     status: 'pending',
   };
   if (s.text !== undefined && s.text !== null) step.text = String(s.text);
@@ -118,25 +121,28 @@ function toStep(raw: unknown, frame: Frame | null): WorkflowStep {
     if (frame) step.refFrame = frame;
     if (!parseCell(s.cell) && (s.x === undefined || s.x === null || s.y === undefined || s.y === null)) step.unlocated = true;
   }
-  if (action === 'drag') Object.assign(step, dropPoint(s, step.name));
+  if (action === 'drag') Object.assign(step, dropPoint(s, step.name, view));
   return step;
 }
 
 /** A drag's drop point and target from a model step; throws AiError when the end point is missing. */
-function dropPoint(s: Record<string, unknown>, name: string): Pick<WorkflowStep, 'endX' | 'endY' | 'endTarget'> {
+function dropPoint(s: Record<string, unknown>, name: string, view: ViewSize): Pick<WorkflowStep, 'endX' | 'endY' | 'endTarget'> {
   const end = { cell: s.endCell, cx: s.endCx, cy: s.endCy, x: s.endX, y: s.endY };
   const hasEnd = resolveCell(end.cell, end.cx, end.cy) !== null || (end.x !== undefined && end.x !== null && end.y !== undefined && end.y !== null);
   if (!hasEnd) throw new AiError(`AI proposed drag "${name}" without an end point (endCell/endCx/endCy or endX/endY)`);
   const endTarget = typeof s.endTarget === 'string' && s.endTarget.trim() ? s.endTarget.trim() : name;
-  const p = replyPoint(end);
+  const p = replyPoint(end, undefined, view);
   return { endX: p.x, endY: p.y, endTarget };
 }
 
-/** Parses the planner's JSON reply into steps; throws AiError on malformed or empty plans. */
-export function parsePlan(reply: string, frame: Frame | null): WorkflowStep[] {
+/**
+ * Parses the planner's JSON reply into steps, reading pixel coordinates in the view the reply's
+ * screenshot was sent at; throws AiError on malformed or empty plans.
+ */
+export function parsePlan(reply: string, frame: Frame | null, view: ViewSize = SAMPLE_VIEW): WorkflowStep[] {
   const steps = parseJsonReply(reply).steps;
   if (!Array.isArray(steps) || !steps.length) throw new AiError('AI returned no steps for this goal');
-  return steps.map((s) => toStep(s, frame));
+  return steps.map((s) => toStep(s, frame, view));
 }
 
 /** Most learned patterns sent with one planning ask. */
@@ -187,9 +193,9 @@ export async function planFromGoal(goal: string, cards: SavedCard[], frame: Fram
     };
   }
   const lessons = relevantPatterns(goal, patterns).map(patternLine);
-  const reply = await ask({ system: PLAN_SYSTEM, prompt: `Goal: ${goal}`, frame, context: [...lessons, ...context], json: true });
+  const reply = await ask({ system: planSystem, prompt: `Goal: ${goal}`, frame, context: [...lessons, ...context], json: true });
   const source = lessons.length ? `${AI_PLAN_SOURCE}, applying ${lessons.length} learned pattern(s)` : AI_PLAN_SOURCE;
-  return { steps: parsePlan(reply.content, frame), source, thinking: reply.thinking, expect: parseExpectations(reply.content) };
+  return { steps: parsePlan(reply.content, frame, reply.view), source, thinking: reply.thinking, expect: parseExpectations(reply.content) };
 }
 
 /**
@@ -200,31 +206,32 @@ export async function planRemaining(ask: AskFn, goal: string, frame: Frame | nul
   const lessons = relevantPatterns(goal, patterns).map(patternLine);
   const done = ran.map((s) => `- ${s.action} "${s.target ?? s.name}": ${s.status}`).join('\n') || '(none)';
   const reply = await ask({
-    system: `${PLAN_SYSTEM}\nThis is a continuation: plan ONLY the remaining steps from the current screen.`,
+    system: (view) => `${planSystem(view)}\nThis is a continuation: plan ONLY the remaining steps from the current screen.`,
     prompt: `Goal: ${goal}\nSteps already run:\n${done}\nNot complete yet: ${why}`,
     frame,
     context: lessons,
     json: true,
   });
-  return { steps: parsePlan(reply.content, frame), source: AI_PLAN_SOURCE, thinking: reply.thinking, expect: [] };
+  return { steps: parsePlan(reply.content, frame, reply.view), source: AI_PLAN_SOURCE, thinking: reply.thinking, expect: [] };
 }
 /**
  * Re-asks the planner, once, where `step`'s target is after its proposed point was rejected
  * (`feedback` says why). Resolves the new point, or null when the model says it is not visible.
  */
-export async function relocateTarget(ask: AskFn, frame: Frame, step: WorkflowStep, feedback: string, context: string[] = []): Promise<{ x: number; y: number; thinking: string | null } | null> {
+export async function relocateTarget(ask: AskFn, frame: Frame, step: WorkflowStep, feedback: string, context: string[] = [], crop?: Frame): Promise<{ x: number; y: number; thinking: string | null } | null> {
   const at = `${gridRef(step)} = (${(step.x * 100).toFixed(1)}%, ${(step.y * 100).toFixed(1)}%)`;
   const reply = await ask({
-    system: `${PLAN_SYSTEM}\nThis is a correction: reply with exactly one step for the named target, or {"steps":[]} if it is not visible.`,
-    prompt: `Step "${step.name}" (${step.action}) targets "${step.target ?? step.name}". Your previous point ${at} was rejected: ${feedback}\nLook again and give the target's true center.`,
+    system: (view) => `${planSystem(view)}\nThis is a correction: reply with exactly one step for the named target, or {"steps":[]} if it is not visible.`,
+    prompt: `Step "${step.name}" (${step.action}) targets "${step.target ?? step.name}". Your previous point ${at} was rejected: ${feedback}\nLook again and give the target's true center.${crop ? ' The second image is a zoomed crop of the full-resolution screen around the rejected point (red ring); give the point on the FULL screenshot.' : ''}`,
     frame,
+    ...(crop ? { crops: [crop] } : {}),
     ...(context.length ? { context } : {}),
     json: true,
   });
   const steps = parseJsonReply(reply.content).steps;
   if (!Array.isArray(steps) || !steps.length) return null;
   const s = (steps[0] ?? {}) as Record<string, unknown>;
-  return { ...replyPoint(s), thinking: reply.thinking };
+  return { ...replyPoint(s, undefined, reply.view), thinking: reply.thinking };
 }
 
 /**
@@ -235,14 +242,14 @@ export async function relocateTarget(ask: AskFn, frame: Frame, step: WorkflowSte
  */
 export async function replanDrag(ask: AskFn, frame: Frame | null, step: WorkflowStep, feedback: string): Promise<{ step: WorkflowStep; thinking: string | null } | null> {
   const reply = await ask({
-    system: `${PLAN_SYSTEM}\nThis is a correction of one drag that did not work: reply with exactly one "drag" step for the same element, or {"steps":[]} if it is not visible.`,
+    system: (view) => `${planSystem(view)}\nThis is a correction of one drag that did not work: reply with exactly one "drag" step for the same element, or {"steps":[]} if it is not visible.`,
     prompt: `Drag "${step.name}" was to move "${step.target ?? step.name}" from ${gridRef(step)} to ${gridRef({ x: step.endX ?? step.x, y: step.endY ?? step.y })} ("${step.endTarget ?? 'drop point'}"). It did not land there: ${feedback}\nLook at the screen as it is now and give the element's current center and the drop point again.`,
     frame,
     json: true,
   });
   const steps = parseJsonReply(reply.content).steps;
   if (!Array.isArray(steps) || !steps.length) return null;
-  const next = toStep(steps[0], frame);
+  const next = toStep(steps[0], frame, reply.view ?? SAMPLE_VIEW);
   if (next.action !== 'drag') throw new AiError(`AI re-planned the drag as "${next.action}"`);
   return { step: { ...next, id: step.id, name: step.name }, thinking: reply.thinking };
 }

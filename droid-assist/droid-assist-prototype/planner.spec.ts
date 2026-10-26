@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mapContext } from './element-map-studio.js';
 import { PLAN_SYSTEM, findSimilar, parseExpectations, planFromGoal, relevantPatterns, relocateTarget, replanDrag, similarity } from './planner.js';
 import { decidePopup, decideStep, describeScreen, reflectStep } from './assist-ai.js';
-import { AiError } from './ai.js';
+import { AiError, SAMPLE_VIEW, systemText } from './ai.js';
 import type { AskFn } from './ai.js';
 import { resolveCell } from './grid.js';
 import type { Frame, LearnedPattern, SavedCard, WorkflowStep } from './types.js';
@@ -98,7 +98,7 @@ describe('grid in grounding prompts', () => {
     const p = await relocateTarget(ask, frame, move, 'wrong');
     expect(p?.x).toBeCloseTo(5 / 12);
     expect(p?.y).toBeCloseTo(1);
-    expect(ask.mock.calls[0][0].system).toContain('"A1"');
+    expect(systemText(ask.mock.calls[0][0].system, SAMPLE_VIEW)).toContain('"A1"');
     expect(ask.mock.calls[0][0].prompt).toContain('C1 (');
   });
 
@@ -115,8 +115,8 @@ describe('grid in grounding prompts', () => {
     const helpAsk = askReturning('{"answer":"ok","items":[]}');
     await describeScreen(helpAsk, frame, 'q', '');
     for (const ask of [popupAsk, stepAsk, helpAsk]) {
-      expect(ask.mock.calls[0][0].system).toContain('"A1"');
-      expect(ask.mock.calls[0][0].system).toContain('0.000..0.083');
+      expect(systemText(ask.mock.calls[0][0].system, SAMPLE_VIEW)).toContain('"A1"');
+      expect(systemText(ask.mock.calls[0][0].system, SAMPLE_VIEW)).toContain('0.000..0.083');
     }
   });
 });

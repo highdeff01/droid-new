@@ -16,6 +16,7 @@ import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js
 import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
 import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
+import { AI_VIEWS, type AiView } from './ai.js';
 import styles from './droid-assist.module.css';
 
 const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity' };
@@ -345,6 +346,12 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       </label>
       <label className={styles.setting}>AI model
         <input value={settings.aiModel} onChange={(e) => setSettings({ ...settings, aiModel: e.target.value })} aria-label="AI model" />
+      </label>
+      <label className={styles.setting}>AI view resolution
+        <select value={settings.aiView} onChange={(e) => setSettings({ ...settings, aiView: e.target.value as AiView })} aria-label="AI view resolution">
+          {(Object.keys(AI_VIEWS) as AiView[]).map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <small>Size of the screenshot the model sees; replies are scaled back to the 480x270 sample space.</small>
       </label>
       <AiStatusBadge status={engine.aiStatus} />
       <ErrorForwardingSettings engine={engine} />

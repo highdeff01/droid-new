@@ -9,6 +9,7 @@ import { OUTBOX_LIMIT, isErrorReport, type ErrorReport } from './error-forwardin
 import { EMPTY_WATCHER, NOTE_KINDS, NOTE_LIMIT, PROPOSAL_KINDS, PROPOSAL_LIMIT, PROPOSAL_STATUSES, TEST_LIMIT } from './watcher.js';
 import type { NoteKind, ProposalKind, ProposalStatus, WatchNote, WatchProposal, WatchTest, WatcherState } from './watcher.js';
 import { sanitizeStages } from './loop-control.js';
+import { AI_VIEWS, type AiView } from './ai.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -85,6 +86,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     const v = stored[key];
     if (typeof v === 'string' && v.trim()) out[key] = v;
   }
+  if (typeof stored.aiView === 'string' && Object.hasOwn(AI_VIEWS, stored.aiView)) out.aiView = stored.aiView as AiView;
   if (typeof stored.monitorMode === 'string' && MODES.includes(stored.monitorMode as MonitorMode)) out.monitorMode = stored.monitorMode as MonitorMode;
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
   out.stages = sanitizeStages(stored.stages ?? defaults.stages);

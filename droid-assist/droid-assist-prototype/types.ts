@@ -1,4 +1,5 @@
 import type { StageMap } from './loop-control.js';
+import type { AiView } from './ai.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
@@ -7,8 +8,10 @@ export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
 export interface Frame {
   id: number;
   time: number;
-  /** JPEG data URL for display. */
+  /** JPEG data URL for display, 480x270: the sample space the UI, bridge and drift math use. */
   url: string;
+  /** The highest-resolution JPEG data URL of the capture, drawn into the AI view and zoomed crops; absent means `url` is the best there is. Never persisted. */
+  full?: string;
   /** 320x180 pixel buffer used for Euclidean comparisons. */
   data: ImageData;
   /** Source resolution of the captured screen (for converting to native coordinates). */
@@ -230,6 +233,8 @@ export interface AssistSettings {
   aiUrl: string;
   /** Model name sent with every AI request. */
   aiModel: string;
+  /** Pixel size every screenshot is rendered at for the model (the sample space stays 480x270). */
+  aiView: AiView;
   /** After a replay, verify the goal on the live screen and keep planning/running until it is done. */
   autoContinue: boolean;
   /** Max auto-continue rounds (verify → re-plan → run) after the first run. */
