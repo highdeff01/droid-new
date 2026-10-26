@@ -26,6 +26,7 @@ import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, runVerdict, upsertCard } from './flow-memory.js';
+import { useErrorForwarding } from './use-error-forwarding.js';
 import { buildElementMap } from './element-map.js';
 import type { Calibration } from './calibration.js';
 import { remapStep, useMeasure } from './use-measure.js';
@@ -133,6 +134,9 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   autoContinue: false,
   maxIterations: DEFAULT_MAX_ITERATIONS,
   stages: DEFAULT_STAGES,
+  errorUrl: '',
+  errorForwarding: false,
+  errorToken: '',
 };
 
 /**
@@ -294,6 +298,10 @@ export function useAssist() {
     setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone }, ...l].slice(0, LOG_LIMIT));
   }, []);
 
+  /** Error forwarding: reports carry the recent log and the current frame. */
+  const errorForwarding = useErrorForwarding(settings, addLog, () => ({ log: logRef.current, frame: framesRef.current[0] ?? null }));
+  const captureError = errorForwarding.capture;
+
   const annotationsRef = useRef(annotations);
   annotationsRef.current = annotations;
   /** The element map the ruler and the measure action resolve names against. */
@@ -317,11 +325,12 @@ export function useAssist() {
       if (!live) return;
       setAiStatus(status);
       addLog('AI', status.detail, status.state === 'online' ? 'ok' : 'error');
+      if (status.state !== 'online') captureError({ kind: 'ai', message: status.detail });
     });
     return () => {
       live = false;
     };
-  }, [settings.aiUrl, settings.aiModel, addLog]);
+  }, [settings.aiUrl, settings.aiModel, addLog, captureError]);
 
   /** Whether a loop-control stage is checked; read live so a toggle applies mid-run. */
   const stageOn = (id: StageId) => settingsRef.current.stages[id];
@@ -342,12 +351,15 @@ export function useAssist() {
       if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${aiModel}` });
       return reply;
     } catch (error) {
-      if (!(error instanceof AiCancelled)) setAiStatus({ state: 'offline', detail: `AI unavailable — ${errorText(error)}` });
+      if (!(error instanceof AiCancelled)) {
+        setAiStatus({ state: 'offline', detail: `AI unavailable — ${errorText(error)}` });
+        captureError({ kind: 'ai', message: `AI unavailable — ${errorText(error)}`, goal: goalRef.current });
+      }
       throw error;
     } finally {
       setAiCalls((n) => n - 1);
     }
-  }, []);
+  }, [captureError]);
 
   /** The AskFn of one loop-control stage. */
   const askFor = useCallback((stage: StageId): AskFn => (req) => askAi(req, stage), [askAi]);
@@ -708,6 +720,7 @@ export function useAssist() {
     if (!proposal?.ready) return refused(step, `No recorded proposal for "${step.name}" — not executed`);
     const out = await performStep(step, actor, budget, dryRun);
     void rememberTarget(step, out);
+    if (!out.ok) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
     if (out.halt || !aiOnline()) return out;
     const verdict = await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
     if (verdict && !dryRun) learnHabit(step, verdict);
@@ -1000,6 +1013,7 @@ export function useAssist() {
       const r = matchTemplate(next.refFrame.data, frame.data, next.x, next.y);
       const level = syncLevelFor(r);
       setSync({ level, detail: `"${next.name}": region ${r.regionDistance.toFixed(3)}, best ${r.matchDistance.toFixed(3)}${level === 'yellow' ? `, drift (${(r.dx * 100).toFixed(1)}%, ${(r.dy * 100).toFixed(1)}%)` : ''}` });
+      if (level === 'red') captureError({ kind: 'drift', message: `Drift red: target of "${next.name}" not found on the live screen`, goal: goalRef.current, step: next.name });
     } else if (!next) {
       setSync({ level: 'idle', detail: 'No active step' });
     }
@@ -1044,13 +1058,14 @@ export function useAssist() {
           if (Date.now() - lastPollErrorAt.current < 5000) return;
           lastPollErrorAt.current = Date.now();
           addLog('Monitor', `Desktop screenshot failed: ${errorText(error)}`, 'error');
+          captureError({ kind: 'bridge', message: `Desktop screenshot failed: ${errorText(error)}` });
         })
         .finally(() => {
           pollBusyRef.current = false;
         });
     }, intervalMs);
     return () => clearInterval(id);
-  }, [addLog, intervalMs, source]);
+  }, [addLog, captureError, intervalMs, source]);
 
   // The running screen capture follows the monitor mode's interval live.
   useEffect(() => {
@@ -1156,6 +1171,7 @@ export function useAssist() {
       const out: Performed = { ok: false, executed: false, message: `"${planned.name}" is covered by a popup${settingsRef.current.aiHelp ? ' the AI did not clear' : ' (enable AI help to clear it)'} — not executed`, target: { x: planned.x, y: planned.y } };
       updateStep(i, { status: 'drift' });
       addLog(label, out.message, 'error');
+      captureError({ kind: 'drift', message: out.message, goal: goalRef.current, step: planned.name });
       return out;
     }
     let j: Justified;
@@ -1194,6 +1210,7 @@ export function useAssist() {
       const health = await checkBridge(settingsRef.current.bridgeUrl);
       if (!health.ok) {
         addLog(label, `${health.message} — no step was executed`, 'error');
+        captureError({ kind: 'bridge', message: health.message, goal: goalRef.current });
         return;
       }
     }
@@ -1460,6 +1477,7 @@ export function useAssist() {
     const health = await checkBridge(settingsRef.current.bridgeUrl);
     if (!health.ok) {
       addLog('Bridge', health.message, 'error');
+      captureError({ kind: 'bridge', message: health.message });
       return false;
     }
     attachSource('bridge');
@@ -1564,6 +1582,7 @@ export function useAssist() {
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDrag, onStageType, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
+    errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
   };
 }
 

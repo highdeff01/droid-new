@@ -224,4 +224,10 @@ export interface AssistSettings {
   maxIterations: number;
   /** Loop control: on/off per automation stage and agent (guardrails are never in it). */
   stages: StageMap;
+  /** Error forwarding: the error-fix app's HTTP endpoint captured errors are POSTed to. */
+  errorUrl: string;
+  /** Whether captured errors are forwarded automatically. */
+  errorForwarding: boolean;
+  /** Optional bearer token for the error endpoint; never written to the activity log. */
+  errorToken: string;
 }

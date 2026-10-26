@@ -7,6 +7,7 @@ import { AiStatusBadge } from './hud.js';
 import type { Habit, LogEntry } from './types.js';
 import { isReliable, successRate } from './habits.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
+import type { DeliveryStatus, EndpointStatus, ForwardedError } from './error-forwarding.js';
 import { segmentLine } from './ruler.js';
 import type { ElementSource, ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
@@ -276,6 +277,62 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         <input value={settings.aiModel} onChange={(e) => setSettings({ ...settings, aiModel: e.target.value })} aria-label="AI model" />
       </label>
       <AiStatusBadge status={engine.aiStatus} />
+      <ErrorForwardingSettings engine={engine} />
+    </section>
+  );
+}
+
+/** Settings → Error forwarding: endpoint, on/off, optional token and a test send. */
+function ErrorForwardingSettings({ engine }: { engine: AssistEngine }) {
+  const { settings, setSettings } = engine;
+  return (
+    <>
+      <h3>Error forwarding</h3>
+      <label className={styles.agent}>
+        <input type="checkbox" checked={settings.errorForwarding} onChange={(e) => setSettings({ ...settings, errorForwarding: e.target.checked })} />
+        <span><strong>Forward errors</strong><small>POST captured errors to the error-fix app as JSON</small></span>
+      </label>
+      <label className={styles.setting}>Error endpoint URL
+        <input value={settings.errorUrl} onChange={(e) => setSettings({ ...settings, errorUrl: e.target.value })} placeholder="http://127.0.0.1:8787/api/errors" aria-label="Error endpoint URL" />
+      </label>
+      <label className={styles.setting}>Auth token (optional)
+        <input type="password" value={settings.errorToken} onChange={(e) => setSettings({ ...settings, errorToken: e.target.value })} aria-label="Error endpoint auth token" autoComplete="off" />
+        <small>Sent as a Bearer token; never written to the activity log.</small>
+      </label>
+      <button type="button" onClick={() => void engine.sendTestError()} disabled={!settings.errorUrl.trim()}>Send test error</button>
+    </>
+  );
+}
+
+const ENDPOINT_TONE: Record<EndpointStatus['state'], LogEntry['tone']> = { unknown: 'info', ok: 'ok', failed: 'error' };
+const DELIVERY_TONE: Record<DeliveryStatus, LogEntry['tone']> = { 'not sent': 'info', sending: 'info', sent: 'ok', outbox: 'error' };
+
+/** One forwarded error: kind, message, delivery status and a manual send (Resend from the outbox). */
+function ErrorItem({ entry, onSend }: { entry: ForwardedError; onSend: () => void }) {
+  const { report, status, repeats, detail } = entry;
+  return (
+    <li data-tone={DELIVERY_TONE[status]}>
+      <time>{new Date(report.timestamp).toLocaleTimeString()}</time> <b>{report.kind}</b> {report.message}
+      {report.step && <small> · step "{report.step}"</small>}
+      {repeats > 0 && <small> · ×{repeats + 1}</small>}
+      <small> · {status}{detail ? ` (${detail})` : ''}{report.screenshot ? ' · 📷' : ''}</small>
+      <button type="button" onClick={onSend} disabled={status === 'sending'}>{status === 'outbox' ? 'Resend' : 'Send now'}</button>
+    </li>
+  );
+}
+
+/** Errors: everything captured for the error-fix app, with delivery status and the endpoint's last-known status. */
+export function ErrorsPanel({ engine }: { engine: AssistEngine }) {
+  const { errors, errorEndpoint: ep, settings } = engine;
+  const outbox = errors.filter((e) => e.status === 'outbox').length;
+  return (
+    <section className={styles.panel} aria-label="Errors">
+      <h3>Errors <small>{errors.length} captured · {outbox} in outbox · forwarding {settings.errorForwarding ? 'on' : 'off'}</small></h3>
+      <p data-tone={ENDPOINT_TONE[ep.state]}>Endpoint: <b>{ep.state}</b>{ep.time ? ` at ${new Date(ep.time).toLocaleTimeString()}` : ''} — {ep.detail}</p>
+      {!errors.length && <p className={styles.muted}>No errors captured.</p>}
+      <ul className={styles.log}>
+        {errors.map((e) => <ErrorItem key={e.report.id} entry={e} onSend={() => void engine.sendErrorNow(e.report)} />)}
+      </ul>
     </section>
   );
 }
