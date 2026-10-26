@@ -154,6 +154,23 @@ export async function planFromGoal(goal: string, cards: SavedCard[], frame: Fram
   const source = lessons.length ? `${AI_PLAN_SOURCE}, applying ${lessons.length} learned pattern(s)` : AI_PLAN_SOURCE;
   return { steps: parsePlan(reply.content, frame), source, thinking: reply.thinking };
 }
+
+/**
+ * Auto-continue re-plan: the model plans only the steps still needed for `goal` from the live
+ * frame, told what already ran and why the goal is not yet verified. Never reuses a saved flow.
+ */
+export async function planRemaining(ask: AskFn, goal: string, frame: Frame | null, ran: WorkflowStep[], why: string, patterns: LearnedPattern[] = []): Promise<PlanResult> {
+  const lessons = relevantPatterns(goal, patterns).map(patternLine);
+  const done = ran.map((s) => `- ${s.action} "${s.target ?? s.name}": ${s.status}`).join('\n') || '(none)';
+  const reply = await ask({
+    system: `${PLAN_SYSTEM}\nThis is a continuation: plan ONLY the remaining steps from the current screen.`,
+    prompt: `Goal: ${goal}\nSteps already run:\n${done}\nNot complete yet: ${why}`,
+    frame,
+    context: lessons,
+    json: true,
+  });
+  return { steps: parsePlan(reply.content, frame), source: AI_PLAN_SOURCE, thinking: reply.thinking };
+}
 /**
  * Re-asks the planner, once, where `step`'s target is after its proposed point was rejected
  * (`feedback` says why). Resolves the new point, or null when the model says it is not visible.

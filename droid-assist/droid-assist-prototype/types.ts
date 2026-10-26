@@ -153,4 +153,8 @@ export interface AssistSettings {
   aiUrl: string;
   /** Model name sent with every AI request. */
   aiModel: string;
+  /** After a replay, verify the goal on the live screen and keep planning/running until it is done. */
+  autoContinue: boolean;
+  /** Max auto-continue rounds (verify → re-plan → run) after the first run. */
+  maxIterations: number;
 }

@@ -50,33 +50,69 @@ export const CONTENT_RETRY_INSTRUCTION =
   'Your previous reply contained only thinking and an empty answer. Do not think further: put your final answer directly in the message content now.';
 const CONTENT_RETRY_JSON = ' Reply with exactly one JSON object and nothing else.';
 
-/**
- * A signal that aborts on the per-request AbortSignal.timeout or when `cancel` (the session's
- * AbortController) aborts; `cancelled()` tells the two apart after a failure.
- */
-function requestSignal(timeoutMs: number, cancel?: AbortSignal) {
-  const ctrl = new AbortController();
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const abort = () => ctrl.abort();
-  timeout.addEventListener('abort', abort, { once: true });
-  cancel?.addEventListener('abort', abort, { once: true });
-  if (cancel?.aborted) ctrl.abort();
-  return { signal: ctrl.signal, cancelled: () => cancel?.aborted === true };
+/** A model call the user cancelled (AI stop, emergency stop, a loop stage unchecked): not an endpoint failure. */
+export class AiCancelled extends AiError {
+  override name = 'AiCancelled';
 }
 
-/** One POST; content is '' when the reply carried none. HTTP, network and cancel failures reject with AiError. */
+/** A signal that aborts as soon as any of `signals` aborts. */
+export function linkSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
+  const ctrl = new AbortController();
+  for (const s of signals) {
+    if (s?.aborted) ctrl.abort();
+    else s?.addEventListener('abort', () => ctrl.abort(), { once: true });
+  }
+  return ctrl.signal;
+}
+
+/**
+ * One request's cancellation: its own AbortController, aborted by the timeout or by the
+ * caller's `signal`; `cancelled` rejects at that moment so the call settles immediately.
+ */
+function cancellation(url: string, timeoutMs: number, signal?: AbortSignal) {
+  const ctrl = new AbortController();
+  let reject: (error: AiError) => void = () => undefined;
+  const cancelled = new Promise<never>((_, r) => {
+    reject = r;
+  });
+  cancelled.catch(() => undefined);
+  const stop = (error: AiError) => {
+    if (ctrl.signal.aborted) return;
+    reject(error);
+    ctrl.abort(error);
+  };
+  const timer = setTimeout(() => stop(new AiError(`AI endpoint unreachable (${url}): no reply within ${timeoutMs} ms`)), timeoutMs);
+  const onAbort = () => stop(new AiCancelled('AI request cancelled'));
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
+  const done = () => {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+  };
+  return { signal: ctrl.signal, cancelled, done };
+}
+
+/** One POST, settling at once on timeout or cancel (AiCancelled); content is '' when the reply carried none. */
 async function post(cfg: AiConfig, messages: ChatMessage[], json: boolean, timeoutMs: number, cancel?: AbortSignal): Promise<AiReply> {
-  const req = requestSignal(timeoutMs, cancel);
+  const call = cancellation(cfg.url, timeoutMs, cancel);
+  try {
+    return await Promise.race([fetchReply(cfg, messages, json, call.signal), call.cancelled]);
+  } finally {
+    call.done();
+  }
+}
+
+/** The fetch and reply parsing of post(), on an already-combined signal. */
+async function fetchReply(cfg: AiConfig, messages: ChatMessage[], json: boolean, signal: AbortSignal): Promise<AiReply> {
   let res: Response;
   try {
     res = await fetch(cfg.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: cfg.model, messages, stream: false, think: true, ...(json ? { format: 'json' } : {}) }),
-      signal: req.signal,
+      signal,
     });
   } catch (error) {
-    if (req.cancelled()) throw new AiError('AI request cancelled');
     throw new AiError(`AI endpoint unreachable (${cfg.url}): ${error instanceof Error ? error.message : String(error)}`);
   }
   const body = (await res.json().catch(() => null)) as { message?: { content?: unknown; thinking?: unknown }; error?: unknown } | null;
@@ -89,7 +125,8 @@ async function post(cfg: AiConfig, messages: ChatMessage[], json: boolean, timeo
  * One non-streaming chat with thinking enabled; resolves with message.content and message.thinking.
  * A reply whose content is empty but whose thinking is not is retried once with an instruction to
  * answer in content; a still-empty answer, or one with neither content nor thinking, rejects with an
- * AiError naming the cause. HTTP errors, network errors and cancellation reject with AiError.
+ * AiError naming the cause. HTTP errors, network errors and the timeout reject with AiError;
+ * aborting `cancel` cancels the in-flight fetch and rejects at once with AiCancelled.
  * @param json ask the server for a JSON-formatted reply
  * @param cancel aborts the request (alongside the per-request timeout)
  */
@@ -206,6 +243,8 @@ export interface AskRequest {
   /** Recent log / action lines sent as context. */
   context?: string[];
   json?: boolean;
+  /** Cancels the call (AI stop / emergency stop). */
+  signal?: AbortSignal;
 }
 
 /** The asker every AI feature goes through. */
@@ -235,7 +274,7 @@ export function createAiSession(store: HistoryStore | null) {
     const context = req.context?.length ? `\n\nRecent activity (newest first):\n${req.context.join('\n')}` : '';
     const content = `${req.prompt}${context}`;
     const user: ChatMessage = { role: 'user', content, ...(req.frame ? { images: [frameToBase64(req.frame)] } : {}) };
-    const reply = await chat(cfg, [{ role: 'system', content: req.system }, ...history, user], req.json, undefined, controller.signal);
+    const reply = await chat(cfg, [{ role: 'system', content: req.system }, ...history, user], req.json, undefined, linkSignals(controller.signal, req.signal));
     history = [...history, { role: 'user' as const, content }, { role: 'assistant' as const, content: reply.content }].slice(-HISTORY_MAX);
     store?.setItem(HISTORY_KEY, JSON.stringify(history));
     return reply;
