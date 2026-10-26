@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ActionRecord, Annotation, AssistSettings, Frame, InputAction, LearnedPattern, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
-import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
+import { SAMPLE_H, SAMPLE_W, boxDistance, frameDistance, matchTemplate, syncLevelFor } from './drift.js';
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
-import { AI_PLAN_SOURCE, calculate, generateCard, planFromGoal, relocateTarget, uid } from './planner.js';
+import { AI_PLAN_SOURCE, calculate, generateCard, patternLine, planFromGoal, relevantPatterns, relocateTarget, uid } from './planner.js';
 import { DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, pingAi } from './ai.js';
 import type { AiReply, AiStatus, AskRequest } from './ai.js';
-import { confirmTarget, decidePopup, decideStep, describeScreen, reflectStep, type PopupDecision, type StepDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
-import { addEntry, verdictText, type ThinkingEntry } from './thinking-timeline.js';
+import { confirmTarget, decidePopup, describeScreen, reflectStep, type PopupDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
+import { DEFAULT_CHANGE_CELLS, assessChange, changeText, detectChange, type ChangeAssessment, type ScreenChange } from './screen-change.js';
+import { localProposal, proposalText, proposeStep, type Proposal, type ProposalContext } from './proposal.js';
+import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './thinking-timeline.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge } from './bridge.js';
 import { runStep, type Grounding, type StepOutcome } from './run-step.js';
-import { zoomFrame } from './grounding.js';
+import { zoomFrame, boxedFrames } from './grounding.js';
 import { parseCommand } from './commands.js';
 import { createScreenCapture, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction, type ActionBudget } from './safety.js';
@@ -76,8 +78,18 @@ const refused = (step: WorkflowStep, message: string): Performed => ({ ok: false
 const at = (x: number, y: number) => `(${(x * 100).toFixed(1)}%, ${(y * 100).toFixed(1)}%)`;
 /** Timeline text of a popup decision. */
 const popupSummary = (d: PopupDecision) => (d.close ? `Close the popup at ${at(d.x, d.y)} — ${d.reason}` : `Leave it — ${d.reason}`);
-/** Timeline text of a step decision. */
-const stepSummary = (d: StepDecision) => (d.run ? `Run now at ${at(d.x, d.y)} — ${d.reason}` : `Wait — ${d.reason}`);
+/** The executor's verdict on a step before dispatch: run it as proposed, wait, or fail honestly. */
+type Justified = { kind: 'go'; step: WorkflowStep; proposal: Proposal } | { kind: 'wait'; reason: string } | { kind: 'fail'; reason: string };
+/** Describes the pending step for the screen-change responder. */
+const describeNext = (s: WorkflowStep | undefined) => (s ? `"${s.name}" — ${s.action} "${s.target ?? s.name}" at ${at(s.correctedX ?? s.x, s.correctedY ?? s.y)}` : null);
+/**
+ * The step a proposal runs: a local proposal or a first proposal of a template-recorded step runs as
+ * planned (the template locates the target); otherwise at the proposed point, dropping a stale template on a re-proposal.
+ */
+function adopt(step: WorkflowStep, p: Proposal, redo: boolean): WorkflowStep {
+  if (p.source === 'local' || (step.refFrame && !redo)) return step;
+  return { ...step, x: p.x, y: p.y, ...(redo ? { refFrame: undefined, correctedX: undefined, correctedY: undefined } : {}) };
+}
 /** Timeline text of a model plan; null for a reused saved flow (no model call). */
 const planSummary = (r: { source: string; steps: WorkflowStep[] }) => (r.source.startsWith(AI_PLAN_SOURCE) ? `${r.steps.length} step(s): ${r.steps.map((s) => `${s.action} "${s.target ?? s.name}"`).join(' → ')}` : null);
 /** Timeline text of a grounding check on a zoomed crop. */
@@ -88,6 +100,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   gallerySize: 10,
   checkpoints: 6,
   captureMs: 500,
+  changeCells: DEFAULT_CHANGE_CELLS,
   monitorMode: 'app',
   autoAct: false,
   aiHelp: true,
@@ -101,7 +114,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
 
 /** A background agent the user can toggle. */
 export interface Agent {
-  id: 'popup' | 'drift' | 'progress' | 'goal';
+  id: 'popup' | 'change' | 'drift' | 'progress' | 'goal';
   name: string;
   description: string;
   on: boolean;
@@ -138,6 +151,7 @@ export function useAssist() {
   const [progress, setProgress] = useState({ done: 0, manual: 0 });
   const [agents, setAgents] = useState<Agent[]>([
     { id: 'popup', name: 'Popup watcher', description: 'Flags ads & intrusive popups, auto-closes when Auto act is on', on: true },
+    { id: 'change', name: 'Screen-change responder', description: 'Asks the AI what changed and whether it affects the plan', on: true },
     { id: 'drift', name: 'Drift monitor', description: 'Cross-checks every frame against the active step', on: true },
     { id: 'progress', name: 'Progress tracker', description: 'Counts verified steps toward the goal', on: true },
     { id: 'goal', name: 'Goal reviewer', description: 'Reviews the goal after each run and suggests what is next', on: true },
@@ -188,6 +202,16 @@ export function useAssist() {
   const patternsRef = useRef<LearnedPattern[]>(patterns);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
+  /** The in-flight change assessment; the executor waits for it before proposing. */
+  const changeBusyRef = useRef<Promise<void> | null>(null);
+  /** The latest change assessment and when it was made. */
+  const lastChangeRef = useRef<{ at: number; assessment: ChangeAssessment } | null>(null);
+  /** When the current plan was made (planned, loaded or recorded). */
+  const planAtRef = useRef(0);
+  /** A stale-plan assessment already answered by a re-proposal. */
+  const staleHandledRef = useRef<ChangeAssessment | null>(null);
+  /** Steps that already used their one re-proposal. */
+  const reproposedRef = useRef(new Set<string>());
 
   settingsRef.current = settings;
   sourceRef.current = source;
@@ -272,14 +296,14 @@ export function useAssist() {
    * Runs one AI decision and records its initial thinking on the timeline, or the failure
    * when the call fails (rethrown). `summary` returning null means no model call was made.
    */
-  const thought = useCallback(async <T extends Thought>(step: string, call: () => Promise<T>, summary: (r: T) => string | null): Promise<T> => {
+  const thought = useCallback(async <T extends Thought>(step: string, call: () => Promise<T>, summary: (r: T) => string | null, kind: ThoughtKind = 'thought'): Promise<T> => {
     try {
       const r = await call();
       const text = summary(r);
-      if (text !== null) note({ step, kind: 'thought', text, thinking: r.thinking });
+      if (text !== null) note({ step, kind, text, thinking: r.thinking });
       return r;
     } catch (error) {
-      note({ step, kind: 'thought', text: '', thinking: null, error: errorText(error) });
+      note({ step, kind, text: '', thinking: null, error: errorText(error) });
       throw error;
     }
   }, [note]);
@@ -496,8 +520,12 @@ export function useAssist() {
     return out;
   };
 
-  /** performStep, then reflect-after-step: every step the pipeline ran gets the model's reflection and verdict. */
-  const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
+  /**
+   * performStep, then reflect-after-step: every step the pipeline ran gets the model's reflection and verdict.
+   * No step is dispatched without a recorded proposal for it.
+   */
+  const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null): Promise<Performed> => {
+    if (!proposal?.ready) return refused(step, `No recorded proposal for "${step.name}" — not executed`);
     const out = await performStep(step, actor, budget, dryRun);
     if (!out.halt && aiOnline()) await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
     return out;
@@ -524,23 +552,8 @@ export function useAssist() {
     if (agentsRef.current('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
   };
 
-  /** Visual error detection: frame-to-frame cluster of changed cells → highlighted popup/mismatch. */
-  const detectErrors = useCallback((prev: Frame, cur: Frame) => {
-    if (popupRef.current && popupBaseRef.current && popupFrameRef.current) {
-      const backToClean = boxDistance(popupBaseRef.current.data, cur.data, popupRef.current) < 0.06;
-      const popupChanged = boxDistance(popupFrameRef.current.data, cur.data, popupRef.current) > 0.15;
-      if (backToClean || popupChanged) {
-        popupRef.current = null;
-        popupBaseRef.current = null;
-        popupFrameRef.current = null;
-        setAnnotations((a) => a.filter((x) => x.tone !== 'error'));
-        if (agentsRef.current('popup')) addLog('Popup watcher', 'Popup gone — area matches the clean screen again', 'ok');
-      }
-      return;
-    }
-    const cells = largestCluster(diffCells(prev.data, cur.data));
-    const box = cells.length >= 6 ? boundingBox(cells) : null;
-    if (!box) return;
+  /** Flags `box` as a popup: the popup watcher's special case, which the AI then rules on (decidePopup). */
+  const flagPopup = useCallback((prev: Frame, cur: Frame, box: ScreenChange['box']) => {
     popupBaseRef.current = prev;
     popupFrameRef.current = cur;
     const ann: Annotation = { id: uid('ann'), ...box, label: 'New popup / UI mismatch', tone: 'error' };
@@ -548,6 +561,144 @@ export function useAssist() {
     setAnnotations((a) => [ann, ...a.filter((x) => x.tone !== 'error')].slice(0, 6));
     if (agentsRef.current('popup')) addLog('Popup watcher', `New content appeared at (${pct(box.x)}, ${pct(box.y)}) — the AI decides whether it is a popup to close`, 'warn');
   }, [addLog]);
+
+  /** True (and clears the flag) once a flagged popup is gone or replaced; false while it is still there. */
+  const popupStillShown = useCallback((cur: Frame): boolean => {
+    const popup = popupRef.current;
+    if (!popup || !popupBaseRef.current || !popupFrameRef.current) return false;
+    const backToClean = boxDistance(popupBaseRef.current.data, cur.data, popup) < 0.06;
+    const popupChanged = boxDistance(popupFrameRef.current.data, cur.data, popup) > 0.15;
+    if (!backToClean && !popupChanged) return true;
+    popupRef.current = null;
+    popupBaseRef.current = null;
+    popupFrameRef.current = null;
+    setAnnotations((a) => a.filter((x) => x.tone !== 'error'));
+    if (agentsRef.current('popup')) addLog('Popup watcher', 'Popup gone — area matches the clean screen again', 'ok');
+    return false;
+  }, [addLog]);
+
+  /** The latest change assessment made after the current plan, or null when the screen has not changed since. */
+  const currentChange = (): ChangeAssessment | null => {
+    const last = lastChangeRef.current;
+    return last && last.at >= planAtRef.current ? last.assessment : null;
+  };
+
+  /**
+   * Screen-change responder: the AI is shown the full frame with the changed region boxed plus a
+   * zoomed crop, and says what changed and whether it affects the plan. A popup becomes the popup
+   * watcher's special case; any other change is recorded and boxed. A failed assessment falls back to the popup flag.
+   */
+  const respondToChange = async (prev: Frame, cur: Frame, change: ScreenChange) => {
+    const next = describeNext(stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running'));
+    const where = `(${pct(change.box.x)}, ${pct(change.box.y)}) ${pct(change.box.w)}×${pct(change.box.h)}`;
+    try {
+      const a = await thought('Screen change', async () => {
+        const { full, crop } = await boxedFrames(cur, change.box);
+        return assessChange(askAi, full, crop, change, { goal: goalRef.current, next });
+      }, changeText, 'change');
+      lastChangeRef.current = { at: Date.now(), assessment: a };
+      addLog('Screen-change responder', `Change at ${where}: ${changeText(a)}`, a.stale ? 'warn' : 'info');
+      if (a.kind === 'popup') flagPopup(prev, cur, change.box);
+      else setAnnotations((list) => [{ id: uid('ann'), ...change.box, label: `Changed: ${a.summary}`, tone: 'warn' as const }, ...list.filter((x) => x.tone === 'error')].slice(0, 6));
+    } catch (error) {
+      addLog('Screen-change responder', `Change at ${where} not assessed — AI unavailable: ${errorText(error)}`, 'error');
+      flagPopup(prev, cur, change.box);
+    }
+  };
+
+  /**
+   * Visual change detection: a frame-to-frame cluster of changed cells at least the Settings threshold
+   * in size is a material change. With the responder on and the AI online it is assessed; otherwise it
+   * is flagged as a popup for the AI to rule on, as before.
+   */
+  const watchScreen = (prev: Frame, cur: Frame) => {
+    if (popupStillShown(cur) || changeBusyRef.current) return;
+    const change = detectChange(prev.data, cur.data, settingsRef.current.changeCells);
+    if (!change) return;
+    if (!agentsRef.current('change') || !aiOnline()) {
+      flagPopup(prev, cur, change.box);
+      return;
+    }
+    changeBusyRef.current = respondToChange(prev, cur, change).finally(() => {
+      changeBusyRef.current = null;
+    });
+  };
+
+  /** The planning context a proposal is justified against; `redo` marks a re-proposal. */
+  const proposalContext = (redo?: string): ProposalContext => ({
+    goal: goalRef.current,
+    change: currentChange(),
+    patterns: relevantPatterns(goalRef.current, patternsRef.current).map(patternLine),
+    redo,
+  });
+
+  /** Writes a proposal to the activity log (the timeline entry is recorded where the proposal is made). */
+  const logProposal = (actor: string, step: WorkflowStep, p: Proposal, redo: boolean) =>
+    addLog(actor, `${redo ? 'Re-proposal' : 'Proposal'} for "${step.name}": ${proposalText(p)}`, p.ready ? 'info' : 'warn');
+
+  /** Records a proposal made without a separate model call (AI offline, a popup ruling, a /use request). */
+  const recordLocal = (actor: string, step: WorkflowStep, why: string): Proposal => {
+    const p = localProposal(step, why, currentChange());
+    note({ step: step.name, kind: 'proposal', text: proposalText(p), thinking: null });
+    logProposal(actor, step, p, false);
+    return p;
+  };
+
+  /** The model's what/why for `step` on the live screen, recorded on the timeline and in the log. */
+  const proposeNow = async (actor: string, step: WorkflowStep, redo?: string): Promise<Proposal> => {
+    const frame = framesRef.current[0] ?? null;
+    const p = await thought(step.name, () => proposeStep(askAi, frame, step, proposalContext(redo)), proposalText, 'proposal');
+    logProposal(actor, step, p, !!redo);
+    return p;
+  };
+
+  /** Why the pending step must be re-proposed (drift monitor red, or the responder says the plan is stale), or null. */
+  const redoReason = (step: WorkflowStep): string | null => {
+    const live = framesRef.current[0];
+    if (step.refFrame && live && agentsRef.current('drift') && syncLevelFor(matchTemplate(step.refFrame.data, live.data, step.x, step.y)) === 'red') {
+      return 'the drift monitor reports RED — the recorded target is no longer where the plan put it';
+    }
+    const change = currentChange();
+    if (change?.stale && staleHandledRef.current !== change) return `the screen-change responder says the plan is stale: ${change.summary}`;
+    return null;
+  };
+
+  /** The one re-proposal a step gets; a second need, or a re-proposal that is still not ready, fails honestly. */
+  const repropose = async (actor: string, step: WorkflowStep, reason: string): Promise<Justified> => {
+    if (reproposedRef.current.has(step.id)) return { kind: 'fail', reason: `"${step.name}" already had its one re-proposal and ${reason} — not executed` };
+    reproposedRef.current.add(step.id);
+    const change = currentChange();
+    if (change?.stale) staleHandledRef.current = change;
+    if (!aiOnline()) return { kind: 'fail', reason: `"${step.name}" must be re-proposed (${reason}) but the AI is offline — not executed` };
+    const p = await proposeNow(actor, step, reason);
+    if (!p.ready) return { kind: 'fail', reason: `"${step.name}" could not be justified after re-proposal: ${p.why} — not executed` };
+    return { kind: 'go', step: adopt(step, p, true), proposal: p };
+  };
+
+  /**
+   * Intent before action: waits for an in-flight change assessment, then records a what/why proposal
+   * for `step`. Drift red or a stale plan goes straight to the one re-proposal; a not-ready first
+   * proposal waits when `canWait` (Auto Act), otherwise gets the re-proposal. Offline, a local proposal is recorded.
+   */
+  const justify = async (actor: string, step: WorkflowStep, canWait: boolean): Promise<Justified> => {
+    await changeBusyRef.current;
+    const reason = redoReason(step);
+    if (reason) return repropose(actor, step, reason);
+    if (!aiOnline()) {
+      const why = `AI offline — running the planned step as recorded${goalRef.current ? ` toward "${goalRef.current}"` : ''}; drift correction still checks the target`;
+      return { kind: 'go', step, proposal: recordLocal(actor, step, why) };
+    }
+    const p = await proposeNow(actor, step);
+    if (p.ready) return { kind: 'go', step: adopt(step, p, false), proposal: p };
+    return canWait ? { kind: 'wait', reason: p.why } : repropose(actor, step, `the first proposal was not ready: ${p.why}`);
+  };
+
+  /** Starts a new plan: a fresh baseline for "changed since the plan" and fresh re-proposal allowances. */
+  const markPlan = () => {
+    planAtRef.current = Date.now();
+    reproposedRef.current = new Set();
+    staleHandledRef.current = null;
+  };
 
   /** Auto-Actor popup handling: the model rules once per flagged region; a close is a grounded click. */
   const autoClosePopup = async (frame: Frame, popup: Annotation, dry: boolean) => {
@@ -558,34 +709,44 @@ export function useAssist() {
       return;
     }
     const close: WorkflowStep = { id: uid('close'), name: 'Close popup', action: 'click', target: 'close (X) button of the popup', x: d.x, y: d.y, status: 'pending' };
-    const out = await perform(close, 'Auto-Actor', autoBudgetRef.current, dry);
+    const proposal = recordLocal('Auto-Actor', close, `the popup blocks the goal, so it is closed first — ${d.reason}`);
+    const out = await perform(close, 'Auto-Actor', autoBudgetRef.current, dry, proposal);
     addLog('Auto-Actor', `Close popup (${d.reason}): ${out.message}`, out.ok ? 'ok' : 'error');
     if (out.halt) setSettings((s) => ({ ...s, autoAct: false }));
   };
 
-  /** Auto-Actor step execution: the model decides whether the next step can run now, then it runs grounded. */
+  /** Marks a step that could not be justified as failed, with the reason in the log. */
+  const failUnjustified = (idx: number, actor: string, reason: string): Performed => {
+    const step = stepsRef.current[idx];
+    updateStep(idx, { status: 'failed' });
+    addLog(actor, reason, 'error');
+    return { ok: false, executed: false, message: reason, target: { x: step.x, y: step.y } };
+  };
+
+  /** Auto-Actor step execution: a recorded what/why proposal for the next step, then it runs grounded. */
   const autoRunStep = async (frame: Frame, idx: number, dry: boolean) => {
     const next = stepsRef.current[idx];
-    const d = await thought(next.name, () => decideStep(askAi, frame, next, goalRef.current), stepSummary);
-    if (!d.run) {
-      setSync({ level: 'yellow', detail: `AI is waiting on "${next.name}": ${d.reason}` });
+    const j = await justify('Auto-Actor', next, true);
+    if (j.kind === 'wait') {
+      setSync({ level: 'yellow', detail: `AI is waiting on "${next.name}": ${j.reason}` });
       return;
     }
-    // A recorded template locates the target itself; otherwise the model's current point is used.
-    const step = next.refFrame ? next : { ...next, x: d.x, y: d.y };
-    updateStep(idx, { status: 'running' });
-    const out = await perform(step, 'Auto-Actor', autoBudgetRef.current, dry);
-    applyOutcome(idx, out, dry, frame);
-    addLog(dry ? 'Auto-Actor (dry run)' : 'Auto-Actor', `${next.name}: ${out.message}`, out.ok ? 'ok' : 'error');
+    if (j.kind === 'fail') failUnjustified(idx, 'Auto-Actor', j.reason);
+    else {
+      updateStep(idx, { status: 'running' });
+      const out = await perform(j.step, 'Auto-Actor', autoBudgetRef.current, dry, j.proposal);
+      applyOutcome(idx, out, dry, frame);
+      addLog(dry ? 'Auto-Actor (dry run)' : 'Auto-Actor', `${next.name}: ${out.message}`, out.ok ? 'ok' : 'error');
+      if (out.halt) {
+        setSettings((s) => ({ ...s, autoAct: false }));
+        addLog('Auto-Actor', 'Auto Act stopped', 'error');
+      }
+    }
     if (dry) autoDryRef.current = true;
     if (!stepsRef.current.some((s) => s.status === 'pending')) {
       const dryRun = autoDryRef.current;
       autoDryRef.current = false;
       void learnFromRun(stepsRef.current, { dryRun, stopped: false });
-    }
-    if (out.halt) {
-      setSettings((s) => ({ ...s, autoAct: false }));
-      addLog('Auto-Actor', 'Auto Act stopped', 'error');
     }
   };
 
@@ -616,7 +777,7 @@ export function useAssist() {
     setFrames(framesRef.current);
     setShotCount((n) => n + 1);
     void putStoredFrame(toStoredFrame(frame), settingsRef.current.gallerySize).catch(() => undefined);
-    if (prev) detectErrors(prev, frame);
+    if (prev) watchScreen(prev, frame);
     const next = stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running');
     if (next?.refFrame && agentsRef.current('drift')) {
       const r = matchTemplate(next.refFrame.data, frame.data, next.x, next.y);
@@ -716,6 +877,7 @@ export function useAssist() {
     }
     setTrail([]);
     setRecording(true);
+    markPlan();
     addLog('Recorder', 'Live recording started — click to record clicks, Alt+click to record a mouse move');
   };
 
@@ -730,7 +892,8 @@ export function useAssist() {
         return false;
       }
       const close: WorkflowStep = { id: uid('close'), name: 'Close popup', action: 'click', target: 'close (X) button of the popup', x: d.x, y: d.y, status: 'pending' };
-      const out = await perform(close, 'AI help', budget, dryRun);
+      const proposal = recordLocal('AI help', close, `the popup covers "${step.name}", so it is closed before that step — ${d.reason}`);
+      const out = await perform(close, 'AI help', budget, dryRun, proposal);
       addLog('AI help', `Popup covers "${step.name}" — ${out.message}`, out.ok ? 'ok' : 'error');
       await sleep(settingsRef.current.captureMs * 2 + 200);
       return out.ok;
@@ -744,23 +907,30 @@ export function useAssist() {
   const coveredBy = (popup: Annotation | null, s: WorkflowStep): popup is Annotation =>
     !!popup && s.x >= popup.x && s.x <= popup.x + popup.w && s.y >= popup.y && s.y <= popup.y + popup.h;
 
-  /** Runs one replay step, clearing a covering popup first when AI help is on. */
+  /** Runs one replay step, clearing a covering popup first when AI help is on, after a recorded what/why proposal. */
   const replayStep = async (i: number, budget: ActionBudget, dryRun: boolean, label: string): Promise<Performed> => {
-    const step = stepsRef.current[i];
+    const planned = stepsRef.current[i];
     setActiveIndex(i);
     updateStep(i, { status: 'running' });
-    setCursor({ x: step.x, y: step.y });
+    setCursor({ x: planned.x, y: planned.y });
     const popup = popupRef.current;
-    if (coveredBy(popup, step) && !(settingsRef.current.aiHelp && aiOnline() && (await clearCoveringPopup(popup, step, budget, dryRun)))) {
-      const out: Performed = { ok: false, executed: false, message: `"${step.name}" is covered by a popup${settingsRef.current.aiHelp ? ' the AI did not clear' : ' (enable AI help to clear it)'} — not executed`, target: { x: step.x, y: step.y } };
+    if (coveredBy(popup, planned) && !(settingsRef.current.aiHelp && aiOnline() && (await clearCoveringPopup(popup, planned, budget, dryRun)))) {
+      const out: Performed = { ok: false, executed: false, message: `"${planned.name}" is covered by a popup${settingsRef.current.aiHelp ? ' the AI did not clear' : ' (enable AI help to clear it)'} — not executed`, target: { x: planned.x, y: planned.y } };
       updateStep(i, { status: 'drift' });
       addLog(label, out.message, 'error');
       return out;
     }
+    let j: Justified;
+    try {
+      j = await justify(label, planned, false);
+    } catch (error) {
+      return failUnjustified(i, label, `No proposal for "${planned.name}" — AI unavailable: ${errorText(error)} — not executed`);
+    }
+    if (j.kind !== 'go') return failUnjustified(i, label, j.reason);
     const before = framesRef.current[0] ?? null;
-    const out = await perform(step, label, budget, dryRun);
+    const out = await perform(j.step, label, budget, dryRun, j.proposal);
     applyOutcome(i, out, dryRun, before);
-    addLog(label, `${step.name}: ${out.message}`, out.ok ? 'ok' : 'error');
+    addLog(label, `${planned.name}: ${out.message}`, out.ok ? 'ok' : 'error');
     return out;
   };
 
@@ -789,6 +959,7 @@ export function useAssist() {
     if (dryRun && !selfTest) addLog('Safety', 'Real input disarmed — replay runs as a dry run (nothing is sent)', 'warn');
     const budget = createBudget(settingsRef.current.actionBudget);
     abortRef.current = false;
+    reproposedRef.current = new Set();
     setReplaying(true);
     stepsRef.current = stepsRef.current.map((st) => ({ ...st, status: 'pending' as const }));
     setSteps(stepsRef.current);
@@ -843,6 +1014,7 @@ export function useAssist() {
         const { steps: planned, source: why } = plan;
         stepsRef.current = planned;
         setSteps(planned);
+        markPlan();
         setDraftCard(generateCard(planned, text));
         addLog('Planner', `${why}: ${planned.length} step(s) — ${planned.map((s) => `${s.action} "${s.target ?? s.name}"`).join(' → ')}${armedRef.current ? '' : ' (real input disarmed: replay / Auto Act run it as a dry run)'}`, 'ok');
       } catch (error) {
@@ -864,7 +1036,13 @@ export function useAssist() {
         const step = { ...move, target: move.target ?? name };
         stepsRef.current = [step];
         setSteps(stepsRef.current);
-        const out = await perform(step, '/move', createBudget(settingsRef.current.actionBudget), !armedRef.current);
+        markPlan();
+        const j = await justify('/move', step, false);
+        if (j.kind !== 'go') {
+          failUnjustified(0, '/move', j.reason);
+          return;
+        }
+        const out = await perform(j.step, '/move', createBudget(settingsRef.current.actionBudget), !armedRef.current, j.proposal);
         applyOutcome(0, out, !armedRef.current);
         addLog('/move', `${step.name}: ${out.message}`, out.ok ? 'ok' : 'error');
       } catch (error) {
@@ -969,7 +1147,8 @@ export function useAssist() {
   const attachTarget = async (name: string) => {
     if (settingsRef.current.bridgeUrl && (await connectBridge())) {
       const open: WorkflowStep = { id: uid('step'), name: `Open ${name}`, action: 'open_app', text: name, x: 0.5, y: 0.5, status: 'pending' };
-      const out = await perform(open, '/use', createBudget(settingsRef.current.actionBudget), !armedRef.current);
+      const proposal = recordLocal('/use', open, `you asked to use "${name}", so it is opened or focused on the PC before anything else`);
+      const out = await perform(open, '/use', createBudget(settingsRef.current.actionBudget), !armedRef.current, proposal);
       addLog('/use', out.ok ? `${out.message}; attached to "${name}"` : `Could not open "${name}": ${out.message}`, out.ok ? 'ok' : 'error');
       if (out.ok) setTarget(name);
       return;
@@ -1020,6 +1199,7 @@ export function useAssist() {
 
   const loadCard = (card: SavedCard) => {
     setSteps(card.steps.map((s) => ({ ...s, status: 'pending' as const })));
+    markPlan();
     addLog('Library', `Loaded "${card.name}"`);
   };
 

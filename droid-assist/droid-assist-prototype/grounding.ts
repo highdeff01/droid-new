@@ -38,3 +38,39 @@ export async function zoomFrame(live: Frame, p: { x: number; y: number }): Promi
   ctx.stroke();
   return { ...live, url: canvas.toDataURL('image/jpeg', 0.85) };
 }
+
+/** Longest side, in pixels, of the zoomed crop of a changed region. */
+export const REGION_PX = 360;
+
+async function decode(url: string): Promise<HTMLImageElement> {
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  return img;
+}
+
+/**
+ * The changed region shown to the model twice: the full frame with the region boxed in red,
+ * and a zoomed crop of just that region.
+ */
+export async function boxedFrames(live: Frame, box: Box): Promise<{ full: Frame; crop: Frame }> {
+  const img = await decode(live.url);
+  const W = img.naturalWidth;
+  const H = img.naturalHeight;
+  const full = document.createElement('canvas');
+  full.width = W;
+  full.height = H;
+  const fctx = full.getContext('2d')!;
+  fctx.drawImage(img, 0, 0);
+  fctx.strokeStyle = '#ff0000';
+  fctx.lineWidth = 3;
+  fctx.strokeRect(box.x * W, box.y * H, box.w * W, box.h * H);
+  const sw = box.w * W;
+  const sh = box.h * H;
+  const scale = REGION_PX / Math.max(sw, sh);
+  const crop = document.createElement('canvas');
+  crop.width = Math.max(1, Math.round(sw * scale));
+  crop.height = Math.max(1, Math.round(sh * scale));
+  crop.getContext('2d')!.drawImage(img, box.x * W, box.y * H, sw, sh, 0, 0, crop.width, crop.height);
+  return { full: { ...live, url: full.toDataURL('image/jpeg', 0.85) }, crop: { ...live, url: crop.toDataURL('image/jpeg', 0.85) } };
+}

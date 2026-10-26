@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PLAN_SYSTEM, findSimilar, planFromGoal, relevantPatterns, relocateTarget, similarity } from './planner.js';
-import { decidePopup, decideStep, describeScreen, reflectStep } from './assist-ai.js';
+import { decidePopup, describeScreen, reflectStep } from './assist-ai.js';
 import { AiError } from './ai.js';
 import type { AskFn } from './ai.js';
 import type { Frame, LearnedPattern, SavedCard, WorkflowStep } from './types.js';
@@ -104,13 +104,6 @@ describe('decidePopup', () => {
   });
   it('leaves it when the model says so, carrying its thinking', async () => {
     await expect(decidePopup(askReturning('{"close":false,"reason":"content"}', 'it is page content'), frame, box)).resolves.toEqual({ close: false, reason: 'content', thinking: 'it is page content' });
-  });
-});
-
-describe('decideStep', () => {
-  it('runs at the model target or waits', async () => {
-    await expect(decideStep(askReturning('{"run":true,"x":0.6,"y":0.7,"reason":"visible"}', 'button is visible'), frame, step, 'play')).resolves.toEqual({ run: true, x: 0.6, y: 0.7, reason: 'visible', thinking: 'button is visible' });
-    await expect(decideStep(askReturning('{"run":false,"reason":"not ready"}'), frame, step, 'play')).resolves.toEqual({ run: false, reason: 'not ready', thinking: null });
   });
 });
 

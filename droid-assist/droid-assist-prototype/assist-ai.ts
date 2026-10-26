@@ -38,24 +38,6 @@ export async function decidePopup(ask: AskFn, frame: Frame, box: Box): Promise<P
   return { close: true, x: toUnit(r.x, VIEW_W), y: toUnit(r.y, VIEW_H), reason, thinking };
 }
 
-/** The model's ruling on the next step: run it now (at a possibly corrected target) or wait. */
-export type StepDecision = ({ run: true; x: number; y: number; reason: string } | { run: false; reason: string }) & Thought;
-
-/** Asks the model whether the screen is ready for `step` and where its target is now. */
-export async function decideStep(ask: AskFn, frame: Frame, step: WorkflowStep, goal: string): Promise<StepDecision> {
-  const target = `(${pct(step.correctedX ?? step.x)}, ${pct(step.correctedY ?? step.y)})`;
-  const { content, thinking } = await ask({
-    system: `You are Droid Assist's executor. Look at the screenshot and decide whether the next step can run now. ${COORDS} Reply ONLY with JSON {"run":boolean,"x":number,"y":number,"reason":string}.`,
-    prompt: `Goal: ${goal || '(none)'}\nNext step: ${stepText(step)}, planned target ${target}.\nSet run=true only if the screen is ready for it, with x,y the target's current center. Set run=false if something blocks it or the screen is not ready.`,
-    frame,
-    json: true,
-  });
-  const r = parseJsonReply(content);
-  const reason = String(r.reason ?? '');
-  if (r.run !== true) return { run: false, reason, thinking };
-  return { run: true, x: toUnit(r.x ?? step.x, VIEW_W), y: toUnit(r.y ?? step.y, VIEW_H), reason, thinking };
-}
-
 /** The model's ruling on whether a step's named target is under the proposed point. */
 export interface TargetCheck extends Thought {
   visible: boolean;
