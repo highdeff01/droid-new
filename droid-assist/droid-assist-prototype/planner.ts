@@ -2,7 +2,7 @@ import type { Frame, LearnedPattern, SavedCard, StepAction, WorkflowStep } from 
 import { POINTER_ACTIONS, STEP_ACTIONS } from './types.js';
 import { AiError, VIEW_H, VIEW_W, parseJsonReply } from './ai.js';
 import type { AskFn } from './ai.js';
-import { GRID_PROMPT, gridRef, replyPoint } from './grid.js';
+import { GRID_PROMPT, gridRef, replyPoint, resolveCell } from './grid.js';
 
 let seq = 0;
 /** A short unique id. */
@@ -64,10 +64,12 @@ const ACTION_LIST = STEP_ACTIONS.map((a) => `"${a}"`).join('|');
 export const PLAN_SYSTEM = `You are Droid Assist, an agent that controls a computer screen. You see a screenshot (${VIEW_W}x${VIEW_H}) of the user's screen.
 Plan the concrete steps that achieve the user's goal on THIS screen. Look at the screenshot and target real visible controls.
 ${GRID_PROMPT}
-Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"cell":string,"cx":number,"cy":number,"text"?:string}]}
+Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"cell":string,"cx":number,"cy":number,"text"?:string,"endTarget"?:string,"endCell"?:string,"endCx"?:number,"endCy"?:number}],"expect"?:[{"element":string,"relation":"below"|"above"|"left_of"|"right_of","anchor":string}]}
 "cell","cx","cy" locate the target's center on the grid. "target" names the on-screen thing the step points at (e.g. "Files icon in the taskbar").
 "move" only moves (hovers) the mouse cursor onto the target without clicking — use it for "move the mouse to X" / "hover over X", e.g. {"name":"Move to Files icon","action":"move","target":"Files icon","cell":"H6","cx":0.04,"cy":0.76}.
 "click" clicks the target once, "double_click" double-clicks it (open a desktop icon or file), "scroll" scrolls over the target with "text" "up" or "down".
+"drag" presses the mouse on the target, drags it and releases it at a drop point: locate the drop point with "endCell","endCx","endCy" and name what is there in "endTarget" (an empty spot is named by where it is, e.g. "empty space below Game"), e.g. {"name":"Drag Files below Game","action":"drag","target":"Files icon","cell":"B1","cx":0.5,"cy":0.5,"endTarget":"empty space below Game","endCell":"G1","endCx":0.5,"endCy":0.3}.
+To move or rearrange several elements ("move the Files icon below Game", "rearrange the sidebar to Calc, Game, Notes, Files") plan one "drag" per element, in an order where every drop point is free when that drag runs, and list the arrangement the goal asks for in "expect": one relation per requested placement; an order "A, B, C" top to bottom is {"element":"B","relation":"below","anchor":"A"},{"element":"C","relation":"below","anchor":"B"}.
 "text" is the text to type, the key to press, the search query, the arithmetic expression or the scroll direction.
 Never substitute another action for the one the goal asks for; if the target is not visible, return {"steps":[]}.`;
 
@@ -95,7 +97,18 @@ function toStep(raw: unknown, frame: Frame | null): WorkflowStep {
     step.target = typeof s.target === 'string' && s.target.trim() ? s.target.trim() : step.name;
     if (frame) step.refFrame = frame;
   }
+  if (action === 'drag') Object.assign(step, dropPoint(s, step.name));
   return step;
+}
+
+/** A drag's drop point and target from a model step; throws AiError when the end point is missing. */
+function dropPoint(s: Record<string, unknown>, name: string): Pick<WorkflowStep, 'endX' | 'endY' | 'endTarget'> {
+  const end = { cell: s.endCell, cx: s.endCx, cy: s.endCy, x: s.endX, y: s.endY };
+  const hasEnd = resolveCell(end.cell, end.cx, end.cy) !== null || (end.x !== undefined && end.x !== null && end.y !== undefined && end.y !== null);
+  if (!hasEnd) throw new AiError(`AI proposed drag "${name}" without an end point (endCell/endCx/endCy)`);
+  const endTarget = typeof s.endTarget === 'string' && s.endTarget.trim() ? s.endTarget.trim() : name;
+  const p = replyPoint(end);
+  return { endX: p.x, endY: p.y, endTarget };
 }
 
 /** Parses the planner's JSON reply into steps; throws AiError on malformed or empty plans. */

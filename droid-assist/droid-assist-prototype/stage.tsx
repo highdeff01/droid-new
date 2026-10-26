@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { COLUMN_LABELS, GRID_COLS, GRID_ROWS, ROW_LABELS, cellLabel } from './grid.js';
+import { classifyGesture, type StagePoint } from './gesture.js';
 import styles from './droid-assist.module.css';
 
 /** The labeled spatial grid: light gridlines, column numbers / row letters on the edges, cell labels. */
@@ -55,6 +56,8 @@ export function Stage({ engine }: { engine: AssistEngine }) {
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [typed, setTyped] = useState('');
+  /** Where the current press started; a release far enough away from it is a drag. */
+  const pressRef = useRef<StagePoint | null>(null);
 
   useEffect(() => {
     const c = overlayRef.current;
@@ -159,9 +162,17 @@ export function Stage({ engine }: { engine: AssistEngine }) {
           const p = norm(e);
           engine.onStageMove(p.x, p.y);
         }}
-        onClick={(e) => {
+        onMouseDown={(e) => {
+          pressRef.current = norm(e);
+        }}
+        onMouseUp={(e) => {
+          const down = pressRef.current;
+          pressRef.current = null;
+          if (!down) return;
           const p = norm(e);
-          engine.onStageClick(p.x, p.y, e.altKey);
+          const r = e.currentTarget.getBoundingClientRect();
+          if (classifyGesture(down, p, r.width, r.height) === 'drag') engine.onStageDrag(down, p);
+          else engine.onStageClick(p.x, p.y, e.altKey);
         }}
       >
         <canvas ref={demoCanvasRef} width={DEMO_W} height={DEMO_H} className={styles.screen} style={{ display: source === 'demo' ? 'block' : 'none' }} />

@@ -18,12 +18,15 @@ export const BRIDGE_REQUIRED = 'Desktop bridge not connected — connect the bri
 
 /** One native action as the Droid replay engine (python-service/replay.py, pyautogui) accepts it. */
 export interface NativeAction {
-  action: 'click' | 'double_click' | 'move' | 'scroll' | 'type_text' | 'press_key' | 'hotkey' | 'wait';
+  action: 'click' | 'double_click' | 'move' | 'drag' | 'scroll' | 'type_text' | 'press_key' | 'hotkey' | 'wait';
   x: number;
   y: number;
+  /** A `drag`'s release point (pyautogui mouseDown at x,y → moveTo(endX, endY, duration) → mouseUp). */
+  endX?: number;
+  endY?: number;
   text?: string;
   keyPayload?: string;
-  /** pyautogui.moveTo duration for a `move`, in ms (humanized, never instant). */
+  /** pyautogui.moveTo duration for a `move` or `drag` travel, in ms (humanized, never instant). */
   durationMs?: number;
   delayMs: number;
 }
@@ -33,17 +36,30 @@ type Point = { x: number; y: number };
 /** A human-looking cursor travel time for pyautogui.moveTo: 250–550 ms. */
 export const humanMoveMs = (random: () => number = Math.random) => Math.round(250 + random() * 300);
 
+/** A normalized coordinate as a native pixel on a `size`-pixel axis, kept on screen. */
+const toPx = (v: number, size: number) => Math.min(size - 1, Math.max(0, Math.round(v * size)));
+
+/** A drag's release point on a srcW×srcH screen; null when the step has no end point. */
+export function dragEnd(step: WorkflowStep, srcW: number, srcH: number): Point | null {
+  if (typeof step.endX !== 'number' || typeof step.endY !== 'number') return null;
+  return { x: toPx(step.endX, srcW), y: toPx(step.endY, srcH) };
+}
+
 const at = (p: Point, action: NativeAction['action'], extra: Partial<NativeAction> = {}): NativeAction => ({ action, x: p.x, y: p.y, delayMs: 200, ...extra });
 const keys = (p: Point, combo: string) => at(p, combo.includes('+') ? 'hotkey' : 'press_key', { keyPayload: combo.toLowerCase() });
 const write = (p: Point, text: string) => at(p, 'type_text', { text });
 const appName = (step: WorkflowStep) => step.text ?? step.name.replace(/^open\s+/i, '');
 const scrollDir = (step: WorkflowStep) => (/^\s*up\s*$/i.test(step.text ?? '') ? 'up' : 'down');
 
+/** One pyautogui-style drag: press at the start, humanized travel to the end, release there. */
+const drag = (p: Point, end: Point): NativeAction => at(p, 'drag', { endX: end.x, endY: end.y, durationMs: humanMoveMs() });
+
 /** Every step action as the real mouse/keyboard input it performs on the PC. */
-const NATIVE: Record<StepAction, (step: WorkflowStep, p: Point) => NativeAction[]> = {
+const NATIVE: Record<StepAction, (step: WorkflowStep, p: Point, end: Point | null) => NativeAction[]> = {
   click: (_s, p) => [at(p, 'click')],
   double_click: (_s, p) => [at(p, 'double_click')],
   move: (_s, p) => [at(p, 'move', { durationMs: humanMoveMs() })],
+  drag: (_s, p, end) => (end ? [drag(p, end)] : []),
   scroll: (s, p) => [at(p, 'scroll', { keyPayload: scrollDir(s) })],
   type: (s, p) => [write(p, s.text ?? '')],
   key: (s, p) => [keys(p, s.text ?? 'enter')],
@@ -56,11 +72,8 @@ const NATIVE: Record<StepAction, (step: WorkflowStep, p: Point) => NativeAction[
 
 /** The native actions a step performs at its (drift-corrected) position on a srcW×srcH screen. */
 export function nativeActions(step: WorkflowStep, srcW: number, srcH: number): NativeAction[] {
-  const p = {
-    x: Math.min(srcW - 1, Math.max(0, Math.round((step.correctedX ?? step.x) * srcW))),
-    y: Math.min(srcH - 1, Math.max(0, Math.round((step.correctedY ?? step.y) * srcH))),
-  };
-  return NATIVE[step.action](step, p);
+  const p = { x: toPx(step.correctedX ?? step.x, srcW), y: toPx(step.correctedY ?? step.y, srcH) };
+  return NATIVE[step.action](step, p, dragEnd(step, srcW, srcH));
 }
 
 const base = (url: string) => url.replace(/\/$/, '');
@@ -88,6 +101,7 @@ async function waitForRun(bridgeUrl: string, id: string, pollMs: number, timeout
 export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: number, srcH: number, { pollMs = 250, timeoutMs = 60000 } = {}): Promise<BridgeResult> {
   if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };
   const actions = nativeActions(step, srcW, srcH);
+  if (!actions.length) return { ok: false, message: `"${step.name}" has no end point — a drag needs both a start and an end; not sent` };
   const { x, y } = actions[0];
   try {
     const res = await fetch(`${base(bridgeUrl)}/api/replay`, {
@@ -105,7 +119,8 @@ export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: 
     if (!res.ok || body?.success !== true || !body.run?.id) return { ok: false, message: body?.error ?? `Bridge HTTP ${res.status}` };
     const run = await waitForRun(bridgeUrl, body.run.id, pollMs, timeoutMs);
     if (run.status !== 'completed') return { ok: false, message: `PC ${run.status}: ${run.error ?? 'no reason given'}` };
-    return { ok: true, message: `Performed ${actions.map((a) => a.action).join(' → ')} on the PC at (${x}, ${y})px, run ${body.run.id}` };
+    const to = actions[0].endX !== undefined ? ` → (${actions[0].endX}, ${actions[0].endY})px` : '';
+    return { ok: true, message: `Performed ${actions.map((a) => a.action).join(' → ')} on the PC at (${x}, ${y})px${to}, run ${body.run.id}` };
   } catch (error) {
     return { ok: false, message: `${BRIDGE_REQUIRED} (unreachable: ${errorText(error)})` };
   }
