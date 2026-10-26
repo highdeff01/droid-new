@@ -1,3 +1,5 @@
+import type { StageMap } from './loop-control.js';
+
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
 
@@ -206,4 +208,6 @@ export interface AssistSettings {
   autoContinue: boolean;
   /** Max auto-continue rounds (verify → re-plan → run) after the first run. */
   maxIterations: number;
+  /** Loop control: on/off per automation stage and agent (guardrails are never in it). */
+  stages: StageMap;
 }

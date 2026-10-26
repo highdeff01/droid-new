@@ -3,8 +3,9 @@ import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, 
 import { HABIT_STALE_MS } from './habits.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, saveFamiliar, savePatterns, saveCards, saveHabits, saveLog, saveSettings } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
+import { DEFAULT_STAGES } from './loop-control.js';
 
-const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, showGrid: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b', autoContinue: false, maxIterations: 5 };
+const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, showGrid: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b', autoContinue: false, maxIterations: 5, stages: DEFAULT_STAGES };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
 
 describe('settings', () => {
@@ -31,6 +32,15 @@ describe('settings', () => {
       localStorage.setItem('droid-assist.settings', raw);
       expect(loadSettings(DEFAULTS)).toEqual(DEFAULTS);
     }
+  });
+
+  it('round-trips loop-control stages and sanitizes a stored stage map', () => {
+    saveSettings({ ...DEFAULTS, stages: { ...DEFAULT_STAGES, popup: false, verdict: false } });
+    expect(loadSettings(DEFAULTS).stages).toEqual({ ...DEFAULT_STAGES, popup: false, verdict: false });
+    localStorage.setItem('droid-assist.settings', '{"stages":{"reflect":false,"drift":"off","nope":false}}');
+    expect(loadSettings(DEFAULTS).stages).toEqual({ ...DEFAULT_STAGES, reflect: false });
+    localStorage.setItem('droid-assist.settings', '{"stages":[1]}');
+    expect(loadSettings(DEFAULTS).stages).toEqual(DEFAULT_STAGES);
   });
 });
 

@@ -4,6 +4,7 @@ import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './f
 import { sanitizeBudget } from './safety.js';
 import { pruneHabits } from './habits.js';
 import { FAMILIAR_LIMIT } from './elements.js';
+import { sanitizeStages } from './loop-control.js';
 
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
@@ -63,7 +64,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     const v = stored[key];
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'showGrid', 'autoContinue'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'autoContinue', 'showGrid'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
   if (typeof stored.bridgeUrl === 'string') out.bridgeUrl = stored.bridgeUrl;
@@ -73,6 +74,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   }
   if (typeof stored.monitorMode === 'string' && MODES.includes(stored.monitorMode as MonitorMode)) out.monitorMode = stored.monitorMode as MonitorMode;
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
+  out.stages = sanitizeStages(stored.stages ?? defaults.stages);
   return out;
 }
 

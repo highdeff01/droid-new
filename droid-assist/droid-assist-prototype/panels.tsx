@@ -9,6 +9,7 @@ import { isReliable, successRate } from './habits.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
 import type { ElementSource, ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
+import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
 import styles from './droid-assist.module.css';
 
 /** The N most recent frames with frame-to-frame drift, plus the AI-picked frames shown to the user. */
@@ -151,19 +152,45 @@ export function PatternsPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-/** Watcher / monitor agents and settings (gallery size, drift checkpoints, capture rate, bridge). */
-export function AgentsPanel({ engine }: { engine: AssistEngine }) {
-  const { agents, setAgents, settings, setSettings } = engine;
+const STAGE_GROUPS: Array<{ group: StageGroup; title: string }> = [
+  { group: 'pipeline', title: 'Pipeline' },
+  { group: 'agent', title: 'Agents' },
+];
+
+/**
+ * Loop control: one checkbox per pipeline stage and agent, with a warning while a verification
+ * stage is off. Guardrails (arm, emergency stop, budget, abort) are not listed — they always apply.
+ */
+export function LoopControlPanel({ engine }: { engine: AssistEngine }) {
+  const { settings, toggleStage } = engine;
+  const unverified = unverifiedStages(settings.stages);
+  return (
+    <section className={styles.panel}>
+      <h3>Loop control <small>guardrails always on</small></h3>
+      {unverified.length > 0 && (
+        <p className={styles.muted} role="alert">⚠ Unverified input: {unverified.map((s) => s.name).join(', ')} off — steps run without these checks.</p>
+      )}
+      {STAGE_GROUPS.map(({ group, title }) => (
+        <div key={group}>
+          <h4>{title}</h4>
+          {STAGES.filter((s) => s.group === group).map((s) => (
+            <label key={s.id} className={styles.agent}>
+              <input type="checkbox" checked={settings.stages[s.id]} onChange={(e) => toggleStage(s.id, e.target.checked)} />
+              <span><strong>{s.name}</strong><small>{s.description}</small></span>
+            </label>
+          ))}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+/** Settings: gallery size, drift checkpoints, capture rate, budget, hotkey, bridge, AI endpoint. */
+export function SettingsPanel({ engine }: { engine: AssistEngine }) {
+  const { settings, setSettings } = engine;
   const [bridge, setBridge] = useState('');
   return (
     <section className={styles.panel}>
-      <h3>Agents</h3>
-      {agents.map((a) => (
-        <label key={a.id} className={styles.agent}>
-          <input type="checkbox" checked={a.on} onChange={(e) => setAgents(agents.map((x) => (x.id === a.id ? { ...x, on: e.target.checked } : x)))} />
-          <span><strong>{a.name}</strong><small>{a.description}</small></span>
-        </label>
-      ))}
       <h3>Settings</h3>
       <label className={styles.setting}>Gallery frames <b>{settings.gallerySize}</b>
         <input type="range" min={4} max={30} value={settings.gallerySize} onChange={(e) => setSettings({ ...settings, gallerySize: +e.target.value })} />

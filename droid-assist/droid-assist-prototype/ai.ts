@@ -45,9 +45,24 @@ function thinkingOf(raw: unknown): string | null {
   return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
 }
 
-/** A model call the user cancelled (AI stop, emergency stop): not an endpoint failure. */
+/** The extra turn sent when the model spent its whole reply thinking and left message.content empty. */
+export const CONTENT_RETRY_INSTRUCTION =
+  'Your previous reply contained only thinking and an empty answer. Do not think further: put your final answer directly in the message content now.';
+const CONTENT_RETRY_JSON = ' Reply with exactly one JSON object and nothing else.';
+
+/** A model call the user cancelled (AI stop, emergency stop, a loop stage unchecked): not an endpoint failure. */
 export class AiCancelled extends AiError {
   override name = 'AiCancelled';
+}
+
+/** A signal that aborts as soon as any of `signals` aborts. */
+export function linkSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
+  const ctrl = new AbortController();
+  for (const s of signals) {
+    if (s?.aborted) ctrl.abort();
+    else s?.addEventListener('abort', () => ctrl.abort(), { once: true });
+  }
+  return ctrl.signal;
 }
 
 /**
@@ -67,7 +82,7 @@ function cancellation(url: string, timeoutMs: number, signal?: AbortSignal) {
     ctrl.abort(error);
   };
   const timer = setTimeout(() => stop(new AiError(`AI endpoint unreachable (${url}): no reply within ${timeoutMs} ms`)), timeoutMs);
-  const onAbort = () => stop(new AiCancelled('AI request cancelled by the user'));
+  const onAbort = () => stop(new AiCancelled('AI request cancelled'));
   if (signal?.aborted) onAbort();
   else signal?.addEventListener('abort', onAbort, { once: true });
   const done = () => {
@@ -77,13 +92,18 @@ function cancellation(url: string, timeoutMs: number, signal?: AbortSignal) {
   return { signal: ctrl.signal, cancelled, done };
 }
 
-/** The extra turn sent when the model spent its whole reply thinking and left message.content empty. */
-export const CONTENT_RETRY_INSTRUCTION =
-  'Your previous reply contained only thinking and an empty answer. Do not think further: put your final answer directly in the message content now.';
-const CONTENT_RETRY_JSON = ' Reply with exactly one JSON object and nothing else.';
+/** One POST, settling at once on timeout or cancel (AiCancelled); content is '' when the reply carried none. */
+async function post(cfg: AiConfig, messages: ChatMessage[], json: boolean, timeoutMs: number, cancel?: AbortSignal): Promise<AiReply> {
+  const call = cancellation(cfg.url, timeoutMs, cancel);
+  try {
+    return await Promise.race([fetchReply(cfg, messages, json, call.signal), call.cancelled]);
+  } finally {
+    call.done();
+  }
+}
 
-/** One POST on an already-combined signal; content is '' when the reply carried none. HTTP and network failures reject with AiError. */
-async function post(cfg: AiConfig, messages: ChatMessage[], json: boolean, signal: AbortSignal): Promise<AiReply> {
+/** The fetch and reply parsing of post(), on an already-combined signal. */
+async function fetchReply(cfg: AiConfig, messages: ChatMessage[], json: boolean, signal: AbortSignal): Promise<AiReply> {
   let res: Response;
   try {
     res = await fetch(cfg.url, {
@@ -106,26 +126,16 @@ async function post(cfg: AiConfig, messages: ChatMessage[], json: boolean, signa
  * A reply whose content is empty but whose thinking is not is retried once with an instruction to
  * answer in content; a still-empty answer, or one with neither content nor thinking, rejects with an
  * AiError naming the cause. HTTP errors, network errors and the timeout reject with AiError;
- * aborting `signal` cancels the in-flight fetch and rejects at once with AiCancelled.
+ * aborting `cancel` cancels the in-flight fetch and rejects at once with AiCancelled.
  * @param json ask the server for a JSON-formatted reply
- * @param signal cancels the call (AI stop / emergency stop), alongside the per-call timeout
+ * @param cancel aborts the request (alongside the per-request timeout)
  */
-export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = 90_000, signal?: AbortSignal): Promise<AiReply> {
-  const call = cancellation(cfg.url, timeoutMs, signal);
-  try {
-    return await Promise.race([answer(cfg, messages, json, call.signal), call.cancelled]);
-  } finally {
-    call.done();
-  }
-}
-
-/** chat()'s reply with the empty-content retry, on an already-combined signal. */
-async function answer(cfg: AiConfig, messages: ChatMessage[], json: boolean, signal: AbortSignal): Promise<AiReply> {
-  const first = await post(cfg, messages, json, signal);
+export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = 90_000, cancel?: AbortSignal): Promise<AiReply> {
+  const first = await post(cfg, messages, json, timeoutMs, cancel);
   if (first.content) return first;
   if (!first.thinking) throw new AiError('AI endpoint returned no message content and no thinking');
   const instruction = `${CONTENT_RETRY_INSTRUCTION}${json ? CONTENT_RETRY_JSON : ''}`;
-  const retry = await post(cfg, [...messages, { role: 'user', content: instruction }], json, signal);
+  const retry = await post(cfg, [...messages, { role: 'user', content: instruction }], json, timeoutMs, cancel);
   if (retry.content) return { content: retry.content, thinking: retry.thinking ?? first.thinking };
   throw new AiError('AI model spent its whole reply on thinking and returned no message content, even after a retry asking for the answer in content');
 }
@@ -252,18 +262,6 @@ function loadHistory(store: HistoryStore | null): ChatMessage[] {
   }
 }
 
-/** A signal aborted when either `a` (the session's cancel()) or `b` (the request's own signal) aborts. */
-function eitherSignal(a: AbortSignal, b?: AbortSignal): AbortSignal {
-  if (!b) return a;
-  const ctrl = new AbortController();
-  const abort = () => ctrl.abort();
-  for (const s of [a, b]) {
-    if (s.aborted) abort();
-    else s.addEventListener('abort', abort, { once: true });
-  }
-  return ctrl.signal;
-}
-
 /**
  * A per-session conversation: every ask sends system + history + the new user turn
  * (with the frame), and on success appends the text of both turns (content only, no thinking)
@@ -276,7 +274,7 @@ export function createAiSession(store: HistoryStore | null) {
     const context = req.context?.length ? `\n\nRecent activity (newest first):\n${req.context.join('\n')}` : '';
     const content = `${req.prompt}${context}`;
     const user: ChatMessage = { role: 'user', content, ...(req.frame ? { images: [frameToBase64(req.frame)] } : {}) };
-    const reply = await chat(cfg, [{ role: 'system', content: req.system }, ...history, user], req.json, undefined, eitherSignal(controller.signal, req.signal));
+    const reply = await chat(cfg, [{ role: 'system', content: req.system }, ...history, user], req.json, undefined, linkSignals(controller.signal, req.signal));
     history = [...history, { role: 'user' as const, content }, { role: 'assistant' as const, content: reply.content }].slice(-HISTORY_MAX);
     store?.setItem(HISTORY_KEY, JSON.stringify(history));
     return reply;

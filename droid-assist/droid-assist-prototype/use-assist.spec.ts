@@ -151,6 +151,78 @@ describe('useAssist Qwen thinking timeline', () => {
   });
 });
 
+describe('useAssist re-plan loop guard and parse failures', () => {
+  const planBody = (x: number) => ({ content: `{"steps":[{"name":"Hover Files","action":"move","target":"files icon","x":${x},"y":0.9}]}`, thinking: 'Files sits bottom-left.' });
+  const isPlan = (init: RequestInit) => typeof init.body === 'string' && init.body.includes('Goal: move mouse to files icon');
+
+  /** Stubs fetch: plan calls get `planReply(n)` for the n-th plan call, everything else a plain OK. */
+  function stubModel(planReply: (n: number) => Record<string, unknown>) {
+    let n = 0;
+    const fn = vi.fn(async (_url: string, init: RequestInit) => {
+      const message = isPlan(init) ? planReply(n++) : { content: 'OK' };
+      return new Response(JSON.stringify({ message: { role: 'assistant', ...message } }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fn);
+    return { planCalls: () => fn.mock.calls.filter(([, init]) => isPlan(init)).length };
+  }
+
+  async function mount() {
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    return result;
+  }
+
+  const guardLogs = (result: Awaited<ReturnType<typeof mount>>) => result.current.log.filter((l) => l.source === 'Planner' && /Re-plan guard/.test(l.message));
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('dedupes identical consecutive plans: logs once and skips further model calls', async () => {
+    const model = stubModel(() => planBody(0.1));
+    const result = await mount();
+    for (let i = 0; i < 4; i++) await act(() => result.current.autoPlan('move mouse to files icon'));
+    expect(model.planCalls()).toBe(2);
+    expect(guardLogs(result).filter((l) => /identical/.test(l.message))).toHaveLength(1);
+    expect(result.current.log.filter((l) => l.source === 'Planner' && l.tone === 'ok')).toHaveLength(1);
+  });
+
+  it('caps re-plans per goal at 3 on an unchanged screen and resumes after a new frame', async () => {
+    const { hooks } = installNative();
+    const model = stubModel((n) => planBody(0.1 + n / 20));
+    const result = await mount();
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(frame()));
+    for (let i = 0; i < 6; i++) await act(() => result.current.autoPlan('move mouse to files icon'));
+    expect(model.planCalls()).toBe(4);
+    expect(guardLogs(result).filter((l) => /cap/.test(l.message))).toHaveLength(1);
+    act(() => hooks.onFrame!(frame()));
+    await act(() => result.current.autoPlan('move mouse to files icon'));
+    expect(model.planCalls()).toBe(5);
+  });
+
+  it('does not start a second plan while one is still in flight', async () => {
+    const model = stubModel(() => planBody(0.1));
+    const result = await mount();
+    await act(() => Promise.all([result.current.autoPlan('move mouse to files icon'), result.current.autoPlan('move mouse to files icon')]));
+    expect(model.planCalls()).toBe(1);
+    expect(guardLogs(result).filter((l) => /still being thought out/.test(l.message))).toHaveLength(1);
+  });
+
+  it('logs prose instead of JSON as an AI parse failure and never shows it as a plan', async () => {
+    const prose = `Thinking Process: 1. Analyze the request. ${'The user wants to move the mouse. '.repeat(20)}`;
+    stubModel(() => ({ content: prose, thinking: 'hmm' }));
+    const result = await mount();
+    await act(() => result.current.autoPlan('move mouse to files icon'));
+    const parse = result.current.log.filter((l) => l.source === 'AI parse');
+    expect(parse).toHaveLength(1);
+    expect(parse[0].tone).toBe('error');
+    expect(parse[0].message).toContain('Thinking Process');
+    expect(parse[0].message.length).toBeLessThan(prose.length);
+    expect(result.current.steps).toHaveLength(0);
+    expect(result.current.timeline[0]).toMatchObject({ kind: 'thought', text: '' });
+    expect(result.current.timeline.some((e) => e.text.includes('Thinking Process'))).toBe(false);
+  });
+});
+
 describe('useAssist auto-continue and AI stop', () => {
   const calc = (n: number) => ({ name: `Calc ${n}`, action: 'calc', text: `${n}+1`, x: 0.5, y: 0.5 });
   type Script = { checks: Array<{ complete: boolean; progress: boolean; reason: string }>; hangVerify?: boolean };
@@ -275,6 +347,102 @@ describe('useAssist auto-continue and AI stop', () => {
     await act(() => run);
     expect(m.signals[m.signals.length - 1].aborted).toBe(true);
     expect(result.current.aborted).toBe(true);
+  });
+});
+
+describe('useAssist loop control', () => {
+  const ALL_STAGES = ['planner', 'grounding', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'coords', 'supervisor', 'elementMap', 'subagents'] as const;
+
+  /** A model whose reflection call hangs until cancelled; every other prompt gets a plain answer. */
+  function hangingReflect() {
+    const calls: Array<{ body: string; signal: AbortSignal }> = [];
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => {
+      const body = String(init.body);
+      calls.push({ body, signal: init.signal! });
+      if (body.includes('reviewing a step')) {
+        return new Promise<Response>((_, reject) => init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
+      }
+      const content = body.includes('final verdict') ? '{"success":true,"pattern_avoid":null,"pattern_add":null}' : body.includes('Reply with OK') ? 'OK' : '{"patterns":[]}';
+      return Promise.resolve(new Response(JSON.stringify({ message: { role: 'assistant', content } }), { status: 200 }));
+    }));
+    return { calls, count: (part: string) => calls.filter((c) => c.body.includes(part)).length };
+  }
+
+  async function mount() {
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    return result;
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('unchecking Reflect cancels its in-flight model call at once, skips the verdict and logs the toggle', async () => {
+    const m = hangingReflect();
+    const result = await mount();
+    act(() => result.current.setSteps([{ id: 's1', name: 'Calc', action: 'calc', text: '2+2', x: 0.5, y: 0.5, status: 'pending' }]));
+    let run!: Promise<void>;
+    act(() => {
+      run = result.current.replay(false);
+    });
+    await vi.waitFor(() => expect(m.count('reviewing a step')).toBe(1));
+    const reflectCall = m.calls.find((c) => c.body.includes('reviewing a step'))!;
+    expect(reflectCall.signal.aborted).toBe(false);
+    act(() => result.current.toggleStage('reflect', false));
+    expect(reflectCall.signal.aborted).toBe(true);
+    await act(() => run);
+    expect(m.count('final verdict')).toBe(0);
+    expect(result.current.aborted).toBe(false);
+    expect(result.current.settings.stages.reflect).toBe(false);
+    const entry = result.current.log.find((l) => l.source === 'Loop control');
+    expect(entry).toMatchObject({ message: 'Reflect disabled — its in-flight AI calls were cancelled', tone: 'warn' });
+    expect(typeof entry?.time).toBe('number');
+    expect(JSON.parse(localStorage.getItem('droid-assist.settings')!).stages.reflect).toBe(false);
+  });
+
+  it('cancelling one stage leaves the other stages\' calls alone, and re-checking logs an enable', async () => {
+    hangingReflect();
+    const result = await mount();
+    act(() => result.current.toggleStage('popup', false));
+    act(() => result.current.toggleStage('popup', true));
+    const msgs = result.current.log.filter((l) => l.source === 'Loop control').map((l) => [l.message, l.tone]);
+    expect(msgs).toEqual([['Popup watcher enabled', 'ok'], ['Popup watcher disabled — its in-flight AI calls were cancelled', 'warn']]);
+  });
+
+  it('an unchecked Planner makes no model call and says why', async () => {
+    const m = hangingReflect();
+    const result = await mount();
+    act(() => result.current.toggleStage('planner', false));
+    const before = m.calls.length;
+    await act(() => result.current.autoPlan('open the files app'));
+    expect(m.calls.length).toBe(before);
+    expect(result.current.steps).toHaveLength(0);
+    expect(result.current.log.find((l) => l.source === 'Planner')?.message).toMatch(/Planner stage is unchecked in Loop control/);
+  });
+
+  it('hydrates the stage map on startup', async () => {
+    hangingReflect();
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ stages: { drift: false } }));
+    const result = await mount();
+    expect(result.current.settings.stages.drift).toBe(false);
+    expect(result.current.settings.stages.reflect).toBe(true);
+  });
+
+  it('guardrails still fire with every stage unchecked: the hotkey aborts and an aborted Test click reports the abort', async () => {
+    hangingReflect();
+    const result = await mount();
+    act(() => ALL_STAGES.forEach((id) => result.current.toggleStage(id, false)));
+    expect(Object.values(result.current.settings.stages).every((v) => v === false)).toBe(true);
+    const el = { id: 'el1', name: 'Files icon', x: 0.42, y: 0.97, source: 'familiar' as const };
+    await act(() => result.current.testClick(el));
+    expect(result.current.log.find((l) => l.source === 'Test click')?.message).toMatch(/H6 .*dry run/);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', shiftKey: true }));
+    });
+    expect(result.current.aborted).toBe(true);
+    act(() => result.current.toggleArmed());
+    await act(() => result.current.testClick(el));
+    expect(result.current.log.find((l) => l.source === 'Test click')?.message).toMatch(/Aborted/);
+    expect(result.current.history).toHaveLength(0);
   });
 });
 
