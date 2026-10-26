@@ -1,3 +1,5 @@
+import type { StageMap } from './loop-control.js';
+
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
 
@@ -24,29 +26,36 @@ export interface TrailPoint {
   click?: boolean;
 }
 
-/** Actions a workflow step can perform. `move` hovers the cursor over its target without clicking. */
-export type StepAction = 'click' | 'double_click' | 'move' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media';
+/**
+ * Actions a workflow step can perform. `move` hovers the cursor over its target without clicking;
+ * `drag` presses at (x, y), travels to (endX, endY) and releases there; `measure` only measures
+ * distances (no input).
+ */
+export type StepAction = 'click' | 'double_click' | 'move' | 'drag' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media' | 'measure';
 
 /** Every step action, in the order the planner contract lists them. */
-export const STEP_ACTIONS: readonly StepAction[] = ['click', 'double_click', 'move', 'scroll', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media'];
+export const STEP_ACTIONS: readonly StepAction[] = ['click', 'double_click', 'move', 'drag', 'scroll', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media', 'measure'];
 
 /** Step actions that point the mouse at an on-screen target, so their coordinates must be grounded. */
-export const POINTER_ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(['click', 'double_click', 'move', 'scroll']);
+export const POINTER_ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(['click', 'double_click', 'move', 'drag', 'scroll']);
 
 /** Monitor modes, each with its own capture interval. */
 export type MonitorMode = 'app' | 'background' | 'advanced';
 
 /** Real mouse/keyboard actions recorded in the persistent action history. */
-export type InputAction = 'move' | 'click' | 'double_click' | 'type' | 'key' | 'scroll';
+export type InputAction = 'move' | 'click' | 'double_click' | 'drag' | 'type' | 'key' | 'scroll';
 
 /** One executed mouse or keyboard action, persisted for viewing and export. */
 export interface ActionRecord {
   id: string;
   time: number;
   action: InputAction;
-  /** Native screen pixels the action targeted. */
+  /** Native screen pixels the action targeted (a drag's start). */
   x: number;
   y: number;
+  /** A drag's release point, in native screen pixels. */
+  endX?: number;
+  endY?: number;
   text?: string;
   /** Who performed it: Replay, Auto-Actor, AI help, ... */
   source: string;
@@ -64,6 +73,40 @@ export interface LearnedPattern {
   /** The goal or situation the lesson applies to. */
   context: string;
   time: number;
+}
+
+/** A lesson attached to one habit: something to avoid or add when acting on that target. */
+export interface HabitLesson {
+  kind: LearnedPattern['kind'];
+  text: string;
+  time: number;
+}
+
+/** Where a habit's target was last confirmed: the point and a luminance patch of the drift buffer around it. */
+export interface HabitAnchor {
+  x: number;
+  y: number;
+  /** Row-major luminance values (0..255) of a square patch centred on the point. */
+  patch: number[];
+  size: number;
+  time: number;
+}
+
+/** Learned outcomes of acting on one target in one app/window context. */
+export interface Habit {
+  id: string;
+  /** The target/element name as the steps name it. */
+  target: string;
+  /** The app/window the assistant was attached to (empty when none). */
+  context: string;
+  attempts: number;
+  successes: number;
+  /** Last-known-good coordinates, when a verification confirmed them. */
+  anchor?: HabitAnchor;
+  lastUsed: number;
+  lessons: HabitLesson[];
+  /** Pinned habits are never pruned. */
+  pinned: boolean;
 }
 
 /** An on-screen element the assistant has verified or used, remembered across sessions. */
@@ -92,6 +135,11 @@ export interface WorkflowStep {
   text?: string;
   /** The on-screen thing a pointer step acts on ("files icon"); its coordinates are confirmed against it before dispatch. */
   target?: string;
+  /** A drag's release point, normalized 0..1 like x/y. Required for a drag step. */
+  endX?: number;
+  endY?: number;
+  /** The on-screen thing a drag drops onto ("Archive folder"). */
+  endTarget?: string;
   /** Screenshot captured when the step was recorded — the template for drift matching. */
   refFrame?: Frame;
   status: StepStatus;
@@ -152,6 +200,8 @@ export interface AssistSettings {
   checkpoints: number;
   /** Capture interval of the "app" monitor mode; background and advanced modes use fixed intervals. */
   captureMs: number;
+  /** Size (cells of the 16x9 diff grid) the largest changed cluster must reach to count as a material screen change. */
+  changeCells: number;
   monitorMode: MonitorMode;
   /** How often the Screen watcher observes the live frame, in ms. */
   watchMs: number;
@@ -170,4 +220,16 @@ export interface AssistSettings {
   aiUrl: string;
   /** Model name sent with every AI request. */
   aiModel: string;
+  /** After a replay, verify the goal on the live screen and keep planning/running until it is done. */
+  autoContinue: boolean;
+  /** Max auto-continue rounds (verify → re-plan → run) after the first run. */
+  maxIterations: number;
+  /** Loop control: on/off per automation stage and agent (guardrails are never in it). */
+  stages: StageMap;
+  /** Error forwarding: the error-fix app's HTTP endpoint captured errors are POSTed to. */
+  errorUrl: string;
+  /** Whether captured errors are forwarded automatically. */
+  errorForwarding: boolean;
+  /** Optional bearer token for the error endpoint; never written to the activity log. */
+  errorToken: string;
 }

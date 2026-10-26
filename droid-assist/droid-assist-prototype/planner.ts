@@ -1,6 +1,6 @@
 import type { Frame, LearnedPattern, SavedCard, StepAction, WorkflowStep } from './types.js';
 import { POINTER_ACTIONS, STEP_ACTIONS } from './types.js';
-import { AiError, VIEW_H, VIEW_W, parseJsonReply } from './ai.js';
+import { AiError, VIEW_H, VIEW_W, parseJsonReply, toUnit } from './ai.js';
 import type { AskFn } from './ai.js';
 import { GRID_PROMPT, gridRef, replyPoint } from './grid.js';
 
@@ -64,11 +64,13 @@ const ACTION_LIST = STEP_ACTIONS.map((a) => `"${a}"`).join('|');
 export const PLAN_SYSTEM = `You are Droid Assist, an agent that controls a computer screen. You see a screenshot (${VIEW_W}x${VIEW_H}) of the user's screen.
 Plan the concrete steps that achieve the user's goal on THIS screen. Look at the screenshot and target real visible controls.
 ${GRID_PROMPT}
-Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"cell":string,"cx":number,"cy":number,"text"?:string}]}
+Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"cell":string,"cx":number,"cy":number,"text"?:string,"endTarget"?:string,"endX"?:number,"endY"?:number}]}
 "cell","cx","cy" locate the target's center on the grid. "target" names the on-screen thing the step points at (e.g. "Files icon in the taskbar").
 "move" only moves (hovers) the mouse cursor onto the target without clicking — use it for "move the mouse to X" / "hover over X", e.g. {"name":"Move to Files icon","action":"move","target":"Files icon","cell":"H6","cx":0.04,"cy":0.76}.
 "click" clicks the target once, "double_click" double-clicks it (open a desktop icon or file), "scroll" scrolls over the target with "text" "up" or "down".
+"drag" presses the mouse on the target, drags it and releases it on a second on-screen thing: locate the start on the grid like any target and give the drop point as "endX","endY" (fractions 0..1), naming it in "endTarget", e.g. {"name":"Drag Report onto Archive","action":"drag","target":"Report file","cell":"B2","cx":0.1,"cy":0.3,"endTarget":"Archive folder","endX":0.9,"endY":0.3}.
 "text" is the text to type, the key to press, the search query, the arithmetic expression or the scroll direction.
+"measure" sends no input: it measures on-screen distances; "text" lists the endpoints joined by " to " — element names from the element map, "x,y" coordinates or a screen edge ("left edge", "right edge", "top edge", "bottom edge"), e.g. {"name":"Files to Game","action":"measure","target":"Files icon","x":0.42,"y":0.97,"text":"Files icon to Game icon"}. The measured distances are returned to you in the log.
 Never substitute another action for the one the goal asks for; if the target is not visible, return {"steps":[]}.`;
 
 /** A plan the assistant proposes, with where it came from and the model's thinking (null when reused or absent). */
@@ -95,7 +97,15 @@ function toStep(raw: unknown, frame: Frame | null): WorkflowStep {
     step.target = typeof s.target === 'string' && s.target.trim() ? s.target.trim() : step.name;
     if (frame) step.refFrame = frame;
   }
+  if (action === 'drag') Object.assign(step, dropPoint(s, step.name));
   return step;
+}
+
+/** A drag's drop point and target from a model step; throws AiError when the end point is missing. */
+function dropPoint(s: Record<string, unknown>, name: string): Pick<WorkflowStep, 'endX' | 'endY' | 'endTarget'> {
+  if (s.endX === undefined || s.endX === null || s.endY === undefined || s.endY === null) throw new AiError(`AI proposed drag "${name}" without an end point (endX, endY)`);
+  const endTarget = typeof s.endTarget === 'string' && s.endTarget.trim() ? s.endTarget.trim() : name;
+  return { endX: toUnit(s.endX, VIEW_W), endY: toUnit(s.endY, VIEW_H), endTarget };
 }
 
 /** Parses the planner's JSON reply into steps; throws AiError on malformed or empty plans. */
@@ -154,6 +164,23 @@ export async function planFromGoal(goal: string, cards: SavedCard[], frame: Fram
   const reply = await ask({ system: PLAN_SYSTEM, prompt: `Goal: ${goal}`, frame, context: [...lessons, ...context], json: true });
   const source = lessons.length ? `${AI_PLAN_SOURCE}, applying ${lessons.length} learned pattern(s)` : AI_PLAN_SOURCE;
   return { steps: parsePlan(reply.content, frame), source, thinking: reply.thinking };
+}
+
+/**
+ * Auto-continue re-plan: the model plans only the steps still needed for `goal` from the live
+ * frame, told what already ran and why the goal is not yet verified. Never reuses a saved flow.
+ */
+export async function planRemaining(ask: AskFn, goal: string, frame: Frame | null, ran: WorkflowStep[], why: string, patterns: LearnedPattern[] = []): Promise<PlanResult> {
+  const lessons = relevantPatterns(goal, patterns).map(patternLine);
+  const done = ran.map((s) => `- ${s.action} "${s.target ?? s.name}": ${s.status}`).join('\n') || '(none)';
+  const reply = await ask({
+    system: `${PLAN_SYSTEM}\nThis is a continuation: plan ONLY the remaining steps from the current screen.`,
+    prompt: `Goal: ${goal}\nSteps already run:\n${done}\nNot complete yet: ${why}`,
+    frame,
+    context: lessons,
+    json: true,
+  });
+  return { steps: parsePlan(reply.content, frame), source: AI_PLAN_SOURCE, thinking: reply.thinking };
 }
 /**
  * Re-asks the planner, once, where `step`'s target is after its proposed point was rejected

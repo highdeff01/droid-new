@@ -32,8 +32,17 @@ describe('action history', () => {
 
   it('exports CSV with a header and RFC 4180 quoting', () => {
     const [header, row] = historyToCsv([rec()]).split('\r\n');
-    expect(header).toBe('time,action,x,y,text,source,via,ok,message');
-    expect(row).toBe('2026-01-02T03:04:05.000Z,type,120,340,"a,""b""",Replay,bridge,true,Dispatched');
+    expect(header).toBe('time,action,x,y,endX,endY,text,source,via,ok,message');
+    expect(row).toBe('2026-01-02T03:04:05.000Z,type,120,340,,,"a,""b""",Replay,bridge,true,Dispatched');
+  });
+
+  it('keeps both coordinates of a drag through storage and export', () => {
+    const store = memory();
+    const drag = rec({ action: 'drag', x: 100, y: 80, endX: 900, endY: 400, text: undefined });
+    appendHistory([], drag, store);
+    expect(loadHistory(store)[0]).toMatchObject({ action: 'drag', x: 100, y: 80, endX: 900, endY: 400 });
+    expect(historyToCsv([drag]).split('\r\n')[1]).toBe('2026-01-02T03:04:05.000Z,drag,100,80,900,400,,Replay,bridge,true,Dispatched');
+    expect(JSON.parse(historyToJson([drag]))[0]).toMatchObject({ endX: 900, endY: 400 });
   });
 
   it('exports JSON as the array of records', () => {
