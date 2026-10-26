@@ -174,7 +174,8 @@ export const AI_PLAN_SOURCE = 'AI planned from the goal and the live screen';
  * to this goal. Rejects with AiError when the model is unreachable or its reply is unusable.
  */
 export async function planFromGoal(goal: string, cards: SavedCard[], frame: Frame | null, ask: AskFn, context: string[] = [], patterns: LearnedPattern[] = []): Promise<PlanResult> {
-  const similar = findSimilar(goal, cards);
+  // A flow with drags is a rearrangement whose requested relations are not saved with it, so it is always planned fresh.
+  const similar = findSimilar(goal, cards.filter((c) => !c.steps.some((s) => s.action === 'drag')));
   if (similar) {
     return {
       source: `Reused saved workflow "${similar.name}" (similar goal, drift-corrected coordinates)`,

@@ -1051,7 +1051,7 @@ export function useAssist() {
    * AI plan: reuse a similar saved flow (drift-corrected), otherwise the model plans from the
    * goal + live frame with the learned patterns relevant to this goal as context.
    */
-  const autoPlan = async (text = goal, reuse = true): Promise<boolean> => {
+  const autoPlan = async (text = goal): Promise<boolean> => {
     if (!text.trim()) {
       addLog('Planner', 'Type a goal first', 'warn');
       return false;
@@ -1059,7 +1059,7 @@ export function useAssist() {
     let planned = false;
     await withAi(async () => {
       try {
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, reuse ? cardsRef.current : [], framesRef.current[0] ?? null, askAi, [], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askAi, [], patternsRef.current), planSummary);
         const { steps: next, source: why, expect } = plan;
         stepsRef.current = next;
         expectRef.current = expect;
@@ -1077,11 +1077,11 @@ export function useAssist() {
 
   /**
    * "/arrange <goal>": the model plans the rearrangement as drags with the arrangement it asks for
-   * (never a reused flow, which carries no relations to verify), then it replays at once with the
-   * move checks and the final verification pass.
+   * (a saved drag flow is never reused: it carries no relations to verify), then it replays at once
+   * with the move checks and the final verification pass.
    */
   const arrange = async (text: string) => {
-    if (await autoPlan(text, false)) await replay();
+    if (await autoPlan(text)) await replay();
   };
 
   /** "/move <target>": the model plans one move onto the target, which runs at once through the grounded pipeline. */

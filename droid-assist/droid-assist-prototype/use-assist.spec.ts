@@ -278,6 +278,11 @@ describe('useAssist rearrangement on the demo desktop', () => {
     await act(() => result.current.submitInput());
     expect(result.current.log.some((l) => /Reused saved workflow/.test(l.message))).toBe(false);
     expect(result.current.log.filter((l) => l.source === 'Planner' && /arrangement: "Files icon" below "Game"/.test(l.message))).toHaveLength(2);
+    // The same goal typed as a plain goal is planned fresh too, never reused from the saved drag flow.
+    act(() => result.current.setGoal('move the Files icon below Game'));
+    await act(() => result.current.submitInput());
+    expect(result.current.log.some((l) => /Reused saved workflow/.test(l.message))).toBe(false);
+    expect(result.current.log.filter((l) => l.source === 'Planner' && /arrangement: "Files icon" below "Game"/.test(l.message))).toHaveLength(3);
   });
 
   it('disarmed: a dry run sends nothing and runs no verification pass', async () => {
