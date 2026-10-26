@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AiCancelled, AiError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, chat, createAiSession, parseJsonReply, pingAi, toUnit } from './ai.js';
+import { AiCancelled, AiError, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, RAW_REPLY_MAX, chat, createAiSession, parseJsonReply, pingAi, toUnit } from './ai.js';
 import type { Frame } from './types.js';
 
 const cfg = { url: 'http://model.test/api/chat', model: 'test-model' };
