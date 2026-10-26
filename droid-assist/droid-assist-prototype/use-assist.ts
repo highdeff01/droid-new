@@ -8,6 +8,7 @@ import { checkMoved, sameElement, verifyArrangement, type Expectation, type Move
 import { AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, linkSignals, pingAi } from './ai.js';
 import type { AiReply, AiStatus, AskFn, AskRequest } from './ai.js';
 import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type StageId } from './loop-control.js';
+import { DEFAULT_AI_MAX_IN_FLIGHT, createAiQueue, type AiQueue, type AiQueueStats } from './ai-queue.js';
 import { confirmTarget, decidePopup, decideStep, describeScreen, judgeStep, reflectOn, reflectStep, verifyGoal, type GoalCheck, type PopupDecision, type StepDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
 import { DEFAULT_MAX_ITERATIONS, autoContinue, type ContinueStop, type RunReport } from './auto-continue.js';
 import { DEFAULT_CHANGE_CELLS, assessChange, changeText, detectChange, type ChangeAssessment, type ScreenChange } from './screen-change.js';
@@ -146,6 +147,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   aiModel: DEFAULT_AI_MODEL,
   autoContinue: false,
   maxIterations: DEFAULT_MAX_ITERATIONS,
+  aiMaxInFlight: DEFAULT_AI_MAX_IN_FLIGHT,
   stages: DEFAULT_STAGES,
   errorUrl: '',
   errorForwarding: false,
@@ -223,6 +225,8 @@ export function useAssist() {
   const [aiBusy, setAiBusy] = useState(false);
   /** Model calls in flight (planning, reflecting, deciding, verifying). */
   const [aiCalls, setAiCalls] = useState(0);
+  /** Shared AI queue: calls waiting for a slot and calls running against the endpoint. */
+  const [aiQueue, setAiQueue] = useState<AiQueueStats>({ queued: 0, inFlight: 0 });
   /** An auto-continue loop is running. */
   const [continuing, setContinuing] = useState(false);
   /** Per-step Qwen thinking timeline, newest first: thought, reflection and verdict of every AI call. */
@@ -267,6 +271,9 @@ export function useAssist() {
   const aiCtrlRef = useRef(new AbortController());
   /** Loop control: one controller per stage, so unchecking a stage cancels only its in-flight calls. */
   const stageCtrlsRef = useRef(createStageControllers());
+  /** Shared model-call queue: executor/grounding first, pipeline next, agents last; at most aiMaxInFlight running. */
+  const [aiQueueApi] = useState(() => createAiQueue(settings.aiMaxInFlight, setAiQueue));
+  const aiQueueRef = useRef<AiQueue>(aiQueueApi);
   const aiStatusRef = useRef(aiStatus);
   const logRef = useRef(log);
   const goalRef = useRef(goal);
@@ -350,6 +357,7 @@ export function useAssist() {
 
   // Persistence: settings, log and cards.
   useEffect(() => saveSettings(settings), [settings]);
+  useEffect(() => aiQueueRef.current.setLimit(settings.aiMaxInFlight), [settings.aiMaxInFlight]);
   useEffect(() => saveLog(log), [log]);
   useEffect(() => savePatterns(patterns), [patterns]);
   useEffect(() => saveFamiliar(familiar), [familiar]);
@@ -436,12 +444,15 @@ export function useAssist() {
    */
   const askAi = useCallback(async (req: AskRequest, stage: StageId): Promise<AiReply> => {
     if (!settingsRef.current.stages[stage]) throw new AiCancelled(stageOff(stage));
-    const { aiUrl, aiModel } = settingsRef.current;
     const context = req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
-    const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage));
+    const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage), req.signal);
     setAiCalls((n) => n + 1);
     try {
-      const reply = await aiSessionRef.current.ask({ url: aiUrl, model: aiModel }, { ...req, context, signal });
+      const reply = await aiQueueRef.current.run(stage, () => {
+        const { aiUrl, aiModel } = settingsRef.current;
+        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel }, { ...req, context, signal });
+      }, signal);
+      const { aiModel } = settingsRef.current;
       if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${aiModel}` });
       return reply;
     } catch (error) {
@@ -666,7 +677,10 @@ export function useAssist() {
   const toggleStage = (id: StageId, on: boolean) => {
     settingsRef.current = { ...settingsRef.current, stages: { ...settingsRef.current.stages, [id]: on } };
     setSettings((s) => ({ ...s, stages: { ...s.stages, [id]: on } }));
-    if (!on) stageCtrlsRef.current.cancel(id);
+    if (!on) {
+      aiQueueRef.current.drain(id);
+      stageCtrlsRef.current.cancel(id);
+    }
     addLog('Loop control', toggleMessage(id, on), on ? 'ok' : 'warn');
   };
 
@@ -2356,7 +2370,7 @@ export function useAssist() {
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     watcher, acceptProposal, dismissProposal, testProposal,
-    bus, knownElements, forwardElement, subReport, subRunning, testRoutes,
+    bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDrag, onStageType, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
