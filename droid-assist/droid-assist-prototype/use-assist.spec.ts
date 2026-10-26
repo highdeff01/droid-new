@@ -266,6 +266,18 @@ describe('useAssist rearrangement on the demo desktop', () => {
     expect(result.current.steps[0].status).toBe('failed');
     expect(result.current.log.some((l) => l.source === 'Verify' && /^FAIL "Files icon"/.test(l.message) && l.tone === 'error')).toBe(true);
     expect(result.current.log.some((l) => /Arrangement NOT confirmed: 0\/1/.test(l.message))).toBe(true);
+    expect(result.current.log.some((l) => /Flow saved/.test(l.message))).toBe(false);
+    expect(result.current.cards).toHaveLength(0);
+  });
+
+  it('a second /arrange plans fresh with its relations instead of reusing a saved flow', async () => {
+    stubAi(plan(0.55), replan(0, 0));
+    const result = await arrange(true);
+    expect(result.current.cards).toHaveLength(1);
+    act(() => result.current.setGoal('/arrange move the Files icon below Game'));
+    await act(() => result.current.submitInput());
+    expect(result.current.log.some((l) => /Reused saved workflow/.test(l.message))).toBe(false);
+    expect(result.current.log.filter((l) => l.source === 'Planner' && /arrangement: "Files icon" below "Game"/.test(l.message))).toHaveLength(2);
   });
 
   it('disarmed: a dry run sends nothing and runs no verification pass', async () => {

@@ -665,7 +665,8 @@ export function useAssist() {
    * frame and the requested arrangement checked, one PASS/FAIL log entry (before/after screenshots)
    * and one 'check' entry per element.
    */
-  const verifyRearrangement = async (moved: MovedElement[], label: string) => {
+  /** The verification pass; resolves whether every element passed. */
+  const verifyRearrangement = async (moved: MovedElement[], label: string): Promise<boolean> => {
     const final = await finalFrame(label);
     const verdicts = verifyArrangement(moved, expectRef.current, final, (name) => mapAt(name));
     for (const v of verdicts) {
@@ -674,7 +675,9 @@ export function useAssist() {
       note({ step: `Verify "${v.element}"`, kind: 'check', text, thinking: null });
     }
     const passed = verdicts.filter((v) => v.pass).length;
-    addLog('Verify', `Arrangement ${passed === verdicts.length ? 'confirmed' : 'NOT confirmed'}: ${passed}/${verdicts.length} element(s) pass`, passed === verdicts.length ? 'ok' : 'error');
+    const confirmed = passed === verdicts.length;
+    addLog('Verify', `Arrangement ${confirmed ? 'confirmed' : 'NOT confirmed'}: ${passed}/${verdicts.length} element(s) pass`, confirmed ? 'ok' : 'error');
+    return confirmed;
   };
 
   /**
@@ -1014,7 +1017,7 @@ export function useAssist() {
       if (out.moved) moved.push(out.moved);
       if (out.halt) break;
     }
-    if (moved.length) await verifyRearrangement(moved, label);
+    const arranged = moved.length ? await verifyRearrangement(moved, label) : true;
     setActiveIndex(null);
     setReplaying(false);
     const picks = shots.map((f, i) => ({ f, score: i === 0 ? 1 : frameDistance(shots[i - 1].data, f.data) })).sort((a, b) => b.score - a.score).slice(0, 3).map((p) => p.f);
@@ -1024,7 +1027,9 @@ export function useAssist() {
       const what = dryRun ? 'verified on screen (not dispatched)' : 'executed';
       addLog('Goal reviewer', ok === total ? `All ${total} steps ${what}${goal ? ` for "${goal}"` : ''}` : `${ok}/${total} ${what} — re-plan the failed steps or let AI help clear blockers`, ok === total ? 'ok' : 'warn');
     }
-    await learnFromRun(stepsRef.current, { dryRun, stopped: abortRef.current });
+    // An arrangement the verification pass did not confirm is a failed run: never saved as a reusable flow.
+    const runSteps = arranged ? stepsRef.current : stepsRef.current.map((s) => (s.action === 'drag' ? { ...s, status: 'failed' as const } : s));
+    await learnFromRun(runSteps, { dryRun, stopped: abortRef.current });
   };
 
   const stop = () => {
@@ -1046,7 +1051,7 @@ export function useAssist() {
    * AI plan: reuse a similar saved flow (drift-corrected), otherwise the model plans from the
    * goal + live frame with the learned patterns relevant to this goal as context.
    */
-  const autoPlan = async (text = goal): Promise<boolean> => {
+  const autoPlan = async (text = goal, reuse = true): Promise<boolean> => {
     if (!text.trim()) {
       addLog('Planner', 'Type a goal first', 'warn');
       return false;
@@ -1054,7 +1059,7 @@ export function useAssist() {
     let planned = false;
     await withAi(async () => {
       try {
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askAi, [], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, reuse ? cardsRef.current : [], framesRef.current[0] ?? null, askAi, [], patternsRef.current), planSummary);
         const { steps: next, source: why, expect } = plan;
         stepsRef.current = next;
         expectRef.current = expect;
@@ -1070,9 +1075,13 @@ export function useAssist() {
     return planned;
   };
 
-  /** "/arrange <goal>": the model plans the rearrangement as drags, which replay at once with the move checks and the final verification pass. */
+  /**
+   * "/arrange <goal>": the model plans the rearrangement as drags with the arrangement it asks for
+   * (never a reused flow, which carries no relations to verify), then it replays at once with the
+   * move checks and the final verification pass.
+   */
   const arrange = async (text: string) => {
-    if (await autoPlan(text)) await replay();
+    if (await autoPlan(text, false)) await replay();
   };
 
   /** "/move <target>": the model plans one move onto the target, which runs at once through the grounded pipeline. */
