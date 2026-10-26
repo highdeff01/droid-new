@@ -2,7 +2,7 @@ import { Routes, Route } from 'react-router-dom';
 import { useAssist } from './use-assist.js';
 import { Stage } from './stage.js';
 import { Hud } from './hud.js';
-import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, ComparisonGallery, LibraryPanel, LogPanel, PatternsPanel, QwenThinkingPanel, WorkflowPanel } from './panels.js';
+import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, WatcherPanel, WorkflowPanel } from './panels.js';
 import { AgentBusPanel, SubagentReportPanel } from './bus-panels.js';
 import styles from './droid-assist.module.css';
 
@@ -27,8 +27,13 @@ function AssistScreen() {
           <Stage engine={engine} />
           <div className={styles.side}>
             <WorkflowPanel engine={engine} />
+            <RulerPanel engine={engine} />
+            <ElementsPanel engine={engine} />
+            <ElementMapPanel engine={engine} />
+            <LearnedCoordsPanel engine={engine} />
             <LibraryPanel engine={engine} />
             <PatternsPanel engine={engine} />
+            <WatcherPanel engine={engine} />
           </div>
         </div>
         <div className={styles.bottom}>
@@ -36,9 +41,12 @@ function AssistScreen() {
           <AiHelpPanel engine={engine} />
           <QwenThinkingPanel engine={engine} />
           <AgentsPanel engine={engine} />
+          <LoopControlPanel engine={engine} />
+          <SettingsPanel engine={engine} />
           <AgentBusPanel engine={engine} />
           <SubagentReportPanel engine={engine} />
           <LogPanel engine={engine} />
+          <ErrorsPanel engine={engine} />
           <ActionHistoryPanel engine={engine} />
         </div>
       </main>
