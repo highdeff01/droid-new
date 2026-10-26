@@ -34,6 +34,15 @@ describe('nativeActions', () => {
     expect(humanMoveMs(() => 1)).toBe(550);
   });
 
+  it('carries a recorded step\'s measured human pause instead of the fixed default', () => {
+    expect(nativeActions(step({ delayMs: 730 }), 100, 100)).toEqual([expect.objectContaining({ action: 'click', delayMs: 730 })]);
+    expect(nativeActions(step({ action: 'key', text: 'ctrl+shift+t', delayMs: 0 }), 100, 100)).toEqual([expect.objectContaining({ action: 'hotkey', keyPayload: 'ctrl+shift+t', delayMs: 0 })]);
+    const [first, wait] = nativeActions(step({ action: 'open_app', text: 'notepad', delayMs: 1500 }), 100, 100);
+    expect(first.delayMs).toBe(1500);
+    expect(wait).toMatchObject({ action: 'wait', delayMs: 600 });
+    expect(nativeActions(step({ action: 'measure', delayMs: 50 }), 100, 100)).toEqual([]);
+  });
+
   it('maps double_click and scroll to real pointer input at the target', () => {
     expect(nativeActions(step({ action: 'double_click' }), 1000, 500)).toEqual([expect.objectContaining({ action: 'double_click', x: 500, y: 125 })]);
     expect(nativeActions(step({ action: 'scroll', text: 'up' }), 1000, 500)[0]).toMatchObject({ action: 'scroll', x: 500, y: 125, keyPayload: 'up' });
@@ -71,6 +80,16 @@ describe('sendToBridge', () => {
     expect(url).toBe('http://pc:3000/api/replay');
     expect(JSON.parse(init.body).steps[0]).toMatchObject({ action: 'click', x: 100, y: 100 });
     expect(fetchSpy.mock.calls[2][0]).toBe('http://pc:3000/api/replay/r1');
+  });
+
+  it('sends each recorded step\'s measured delay in the bridge payload', async () => {
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(json(202, { success: true, run: { id: 'r3', status: 'running' } }))
+      .mockResolvedValueOnce(json(200, { success: true, run: { id: 'r3', status: 'completed' } }));
+    vi.stubGlobal('fetch', fetchSpy);
+    const r = await sendToBridge('http://pc', step({ action: 'scroll', text: 'up', delayMs: 1240 }), 100, 100, { pollMs: 1 });
+    expect(r.ok).toBe(true);
+    expect(JSON.parse(fetchSpy.mock.calls[0][1].body).steps).toEqual([expect.objectContaining({ action: 'scroll', keyPayload: 'up', delayMs: 1240 })]);
   });
 
   it('reports the PC failure when the run failed', async () => {

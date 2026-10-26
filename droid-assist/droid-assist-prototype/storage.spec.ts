@@ -99,6 +99,13 @@ describe('cards', () => {
     expect(loaded.steps[0]).toMatchObject({ action: 'move', target: 'Files icon' });
   });
 
+  it('keeps a recorded step\'s measured delay so a saved flow replays with human timing', async () => {
+    saveCards([{ ...card, steps: [{ id: 'k', name: 'Press ctrl+s', action: 'key', text: 'ctrl+s', x: 0.5, y: 0.5, delayMs: 840, status: 'done' }, { id: 'bad', name: 'x', action: 'click', x: 0.1, y: 0.1, delayMs: -5, status: 'done' }] }]);
+    const [loaded] = await loadCards();
+    expect(loaded.steps[0]).toMatchObject({ action: 'key', text: 'ctrl+s', delayMs: 840 });
+    expect(loaded.steps[1].delayMs).toBeUndefined();
+  });
+
   it('stores a step screenshot without its pixel buffer', () => {
     const refFrame = { id: 7, time: 1, url: 'data:image/jpeg;base64,AAAA', data: { width: 320 } as unknown as ImageData, srcW: 960, srcH: 540, source: 'demo' as const };
     saveCards([{ ...card, steps: [{ ...card.steps[0], refFrame }] }]);

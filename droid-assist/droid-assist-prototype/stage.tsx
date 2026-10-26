@@ -233,7 +233,19 @@ export function Stage({ engine }: { engine: AssistEngine }) {
       <div
         ref={wrapRef}
         className={`${styles.stage} ${recording ? styles.recording : ''}`}
+        tabIndex={0}
+        aria-label="Screen stage"
+        onKeyDown={(e) => {
+          if (!recording) return;
+          e.preventDefault();
+          engine.onStageKey(e);
+        }}
+        onWheel={(e) => {
+          const p = norm(e);
+          engine.onStageScroll(p.x, p.y, e.deltaY);
+        }}
         onMouseDown={(e) => {
+          e.currentTarget.focus();
           pressRef.current = norm(e);
           if (!mapMode) return;
           dragRef.current = norm(e);

@@ -148,6 +148,8 @@ export interface WorkflowStep {
   endY?: number;
   /** The on-screen thing a drag drops onto ("Archive folder"). */
   endTarget?: string;
+  /** Recorded human pause before this step (ms since the previous recorded input); replay sends it to the bridge. */
+  delayMs?: number;
   /** Screenshot captured when the step was recorded — the template for drift matching. */
   refFrame?: Frame;
   status: StepStatus;

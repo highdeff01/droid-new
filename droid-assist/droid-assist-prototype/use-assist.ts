@@ -19,7 +19,8 @@ import { boxedFrames, patchAt, zoomBox, zoomFrame } from './grounding.js';
 import { parseCommand } from './commands.js';
 import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
-import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction, type ActionBudget } from './safety.js';
+import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
+import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './recorder.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveSettings, saveWatcher } from './storage.js';
 import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, reorderSteps, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
 import { forgetElement, listElements, rememberElement, type ScreenElement } from './elements.js';
@@ -272,6 +273,8 @@ export function useAssist() {
   const goalRef = useRef(goal);
   const replayingRef = useRef(false);
   const recordingRef = useRef(false);
+  /** Time of the last recorded input (or of recording start), for each recorded step's measured human pause. */
+  const lastInputRef = useRef(0);
   const cardsRef = useRef<SavedCard[]>([]);
   const patternsRef = useRef<LearnedPattern[]>(patterns);
   /** Re-plan loop guard for autoPlan, the plan in flight, and step status changes made by execution. */
@@ -1619,6 +1622,17 @@ export function useAssist() {
 
   useEffect(() => () => captureRef.current?.stop(), []);
 
+  /**
+   * Appends a recorded step carrying its measured human pause (ms since the previous recorded
+   * input, or since recording started), so replay reproduces the original timing.
+   */
+  const appendRecorded = useCallback((step: WorkflowStep) => {
+    const now = Date.now();
+    stepsRef.current = [...stepsRef.current, { ...step, delayMs: stepDelay(now, lastInputRef.current) }];
+    lastInputRef.current = now;
+    setSteps(stepsRef.current);
+  }, []);
+
   /** Stage pointer input: trail while recording. */
   const onStageMove = useCallback((x: number, y: number) => {
     pointerRef.current = [...pointerRef.current, { x, y, t: Date.now() }].slice(-POINTER_LIMIT);
@@ -1635,13 +1649,35 @@ export function useAssist() {
     if (recordingRef.current) {
       const n = stepsRef.current.length + 1;
       setTrail((t) => [...t, { x, y, t: Date.now(), click: !hover }]);
-      const step: WorkflowStep = { id: uid('step'), name: hover ? `Move ${n}` : `Click ${n}`, action: hover ? 'move' : 'click', x, y, refFrame: frame, status: 'pending' };
-      setSteps((s) => [...s, step]);
+      appendRecorded({ id: uid('step'), name: hover ? `Move ${n}` : `Click ${n}`, action: hover ? 'move' : 'click', x, y, refFrame: frame, status: 'pending' });
       addLog('Recorder', `Captured ${hover ? 'mouse move' : 'click'} at (${pct(x)}, ${pct(y)}) with screenshot`, 'info');
       return;
     }
     if (sourceRef.current === 'demo' && !hover) addLog('You', demoClick(x, y));
   };
+
+  /** Recorded key press (with modifiers) on the focused stage: becomes a key step. The abort hotkey is never recorded. */
+  const onStageKey = useCallback((e: HotkeyEvent) => {
+    if (!recordingRef.current || matchesHotkey(e, settingsRef.current.abortHotkey)) return;
+    const combo = keyCombo(e);
+    if (!combo) return;
+    appendRecorded(keyStep(uid('step'), combo));
+    addLog('Recorder', `Captured key ${combo}`, 'info');
+  }, [addLog, appendRecorded]);
+
+  /** Recorded mouse wheel at (x, y): one scroll step per gesture (same-direction wheel events in a burst merge). */
+  const onStageScroll = useCallback((x: number, y: number, deltaY: number) => {
+    if (!recordingRef.current || deltaY === 0) return;
+    const now = Date.now();
+    const last = stepsRef.current[stepsRef.current.length - 1];
+    if (continuesScroll(last, deltaY, now - lastInputRef.current)) {
+      lastInputRef.current = now;
+      return;
+    }
+    const step = scrollStep(uid('step'), x, y, deltaY);
+    appendRecorded({ ...step, refFrame: framesRef.current[0] });
+    addLog('Recorder', `Captured scroll ${step.text} at (${pct(x)}, ${pct(y)})`, 'info');
+  }, [addLog, appendRecorded]);
 
   /**
    * Stage drag (mousedown → move → mouseup): while recording becomes a drag step with both
@@ -1652,20 +1688,19 @@ export function useAssist() {
       const n = stepsRef.current.length + 1;
       setTrail((t) => [...t, { x: from.x, y: from.y, t: Date.now(), click: true }, { x: to.x, y: to.y, t: Date.now(), click: true }].slice(-1500));
       const step: WorkflowStep = { id: uid('step'), name: `Drag ${n}`, action: 'drag', x: from.x, y: from.y, endX: to.x, endY: to.y, refFrame: framesRef.current[0], status: 'pending' };
-      stepsRef.current = [...stepsRef.current, step];
-      setSteps(stepsRef.current);
+      appendRecorded(step);
       addLog('Recorder', `Captured drag from (${pct(from.x)}, ${pct(from.y)}) to (${pct(to.x)}, ${pct(to.y)}) with screenshot`, 'info');
       return;
     }
     if (sourceRef.current === 'demo') addLog('You', applyDemoDrag(from, to).message);
-  }, [addLog, applyDemoDrag]);
+  }, [addLog, applyDemoDrag, appendRecorded]);
 
   /** Live-write while recording: typed text becomes a "type" step. */
   const onStageType = useCallback((text: string) => {
     if (!recordingRef.current || !text) return;
-    setSteps((s) => [...s, { id: uid('step'), name: `Type "${text}"`, action: 'type', x: 0.5, y: 0.5, text, status: 'pending' }]);
+    appendRecorded({ id: uid('step'), name: `Type "${text}"`, action: 'type', x: 0.5, y: 0.5, text, status: 'pending' });
     addLog('Recorder', `Captured typing: "${text}"`);
-  }, [addLog]);
+  }, [addLog, appendRecorded]);
 
   const toggleRecording = () => {
     if (recording) {
@@ -1675,9 +1710,10 @@ export function useAssist() {
       return;
     }
     setTrail([]);
+    lastInputRef.current = Date.now();
     setRecording(true);
     markPlan();
-    addLog('Recorder', 'Live recording started — click to record clicks, Alt+click to record a mouse move');
+    addLog('Recorder', 'Live recording started — click to record clicks, Alt+click to record a mouse move, keys and the mouse wheel on the focused stage record key and scroll steps');
   };
 
   /** AI help during replay: the model rules on the popup covering `step` and closes it as a grounded click. */
@@ -2359,7 +2395,7 @@ export function useAssist() {
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes,
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
-    onStageMove, onStageClick, onStageDrag, onStageType, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
+    onStageMove, onStageClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
   };

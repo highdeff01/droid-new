@@ -71,10 +71,15 @@ const NATIVE: Record<StepAction, (step: WorkflowStep, p: Point, end: Point | nul
   measure: () => [],
 };
 
-/** The native actions a step performs at its (drift-corrected) position on a srcW×srcH screen. */
+/**
+ * The native actions a step performs at its (drift-corrected) position on a srcW×srcH screen.
+ * A recorded step's measured human pause (`delayMs`) replaces the default delay of its first action.
+ */
 export function nativeActions(step: WorkflowStep, srcW: number, srcH: number): NativeAction[] {
   const p = { x: toPx(step.correctedX ?? step.x, srcW), y: toPx(step.correctedY ?? step.y, srcH) };
-  return NATIVE[step.action](step, p, dragEnd(step, srcW, srcH));
+  const [first, ...rest] = NATIVE[step.action](step, p, dragEnd(step, srcW, srcH));
+  if (!first) return [];
+  return typeof step.delayMs === 'number' ? [{ ...first, delayMs: step.delayMs }, ...rest] : [first, ...rest];
 }
 
 const base = (url: string) => url.replace(/\/$/, '');

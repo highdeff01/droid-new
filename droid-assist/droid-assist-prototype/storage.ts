@@ -128,6 +128,7 @@ function parseStep(v: unknown): StoredStep | null {
     ...(typeof v.target === 'string' && v.target ? { target: v.target } : {}),
     ...(isNum(v.endX) && isNum(v.endY) ? { endX: v.endX, endY: v.endY } : {}),
     ...(typeof v.endTarget === 'string' && v.endTarget ? { endTarget: v.endTarget } : {}),
+    ...(isNum(v.delayMs) && v.delayMs >= 0 ? { delayMs: v.delayMs } : {}),
     ...(isStoredFrame(v.refFrame) ? { refFrame: v.refFrame } : {}),
   };
 }
