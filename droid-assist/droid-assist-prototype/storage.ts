@@ -1,11 +1,14 @@
-import type { AssistSettings, LogEntry, MonitorMode, SavedCard, StepAction, WorkflowStep } from './types.js';
-import { MONITOR_MODES, STEP_ACTIONS } from './types.js';
+import type { AssistSettings, LearnedPattern, LogEntry, SavedCard, StepAction, WorkflowStep } from './types.js';
 import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns' } as const;
+
+/** Most learned patterns kept. */
+export const PATTERN_LIMIT = 100;
+const PATTERN_KINDS: ReadonlyArray<LearnedPattern['kind']> = ['avoid', 'add'];
 
 const ACTIONS: readonly StepAction[] = STEP_ACTIONS;
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
@@ -97,7 +100,7 @@ function parseStep(v: unknown): StoredStep | null {
     y: v.y,
     status: 'pending',
     ...(typeof v.text === 'string' ? { text: v.text } : {}),
-    ...(typeof v.target === 'string' && v.target ? { target: v.target } : {}),
+    ...(isNum(v.correctedX) && isNum(v.correctedY) ? { correctedX: v.correctedX, correctedY: v.correctedY } : {}),
     ...(isStoredFrame(v.refFrame) ? { refFrame: v.refFrame } : {}),
   };
 }
@@ -130,4 +133,20 @@ export function saveCards(cards: SavedCard[]) {
     steps: c.steps.map(({ refFrame, ...s }) => (keepFrames && refFrame ? { ...s, refFrame: toStoredFrame(refFrame) } : s)),
   }));
   if (!writeJson(KEYS.cards, toStored(true))) writeJson(KEYS.cards, toStored(false));
+}
+
+function isPattern(v: unknown): v is LearnedPattern {
+  return isObject(v) && typeof v.id === 'string' && PATTERN_KINDS.includes(v.kind as LearnedPattern['kind'])
+    && typeof v.pattern === 'string' && !!v.pattern.trim() && typeof v.context === 'string' && isNum(v.time);
+}
+
+/** The stored learned patterns (newest first, at most PATTERN_LIMIT); invalid entries are dropped. */
+export function loadPatterns(): LearnedPattern[] {
+  const stored = readJson(KEYS.patterns);
+  return Array.isArray(stored) ? stored.filter(isPattern).slice(0, PATTERN_LIMIT) : [];
+}
+
+/** Persists the newest PATTERN_LIMIT learned patterns. */
+export function savePatterns(patterns: LearnedPattern[]) {
+  writeJson(KEYS.patterns, patterns.slice(0, PATTERN_LIMIT));
 }

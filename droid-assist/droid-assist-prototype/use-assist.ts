@@ -1,22 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ActionRecord, Annotation, AssistSettings, Frame, InputAction, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
-import { monitorInterval } from './types.js';
+import type { ActionRecord, Annotation, AssistSettings, Frame, InputAction, LearnedPattern, LogEntry, SavedCard, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
 import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
-import { calculate, generateCard, planFromGoal, relocateTarget, uid } from './planner.js';
-import { DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, pingAi } from './ai.js';
-import type { AiStatus, AskRequest } from './ai.js';
-import { confirmTarget, decidePopup, decideStep, describeScreen } from './assist-ai.js';
-import { BRIDGE_REQUIRED, captureDesktop, checkBridge } from './bridge.js';
-import { runStep, type Grounding, type StepOutcome } from './run-step.js';
-import { zoomFrame } from './grounding.js';
-import { parseCommand } from './commands.js';
+import { calculate, generateCard, planFromGoal, uid } from './planner.js';
+import { BRIDGE_REQUIRED, captureDesktop, sendToBridge } from './bridge.js';
 import { createScreenCapture, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction, type ActionBudget } from './safety.js';
-import { LOG_LIMIT, loadCards, loadLog, loadSettings, saveCards, saveLog, saveSettings } from './storage.js';
-import { decodeFrames, toStoredFrame } from './frame-codec.js';
-import { loadStoredFrames, putStoredFrame } from './frame-store.js';
-import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
+import { LOG_LIMIT, loadCards, loadLog, loadPatterns, loadSettings, saveCards, saveLog, savePatterns, saveSettings } from './storage.js';
+import { decodeFrames } from './frame-codec.js';
+import { loadStoredFrames } from './frame-store.js';
+import { DEFAULT_AI_MODEL, DEFAULT_AI_URL, createAiSession, type AiStatus, type AskRequest } from './ai.js';
+import { describeScreen } from './assist-ai.js';
+import { clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
+import { failurePattern, flowCard, learnPatterns, mergePatterns, runVerdict, upsertCard } from './flow-memory.js';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -67,8 +65,10 @@ const LOCAL_ACTIONS: Partial<Record<StepAction, (step: WorkflowStep) => Promise<
   },
 };
 
-/** One step's real result plus whether the run must stop (abort, disarm, budget). */
-type Performed = StepOutcome & { halt?: boolean };
+type ExecResult = { ok: boolean; message: string; halt?: boolean };
+
+/** What a dry run reports for a step it verified but did not send. */
+const DRY_RUN_RESULT: ExecResult = { ok: true, message: 'verified (dry run — not dispatched)' };
 
 const refused = (step: WorkflowStep, message: string): Performed => ({ ok: false, executed: false, halt: true, message, target: { x: step.x, y: step.y } });
 
@@ -120,6 +120,12 @@ export function useAssist() {
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [log, setLog] = useState<LogEntry[]>(loadLog);
   const [cards, setCards] = useState<SavedCard[]>([]);
+  /** Lessons learned from finished runs, fed into future planning. */
+  const [patterns, setPatterns] = useState<LearnedPattern[]>(loadPatterns);
+  const [history, setHistory] = useState<ActionRecord[]>(() => loadHistory());
+  const [aiStatus, setAiStatus] = useState<AiStatus>({ state: 'checking', detail: 'Connecting to the AI endpoint…' });
+  const [aiAnswer, setAiAnswer] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
   const [progress, setProgress] = useState({ done: 0, manual: 0 });
@@ -161,12 +167,15 @@ export function useAssist() {
   const armedRef = useRef(armed);
   const abortedRef = useRef(aborted);
   const autoBudgetRef = useRef<ActionBudget>(createBudget(settings.actionBudget));
+  /** The popup a disarmed Auto Act already reported, so the dry run is logged once. */
+  const dryPopupRef = useRef<string | null>(null);
   const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage));
   const aiStatusRef = useRef(aiStatus);
-  const logRef = useRef(log);
-  const goalRef = useRef(goal);
-  const replayingRef = useRef(false);
-  const recordingRef = useRef(false);
+  const logRef = useRef<LogEntry[]>([]);
+  /** The goal as of the last render, for the capture-loop closures. */
+  const goalRef = useRef('');
+  const cardsRef = useRef<SavedCard[]>([]);
+  const patternsRef = useRef<LearnedPattern[]>(patterns);
 
   settingsRef.current = settings;
   sourceRef.current = source;
@@ -176,14 +185,13 @@ export function useAssist() {
   stepsRef.current = steps;
   armedRef.current = armed;
   abortedRef.current = aborted;
-  replayingRef.current = replaying;
-  recordingRef.current = recording;
+  cardsRef.current = cards;
+  patternsRef.current = patterns;
 
-  const intervalMs = monitorInterval(settings.monitorMode, settings.captureMs);
-
-  // Persistence: settings, log and cards.
+  // Persistence: settings, log, cards and learned patterns to localStorage.
   useEffect(() => saveSettings(settings), [settings]);
   useEffect(() => saveLog(log), [log]);
+  useEffect(() => savePatterns(patterns), [patterns]);
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
   }, [cards]);
@@ -212,27 +220,15 @@ export function useAssist() {
     setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone }, ...l].slice(0, LOG_LIMIT));
   }, []);
 
-  // AI endpoint health: at startup and whenever the endpoint or model changes.
-  useEffect(() => {
-    let live = true;
-    setAiStatus({ state: 'checking', detail: `Connecting to ${settings.aiUrl}…` });
-    void pingAi({ url: settings.aiUrl, model: settings.aiModel }).then((status) => {
-      if (!live) return;
-      setAiStatus(status);
-      addLog('AI', status.detail, status.state === 'online' ? 'ok' : 'error');
-    });
-    return () => {
-      live = false;
-    };
-  }, [settings.aiUrl, settings.aiModel, addLog]);
-
-  /** Every model call, with session history and the recent log; a failure marks the AI offline and is rethrown. */
+  /**
+   * Every model call: the quantumclaw endpoint, the session history and the recent log as
+   * context. A failure marks the AI offline and is rethrown — never replaced by a canned answer.
+   */
   const askAi = useCallback(async (req: AskRequest): Promise<string> => {
-    const { aiUrl, aiModel } = settingsRef.current;
-    const context = req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
+    const recent = logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
     try {
-      const reply = await aiSessionRef.current.ask({ url: aiUrl, model: aiModel }, { ...req, context });
-      if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${aiModel}` });
+      const reply = await aiSessionRef.current.ask({ url: DEFAULT_AI_URL, model: DEFAULT_AI_MODEL }, { ...req, context: [...(req.context ?? []), ...recent] });
+      if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${DEFAULT_AI_MODEL}` });
       return reply;
     } catch (error) {
       setAiStatus({ state: 'offline', detail: `AI unavailable — ${errorText(error)}` });
@@ -240,14 +236,49 @@ export function useAssist() {
     }
   }, []);
 
-  const aiOnline = () => aiStatusRef.current.state === 'online';
+  /** Adds learned patterns (newest first, deduplicated) to the persisted store. */
+  const addPatterns = useCallback((added: LearnedPattern[]) => {
+    patternsRef.current = mergePatterns(patternsRef.current, added);
+    setPatterns(patternsRef.current);
+  }, []);
 
-  /** The AI grounding pass run-step uses: confirm on a zoomed crop, re-ask the planner once. */
-  const grounding: Grounding = {
-    confirm: async (live, step, p) => confirmTarget(askAi, await zoomFrame(live, p), step),
-    relocate: (live, step, feedback) => relocateTarget(askAi, live, step, feedback),
+  const deletePattern = (id: string) => {
+    patternsRef.current = patternsRef.current.filter((p) => p.id !== id);
+    setPatterns(patternsRef.current);
   };
 
+  /** Saves a successful run as a card, replacing a near-duplicate of the same flow. */
+  const autoSaveFlow = useCallback((runGoal: string, runSteps: WorkflowStep[]) => {
+    const { cards: next, replaced } = upsertCard(cardsRef.current, flowCard(runGoal, runSteps));
+    cardsRef.current = next;
+    setCards(next);
+    addLog('Library', `Flow saved: "${next[0].name}" (${runSteps.length} step(s), drift-corrected)${replaced ? ` — updated the existing "${replaced.name}"` : ''}`, 'ok');
+  }, [addLog]);
+
+  /**
+   * Run memory: a successful real run is saved as a flow; a failed one records its failure
+   * pattern instead. Either way the model is asked for lessons; its failure never blocks saving.
+   */
+  const learnFromRun = useCallback(async (runSteps: WorkflowStep[], opts: { dryRun: boolean; stopped: boolean }) => {
+    const verdict = runVerdict(runSteps, opts);
+    if (verdict === 'ignored') return;
+    const runGoal = goalRef.current.trim();
+    if (verdict === 'success') autoSaveFlow(runGoal, runSteps);
+    else {
+      const lesson = failurePattern(runGoal, runSteps);
+      addPatterns([lesson]);
+      addLog('Patterns', `Run failed — not saved as a flow. Learned: avoid ${lesson.pattern}`, 'warn');
+    }
+    try {
+      const learned = await learnPatterns(askAi, runGoal, runSteps, verdict);
+      if (learned.length) addPatterns(learned);
+      addLog('Patterns', learned.length ? `AI learned ${learned.length} pattern(s): ${learned.map((p) => `${p.kind} "${p.pattern}"`).join('; ')}` : 'AI found no new pattern in this run', 'info');
+    } catch (error) {
+      addLog('Patterns', `AI unavailable — no patterns learned from this run: ${errorText(error)}`, 'warn');
+    }
+  }, [addLog, addPatterns, askAi, autoSaveFlow]);
+
+  /** Emergency stop: latches ABORTED, sets abortRef and switches Auto Act off. */
   const triggerAbort = useCallback((reason: string) => {
     abortRef.current = true;
     abortedRef.current = true;
@@ -509,42 +540,84 @@ export function useAssist() {
 
   // Demo monitor at the mode's interval.
   useEffect(() => {
-    if (source !== 'demo') return undefined;
-    const id = setInterval(() => {
-      const c = demoCanvasRef.current;
-      if (c && !pausedWhileHidden()) processRef.current(toFrame(c, DEMO_W, DEMO_H, ++frameId.current, 'demo'));
-    }, intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs, source]);
+    captureRef.current?.setInterval(settings.captureMs);
+  }, [settings.captureMs]);
 
-  // Bridge monitor: a real desktop screenshot at the mode's interval; failures are logged, never faked.
-  useEffect(() => {
-    if (source !== 'bridge') return undefined;
-    const id = setInterval(() => {
-      if (pollBusyRef.current || pausedWhileHidden()) return;
-      pollBusyRef.current = true;
-      desktopFrame(settingsRef.current.bridgeUrl, ++frameId.current)
-        .then((f) => processRef.current(f))
-        .catch((error) => {
-          if (Date.now() - lastPollErrorAt.current < 5000) return;
-          lastPollErrorAt.current = Date.now();
-          addLog('Monitor', `Desktop screenshot failed: ${errorText(error)}`, 'error');
-        })
-        .finally(() => {
-          pollBusyRef.current = false;
-        });
-    }, intervalMs);
-    return () => clearInterval(id);
-  }, [addLog, intervalMs, source]);
-
-  // The running screen capture follows the monitor mode's interval live.
-  useEffect(() => {
-    captureRef.current?.setInterval(intervalMs);
-  }, [intervalMs]);
-
+  // Stop capturing when the engine unmounts.
   useEffect(() => () => captureRef.current?.stop(), []);
 
-  /** Stage pointer input: trail while recording. */
+  /**
+   * Auto-Actor: when "Auto act" is on, closes popups and runs the next step once it matches the screen.
+   * Disarmed, it runs as a dry run: steps are verified against the screen but nothing is dispatched.
+   * Halted entirely while ABORTED.
+   */
+  const autoAct = async (frame: Frame) => {
+    if (!settingsRef.current.autoAct || abortedRef.current || autoBusyRef.current || replayingRef.current || recordingRef.current) return;
+    autoBusyRef.current = true;
+    try {
+      const dry = !armedRef.current;
+      const popup = popupRef.current;
+      const closable = popup?.actX !== undefined && popup.actY !== undefined && agentsRef.current('popup') ? popup : null;
+      if (closable && dry && dryPopupRef.current !== closable.id) {
+        dryPopupRef.current = closable.id;
+        addLog('Auto-Actor', 'Dry run (real input disarmed): would close the popup — not dispatched', 'warn');
+      }
+      if (closable?.actX !== undefined && closable.actY !== undefined && !dry) {
+        if (Date.now() - lastStepAt.current < 1500) return;
+        const r = await execute({ id: 'auto', name: 'Close popup', action: 'click', x: closable.actX, y: closable.actY, status: 'pending' }, frame, autoBudgetRef.current);
+        addLog('Auto-Actor', r.message, r.ok ? 'ok' : 'warn');
+        lastStepAt.current = Date.now();
+        haltAutoAct(r);
+        return;
+      }
+      const idx = stepsRef.current.findIndex((s) => s.status === 'pending');
+      const next = stepsRef.current[idx];
+      if (!next || Date.now() - lastStepAt.current < 1500) return;
+      // Steps without a screenshot (calc, search, typing) have nothing to match: run them as-is.
+      const r = next.refFrame ? matchTemplate(next.refFrame.data, frame.data, next.x, next.y) : { regionDistance: 0, matchDistance: 0, dx: 0, dy: 0 };
+      if (syncLevelFor(r) === 'red') return;
+      const corrected = { ...next, correctedX: next.x + r.dx, correctedY: next.y + r.dy };
+      const out = dry ? DRY_RUN_RESULT : await execute(corrected, frame, autoBudgetRef.current);
+      lastStepAt.current = Date.now();
+      haltAutoAct(out);
+      if (out.halt) {
+        addLog('Auto-Actor', `${next.name}: ${out.message} — Auto Act stopped`, 'error');
+        return;
+      }
+      updateStep(idx, { status: out.ok ? 'done' : 'failed', correctedX: corrected.correctedX, correctedY: corrected.correctedY, drift: r.matchDistance });
+      addLog(dry ? 'Auto-Actor (dry run)' : 'Auto-Actor', `${next.name}: ${out.message}`, out.ok ? 'ok' : 'error');
+      if (out.ok && !dry && agentsRef.current('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
+      if (dry) autoDryRef.current = true;
+      if (!stepsRef.current.some((s) => s.status === 'pending')) {
+        const runSteps = stepsRef.current;
+        const dryRun = autoDryRef.current;
+        autoDryRef.current = false;
+        void learnFromRun(runSteps, { dryRun, stopped: false });
+      }
+    } finally {
+      lastStepAt.current = Date.now();
+      autoBusyRef.current = false;
+    }
+  };
+
+  const replayingRef = useRef(false);
+  const recordingRef = useRef(false);
+  /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
+  const autoDryRef = useRef(false);
+  replayingRef.current = replaying;
+  recordingRef.current = recording;
+
+  /** Stops the Auto Act run when the safety gate refused (abort or budget). */
+  const haltAutoAct = (out: ExecResult) => {
+    if (out.halt) setSettings((s) => ({ ...s, autoAct: false }));
+  };
+
+  const updateStep = (index: number, patch: Partial<WorkflowStep>) => {
+    setSteps((s) => s.map((st, i) => (i === index ? { ...st, ...patch } : st)));
+    stepsRef.current = stepsRef.current.map((st, i) => (i === index ? { ...st, ...patch } : st));
+  };
+
+  /** Stage pointer input: trail while recording, and clicks become steps (and act on the demo). */
   const onStageMove = useCallback((x: number, y: number) => {
     if (recordingRef.current) setTrail((t) => [...t, { x, y, t: Date.now() }].slice(-1500));
   }, []);
@@ -582,50 +655,6 @@ export function useAssist() {
     addLog('Recorder', 'Live recording started — click to record clicks, Alt+click to record a mouse move');
   };
 
-  /** AI help during replay: the model rules on the popup covering `step` and closes it as a grounded click. */
-  const clearCoveringPopup = async (popup: Annotation, step: WorkflowStep, budget: ActionBudget, dryRun: boolean): Promise<boolean> => {
-    const live = framesRef.current[0];
-    if (!live) return false;
-    try {
-      const d = await decidePopup(askAi, live, popup);
-      if (!d.close) {
-        addLog('AI help', `AI says the region over "${step.name}" is not a popup to close: ${d.reason}`, 'warn');
-        return false;
-      }
-      const close: WorkflowStep = { id: uid('close'), name: 'Close popup', action: 'click', target: 'close (X) button of the popup', x: d.x, y: d.y, status: 'pending' };
-      const out = await perform(close, 'AI help', budget, dryRun);
-      addLog('AI help', `Popup covers "${step.name}" — ${out.message}`, out.ok ? 'ok' : 'error');
-      await sleep(settingsRef.current.captureMs * 2 + 200);
-      return out.ok;
-    } catch (error) {
-      addLog('AI help', `AI unavailable — popup not cleared: ${errorText(error)}`, 'error');
-      return false;
-    }
-  };
-
-  /** True when the flagged popup covers the step's point. */
-  const coveredBy = (popup: Annotation | null, s: WorkflowStep): popup is Annotation =>
-    !!popup && s.x >= popup.x && s.x <= popup.x + popup.w && s.y >= popup.y && s.y <= popup.y + popup.h;
-
-  /** Runs one replay step, clearing a covering popup first when AI help is on. */
-  const replayStep = async (i: number, budget: ActionBudget, dryRun: boolean, label: string): Promise<Performed> => {
-    const step = stepsRef.current[i];
-    setActiveIndex(i);
-    updateStep(i, { status: 'running' });
-    setCursor({ x: step.x, y: step.y });
-    const popup = popupRef.current;
-    if (coveredBy(popup, step) && !(settingsRef.current.aiHelp && aiOnline() && (await clearCoveringPopup(popup, step, budget, dryRun)))) {
-      const out: Performed = { ok: false, executed: false, message: `"${step.name}" is covered by a popup${settingsRef.current.aiHelp ? ' the AI did not clear' : ' (enable AI help to clear it)'} — not executed`, target: { x: step.x, y: step.y } };
-      updateStep(i, { status: 'drift' });
-      addLog(label, out.message, 'error');
-      return out;
-    }
-    const out = await perform(step, label, budget, dryRun);
-    applyOutcome(i, out, dryRun);
-    addLog(label, `${step.name}: ${out.message}`, out.ok ? 'ok' : 'error');
-    return out;
-  };
-
   /**
    * Replay: every step through the grounded pipeline (template drift check, AI target check,
    * dispatch, re-verify). Self-test, or any run while disarmed, verifies but sends nothing.
@@ -634,6 +663,13 @@ export function useAssist() {
     const label = selfTest ? 'Self-test' : 'Replay';
     if (!stepsRef.current.length) {
       addLog(label, 'Nothing to replay — record or plan a workflow first', 'warn');
+      return;
+    }
+    const missing = source === 'screen' && !settingsRef.current.bridgeUrl ? BRIDGE_REQUIRED : null;
+    if (missing) {
+      setSteps((s) => s.map((st) => ({ ...st, status: 'failed' as const })));
+      stepsRef.current = stepsRef.current.map((st) => ({ ...st, status: 'failed' as const }));
+      addLog(label, `${missing} — no step was executed`, 'error');
       return;
     }
     if (abortedRef.current) {
@@ -655,13 +691,81 @@ export function useAssist() {
     stepsRef.current = stepsRef.current.map((st) => ({ ...st, status: 'pending' as const }));
     setSteps(stepsRef.current);
     const shots: Frame[] = [];
+    let pos = cursor ?? { x: 0.5, y: 0.9 };
     let ok = 0;
-    addLog(label, dryRun ? `Verifying ${stepsRef.current.length} step(s) on the live screen — no input is sent` : `Performing ${stepsRef.current.length} step(s) as real input`);
-    for (let i = 0; i < stepsRef.current.length && !abortRef.current; i++) {
-      const out = await replayStep(i, budget, dryRun, label);
-      if (out.ok) ok++;
-      if (out.shot) shots.push(out.shot);
-      if (out.halt) break;
+    addLog(label, dryRun ? `Self-test of ${stepsRef.current.length} step(s): verifying on the live desktop, no input is sent` : `Replaying ${stepsRef.current.length} step(s) as real input on the PC`);
+    for (let i = 0; i < stepsRef.current.length; i++) {
+      if (abortRef.current) break;
+      const step = stepsRef.current[i];
+      setActiveIndex(i);
+      updateStep(i, { status: 'running' });
+      let target = { x: step.x, y: step.y };
+      let best = 0;
+      const n = Math.max(1, settingsRef.current.checkpoints);
+      for (let k = 1; k <= n; k++) {
+        if (abortRef.current) break;
+        await sleep(Math.max(120, settingsRef.current.captureMs / 2));
+        const live = framesRef.current[0];
+        if (step.refFrame && live) {
+          const r = matchTemplate(step.refFrame.data, live.data, step.x, step.y);
+          best = r.matchDistance;
+          if (syncLevelFor(r) !== 'red') target = { x: step.x + r.dx, y: step.y + r.dy };
+          setSync({ level: syncLevelFor(r), detail: `Checkpoint ${k}/${n} of "${step.name}": best ${r.matchDistance.toFixed(3)}` });
+        }
+        pos = { x: pos.x + (target.x - pos.x) * (k / n), y: pos.y + (target.y - pos.y) * (k / n) };
+        setCursor(pos);
+        setTrail((t) => [...t, { x: pos.x, y: pos.y, t: Date.now() }].slice(-1500));
+      }
+      // AI help: a popup covering the target is closed first.
+      const popup = popupRef.current;
+      const covered = popup && target.x >= popup.x && target.x <= popup.x + popup.w && target.y >= popup.y && target.y <= popup.y + popup.h;
+      if (covered && settingsRef.current.aiHelp && popup?.actX !== undefined) {
+        addLog('AI help', `Popup covers "${step.name}" — closing it first`, 'warn');
+        setCursor({ x: popup.actX, y: popup.actY! });
+        if (!dryRun) {
+          const r = await execute({ id: 'ai', name: 'Close popup', action: 'click', x: popup.actX, y: popup.actY!, status: 'pending' }, framesRef.current[0], budget);
+          addLog('AI help', r.message, r.ok ? 'ok' : 'warn');
+          if (r.halt) {
+            updateStep(i, { status: 'failed', drift: best });
+            break;
+          }
+        } else {
+          popupRef.current = null;
+          setAnnotations((a) => a.filter((x) => x.tone !== 'error'));
+        }
+        await sleep(settingsRef.current.captureMs * 2 + 200);
+        const live = framesRef.current[0];
+        if (step.refFrame && live) {
+          const r = matchTemplate(step.refFrame.data, live.data, step.x, step.y);
+          if (syncLevelFor(r) !== 'red') target = { x: step.x + r.dx, y: step.y + r.dy };
+        }
+        setCursor(target);
+      } else if (covered) {
+        updateStep(i, { status: 'drift', drift: best });
+        addLog('Replay', `"${step.name}" is covered by a popup (enable AI help to clear it)`, 'error');
+        continue;
+      }
+      const drifted = Math.hypot(target.x - step.x, target.y - step.y) > 0.005;
+      const corrected = { ...step, correctedX: target.x, correctedY: target.y };
+      const out = dryRun ? DRY_RUN_RESULT : await execute(corrected, framesRef.current[0], budget);
+      if (out.halt) {
+        updateStep(i, { status: 'failed', drift: best });
+        addLog('Replay', `${step.name}: ${out.message} — replay stopped`, 'error');
+        break;
+      }
+      setTrail((t) => [...t, { x: target.x, y: target.y, t: Date.now(), click: true }]);
+      await sleep(settingsRef.current.captureMs + 100);
+      const after = framesRef.current[0];
+      if (out.ok) {
+        ok++;
+        if (after) shots.push(after);
+        // Replace the step screenshot with the fresh one so the next run matches today's UI.
+        updateStep(i, { status: drifted ? 'drift' : 'done', correctedX: target.x, correctedY: target.y, drift: best, x: target.x, y: target.y, refFrame: !dryRun && drifted && framesRef.current[1] ? framesRef.current[1] : step.refFrame });
+        if (!dryRun && agentsRef.current('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
+      } else {
+        updateStep(i, { status: 'failed', drift: best });
+      }
+      addLog(dryRun ? 'Self-test' : 'Replay', `${step.name}: ${out.message}${drifted ? ` (drift corrected ${((target.x - step.x) * 100).toFixed(1)}%, ${((target.y - step.y) * 100).toFixed(1)}%)` : ''}`, out.ok ? 'ok' : 'error');
     }
     setActiveIndex(null);
     setReplaying(false);
@@ -672,6 +776,7 @@ export function useAssist() {
       const what = dryRun ? 'verified on screen (not dispatched)' : 'executed';
       addLog('Goal reviewer', ok === total ? `All ${total} steps ${what}${goal ? ` for "${goal}"` : ''}` : `${ok}/${total} ${what} — re-plan the failed steps or let AI help clear blockers`, ok === total ? 'ok' : 'warn');
     }
+    await learnFromRun(stepsRef.current, { dryRun, stopped: abortRef.current });
   };
 
   const stop = () => {
@@ -679,54 +784,27 @@ export function useAssist() {
     addLog('Replay', 'Stopped by user', 'warn');
   };
 
-  /** Runs `fn` with the AI busy flag set. */
-  const withAi = async (fn: () => Promise<void>) => {
-    setAiBusy(true);
-    try {
-      await fn();
-    } finally {
-      setAiBusy(false);
-    }
-  };
-
-  /** AI plan: reuse a similar saved workflow, otherwise the model plans from the goal + live frame. */
-  const autoPlan = async (text = goal) => {
-    if (!text.trim()) {
+  /**
+   * AI plan: reuse a similar saved flow (drift-corrected), otherwise the model plans from the
+   * goal + live frame with the learned patterns relevant to this goal as context.
+   */
+  const autoPlan = async () => {
+    if (!goal.trim()) {
       addLog('Planner', 'Type a goal first', 'warn');
       return;
     }
-    await withAi(async () => {
-      try {
-        const { steps: planned, source: why } = await planFromGoal(text, cards, framesRef.current[0] ?? null, askAi);
-        setSteps(planned);
-        setDraftCard(generateCard(planned, text));
-        addLog('Planner', `${why}: ${planned.length} step(s) — ${planned.map((s) => `${s.action} "${s.target ?? s.name}"`).join(' → ')}${armedRef.current ? '' : ' (real input disarmed: replay / Auto Act run it as a dry run)'}`, 'ok');
-      } catch (error) {
-        addLog('Planner', `AI plan failed — no steps created: ${errorText(error)}`, 'error');
-      }
-    });
-  };
-
-  /** "/move <target>": the model plans one move onto the target, which runs at once through the grounded pipeline. */
-  const moveTo = async (name: string) => {
-    await withAi(async () => {
-      try {
-        const { steps: planned } = await planFromGoal(`Move the mouse cursor onto the ${name} (hover, do not click)`, [], framesRef.current[0] ?? null, askAi);
-        const move = planned.find((s) => s.action === 'move');
-        if (!move) {
-          addLog('/move', `AI did not plan a mouse move to "${name}" (it proposed ${planned.map((s) => s.action).join(', ')}) — nothing executed`, 'error');
-          return;
-        }
-        const step = { ...move, target: move.target ?? name };
-        stepsRef.current = [step];
-        setSteps(stepsRef.current);
-        const out = await perform(step, '/move', createBudget(settingsRef.current.actionBudget), !armedRef.current);
-        applyOutcome(0, out, !armedRef.current);
-        addLog('/move', `${step.name}: ${out.message}`, out.ok ? 'ok' : 'error');
-      } catch (error) {
-        addLog('/move', `AI unavailable — nothing executed: ${errorText(error)}`, 'error');
-      }
-    });
+    setAiBusy(true);
+    try {
+      const { steps: planned, source: why } = await planFromGoal(goal, cardsRef.current, framesRef.current[0] ?? null, askAi, [], patternsRef.current);
+      setSteps(planned);
+      stepsRef.current = planned;
+      setDraftCard(generateCard(planned, goal));
+      addLog('Planner', `${why}: ${planned.length} step(s)${armedRef.current ? '' : ' — real input disarmed, Auto Act / replay will run it as a dry run'}`, 'ok');
+    } catch (error) {
+      addLog('Planner', `AI unavailable — no plan: ${errorText(error)}`, 'error');
+    } finally {
+      setAiBusy(false);
+    }
   };
 
   /** AI help: the model answers a question about the live screen and points out what it means. */
@@ -864,10 +942,10 @@ export function useAssist() {
   return {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
-    agents, setAgents, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
-    armed, aborted, aiStatus, aiAnswer, aiBusy,
-    onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, submitInput, askScreen, explainScreen,
-    shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
+    agents, setAgents, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, armed, aborted, aiStatus, aiAnswer, aiBusy,
+    history, exportHistory, resetHistory, patterns, deletePattern,
+    onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, askScreen,
+    shareScreen, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort,
   };
 }
 

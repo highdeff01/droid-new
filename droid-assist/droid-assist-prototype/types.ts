@@ -56,6 +56,19 @@ export interface ActionRecord {
   message: string;
 }
 
+/** A lesson learned from a run: something to avoid or to add when planning similar goals. */
+export interface LearnedPattern {
+  id: string;
+  kind: 'avoid' | 'add';
+  pattern: string;
+  /** The goal or situation the lesson applies to. */
+  context: string;
+  time: number;
+}
+
+/** Actions a workflow step can perform. */
+export type StepAction = 'click' | 'double_click' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media';
+
 /** Status of a step during replay. */
 export type StepStatus = 'pending' | 'running' | 'done' | 'drift' | 'failed';
 

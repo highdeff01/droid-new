@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PLAN_SYSTEM, planFromGoal, relocateTarget } from './planner.js';
+import { findSimilar, planFromGoal, relevantPatterns, similarity } from './planner.js';
 import { decidePopup, decideStep, describeScreen } from './assist-ai.js';
 import { AiError } from './ai.js';
 import type { AskFn } from './ai.js';
-import type { Frame, SavedCard, WorkflowStep } from './types.js';
+import type { Frame, LearnedPattern, SavedCard, WorkflowStep } from './types.js';
 
 const frame = { id: 1, url: 'data:image/jpeg;base64,QUJD' } as Frame;
 const askReturning = (text: string) => vi.fn<AskFn>(async () => text);
@@ -122,5 +122,52 @@ describe('describeScreen', () => {
   });
   it('rejects a reply without an answer', async () => {
     await expect(describeScreen(askReturning('{"items":[]}'), frame, 'q', '')).rejects.toBeInstanceOf(AiError);
+  });
+});
+
+describe('flow reuse', () => {
+  const flow: SavedCard = {
+    id: 'f1', name: 'Close ad and play video', description: '2 step(s): click', savedAt: 1,
+    steps: [
+      { id: 'a', name: 'Close ad', action: 'click', x: 0.8, y: 0.2, correctedX: 0.83, correctedY: 0.22, status: 'pending' },
+      { id: 'b', name: 'Press play', action: 'click', x: 0.5, y: 0.5, status: 'pending' },
+    ],
+  };
+
+  it('matches reworded goals: synonyms, plurals and verb forms', () => {
+    expect(similarity('dismiss the ads and play the videos', 'Close ad and play video')).toBe(1);
+    expect(similarity('launching calculators', 'open calculator')).toBe(1);
+    expect(findSimilar('dismiss popup then play videos', [flow])).toBe(flow);
+    expect(findSimilar('book a flight', [flow])).toBeNull();
+  });
+
+  it('reuses a saved flow from its drift-corrected coordinates without asking the model', async () => {
+    const ask = askReturning('{}');
+    const plan = await planFromGoal('dismiss the ads and play the video', [flow], frame, ask);
+    expect(ask).not.toHaveBeenCalled();
+    expect(plan.source).toMatch(/Reused saved workflow "Close ad and play video".*corrected/);
+    expect(plan.steps.map((s) => [s.x, s.y, s.correctedX, s.status])).toEqual([[0.83, 0.22, undefined, 'pending'], [0.5, 0.5, undefined, 'pending']]);
+    expect(plan.steps[0].id).not.toBe('a');
+  });
+});
+
+describe('learned patterns in planning', () => {
+  const pat = (pattern: string, context: string, kind: LearnedPattern['kind'] = 'avoid'): LearnedPattern => ({ id: pattern, kind, pattern, context, time: 0 });
+  const notepad = pat('close popup first', 'open notepad');
+  const unrelated = pat('scroll the spreadsheet', 'edit budget sheet', 'add');
+  const general = pat('wait for the window to load', '', 'add');
+
+  it('selects patterns related to the goal plus general ones', () => {
+    expect(relevantPatterns('launch Notepad', [notepad, unrelated, general])).toEqual([notepad, general]);
+  });
+
+  it('sends relevant patterns as planning context to the model', async () => {
+    const ask = askReturning('{"steps":[{"name":"Open","action":"open_app","x":0.1,"y":0.1,"text":"notepad"}]}');
+    const plan = await planFromGoal('open notepad', [], frame, ask, ['[You] hi'], [notepad, unrelated]);
+    const context = ask.mock.calls[0][0].context!;
+    expect(context.some((l) => l.includes('close popup first') && l.includes('avoid'))).toBe(true);
+    expect(context.some((l) => l.includes('spreadsheet'))).toBe(false);
+    expect(context).toContain('[You] hi');
+    expect(plan.source).toMatch(/1 learned pattern/);
   });
 });
