@@ -257,6 +257,79 @@ describe('useAssist drag recorder and guardrails', () => {
   });
 });
 
+describe('useAssist key and scroll recorder with human timing', () => {
+  const press = (key: string, mods: Partial<{ ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }> = {}) => ({ key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...mods });
+
+  afterEach(() => vi.useRealTimers());
+
+  async function recordKeys() {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(100_000);
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.toggleRecording());
+    vi.setSystemTime(100_450);
+    act(() => result.current.onStageKey(press('S', { ctrlKey: true, shiftKey: true })));
+    vi.setSystemTime(100_500);
+    act(() => result.current.onStageKey(press('Shift', { shiftKey: true })));
+    vi.setSystemTime(101_700);
+    act(() => result.current.onStageScroll(0.3, 0.6, -100));
+    vi.setSystemTime(101_800);
+    act(() => result.current.onStageScroll(0.3, 0.6, -40));
+    vi.setSystemTime(102_000);
+    act(() => result.current.onStageClick(0.5, 0.62));
+    act(() => result.current.toggleRecording());
+    return result;
+  }
+
+  it('records key presses with modifiers and wheel gestures as key and scroll steps with measured delays', async () => {
+    const result = await recordKeys();
+    expect(result.current.steps.map((s) => [s.action, s.text, s.delayMs])).toEqual([
+      ['key', 'ctrl+shift+s', 450],
+      ['scroll', 'up', 1250],
+      ['click', undefined, 200],
+    ]);
+    expect(result.current.steps[1]).toMatchObject({ x: 0.3, y: 0.6 });
+    expect(result.current.log.some((l) => l.source === 'Recorder' && /Captured key ctrl\+shift\+s/.test(l.message))).toBe(true);
+  });
+
+  it('never records the abort hotkey or input outside a recording', async () => {
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.onStageKey(press('a')));
+    act(() => result.current.onStageScroll(0.5, 0.5, 100));
+    act(() => result.current.toggleRecording());
+    act(() => result.current.onStageKey(press('Escape', { shiftKey: true })));
+    expect(result.current.steps).toHaveLength(0);
+  });
+
+  it('replays recorded key steps as real input only while armed', async () => {
+    const result = await recordKeys();
+    act(() => result.current.toggleArmed());
+    await act(() => result.current.replay());
+    expect(result.current.history.map((h) => h.action)).toEqual(expect.arrayContaining(['key', 'scroll']));
+    expect(result.current.steps[0]).toMatchObject({ status: 'done', delayMs: 450 });
+  });
+
+  it('a disarmed replay of a key step sends nothing', async () => {
+    const result = await recordKeys();
+    await act(() => result.current.replay());
+    expect(result.current.history).toHaveLength(0);
+  });
+
+  it('a key step is refused when aborted or when loop control has the executor unchecked', async () => {
+    const result = await recordKeys();
+    act(() => result.current.toggleArmed());
+    act(() => result.current.toggleStage('executor', false));
+    await act(() => result.current.replay());
+    expect(result.current.history).toHaveLength(0);
+    act(() => result.current.toggleStage('executor', true));
+    act(() => result.current.triggerAbort('test'));
+    await act(() => result.current.replay());
+    expect(result.current.history).toHaveLength(0);
+  });
+});
+
 describe('useAssist rearrangement on the demo desktop', () => {
   // Files starts at (0.055, 0.105), Game at (0.055, 0.425): "below Game" means the same column, lower.
   const plan = (endY: number, endX = 0.12) => ({ content: JSON.stringify({ steps: [{ name: 'Move Files', action: 'drag', target: 'Files icon', x: 0.055, y: 0.105, endTarget: 'free spot below Game', endX, endY }], expect: [{ element: 'Files icon', relation: 'below', anchor: 'Game' }] }), thinking: 'Files goes under Game.' });
