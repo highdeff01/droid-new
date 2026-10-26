@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import type { Measurement } from './ruler.js';
 import { classifyGesture, type StagePoint } from './gesture.js';
-import { COLUMN_LABELS, GRID_COLS, GRID_ROWS, ROW_LABELS, cellLabel } from './grid.js';
+import { drawGrid } from './grid-overlay.js';
 import { MAP_COLS, MAP_ROWS, dragBox } from './element-map-studio.js';
 import styles from './droid-assist.module.css';
 
@@ -34,33 +34,6 @@ function drawRuler(ctx: CanvasRenderingContext2D, m: Measurement, w: number, h: 
     const last = m.points[m.points.length - 1];
     ctx.font = 'bold 12px sans-serif';
     ctx.fillText(`Σ ${m.totalPx}px · ${m.totalPct}% of screen`, Math.min(last.x * w + 8, w - 200), Math.min(last.y * h + 22, h - 6));
-  }
-}
-
-/** The labeled spatial grid: light gridlines, column numbers / row letters on the edges, cell labels. */
-function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number) {
-  const cw = w / GRID_COLS;
-  const ch = h / GRID_ROWS;
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let c = 1; c < GRID_COLS; c++) {
-    ctx.moveTo(c * cw, 0);
-    ctx.lineTo(c * cw, h);
-  }
-  for (let r = 1; r < GRID_ROWS; r++) {
-    ctx.moveTo(0, r * ch);
-    ctx.lineTo(w, r * ch);
-  }
-  ctx.stroke();
-  ctx.font = 'bold 10px sans-serif';
-  ctx.fillStyle = 'rgba(250, 204, 21, 0.9)';
-  COLUMN_LABELS.forEach((label, c) => ctx.fillText(label, c * cw + cw / 2 - 4, 10));
-  ROW_LABELS.forEach((label, r) => ctx.fillText(label, 2, r * ch + ch / 2 + 4));
-  ctx.font = '9px sans-serif';
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-  for (let r = 0; r < GRID_ROWS; r++) {
-    for (let c = 0; c < GRID_COLS; c++) ctx.fillText(cellLabel({ row: r, col: c }), c * cw + 3, (r + 1) * ch - 3);
   }
 }
 
@@ -141,9 +114,9 @@ export function Stage({ engine }: { engine: AssistEngine }) {
       return;
     }
 
-    if (settings.showGrid) drawGrid(ctx, w, h);
+    if (settings.showGrid) drawGrid(ctx, w, h, { opacity: settings.gridOpacity, cellLabels: settings.gridLabels });
 
-    if (settings.showTrail && trail.length > 1) {
+    if (settings.showTrail) {
       for (let i = 1; i < trail.length; i++) {
         const a = trail[i - 1];
         const b = trail[i];
@@ -159,6 +132,14 @@ export function Stage({ engine }: { engine: AssistEngine }) {
         ctx.beginPath();
         ctx.arc(p.x * w, p.y * h, 5, 0, Math.PI * 2);
         ctx.fill();
+      });
+      trail.filter((p) => p.typed).forEach((p) => {
+        ctx.strokeStyle = 'rgba(244, 114, 182, 0.9)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(p.x * w - 9, p.y * h - 7, 18, 14);
+        ctx.fillStyle = 'rgba(244, 114, 182, 0.9)';
+        ctx.font = 'bold 9px sans-serif';
+        ctx.fillText('T', p.x * w - 3, p.y * h + 3);
       });
     }
 
