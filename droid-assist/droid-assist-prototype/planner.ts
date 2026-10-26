@@ -67,6 +67,7 @@ x and y are the target's center as fractions 0..1 of the screenshot width/height
 "move" only moves (hovers) the mouse cursor onto the target without clicking — use it for "move the mouse to X" / "hover over X", e.g. {"name":"Move to Files icon","action":"move","target":"Files icon","x":0.42,"y":0.97}.
 "click" clicks the target once, "double_click" double-clicks it (open a desktop icon or file), "scroll" scrolls over the target with "text" "up" or "down".
 "text" is the text to type, the key to press, the search query, the arithmetic expression or the scroll direction.
+"measure" sends no input: it measures on-screen distances; "text" lists the endpoints joined by " to " — element names from the element map, "x,y" coordinates or a screen edge ("left edge", "right edge", "top edge", "bottom edge"), e.g. {"name":"Files to Game","action":"measure","target":"Files icon","x":0.42,"y":0.97,"text":"Files icon to Game icon"}. The measured distances are returned to you in the log.
 Never substitute another action for the one the goal asks for; if the target is not visible, return {"steps":[]}.`;
 
 /** A plan the assistant proposes, with where it came from and the model's thinking (null when reused or absent). */

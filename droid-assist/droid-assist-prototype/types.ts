@@ -24,11 +24,11 @@ export interface TrailPoint {
   click?: boolean;
 }
 
-/** Actions a workflow step can perform. `move` hovers the cursor over its target without clicking. */
-export type StepAction = 'click' | 'double_click' | 'move' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media';
+/** Actions a workflow step can perform. `move` hovers the cursor over its target without clicking; `measure` only measures distances (no input). */
+export type StepAction = 'click' | 'double_click' | 'move' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media' | 'measure';
 
 /** Every step action, in the order the planner contract lists them. */
-export const STEP_ACTIONS: readonly StepAction[] = ['click', 'double_click', 'move', 'scroll', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media'];
+export const STEP_ACTIONS: readonly StepAction[] = ['click', 'double_click', 'move', 'scroll', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media', 'measure'];
 
 /** Step actions that point the mouse at an on-screen target, so their coordinates must be grounded. */
 export const POINTER_ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(['click', 'double_click', 'move', 'scroll']);

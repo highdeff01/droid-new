@@ -28,6 +28,22 @@ export interface StepDeps {
   log: (message: string, tone: LogEntry['tone']) => void;
   /** Present while the AI is online: every named pointer target is confirmed before input is sent. */
   grounding?: Grounding;
+  /**
+   * Gate for the one corrected retry of a missed step (abort, arm, budget); returns the refusal
+   * reason or null when the retry may be sent. No retry is attempted without it.
+   */
+  gateRetry?: () => string | null;
+}
+
+/** The corrected retry of a missed step: the measured miss offset and the point retried. */
+export interface RetryInfo {
+  /** Expected − actual hit point, in native pixels. */
+  dxPx: number;
+  dyPx: number;
+  /** Where the retry was aimed (normalized). */
+  at: { x: number; y: number };
+  ok: boolean;
+  message: string;
 }
 
 /** The real result of one step. `executed` is true only when the PC confirmed the input. */
@@ -40,6 +56,8 @@ export interface StepOutcome {
   /** Screenshot taken after the step was executed. */
   shot?: Frame;
   check?: Reverify;
+  /** The once-per-step corrected retry, when the first attempt missed. */
+  retry?: RetryInfo;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -146,5 +164,43 @@ export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepO
   const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y }, live.srcW, live.srcH);
   if (!sent.ok) return { ok: false, executed: false, message: sent.message, target, correction };
   const after = await verifyAfter(step, live, target, deps);
-  return { ok: true, executed: true, message: sent.message, target, correction, ...after };
+  const done: StepOutcome = { ok: true, executed: true, message: sent.message, target, correction, ...after };
+  return retryMissed(step, done, deps);
+}
+
+/**
+ * The measured miss of an executed pointer step that changed nothing: drift verification
+ * re-locates the recorded target on the post-action shot (the expected point); the actual
+ * hit is where the input was sent. Returns expected − actual (native px) and the corrected
+ * point actual + delta. Null when there is nothing to measure or correct.
+ */
+export function missOffset(step: WorkflowStep, out: StepOutcome): { dxPx: number; dyPx: number; at: Point } | null {
+  if (!POINTER_ACTIONS.has(step.action) || !step.refFrame || !out.executed || !out.shot || !out.check || out.check.changed) return null;
+  const shot = out.shot;
+  const expected = correctDrift(step.refFrame.data, shot.data, step.x, step.y, shot.srcW, shot.srcH);
+  if (expected.level === 'red') return null;
+  const dxPx = Math.round((expected.x - out.target.x) * shot.srcW);
+  const dyPx = Math.round((expected.y - out.target.y) * shot.srcH);
+  if (Math.hypot(dxPx, dyPx) < 1) return null;
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  return { dxPx, dyPx, at: { x: clamp(out.target.x + dxPx / shot.srcW), y: clamp(out.target.y + dyPx / shot.srcH) } };
+}
+
+/** At most one corrected retry per step, through the host's guardrail gate, with the measured delta applied. */
+async function retryMissed(step: WorkflowStep, out: StepOutcome, deps: StepDeps): Promise<StepOutcome> {
+  const miss = missOffset(step, out);
+  if (!miss || !deps.gateRetry) return out;
+  const delta = `(${miss.dxPx >= 0 ? '+' : ''}${miss.dxPx}, ${miss.dyPx >= 0 ? '+' : ''}${miss.dyPx})px`;
+  const refusal = deps.gateRetry();
+  if (refusal) {
+    deps.log(`"${step.name}": missed by ${delta} — corrected retry not sent: ${refusal}`, 'error');
+    return { ...out, retry: { dxPx: miss.dxPx, dyPx: miss.dyPx, at: miss.at, ok: false, message: refusal } };
+  }
+  const shot = out.shot!;
+  deps.log(`"${step.name}": missed by ${delta} — retrying once at ${px(miss.at, shot)}`, 'warn');
+  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: miss.at.x, correctedY: miss.at.y }, shot.srcW, shot.srcH);
+  const retry = { dxPx: miss.dxPx, dyPx: miss.dyPx, at: miss.at, ok: sent.ok, message: sent.message };
+  if (!sent.ok) return { ...out, retry };
+  const after = await verifyAfter(step, shot, miss.at, deps);
+  return { ...out, target: miss.at, message: `${out.message}; corrected retry by ${delta}: ${sent.message}`, ...after, retry };
 }

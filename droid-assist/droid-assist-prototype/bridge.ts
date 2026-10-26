@@ -52,6 +52,7 @@ const NATIVE: Record<StepAction, (step: WorkflowStep, p: Point) => NativeAction[
   calc: (s, p) => [keys(p, 'win'), at(p, 'wait', { delayMs: 600 }), write(p, 'calculator'), keys(p, 'enter'), at(p, 'wait', { delayMs: 1200 }), write(p, s.text ?? ''), keys(p, 'enter')],
   media: (_s, p) => [keys(p, 'playpause')],
   wait: (_s, p) => [at(p, 'wait', { delayMs: 800 })],
+  measure: () => [],
 };
 
 /** The native actions a step performs at its (drift-corrected) position on a srcW×srcH screen. */
