@@ -101,6 +101,44 @@ describe('useAssist elements and Test click', () => {
   });
 });
 
+describe('useAssist coordinate learner', () => {
+  it('is a loop-control stage, on by default, and lists learned targets only', () => {
+    localStorage.setItem('droid-assist.familiar', JSON.stringify([
+      { id: 'el1', name: 'Files icon', x: 0.42, y: 0.97, lastSeen: 1 },
+      { id: 'el2', name: 'Save button', x: 0.3, y: 0.4, lastSeen: 2, timesSeen: 3, frameId: 7 },
+    ]));
+    const { result } = renderHook(() => useAssist());
+    expect(result.current.settings.stages.coords).toBe(true);
+    expect(result.current.learned).toMatchObject([{ name: 'Save button', x: 0.3, y: 0.4, timesSeen: 3 }]);
+  });
+
+  it('learns an executed Test click target, merges it with the familiar memory and logs the move', async () => {
+    localStorage.setItem('droid-assist.familiar', JSON.stringify([{ id: 'el1', name: 'Play button', x: 0.1, y: 0.1, lastSeen: 1 }]));
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.toggleArmed());
+    // The demo PLAY button sits at (0.5, 0.62) at tick 0.
+    await act(() => result.current.testClick({ id: 'el1', name: 'Play button', x: 0.5, y: 0.62, source: 'familiar' }));
+    expect(result.current.familiar).toHaveLength(1);
+    expect(result.current.learned).toMatchObject([{ id: 'el1', name: 'Play button', x: 0.5, y: 0.62, timesSeen: 1 }]);
+    expect(result.current.log.filter((l) => l.source === 'Coordinate learner' && /moved/.test(l.message))).toHaveLength(1);
+  });
+
+  it('learns nothing from a click that hit nothing', async () => {
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.toggleArmed());
+    await act(() => result.current.testClick({ id: 'x', name: 'Files icon', x: 0.42, y: 0.97, source: 'familiar' }));
+    expect(result.current.learned).toEqual([]);
+  });
+
+  it('learns nothing while the stage is off', async () => {
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.toggleStage('coords', false));
+    act(() => result.current.toggleArmed());
+    await act(() => result.current.testClick({ id: 'x', name: 'Play button', x: 0.5, y: 0.62, source: 'familiar' }));
+    expect(result.current.learned).toEqual([]);
+  });
+});
+
 describe('useAssist Qwen thinking timeline', () => {
   const chatReply = (message: Record<string, unknown>) => vi.fn(async () => new Response(JSON.stringify({ message: { role: 'assistant', ...message } }), { status: 200 }));
 

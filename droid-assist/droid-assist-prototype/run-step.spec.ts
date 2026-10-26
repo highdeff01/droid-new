@@ -183,6 +183,39 @@ describe('runStep grounding', () => {
   });
 });
 
+describe('runStep learned', () => {
+  const live = frame(1, image(100, 60));
+  const target: WorkflowStep = { id: 'l', name: 'Click Save', action: 'click', target: 'Save button', x: 0.25, y: 0.5, status: 'pending' };
+  const seen = (visible: boolean, reason = visible ? 'icon is there' : 'empty desktop') => ({ visible, reason, thinking: null });
+  const grounding = (confirm: Grounding['confirm'], relocate: Grounding['relocate'] = vi.fn(async () => null)): Grounding => ({ confirm, relocate });
+  const sentStep = (fetchSpy: ReturnType<typeof vi.fn>) => JSON.parse(fetchSpy.mock.calls[0][1].body).steps[0];
+
+  it('dispatches the learned point without asking the AI grounding pass', async () => {
+    const fetchSpy = completedRun();
+    vi.stubGlobal('fetch', fetchSpy);
+    const confirm = vi.fn(async () => seen(true));
+    const relocate = vi.fn(async () => null);
+    const learned = vi.fn(() => ({ x: 0.5, y: 0.5 }));
+    const { d } = deps([live], { grounding: grounding(confirm, relocate), learned });
+    const out = await runStep(target, d);
+    expect(out).toMatchObject({ ok: true, executed: true });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(relocate).not.toHaveBeenCalled();
+    expect(sentStep(fetchSpy)).toMatchObject({ action: 'click', x: 960, y: 540 });
+  });
+
+  it('falls back to the AI grounding pass when the learner has no point', async () => {
+    const fetchSpy = completedRun();
+    vi.stubGlobal('fetch', fetchSpy);
+    const confirm = vi.fn(async () => seen(true));
+    const learned = vi.fn(() => null);
+    const { d } = deps([live], { grounding: grounding(confirm), learned });
+    const out = await runStep(target, d);
+    expect(out).toMatchObject({ ok: true, executed: true });
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('runStep corrected retry', () => {
   const live = frame(1, image(100, 60));
   // The AI re-plans the target 60px right / 36px down of where the template really is: the click misses.

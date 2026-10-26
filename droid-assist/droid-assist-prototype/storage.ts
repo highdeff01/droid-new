@@ -2,9 +2,9 @@ import type { AssistSettings, FamiliarElement, Habit, HabitAnchor, HabitLesson, 
 import { STEP_ACTIONS } from './types.js';
 import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 import { sanitizeBudget } from './safety.js';
-import { OUTBOX_LIMIT, isErrorReport, type ErrorReport } from './error-forwarding.js';
-import { pruneHabits } from './habits.js';
 import { FAMILIAR_LIMIT } from './elements.js';
+import { pruneHabits } from './habits.js';
+import { OUTBOX_LIMIT, isErrorReport, type ErrorReport } from './error-forwarding.js';
 import { EMPTY_WATCHER, NOTE_KINDS, NOTE_LIMIT, PROPOSAL_KINDS, PROPOSAL_LIMIT, PROPOSAL_STATUSES, TEST_LIMIT } from './watcher.js';
 import type { NoteKind, ProposalKind, ProposalStatus, WatchNote, WatchProposal, WatchTest, WatcherState } from './watcher.js';
 import { sanitizeStages } from './loop-control.js';
@@ -188,6 +188,26 @@ export function savePatterns(patterns: LearnedPattern[]) {
   writeJson(KEYS.patterns, patterns.slice(0, PATTERN_LIMIT));
 }
 
+function isFamiliar(v: unknown): v is FamiliarElement {
+  return isObject(v) && typeof v.id === 'string' && typeof v.name === 'string' && !!v.name.trim()
+    && isNum(v.x) && isNum(v.y) && v.x >= 0 && v.x <= 1 && v.y >= 0 && v.y <= 1 && isNum(v.lastSeen)
+    && (v.patch === undefined || (typeof v.patch === 'string' && v.patch.startsWith('data:image/')))
+    && (v.timesSeen === undefined || isNum(v.timesSeen)) && (v.frameId === undefined || isNum(v.frameId))
+    && (v.anchor === undefined || (Array.isArray(v.anchor) && v.anchor.every(isNum)));
+}
+
+/** The stored familiar elements (newest first, at most FAMILIAR_LIMIT); invalid entries are dropped. */
+export function loadFamiliar(): FamiliarElement[] {
+  const stored = readJson(KEYS.familiar);
+  return Array.isArray(stored) ? stored.filter(isFamiliar).slice(0, FAMILIAR_LIMIT) : [];
+}
+
+/** Persists the familiar elements; when they do not fit, retries without their screenshot patches. */
+export function saveFamiliar(elements: FamiliarElement[]) {
+  const kept = elements.slice(0, FAMILIAR_LIMIT);
+  if (!writeJson(KEYS.familiar, kept)) writeJson(KEYS.familiar, kept.map(({ patch: _patch, ...e }) => e));
+}
+
 function isLesson(v: unknown): v is HabitLesson {
   return isObject(v) && PATTERN_KINDS.includes(v.kind as LearnedPattern['kind']) && typeof v.text === 'string' && !!v.text.trim() && isNum(v.time);
 }
@@ -223,24 +243,6 @@ export function loadHabits(now = Date.now()): Habit[] {
 /** Persists the habits after pruning stale and low-value ones. */
 export function saveHabits(habits: Habit[], now = Date.now()) {
   writeJson(KEYS.habits, pruneHabits(habits, now));
-}
-
-function isFamiliar(v: unknown): v is FamiliarElement {
-  return isObject(v) && typeof v.id === 'string' && typeof v.name === 'string' && !!v.name.trim()
-    && isNum(v.x) && isNum(v.y) && v.x >= 0 && v.x <= 1 && v.y >= 0 && v.y <= 1 && isNum(v.lastSeen)
-    && (v.patch === undefined || (typeof v.patch === 'string' && v.patch.startsWith('data:image/')));
-}
-
-/** The stored familiar elements (newest first, at most FAMILIAR_LIMIT); invalid entries are dropped. */
-export function loadFamiliar(): FamiliarElement[] {
-  const stored = readJson(KEYS.familiar);
-  return Array.isArray(stored) ? stored.filter(isFamiliar).slice(0, FAMILIAR_LIMIT) : [];
-}
-
-/** Persists the familiar elements; when they do not fit, retries without their screenshot patches. */
-export function saveFamiliar(elements: FamiliarElement[]) {
-  const kept = elements.slice(0, FAMILIAR_LIMIT);
-  if (!writeJson(KEYS.familiar, kept)) writeJson(KEYS.familiar, kept.map(({ patch: _patch, ...e }) => e));
 }
 
 const isStr = (v: unknown): v is string => typeof v === 'string' && !!v.trim();

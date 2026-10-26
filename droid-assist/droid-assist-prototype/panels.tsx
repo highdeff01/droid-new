@@ -4,7 +4,7 @@ import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import { AiStatusBadge } from './hud.js';
-import type { Habit, LogEntry } from './types.js';
+import type { FamiliarElement, Habit, LogEntry } from './types.js';
 import { isReliable, successRate } from './habits.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
 import type { DeliveryStatus, EndpointStatus, ForwardedError } from './error-forwarding.js';
@@ -459,6 +459,34 @@ export function ElementsPanel({ engine }: { engine: AssistEngine }) {
       {!elements.length && <p className={styles.muted}>Verified or used targets are remembered here with their grid cell and coordinates.</p>}
       <ul className={styles.log}>
         {elements.map((el) => <ElementItem key={el.id} engine={engine} el={el} />)}
+      </ul>
+    </section>
+  );
+}
+
+/** One learned target: grid cell, current coordinates, times seen, last update and Test click. */
+function LearnedItem({ engine, el }: { engine: AssistEngine; el: FamiliarElement }) {
+  return (
+    <li data-tone="info">
+      <b>{el.name}</b> · {gridRef(el)} = ({(el.x * 100).toFixed(1)}%, {(el.y * 100).toFixed(1)}%)
+      <small> · seen {el.timesSeen ?? 0}× · updated {new Date(el.lastSeen).toLocaleTimeString()}{el.frameId !== undefined ? ` on frame #${el.frameId}` : ''}</small>
+      <button type="button" onClick={() => void engine.testClick({ ...el, source: 'familiar' })} title={engine.armed ? 'Clicks this point on the PC (real input, budgeted)' : 'Highlights this point only (disarmed dry run)'}>
+        Test click
+      </button>
+    </li>
+  );
+}
+
+/** Targets the coordinate learner learned from cursor dwell and verified actions, with their current coordinates. */
+export function LearnedCoordsPanel({ engine }: { engine: AssistEngine }) {
+  const { learned, agents } = engine;
+  const on = agents.find((a) => a.id === 'coords')?.on ?? false;
+  return (
+    <section className={styles.panel} aria-label="Learned coordinates">
+      <h3>Learned coordinates <small>{learned.length} target(s) · learner {on ? 'on' : 'off'}</small></h3>
+      {!learned.length && <p className={styles.muted}>Rest the cursor on a known target or run a pointer step; its coordinates are learned and re-learned when it moves.</p>}
+      <ul className={styles.log}>
+        {learned.map((el) => <LearnedItem key={el.id} engine={engine} el={el} />)}
       </ul>
     </section>
   );

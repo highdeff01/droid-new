@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { correctDrift, reverify } from './drift.js';
+import { MATCHED, correctDrift, matchTemplate, reverify } from './drift.js';
 
 const W = 320;
 const H = 180;
@@ -71,8 +71,32 @@ describe('correctDrift', () => {
   });
 });
 
-describe('reverify', () => {
-  it('reports a change around the target after an action changed the screen', () => {
+describe('matchTemplate seed', () => {
+  it('without a seed, searching near the original spot misses a target moved far away', () => {
+    const ref = frameWithBox(0.3 * W, 0.3 * H);
+    const live = frameWithBox(0.6 * W, 0.6 * H);
+    const r = matchTemplate(ref, live, 0.3, 0.3, { radius: 24 });
+    expect(r.matchDistance).toBeGreaterThan(MATCHED);
+  });
+
+  it('a seed centred on the moved target finds it with near-zero offset', () => {
+    const ref = frameWithBox(0.3 * W, 0.3 * H);
+    const live = frameWithBox(0.6 * W, 0.6 * H);
+    const r = matchTemplate(ref, live, 0.3, 0.3, { radius: 24, seed: { x: 0.6, y: 0.6 } });
+    expect(r.matchDistance).toBeLessThanOrEqual(MATCHED);
+    expect(r.dx).toBeCloseTo(0, 1);
+    expect(r.dy).toBeCloseTo(0, 1);
+  });
+
+  it('a seed near but not exactly on the moved target still resolves to its true position', () => {
+    const ref = frameWithBox(0.3 * W, 0.3 * H);
+    const live = frameWithBox(0.6 * W, 0.6 * H);
+    const r = matchTemplate(ref, live, 0.3, 0.3, { radius: 24, seed: { x: 0.58, y: 0.6 } });
+    expect(Math.abs(0.58 + r.dx - 0.6)).toBeLessThanOrEqual(0.01);
+  });
+});
+
+describe('reverify', () => {  it('reports a change around the target after an action changed the screen', () => {
     const r = reverify(frameWithBox(100, 60), frameWithBox(200, 120), 100 / W, 60 / H);
     expect(r.changed).toBe(true);
     expect(r.targetChange).toBeGreaterThan(0.02);

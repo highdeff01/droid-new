@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard } from './types.js';
-import { HABIT_STALE_MS } from './habits.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, loadWatcher, saveFamiliar, savePatterns, saveCards, saveHabits, saveLog, saveSettings, saveWatcher } from './storage.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, loadWatcher, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
+import { HABIT_STALE_MS } from './habits.js';
 import { DEFAULT_STAGES } from './loop-control.js';
 import type { WatchNote, WatchProposal, WatchTest } from './watcher.js';
 
@@ -227,6 +227,17 @@ describe('familiar elements', () => {
   it('keeps at most FAMILIAR_LIMIT entries', () => {
     saveFamiliar(Array.from({ length: FAMILIAR_LIMIT + 5 }, (_, i) => fam(i)));
     expect(loadFamiliar()).toHaveLength(FAMILIAR_LIMIT);
+  });
+
+  it('round-trips learned coordinate fields (timesSeen, frameId, numeric anchor)', () => {
+    const learned: FamiliarElement = { ...fam(7), timesSeen: 3, frameId: 9, anchor: [1, 2, 3] };
+    saveFamiliar([learned]);
+    expect(loadFamiliar()).toEqual([learned]);
+  });
+
+  it('drops entries with a non-numeric timesSeen or a non-numeric anchor', () => {
+    localStorage.setItem('droid-assist.familiar', JSON.stringify([{ ...fam(8), timesSeen: 'x' }, { ...fam(9), anchor: ['a'] }]));
+    expect(loadFamiliar()).toEqual([]);
   });
 
   it('retries without patches when storage is full, leaving the patterns intact', () => {

@@ -75,6 +75,25 @@ export interface LearnedPattern {
   time: number;
 }
 
+/** An on-screen element the assistant has verified or used, remembered across sessions. */
+export interface FamiliarElement {
+  id: string;
+  name: string;
+  /** Normalized 0..1 center of the element. */
+  x: number;
+  y: number;
+  /** Small JPEG data URL of the screen around the element. */
+  patch?: string;
+  /** When it was last verified or used (ms since epoch). */
+  lastSeen: number;
+  /** Times the coordinate learner observed it (dwell or verified action). */
+  timesSeen?: number;
+  /** Id of the frame it was last seen on. */
+  frameId?: number;
+  /** Row-major luminance patch (ANCHOR_PATCH²) of the drift buffer around the point, for re-locating it. */
+  anchor?: number[];
+}
+
 /** A lesson attached to one habit: something to avoid or add when acting on that target. */
 export interface HabitLesson {
   kind: LearnedPattern['kind'];
@@ -107,19 +126,6 @@ export interface Habit {
   lessons: HabitLesson[];
   /** Pinned habits are never pruned. */
   pinned: boolean;
-}
-
-/** An on-screen element the assistant has verified or used, remembered across sessions. */
-export interface FamiliarElement {
-  id: string;
-  name: string;
-  /** Normalized 0..1 center of the element. */
-  x: number;
-  y: number;
-  /** Small JPEG data URL of the screen around the element. */
-  patch?: string;
-  /** When it was last verified or used (ms since epoch). */
-  lastSeen: number;
 }
 
 /** Status of a step during replay. */
