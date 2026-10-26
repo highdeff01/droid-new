@@ -28,6 +28,14 @@ describe('parseCommand', () => {
     expect(r).toMatchObject({ kind: 'error' });
     expect(r && 'message' in r ? r.message : '').toMatch(/\/move/);
   });
+  it('parses /measure with a multi-point query', () => {
+    expect(parseCommand('/measure files icon to game icon to left edge')).toEqual({ kind: 'measure', target: 'files icon to game icon to left edge' });
+  });
+  it('rejects /measure without a query and shows its usage', () => {
+    const r = parseCommand('/measure');
+    expect(r).toMatchObject({ kind: 'error' });
+    expect(r && 'message' in r ? r.message : '').toMatch(/\/measure <a> to <b>/);
+  });
 });
 
 describe('/arrange', () => {

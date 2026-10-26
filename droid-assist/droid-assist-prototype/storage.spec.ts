@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AssistSettings, FamiliarElement, LearnedPattern, LogEntry, SavedCard } from './types.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadFamiliar, loadLog, loadPatterns, loadSettings, saveFamiliar, savePatterns, saveCards, saveLog, saveSettings } from './storage.js';
+import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard } from './types.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, loadWatcher, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
+import { HABIT_STALE_MS } from './habits.js';
+import { DEFAULT_STAGES } from './loop-control.js';
+import type { WatchNote, WatchProposal, WatchTest } from './watcher.js';
 
-const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, showGrid: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b' };
+const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, changeCells: 6, monitorMode: 'app', watchMs: 5000, autoAct: false, aiHelp: true, showTrail: true, showGrid: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b', autoContinue: false, maxIterations: 5, stages: DEFAULT_STAGES, errorUrl: '', errorForwarding: false, errorToken: '' };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
 
 describe('settings', () => {
@@ -30,6 +33,24 @@ describe('settings', () => {
       localStorage.setItem('droid-assist.settings', raw);
       expect(loadSettings(DEFAULTS)).toEqual(DEFAULTS);
     }
+  });
+
+  it('keeps a stored watchMs within 2000..30000 and falls back to the default otherwise', () => {
+    localStorage.setItem('droid-assist.settings', '{"watchMs":8000}');
+    expect(loadSettings(DEFAULTS).watchMs).toBe(8000);
+    for (const bad of [0, -5, 100000, '8000']) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ watchMs: bad }));
+      expect(loadSettings(DEFAULTS).watchMs).toBe(DEFAULTS.watchMs);
+    }
+  });
+
+  it('round-trips loop-control stages and sanitizes a stored stage map', () => {
+    saveSettings({ ...DEFAULTS, stages: { ...DEFAULT_STAGES, popup: false, verdict: false } });
+    expect(loadSettings(DEFAULTS).stages).toEqual({ ...DEFAULT_STAGES, popup: false, verdict: false });
+    localStorage.setItem('droid-assist.settings', '{"stages":{"reflect":false,"drift":"off","nope":false}}');
+    expect(loadSettings(DEFAULTS).stages).toEqual({ ...DEFAULT_STAGES, reflect: false });
+    localStorage.setItem('droid-assist.settings', '{"stages":[1]}');
+    expect(loadSettings(DEFAULTS).stages).toEqual(DEFAULT_STAGES);
   });
 });
 
@@ -143,6 +164,47 @@ describe('learned patterns', () => {
   });
 });
 
+describe('habits', () => {
+  beforeEach(() => localStorage.clear());
+  const habit = (overrides: Partial<Habit> = {}): Habit => ({
+    id: 'h1', target: 'Save button', context: 'Notepad', attempts: 3, successes: 2, lastUsed: 1000,
+    lessons: [{ kind: 'avoid', text: 'double click', time: 1 }], pinned: false,
+    anchor: { x: 0.5, y: 0.4, patch: [1, 2, 3, 4], size: 2, time: 1 },
+    ...overrides,
+  });
+
+  it('round-trips a valid habit with anchor and lessons under its own key', () => {
+    saveHabits([habit()], 1000);
+    expect(localStorage.getItem('droid-assist.habits')).not.toBeNull();
+    expect(loadHabits(1000)).toEqual([habit()]);
+  });
+
+  it('returns [] for corrupt JSON', () => {
+    localStorage.setItem('droid-assist.habits', '{bad');
+    expect(loadHabits()).toEqual([]);
+  });
+
+  it('drops invalid entries, keeping only the valid habit', () => {
+    localStorage.setItem('droid-assist.habits', JSON.stringify([habit(), { id: 1 }, null]));
+    expect(loadHabits(1000)).toEqual([habit()]);
+  });
+
+  it('saveHabits prunes a stale unpinned habit but keeps a stale pinned one', () => {
+    const now = 1_000_000_000;
+    const stale = habit({ id: 'stale', lastUsed: now - HABIT_STALE_MS - 1, pinned: false, anchor: undefined });
+    const stalePinned = habit({ id: 'stalePinned', lastUsed: now - HABIT_STALE_MS - 1, pinned: true, anchor: undefined });
+    saveHabits([stale, stalePinned], now);
+    expect(loadHabits(now)).toEqual([stalePinned]);
+  });
+
+  it('leaves existing LearnedPattern data untouched when no habit key exists', () => {
+    const pat = (n: number): LearnedPattern => ({ id: `p${n}`, kind: 'avoid', pattern: `pattern ${n}`, context: 'notepad', time: n });
+    savePatterns([pat(1)]);
+    expect(loadPatterns()).toEqual([pat(1)]);
+    expect(loadHabits()).toEqual([]);
+  });
+});
+
 describe('familiar elements', () => {
   beforeEach(() => localStorage.clear());
   const fam = (n: number, patch?: string): FamiliarElement => ({ id: `el${n}`, name: `Element ${n}`, x: 0.1, y: 0.2, lastSeen: n, ...(patch ? { patch } : {}) });
@@ -167,6 +229,17 @@ describe('familiar elements', () => {
     expect(loadFamiliar()).toHaveLength(FAMILIAR_LIMIT);
   });
 
+  it('round-trips learned coordinate fields (timesSeen, frameId, numeric anchor)', () => {
+    const learned: FamiliarElement = { ...fam(7), timesSeen: 3, frameId: 9, anchor: [1, 2, 3] };
+    saveFamiliar([learned]);
+    expect(loadFamiliar()).toEqual([learned]);
+  });
+
+  it('drops entries with a non-numeric timesSeen or a non-numeric anchor', () => {
+    localStorage.setItem('droid-assist.familiar', JSON.stringify([{ ...fam(8), timesSeen: 'x' }, { ...fam(9), anchor: ['a'] }]));
+    expect(loadFamiliar()).toEqual([]);
+  });
+
   it('retries without patches when storage is full, leaving the patterns intact', () => {
     savePatterns([{ id: 'p1', kind: 'add', pattern: 'p', context: '', time: 1 }]);
     const real = Storage.prototype.setItem;
@@ -178,5 +251,47 @@ describe('familiar elements', () => {
     spy.mockRestore();
     expect(loadFamiliar()).toEqual([fam(1)]);
     expect(loadPatterns()).toHaveLength(1);
+  });
+});
+
+describe('element map', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('round-trips mapped elements under its own key and drops invalid ones', async () => {
+    saveElementMap([{ id: 'm1', name: 'OK', box: { x: 0.1, y: 0.2, w: 0.3, h: 0.1 }, mappedAt: 5 }]);
+    expect(localStorage.getItem('droid-assist.element-map')).not.toBeNull();
+    expect(await loadElementMap()).toEqual([{ id: 'm1', name: 'OK', box: { x: 0.1, y: 0.2, w: 0.3, h: 0.1 }, mappedAt: 5 }]);
+    localStorage.setItem('droid-assist.element-map', JSON.stringify([null, { id: 'a', name: ' ', box: { x: 0, y: 0, w: 0.1, h: 0.1 } }, { id: 'b', name: 'B', box: { x: 0.9, y: 0, w: 0.5, h: 0.1 } }, { id: 'c', name: 'C', box: { x: 0, y: 0, w: 0.1, h: 0.1 } }]));
+    expect((await loadElementMap()).map((m) => m.id)).toEqual(['c']);
+    localStorage.setItem('droid-assist.element-map', 'nope');
+    expect(await loadElementMap()).toEqual([]);
+  });
+});
+
+describe('loadWatcher', () => {
+  beforeEach(() => localStorage.clear());
+
+  const note = (n: number): WatchNote => ({ id: `n${n}`, time: n, kind: 'element', text: `note ${n}` });
+  const proposal = (n: number): WatchProposal => ({ id: `w${n}`, time: n, kind: 'pattern', text: `proposal ${n}`, status: 'pending' });
+  const test = (n: number): WatchTest => ({ id: `t${n}`, time: n, proposalId: 'w1', tried: 'click', happened: 'nothing', verdict: 'passed', dryRun: true });
+
+  it('round-trips notes, proposals and tests', () => {
+    const state = { notes: [note(1), note(2)], proposals: [proposal(1)], tests: [test(1)] };
+    saveWatcher(state);
+    expect(loadWatcher()).toEqual(state);
+  });
+
+  it('drops invalid entries', () => {
+    localStorage.setItem('droid-assist.watcher', JSON.stringify({
+      notes: [note(1), { ...note(2), kind: 'bogus' }, { ...note(3), text: '' }, null],
+      proposals: [proposal(1), { ...proposal(2), status: 'bogus' }, null],
+      tests: [test(1), { ...test(2), verdict: 'maybe' }, null],
+    }));
+    expect(loadWatcher()).toEqual({ notes: [note(1)], proposals: [proposal(1)], tests: [test(1)] });
+  });
+
+  it('gives empty lists for corrupt JSON', () => {
+    localStorage.setItem('droid-assist.watcher', '{oops');
+    expect(loadWatcher()).toEqual({ notes: [], proposals: [], tests: [] });
   });
 });
