@@ -202,6 +202,8 @@ export function useAssist() {
   const patternsRef = useRef<LearnedPattern[]>(patterns);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
+  /** The frame the next material screen change is measured against. */
+  const changeBaseRef = useRef<Frame | null>(null);
   /** The in-flight change assessment; the executor waits for it before proposing. */
   const changeBusyRef = useRef<Promise<void> | null>(null);
   /** The latest change assessment and when it was made. */
@@ -607,19 +609,23 @@ export function useAssist() {
   };
 
   /**
-   * Visual change detection: a frame-to-frame cluster of changed cells at least the Settings threshold
-   * in size is a material change. With the responder on and the AI online it is assessed; otherwise it
-   * is flagged as a popup for the AI to rule on, as before.
+   * Visual change detection: each frame is compared with the frame the last change was measured at
+   * (the last assessed change, or the previous frame when nothing changed); a cluster of changed cells
+   * at least the Settings threshold in size is a material change. Frames arriving during an assessment
+   * are compared after it, so a second change is not lost. With the responder on and the AI online the
+   * change is assessed; otherwise it is flagged as a popup for the AI to rule on, as before.
    */
   const watchScreen = (prev: Frame, cur: Frame) => {
     if (popupStillShown(cur) || changeBusyRef.current) return;
-    const change = detectChange(prev.data, cur.data, settingsRef.current.changeCells);
+    const base = changeBaseRef.current ?? prev;
+    changeBaseRef.current = cur;
+    const change = detectChange(base.data, cur.data, settingsRef.current.changeCells);
     if (!change) return;
     if (!agentsRef.current('change') || !aiOnline()) {
-      flagPopup(prev, cur, change.box);
+      flagPopup(base, cur, change.box);
       return;
     }
-    changeBusyRef.current = respondToChange(prev, cur, change).finally(() => {
+    changeBusyRef.current = respondToChange(base, cur, change).finally(() => {
       changeBusyRef.current = null;
     });
   };
@@ -727,6 +733,10 @@ export function useAssist() {
   const autoRunStep = async (frame: Frame, idx: number, dry: boolean) => {
     const next = stepsRef.current[idx];
     const j = await justify('Auto-Actor', next, true);
+    if (!settingsRef.current.autoAct) {
+      addLog('Auto-Actor', `Auto Act was stopped while proposing "${next.name}" — not executed`, 'warn');
+      return;
+    }
     if (j.kind === 'wait') {
       setSync({ level: 'yellow', detail: `AI is waiting on "${next.name}": ${j.reason}` });
       return;
@@ -927,6 +937,10 @@ export function useAssist() {
       return failUnjustified(i, label, `No proposal for "${planned.name}" — AI unavailable: ${errorText(error)} — not executed`);
     }
     if (j.kind !== 'go') return failUnjustified(i, label, j.reason);
+    if (abortRef.current) {
+      updateStep(i, { status: 'pending' });
+      return { ok: false, executed: false, halt: true, message: `Stopped before "${planned.name}" — not executed`, target: { x: planned.x, y: planned.y } };
+    }
     const before = framesRef.current[0] ?? null;
     const out = await perform(j.step, label, budget, dryRun, j.proposal);
     applyOutcome(i, out, dryRun, before);

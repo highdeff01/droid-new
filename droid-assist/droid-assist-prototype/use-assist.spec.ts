@@ -170,6 +170,31 @@ describe('useAssist screen-change responder and proposals', () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
+  it('responds to a second change that arrives while the first is being assessed', async () => {
+    const fetchMock = stub('{"ready":false,"why":"waiting"}');
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(black()));
+    const second = (): NativeFrame => {
+      const f = changed();
+      for (let y = 120; y < 180; y++) for (let x = 200; x < 300; x++) f.pixels.fill(255, (y * 320 + x) * 4, (y * 320 + x) * 4 + 4);
+      return f;
+    };
+    await act(async () => {
+      hooks.onFrame!(changed());
+      hooks.onFrame!(second());
+      await new Promise((r) => setTimeout(r, 30));
+      hooks.onFrame!(second());
+      await new Promise((r) => setTimeout(r, 30));
+      hooks.onFrame!(second());
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    const changeCalls = fetchMock.mock.calls.filter((c) => String(c[1].body).includes('screen-change responder. The first image'));
+    expect(changeCalls).toHaveLength(2);
+  });
+
   it('assesses a mid-plan change and re-proposes the stale step (what/why referencing it) before it runs', async () => {
     const fetchMock = stub('{"ready":true,"x":0.2,"y":0.8,"why":"hovering Files is the goal"}');
     const result = await changeMidPlan();
