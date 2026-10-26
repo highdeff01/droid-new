@@ -17,6 +17,7 @@ import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotke
 import { LOG_LIMIT, loadCards, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, saveCards, saveFamiliar, saveHabits, saveLog, savePatterns, saveSettings } from './storage.js';
 import { forgetElement, listElements, rememberElement, type ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
+import { POINTER_LIMIT, detectDwell, dwellObservation, findFamiliar, learnCoordinate, learnedSeed, learnedTargets, type CoordObservation } from './coords.js';
 import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
@@ -107,7 +108,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
 
 /** A background agent the user can toggle. */
 export interface Agent {
-  id: 'popup' | 'drift' | 'progress' | 'goal';
+  id: 'popup' | 'drift' | 'progress' | 'goal' | 'coords';
   name: string;
   description: string;
   on: boolean;
@@ -151,6 +152,7 @@ export function useAssist() {
     { id: 'drift', name: 'Drift monitor', description: 'Cross-checks every frame against the active step', on: true },
     { id: 'progress', name: 'Progress tracker', description: 'Counts verified steps toward the goal', on: true },
     { id: 'goal', name: 'Goal reviewer', description: 'Reviews the goal after each run and suggests what is next', on: true },
+    { id: 'coords', name: 'Coordinate learner', description: 'Learns target coordinates from cursor dwell and verified actions; seeds grounding with them', on: true },
   ]);
   const [plays, setPlays] = useState(0);
   const [armed, setArmed] = useState(false);
@@ -197,6 +199,11 @@ export function useAssist() {
   const cardsRef = useRef<SavedCard[]>([]);
   const patternsRef = useRef<LearnedPattern[]>(patterns);
   const habitsRef = useRef<Habit[]>(habits);
+  const familiarRef = useRef<FamiliarElement[]>(familiar);
+  /** Live cursor positions over the stage, for the coordinate learner's dwell detection. */
+  const pointerRef = useRef<TrailPoint[]>([]);
+  /** Start time of the last dwell the coordinate learner handled, so each rest is observed once. */
+  const dwellSeenRef = useRef(-1);
   const targetRef = useRef(target);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
@@ -214,6 +221,7 @@ export function useAssist() {
   cardsRef.current = cards;
   patternsRef.current = patterns;
   habitsRef.current = habits;
+  familiarRef.current = familiar;
   targetRef.current = target;
 
   const intervalMs = monitorInterval(settings.monitorMode, settings.captureMs);
@@ -462,6 +470,41 @@ export function useAssist() {
   const agentsRef = useRef(agentOn);
   agentsRef.current = agentOn;
 
+  /** Coordinate learner: records one observation in the familiar memory and logs a target that moved. */
+  const learnCoords = (obs: CoordObservation) => {
+    const { list, moved } = learnCoordinate(familiarRef.current, obs);
+    familiarRef.current = list;
+    setFamiliar((latest) => learnCoordinate(latest, obs).list);
+    if (moved) addLog('Coordinate learner', `"${moved.name}" moved (${pct(moved.from.x)}, ${pct(moved.from.y)}) → (${pct(moved.to.x)}, ${pct(moved.to.y)}) — coordinates updated`, 'info');
+  };
+
+  /** The learned position of the step's target on `live` (learner on, anchor matched), or null. */
+  const learnedPoint = (live: Frame, step: WorkflowStep) => {
+    if (!agentsRef.current('coords')) return null;
+    const el = findFamiliar(familiarRef.current, step.target ?? step.name);
+    return el ? learnedSeed(el, live.data) : null;
+  };
+
+  /** The executor is running a step (Auto Act, replay or a running step): the learner pauses. */
+  const executorBusy = () => autoBusyRef.current || replayingRef.current || stepsRef.current.some((s) => s.status === 'running');
+
+  /** Dwell learning on a new frame: the cursor resting over a learned target re-observes it there. */
+  const learnFromDwell = (frame: Frame) => {
+    if (!agentsRef.current('coords') || executorBusy()) return;
+    const now = Date.now();
+    const dwell = detectDwell(pointerRef.current, now);
+    if (!dwell || dwell.since === dwellSeenRef.current) return;
+    dwellSeenRef.current = dwell.since;
+    const obs = dwellObservation(familiarRef.current, dwell, frame, now);
+    if (obs) learnCoords(obs);
+  };
+
+  /** Outcome learning: an executed pointer action teaches its target's coordinates, on the frame it was aimed on. */
+  const learnFromOutcome = (step: WorkflowStep, out: Performed, frame: Frame | null) => {
+    if (!agentsRef.current('coords') || !out.executed || !out.ok || !POINTER_ACTIONS.has(step.action)) return;
+    learnCoords({ name: step.target ?? step.name, x: out.target.x, y: out.target.y, frame, time: Date.now() });
+  };
+
   const adDismissed = () => Math.floor(tickRef.current / AD_CYCLE) === dismissedCycleRef.current;
 
   /** Appends one performed mouse/keyboard action to the persistent history. */
@@ -497,7 +540,7 @@ export function useAssist() {
     if (local) return { ...(await local(step)), executed: true, target: { x: step.x, y: step.y } };
     const live = framesRef.current[0];
     let p = { x: step.x, y: step.y };
-    const seeded = live && POINTER_ACTIONS.has(step.action) ? habitSeed(live, step) : null;
+    const seeded = live && POINTER_ACTIONS.has(step.action) ? learnedPoint(live, step) ?? habitSeed(live, step) : null;
     if (seeded) p = seeded;
     else if (step.refFrame && live) {
       const r = matchTemplate(step.refFrame.data, live.data, step.x, step.y);
@@ -543,6 +586,7 @@ export function useAssist() {
       log: (m, tone) => addLog(actor, m, tone),
       grounding: aiOnline() ? grounding : undefined,
       seed: habitSeed,
+      learned: learnedPoint,
       onVerified: strengthen,
     });
     if (out.executed) recordAction(step, out, actor, 'bridge', size.w, size.h);
@@ -567,7 +611,9 @@ export function useAssist() {
    * and verdict, and the verdict of a step that really ran (not a dry run) updates its habit.
    */
   const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
+    const before = framesRef.current[0] ?? null;
     const out = await performStep(step, actor, budget, dryRun);
+    learnFromOutcome(step, out, before);
     void rememberTarget(step, out);
     if (out.halt || !aiOnline()) return out;
     const verdict = await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
@@ -588,12 +634,16 @@ export function useAssist() {
       return;
     }
     const step: WorkflowStep = { id: uid('test'), name: `Test click "${el.name}"`, action: 'click', x: el.x, y: el.y, status: 'pending' };
+    const before = framesRef.current[0] ?? null;
     const out = await performStep(step, 'Test click', createBudget(settingsRef.current.actionBudget), false);
+    learnFromOutcome({ ...step, target: el.name }, out, before);
     if (out.executed) void rememberTarget({ ...step, target: el.name }, out);
     addLog('Test click', `"${el.name}" at ${where}: ${out.message}`, out.ok ? 'ok' : 'error');
   };
 
   const elements = listElements(steps, annotations, familiar);
+  /** Targets the coordinate learner has observed, newest first. */
+  const learned = learnedTargets(familiar);
 
   const updateStep = (index: number, patch: Partial<WorkflowStep>) => {
     stepsRef.current = stepsRef.current.map((st, i) => (i === index ? { ...st, ...patch } : st));
@@ -709,6 +759,7 @@ export function useAssist() {
     setShotCount((n) => n + 1);
     void putStoredFrame(toStoredFrame(frame), settingsRef.current.gallerySize).catch(() => undefined);
     if (prev) detectErrors(prev, frame);
+    learnFromDwell(frame);
     const next = stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running');
     if (next?.refFrame && agentsRef.current('drift')) {
       const r = matchTemplate(next.refFrame.data, frame.data, next.x, next.y);
@@ -775,6 +826,7 @@ export function useAssist() {
 
   /** Stage pointer input: trail while recording. */
   const onStageMove = useCallback((x: number, y: number) => {
+    pointerRef.current = [...pointerRef.current, { x, y, t: Date.now() }].slice(-POINTER_LIMIT);
     if (recordingRef.current) setTrail((t) => [...t, { x, y, t: Date.now() }].slice(-1500));
   }, []);
 
@@ -1122,7 +1174,7 @@ export function useAssist() {
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
     armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern,
-    familiar, forgetFamiliar, elements, highlight, testClick, habits, deleteHabit, pinHabit,
+    familiar, forgetFamiliar, elements, learned, highlight, testClick, habits, deleteHabit, pinHabit,
     onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
   };

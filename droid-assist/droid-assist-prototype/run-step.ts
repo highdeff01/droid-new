@@ -30,6 +30,8 @@ export interface StepDeps {
   grounding?: Grounding;
   /** A learned habit's remembered position of the step's target, found on `live`; null when there is none or it did not match. */
   seed?: (live: Frame, step: WorkflowStep) => Point | null;
+  /** The coordinate learner's position of the step's target, template-matched on `live`; null when unknown or not found. A hit skips the AI grounding call. */
+  learned?: (live: Frame, step: WorkflowStep) => Point | null;
   /** Called with the point the AI grounding pass confirmed for the step's target. */
   onVerified?: (live: Frame, step: WorkflowStep, p: Point) => void;
 }
@@ -153,8 +155,10 @@ export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepO
   if ('error' in found) return { ok: false, executed: false, message: found.error, target: { x: step.x, y: step.y } };
   const { live, correction } = found;
   deps.log(describeCorrection(step, correction, live), correction.driftPx ? 'warn' : 'info');
-  let target = startPoint(step, live, correction, deps);
-  if (needsGrounding(step) && deps.grounding) {
+  const learned = POINTER_ACTIONS.has(step.action) ? deps.learned?.(live, step) ?? null : null;
+  if (learned) deps.log(`"${step.name}": learned coordinates — "${step.target ?? step.name}" found at ${px(learned, live)}, no AI grounding needed`, 'info');
+  let target = learned ?? startPoint(step, live, correction, deps);
+  if (!learned && needsGrounding(step) && deps.grounding) {
     const grounded = await groundTarget(step, live, target, deps.grounding, deps.log);
     if ('error' in grounded) return { ok: false, executed: false, message: grounded.error, target, correction };
     target = grounded.point;
