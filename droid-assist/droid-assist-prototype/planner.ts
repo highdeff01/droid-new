@@ -1,4 +1,4 @@
-import type { Frame, SavedCard, StepAction, WorkflowStep } from './types.js';
+import type { Frame, LearnedPattern, SavedCard, StepAction, WorkflowStep } from './types.js';
 import { AiError, VIEW_H, VIEW_W, parseJsonReply, toUnit } from './ai.js';
 import type { AskFn } from './ai.js';
 
@@ -6,8 +6,27 @@ let seq = 0;
 /** A short unique id. */
 export const uid = (p = 'id') => `${p}_${Date.now().toString(36)}_${(seq++).toString(36)}`;
 
-const STOP = new Set(['the', 'and', 'for', 'with', 'then', 'step', 'steps', 'click', 'button', 'main', 'action']);
-const words = (s: string) => new Set(s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !STOP.has(w)));
+const STOP = new Set(['the', 'and', 'for', 'with', 'then', 'step', 'steps', 'click', 'button', 'main', 'action', 'please', 'into', 'from', 'that', 'this', 'app', 'flow', 'workflow']);
+/** Different wordings of the same intent map to one word. */
+const SYNONYMS: Record<string, string> = {
+  launch: 'open', start: 'open', run: 'open', load: 'open',
+  dismiss: 'close', exit: 'close', quit: 'close', shut: 'close',
+  find: 'search', lookup: 'search', look: 'search', google: 'search',
+  enter: 'type', write: 'type', input: 'type',
+  calculator: 'calc', calculate: 'calc', compute: 'calc',
+  video: 'play', music: 'play', song: 'play', ad: 'popup', ads: 'popup', advert: 'popup',
+};
+/** Drops a plural or verb ending: "files" → "file", "messages" → "message", "running" → "run". */
+function inflect(w: string): string {
+  if (w.length > 4 && /ies$/.test(w)) return w.replace(/ies$/, 'y');
+  if (w.length > 4 && /(ss|sh|ch|x|z)es$/.test(w)) return w.slice(0, -2);
+  if (w.length > 4 && /(ing|ed)$/.test(w)) return w.replace(/(ing|ed)$/, '').replace(/(.)\1$/, '$1');
+  return w.length > 3 ? w.replace(/([^su])s$/, '$1') : w;
+}
+/** Folds endings and a silent final "e" so "closes", "closed" and "close" are one word. */
+const stem = (w: string) => inflect(w).replace(/(.{3,})e$/, '$1');
+const canonical = (w: string) => stem(SYNONYMS[w] ?? SYNONYMS[inflect(w)] ?? w);
+const words = (s: string) => new Set(s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => !STOP.has(w)).map(canonical).filter((w) => w.length > 2 && !STOP.has(w)));
 
 /**
  * How much of `goal` is covered by `text` (0..1): the share of the goal's meaningful
@@ -75,21 +94,51 @@ export function parsePlan(reply: string, frame: Frame | null): WorkflowStep[] {
   return steps.map((s) => toStep(s, frame));
 }
 
+/** Most learned patterns sent with one planning ask. */
+export const PATTERN_CONTEXT_LIMIT = 8;
+
+/**
+ * The learned patterns that apply to `goal`: general ones (no context) and those whose
+ * pattern or context shares a meaningful word with the goal, newest first.
+ */
+export function relevantPatterns(goal: string, patterns: LearnedPattern[]): LearnedPattern[] {
+  const goalWords = words(goal);
+  const related = (p: LearnedPattern) => !p.context.trim() || [...words(`${p.context} ${p.pattern}`)].some((w) => goalWords.has(w));
+  return patterns.filter(related).slice(0, PATTERN_CONTEXT_LIMIT);
+}
+
+/** A learned pattern as one planning-context line. */
+export const patternLine = (p: LearnedPattern) => `[Learned ${p.kind}] ${p.pattern}${p.context ? ` (from: ${p.context})` : ''}`;
+
+/** A saved step as a fresh pending step that starts at its drift-corrected position. */
+const reuseStep = (s: WorkflowStep): WorkflowStep => ({
+  ...s,
+  id: uid('step'),
+  status: 'pending',
+  x: s.correctedX ?? s.x,
+  y: s.correctedY ?? s.y,
+  correctedX: undefined,
+  correctedY: undefined,
+});
+
 /**
  * Fills a workflow from a goal: reuses a similar saved workflow when one exists (no model
- * call); otherwise the model plans the steps from the goal and the live frame.
- * Rejects with AiError when the model is unreachable or its reply is unusable.
+ * call, steps start at their last drift-corrected positions); otherwise the model plans the
+ * steps from the goal, the live frame, the recent context and the learned patterns relevant
+ * to this goal. Rejects with AiError when the model is unreachable or its reply is unusable.
  */
-export async function planFromGoal(goal: string, cards: SavedCard[], frame: Frame | null, ask: AskFn, context: string[] = []): Promise<PlanResult> {
+export async function planFromGoal(goal: string, cards: SavedCard[], frame: Frame | null, ask: AskFn, context: string[] = [], patterns: LearnedPattern[] = []): Promise<PlanResult> {
   const similar = findSimilar(goal, cards);
   if (similar) {
     return {
-      source: `Reused saved workflow "${similar.name}" (similar goal)`,
-      steps: similar.steps.map((s) => ({ ...s, id: uid('step'), status: 'pending' as const, correctedX: undefined, correctedY: undefined })),
+      source: `Reused saved workflow "${similar.name}" (similar goal, drift-corrected coordinates)`,
+      steps: similar.steps.map(reuseStep),
     };
   }
-  const reply = await ask({ system: PLAN_SYSTEM, prompt: `Goal: ${goal}`, frame, context, json: true });
-  return { steps: parsePlan(reply, frame), source: 'AI planned from the goal and the live screen' };
+  const lessons = relevantPatterns(goal, patterns).map(patternLine);
+  const reply = await ask({ system: PLAN_SYSTEM, prompt: `Goal: ${goal}`, frame, context: [...lessons, ...context], json: true });
+  const source = lessons.length ? `AI planned from the goal and the live screen, applying ${lessons.length} learned pattern(s)` : 'AI planned from the goal and the live screen';
+  return { steps: parsePlan(reply, frame), source };
 }
 
 /** A generated name + description for a workflow. */

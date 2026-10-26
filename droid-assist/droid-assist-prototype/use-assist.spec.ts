@@ -28,6 +28,39 @@ function installNative() {
 
 afterEach(() => {
   delete window.droidNative;
+  localStorage.clear();
+});
+
+describe('useAssist flow and pattern memory', () => {
+  const flow = { id: 'f1', name: 'Close ad and play video', description: '', savedAt: 1, steps: [{ id: 'a', name: 'Close ad', action: 'click', x: 0.8, y: 0.2, correctedX: 0.83, correctedY: 0.22, status: 'pending' }] };
+  const lessons = [
+    { id: 'p1', kind: 'avoid', pattern: 'clicking the taskbar', context: 'open notepad', time: 2 },
+    { id: 'p2', kind: 'add', pattern: 'wait for the window', context: '', time: 1 },
+  ];
+
+  it('reuses a stored successful flow for a reworded goal and says so in the log', async () => {
+    localStorage.setItem('droid-assist.cards', JSON.stringify([flow]));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    expect(result.current.cards.map((c) => c.id)).toContain('f1');
+    act(() => result.current.setGoal('dismiss the ads and play the videos'));
+    await act(() => result.current.autoPlan());
+    const planned = result.current.log.find((l) => l.source === 'Planner');
+    expect(planned?.message).toMatch(/Reused saved workflow "Close ad and play video"/);
+    expect(result.current.steps[0]).toMatchObject({ x: 0.83, y: 0.22, status: 'pending' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('loads persisted patterns and persists a deletion', () => {
+    localStorage.setItem('droid-assist.patterns', JSON.stringify(lessons));
+    const { result } = renderHook(() => useAssist());
+    expect(result.current.patterns.map((p) => p.id)).toEqual(['p1', 'p2']);
+    act(() => result.current.deletePattern('p1'));
+    expect(result.current.patterns.map((p) => p.id)).toEqual(['p2']);
+    expect(JSON.parse(localStorage.getItem('droid-assist.patterns')!).map((p: { id: string }) => p.id)).toEqual(['p2']);
+  });
 });
 
 describe('useAssist screen capture', () => {

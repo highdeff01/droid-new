@@ -18,3 +18,9 @@ To run the app locally, run the following:
 ```
 bit run droid-assist-prototype 
 ```
+
+## Flow and pattern memory
+
+- A replay or Auto Act run that executes every step as real input (not a dry run) is saved automatically as a workflow card, logged as `Flow saved: "<name>"`. Steps keep their drift-corrected coordinates and screenshots. A near-duplicate card for the same flow is replaced, not added again.
+- Typing a goal that resembles a saved flow (synonyms, plurals and verb forms are folded, e.g. "launch the calculator" ≈ "Open calculator app") reuses it without calling the model, and the log says `Reused saved workflow "<name>"`.
+- After each real run the AI adds lessons (`avoid` / `add`) to the **Learned patterns** panel (`PatternsPanel`). A failed run is never saved as a flow; its failure is recorded as an `avoid` pattern. Patterns persist in `localStorage` and can be deleted with ✕, and the ones relevant to a new goal are sent as planning context.
