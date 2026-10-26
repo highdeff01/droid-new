@@ -10,7 +10,6 @@ export type PlanGate = { run: true } | { run: false; log: string | null };
 export type PlanVerdict = 'fresh' | 'duplicate';
 
 interface GuardState {
-  goal: string;
   screen: string;
   calls: number;
   signature: string | null;
@@ -26,21 +25,27 @@ export function planSignature(steps: WorkflowStep[]): string {
 }
 
 /**
- * Re-plan loop guard for one session: per goal and screen state (newest frame + step status
- * changes) it allows the first plan plus `cap` re-plans, and stops calling the model once a
- * re-plan came back identical to the previous one. A new goal or a changed screen resets it.
+ * Re-plan loop guard for one session: per goal (each goal keeps its own count, so interleaving
+ * goals never resets another) and screen state (newest frame + step status changes) it allows
+ * the first plan plus `cap` re-plans, and stops calling the model once a re-plan came back
+ * identical to that goal's previous one. A changed screen resets that goal's count.
  */
 export function createPlanGuard(cap = REPLAN_CAP) {
-  let s: GuardState = { goal: '', screen: '', calls: 0, signature: null, duplicate: false, capped: false };
+  const goals = new Map<string, GuardState>();
+  let last = '';
 
-  const reset = (goal: string, screen: string) => {
-    if (s.goal === goal && s.screen === screen) return;
-    s = { goal, screen, calls: 0, signature: null, duplicate: false, capped: false };
+  const stateFor = (goal: string, screen: string): GuardState => {
+    const s = goals.get(goal);
+    if (s && s.screen === screen) return s;
+    const fresh = { screen, calls: 0, signature: null, duplicate: false, capped: false };
+    goals.set(goal, fresh);
+    return fresh;
   };
 
   /** Called before the model is asked to plan `goal` on screen state `screen`; counts the call when it runs. */
   const before = (goal: string, screen: string): PlanGate => {
-    reset(sameGoal(goal), screen);
+    last = sameGoal(goal);
+    const s = stateFor(last, screen);
     if (s.duplicate) return { run: false, log: null };
     if (s.calls > cap) {
       const log = s.capped ? null : `Re-plan cap reached for "${goal.trim()}": ${cap} re-plan(s) on an unchanged screen — not asking the model again until the screen or a step changes`;
@@ -51,8 +56,10 @@ export function createPlanGuard(cap = REPLAN_CAP) {
     return { run: true };
   };
 
-  /** Called with the steps a plan produced; a repeat of the previous plan marks the goal as settled. */
+  /** Called with the steps the last allowed plan produced; a repeat of that goal's previous plan marks it as settled. */
   const after = (steps: WorkflowStep[]): PlanVerdict => {
+    const s = goals.get(last);
+    if (!s) return 'fresh';
     const signature = planSignature(steps);
     if (signature === s.signature) {
       s.duplicate = true;

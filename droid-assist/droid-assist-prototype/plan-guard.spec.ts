@@ -44,6 +44,24 @@ describe('createPlanGuard', () => {
     expect(guard.before('other', 'f2:1').run).toBe(true);
   });
 
+  it('keeps each goal\'s cap and dedupe when goals are interleaved', () => {
+    const guard = createPlanGuard();
+    let runsA = 0;
+    let runsB = 0;
+    for (let i = 0; i < 10; i++) {
+      if (guard.before('A', 's').run) {
+        runsA++;
+        guard.after([step(i / 20)]);
+      }
+      if (guard.before('B', 's').run) {
+        runsB++;
+        guard.after([step(0.5, 'trash')]);
+      }
+    }
+    expect(runsA).toBe(4);
+    expect(runsB).toBe(2);
+  });
+
   it('marks an identical consecutive plan as a duplicate and skips the model silently after it', () => {
     const guard = createPlanGuard();
     guard.before('g', 's');
