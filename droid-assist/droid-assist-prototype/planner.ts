@@ -18,11 +18,10 @@ const SYNONYMS: Record<string, string> = {
 };
 /** Drops a plural or verb ending: "files" → "file", "messages" → "message", "running" → "run". */
 function inflect(w: string): string {
-  if (w.length <= 4) return w;
-  if (/ies$/.test(w)) return w.replace(/ies$/, 'y');
-  if (/(ss|sh|ch|x|z)es$/.test(w)) return w.slice(0, -2);
-  if (/(ing|ed)$/.test(w)) return w.replace(/(ing|ed)$/, '').replace(/(.)\1$/, '$1');
-  return w.replace(/([^s])s$/, '$1');
+  if (w.length > 4 && /ies$/.test(w)) return w.replace(/ies$/, 'y');
+  if (w.length > 4 && /(ss|sh|ch|x|z)es$/.test(w)) return w.slice(0, -2);
+  if (w.length > 4 && /(ing|ed)$/.test(w)) return w.replace(/(ing|ed)$/, '').replace(/(.)\1$/, '$1');
+  return w.length > 3 ? w.replace(/([^su])s$/, '$1') : w;
 }
 /** Folds endings and a silent final "e" so "closes", "closed" and "close" are one word. */
 const stem = (w: string) => inflect(w).replace(/(.{3,})e$/, '$1');

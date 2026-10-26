@@ -45,7 +45,7 @@ describe('upsertCard', () => {
   });
 
   it('treats plural and verb-form rewordings of a flow as the same flow', () => {
-    for (const [a, b] of [['rename file', 'rename files'], ['open message', 'open messages'], ['save the image', 'save the images'], ['close popup', 'closes popups']]) {
+    for (const [a, b] of [['rename file', 'rename files'], ['open message', 'open messages'], ['save the image', 'save the images'], ['close popup', 'closes popups'], ['close tab', 'close tabs'], ['open maps', 'open map'], ['clear logs', 'clear log'], ['press keys', 'press key']]) {
       const first: SavedCard = { id: 'x', name: a, description: '', savedAt: 1, steps: [step('a', 'pending')] };
       const { cards } = upsertCard([first], { ...first, id: 'y', name: b });
       expect(cards, `${a} / ${b}`).toHaveLength(1);
