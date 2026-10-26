@@ -24,29 +24,35 @@ export interface TrailPoint {
   click?: boolean;
 }
 
-/** Actions a workflow step can perform. `move` hovers the cursor over its target without clicking. */
-export type StepAction = 'click' | 'double_click' | 'move' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media';
+/**
+ * Actions a workflow step can perform. `move` hovers the cursor over its target without clicking;
+ * `drag` presses at (x, y), travels to (endX, endY) and releases there.
+ */
+export type StepAction = 'click' | 'double_click' | 'move' | 'drag' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media';
 
 /** Every step action, in the order the planner contract lists them. */
-export const STEP_ACTIONS: readonly StepAction[] = ['click', 'double_click', 'move', 'scroll', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media'];
+export const STEP_ACTIONS: readonly StepAction[] = ['click', 'double_click', 'move', 'drag', 'scroll', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media'];
 
 /** Step actions that point the mouse at an on-screen target, so their coordinates must be grounded. */
-export const POINTER_ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(['click', 'double_click', 'move', 'scroll']);
+export const POINTER_ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(['click', 'double_click', 'move', 'drag', 'scroll']);
 
 /** Monitor modes, each with its own capture interval. */
 export type MonitorMode = 'app' | 'background' | 'advanced';
 
 /** Real mouse/keyboard actions recorded in the persistent action history. */
-export type InputAction = 'move' | 'click' | 'double_click' | 'type' | 'key' | 'scroll';
+export type InputAction = 'move' | 'click' | 'double_click' | 'drag' | 'type' | 'key' | 'scroll';
 
 /** One executed mouse or keyboard action, persisted for viewing and export. */
 export interface ActionRecord {
   id: string;
   time: number;
   action: InputAction;
-  /** Native screen pixels the action targeted. */
+  /** Native screen pixels the action targeted (a drag's start). */
   x: number;
   y: number;
+  /** A drag's release point, in native screen pixels. */
+  endX?: number;
+  endY?: number;
   text?: string;
   /** Who performed it: Replay, Auto-Actor, AI help, ... */
   source: string;
@@ -79,6 +85,11 @@ export interface WorkflowStep {
   text?: string;
   /** The on-screen thing a pointer step acts on ("files icon"); its coordinates are confirmed against it before dispatch. */
   target?: string;
+  /** A drag's release point, normalized 0..1 like x/y. Required for a drag step. */
+  endX?: number;
+  endY?: number;
+  /** The on-screen thing a drag drops onto ("Archive folder"). */
+  endTarget?: string;
   /** Screenshot captured when the step was recorded — the template for drift matching. */
   refFrame?: Frame;
   status: StepStatus;

@@ -62,10 +62,11 @@ const ACTION_LIST = STEP_ACTIONS.map((a) => `"${a}"`).join('|');
 /** System prompt for the planner: the reply contract the model must follow. */
 export const PLAN_SYSTEM = `You are Droid Assist, an agent that controls a computer screen. You see a screenshot (${VIEW_W}x${VIEW_H}) of the user's screen.
 Plan the concrete steps that achieve the user's goal on THIS screen. Look at the screenshot and target real visible controls.
-Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"x":number,"y":number,"text"?:string}]}
+Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"x":number,"y":number,"text"?:string,"endTarget"?:string,"endX"?:number,"endY"?:number}]}
 x and y are the target's center as fractions 0..1 of the screenshot width/height. "target" names the on-screen thing the step points at (e.g. "Files icon in the taskbar").
 "move" only moves (hovers) the mouse cursor onto the target without clicking — use it for "move the mouse to X" / "hover over X", e.g. {"name":"Move to Files icon","action":"move","target":"Files icon","x":0.42,"y":0.97}.
 "click" clicks the target once, "double_click" double-clicks it (open a desktop icon or file), "scroll" scrolls over the target with "text" "up" or "down".
+"drag" presses the mouse on the target, drags it and releases it on a second on-screen thing: give the drop point as "endX","endY" (fractions 0..1) and name it in "endTarget", e.g. {"name":"Drag Report onto Archive","action":"drag","target":"Report file","x":0.1,"y":0.3,"endTarget":"Archive folder","endX":0.9,"endY":0.3}.
 "text" is the text to type, the key to press, the search query, the arithmetic expression or the scroll direction.
 Never substitute another action for the one the goal asks for; if the target is not visible, return {"steps":[]}.`;
 
@@ -94,7 +95,15 @@ function toStep(raw: unknown, frame: Frame | null): WorkflowStep {
     step.target = typeof s.target === 'string' && s.target.trim() ? s.target.trim() : step.name;
     if (frame) step.refFrame = frame;
   }
+  if (action === 'drag') Object.assign(step, dropPoint(s, step.name));
   return step;
+}
+
+/** A drag's drop point and target from a model step; throws AiError when the end point is missing. */
+function dropPoint(s: Record<string, unknown>, name: string): Pick<WorkflowStep, 'endX' | 'endY' | 'endTarget'> {
+  if (s.endX === undefined || s.endX === null || s.endY === undefined || s.endY === null) throw new AiError(`AI proposed drag "${name}" without an end point (endX, endY)`);
+  const endTarget = typeof s.endTarget === 'string' && s.endTarget.trim() ? s.endTarget.trim() : name;
+  return { endX: toUnit(s.endX, VIEW_W), endY: toUnit(s.endY, VIEW_H), endTarget };
 }
 
 /** Parses the planner's JSON reply into steps; throws AiError on malformed or empty plans. */

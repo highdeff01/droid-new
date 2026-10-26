@@ -56,7 +56,7 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
             <div>
               <input value={s.name} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} aria-label={`Step ${i + 1} name`} />
               <small>
-                {s.action}{s.target ? ` "${s.target}"` : ''} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}% · {s.status}
+                {s.action}{s.target ? ` "${s.target}"` : ''} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}%{s.endX !== undefined && s.endY !== undefined ? ` → ${s.endTarget ? `"${s.endTarget}" ` : ''}${(s.endX * 100).toFixed(0)}%,${(s.endY * 100).toFixed(0)}%` : ''} · {s.status}
                 {s.driftPx !== undefined && ` · drift ${s.driftPx}px`}
                 {s.drift !== undefined && ` · match ${s.drift.toFixed(3)}`}
               </small>
@@ -220,7 +220,7 @@ export function ActionHistoryPanel({ engine }: { engine: AssistEngine }) {
       <ul className={styles.log}>
         {history.slice(0, 200).map((a) => (
           <li key={a.id} data-tone={a.ok ? 'ok' : 'error'}>
-            <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.text ? ` "${a.text}"` : ''} · {a.via}
+            <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.endX !== undefined ? ` → (${a.endX}, ${a.endY})` : ''}{a.text ? ` "${a.text}"` : ''} · {a.via}
           </li>
         ))}
       </ul>
