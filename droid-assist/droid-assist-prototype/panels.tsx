@@ -6,6 +6,7 @@ import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import { AiStatusBadge } from './hud.js';
 import type { LogEntry } from './types.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
+import type { StepFix } from './supervisor.js';
 import styles from './droid-assist.module.css';
 
 /** The N most recent frames with frame-to-frame drift, plus the AI-picked frames shown to the user. */
@@ -228,7 +229,7 @@ export function ActionHistoryPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', reflection: '🔁 Reflection', verdict: '⚖️ Verdict' };
+const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement' };
 
 /** Tone of an entry: failures as errors, verdicts by their outcome, the rest informational. */
 function entryTone(e: ThinkingEntry): LogEntry['tone'] {
@@ -265,6 +266,38 @@ export function QwenThinkingPanel({ engine }: { engine: AssistEngine }) {
       <ul className={styles.log}>
         {timeline.map((e) => <ThinkingItem key={e.id} entry={e} />)}
       </ul>
+    </section>
+  );
+}
+
+/** One suggested step correction, as shown in the Supervisor panel. */
+function fixText(f: StepFix): string {
+  const at = f.x !== undefined && f.y !== undefined ? ` → (${(f.x * 100).toFixed(1)}%, ${(f.y * 100).toFixed(1)}%)` : '';
+  const target = f.target ? ` target "${f.target}"` : '';
+  const text = f.text ? ` text "${f.text}"` : '';
+  return `Step ${f.index}${f.name ? ` "${f.name}"` : ''}${target}${text}${at}${f.reason ? ` — ${f.reason}` : ''}`;
+}
+
+/** Supervisor review: its assessment and the concrete updates it applied or only suggests. */
+export function SupervisorPanel({ engine }: { engine: AssistEngine }) {
+  const { supervisor, agents } = engine;
+  const { review } = supervisor;
+  const on = agents.some((a) => a.id === 'supervisor' && a.on);
+  return (
+    <section className={styles.panel} aria-label="Supervisor review">
+      <h3>Supervisor review <small>{supervisor.status}</small></h3>
+      <button type="button" onClick={() => void engine.superviseRun()} disabled={!on || supervisor.status === 'reviewing'}>Review now</button>
+      {supervisor.status === 'offline' || supervisor.status === 'error' ? <p role="alert">{supervisor.detail}</p> : !review && <p className={styles.muted}>{supervisor.detail}</p>}
+      {review && (
+        <>
+          <p><b>{review.planOk ? 'Plan OK' : 'Plan needs updates'}</b> · confidence {review.confidence.toFixed(2)} · {supervisor.applied ? 'auto-applied' : 'suggested only'}</p>
+          <p>{review.assessment}</p>
+          <ul className={styles.log}>
+            {review.stepFixes.map((f) => <li key={f.stepId} data-tone="warn">{fixText(f)}</li>)}
+            {review.habits.map((h) => <li key={`${h.kind}:${h.pattern}`} data-tone={h.kind === 'avoid' ? 'warn' : 'ok'}><b>{h.kind === 'avoid' ? 'Avoid' : 'Add'}</b> {h.pattern}</li>)}
+          </ul>
+        </>
+      )}
     </section>
   );
 }

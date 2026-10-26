@@ -118,6 +118,73 @@ describe('useAssist Qwen thinking timeline', () => {
   });
 });
 
+describe('useAssist supervisor', () => {
+  const stale = { id: 's1', name: 'Click Save', action: 'click' as const, target: 'Save button', x: 0.1, y: 0.1, correctedX: 0.12, correctedY: 0.11, drift: 0.3, status: 'failed' as const };
+  const review = { plan_ok: false, assessment: 'Save moved to the right', confidence: 0.9, step_fixes: [{ step: 1, x: 0.6, y: 0.4, reason: 'button moved' }], habits: [{ kind: 'add', pattern: 'wait for the dialog' }] };
+  const reply = (body: string) => {
+    if (body.includes("Droid Assist's supervisor")) return { content: JSON.stringify(review), thinking: 'Screens show Save on the right.' };
+    if (body.includes('final verdict')) return { content: '{"success":true,"pattern_avoid":null,"pattern_add":null}' };
+    return { content: 'OK' };
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  async function mountWith(fetchImpl: (url: string, init: RequestInit) => Promise<Response>) {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    vi.stubGlobal('fetch', vi.fn(fetchImpl));
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.setSteps([stale]));
+    return result;
+  }
+
+  it('lists the toggleable Supervisor agent', async () => {
+    const result = await mountWith(async () => new Response(JSON.stringify({ message: { content: 'OK' } }), { status: 200 }));
+    expect(result.current.agents.find((a) => a.id === 'supervisor')).toMatchObject({ name: 'Supervisor', on: true });
+  });
+
+  it('corrects a stale plan step and performs it when the executor leaves it unapplied', async () => {
+    const result = await mountWith(async (_u, init) => new Response(JSON.stringify({ message: reply(String(init.body)) }), { status: 200 }));
+    await act(() => result.current.superviseRun());
+    expect(result.current.supervisor).toMatchObject({ status: 'done', applied: true });
+    expect(result.current.steps[0]).toMatchObject({ x: 0.6, y: 0.4, status: 'pending', correctedX: undefined });
+    expect(result.current.patterns.some((p) => p.pattern === 'wait for the dialog')).toBe(true);
+    expect(result.current.timeline[0]).toMatchObject({ step: 'Supervisor', kind: 'review', thinking: 'Screens show Save on the right.' });
+
+    // Within the window the supervisor leaves the screen to the executor.
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+    expect(result.current.timeline.some((e) => e.kind === 'movement')).toBe(false);
+
+    await act(() => vi.advanceTimersByTimeAsync(4000));
+    const move = result.current.timeline.find((e) => e.kind === 'movement');
+    expect(move?.text).toMatch(/Executor left "Click Save" unapplied — supervisor dry run at \(60\.0%, 40\.0%\)/);
+    expect(result.current.log.some((l) => l.source === 'Supervisor (dry run)')).toBe(true);
+    expect(result.current.steps[0]).toMatchObject({ correctedX: 0.6, correctedY: 0.4 });
+  });
+
+  it('pauses its movement while the executor is mid-step', async () => {
+    const result = await mountWith(async (_u, init) => new Response(JSON.stringify({ message: reply(String(init.body)) }), { status: 200 }));
+    await act(() => result.current.superviseRun());
+    act(() => result.current.setSteps((s) => [...s, { id: 's2', name: 'Busy', action: 'click', x: 0.5, y: 0.5, status: 'running' }]));
+    await act(() => vi.advanceTimersByTimeAsync(7000));
+    expect(result.current.timeline.some((e) => e.kind === 'movement')).toBe(false);
+  });
+
+  it('says plainly the AI is down and changes nothing', async () => {
+    const result = await mountWith(async () => { throw new TypeError('Failed to fetch'); });
+    await act(() => result.current.superviseRun());
+    expect(result.current.supervisor.review).toBeNull();
+    expect(result.current.supervisor.status).toBe('offline');
+    expect(result.current.supervisor.detail).toMatch(/AI endpoint is down — no supervisor review/);
+    expect(result.current.steps[0]).toMatchObject({ x: 0.1, y: 0.1, status: 'failed' });
+    await act(() => vi.advanceTimersByTimeAsync(7000));
+    expect(result.current.timeline.some((e) => e.kind === 'movement')).toBe(false);
+  });
+});
+
 describe('useAssist screen capture', () => {
   it('starts native capture at the configured rate and analyses every pushed frame', async () => {
     const { api, hooks } = installNative();

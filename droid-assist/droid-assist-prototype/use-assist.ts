@@ -18,6 +18,7 @@ import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, runVerdict, upsertCard } from './flow-memory.js';
+import { SUPERVISOR_INTERVAL_MS, SUPERVISOR_TICK_MS, applyFixes, executorBusy, habitPatterns, isConfident, reviewRun, reviewText, staleFixes, type PendingFix, type SupervisorReview, type SupervisorState } from './supervisor.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -101,7 +102,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
 
 /** A background agent the user can toggle. */
 export interface Agent {
-  id: 'popup' | 'drift' | 'progress' | 'goal';
+  id: 'popup' | 'drift' | 'progress' | 'goal' | 'supervisor';
   name: string;
   description: string;
   on: boolean;
@@ -141,6 +142,7 @@ export function useAssist() {
     { id: 'drift', name: 'Drift monitor', description: 'Cross-checks every frame against the active step', on: true },
     { id: 'progress', name: 'Progress tracker', description: 'Counts verified steps toward the goal', on: true },
     { id: 'goal', name: 'Goal reviewer', description: 'Reviews the goal after each run and suggests what is next', on: true },
+    { id: 'supervisor', name: 'Supervisor', description: 'Reviews all agents, screenshots and thinking; applies confident fixes and performs them if the executor does not', on: true },
   ]);
   const [plays, setPlays] = useState(0);
   const [armed, setArmed] = useState(false);
@@ -151,6 +153,7 @@ export function useAssist() {
   /** Per-step Qwen thinking timeline, newest first: thought, reflection and verdict of every AI call. */
   const [timeline, setTimeline] = useState<ThinkingEntry[]>([]);
   const [captureLost, setCaptureLost] = useState<string | null>(null);
+  const [supervisor, setSupervisor] = useState<SupervisorState>({ status: 'idle', detail: 'No review yet', review: null, applied: false });
 
   const demoCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const captureRef = useRef<ScreenCapture | null>(null);
@@ -188,7 +191,21 @@ export function useAssist() {
   const patternsRef = useRef<LearnedPattern[]>(patterns);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
+  const timelineRef = useRef(timeline);
+  const syncRef = useRef(sync);
+  const progressRef = useRef(progress);
+  /** Corrections the supervisor applied that the executor has not carried out yet. */
+  const pendingFixesRef = useRef<PendingFix[]>([]);
+  const supervisorBusyRef = useRef(false);
+  /** Set while the supervisor itself moves the pointer; Auto Act waits for it. */
+  const supervisorMovingRef = useRef(false);
+  const lastReviewAt = useRef(Date.now());
+  const supervisorRef = useRef(supervisor);
 
+  supervisorRef.current = supervisor;
+  timelineRef.current = timeline;
+  syncRef.current = sync;
+  progressRef.current = progress;
   settingsRef.current = settings;
   sourceRef.current = source;
   aiStatusRef.current = aiStatus;
@@ -524,6 +541,98 @@ export function useAssist() {
     if (agentsRef.current('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
   };
 
+  /** Shows the supervisor's state in its panel and logs it. */
+  const superviseReport = (state: SupervisorState, tone: LogEntry['tone']) => {
+    supervisorRef.current = state;
+    setSupervisor(state);
+    addLog('Supervisor', state.detail, tone);
+  };
+
+  /** Applies a confident review: step fixes onto the plan (awaiting the executor) and habits into the pattern store. */
+  const applyReview = (review: SupervisorReview) => {
+    stepsRef.current = applyFixes(stepsRef.current, review.stepFixes);
+    setSteps(stepsRef.current);
+    const now = Date.now();
+    const fixed = new Set(review.stepFixes.map((f) => f.stepId));
+    pendingFixesRef.current = [...pendingFixesRef.current.filter((p) => !fixed.has(p.stepId)), ...[...fixed].map((stepId) => ({ stepId, appliedAt: now }))];
+    if (review.habits.length) addPatterns(habitPatterns(review.habits, goalRef.current, now));
+  };
+
+  /**
+   * The supervisor's review: consolidates every agent's output, the gallery screenshots and the
+   * thinking timeline into one structured AI question. With the AI down it says so and does nothing.
+   */
+  const superviseRun = async () => {
+    if (!agentsRef.current('supervisor') || supervisorBusyRef.current) return;
+    lastReviewAt.current = Date.now();
+    if (aiStatusRef.current.state === 'offline') {
+      superviseReport({ status: 'offline', detail: `AI endpoint is down — no supervisor review was made, nothing applied (${aiStatusRef.current.detail})`, review: null, applied: false }, 'error');
+      return;
+    }
+    supervisorBusyRef.current = true;
+    setSupervisor((s) => ({ ...s, status: 'reviewing', detail: 'Reviewing agents, screenshots and thinking…' }));
+    try {
+      const input = { goal: goalRef.current, steps: stepsRef.current, log: logRef.current, timeline: timelineRef.current, frames: framesRef.current, sync: syncRef.current, progress: progressRef.current };
+      const review = await reviewRun(askAi, input);
+      const applied = isConfident(review);
+      if (applied) applyReview(review);
+      const text = reviewText(review, applied);
+      note({ step: 'Supervisor', kind: 'review', text, thinking: review.thinking });
+      superviseReport({ status: 'done', detail: text, review, applied }, review.planOk ? 'ok' : 'warn');
+    } catch (error) {
+      note({ step: 'Supervisor', kind: 'review', text: '', thinking: null, error: errorText(error) });
+      superviseReport({ status: aiOnline() ? 'error' : 'offline', detail: `AI unavailable — no supervisor review, nothing applied: ${errorText(error)}`, review: null, applied: false }, 'error');
+    } finally {
+      supervisorBusyRef.current = false;
+    }
+  };
+
+  /** Performs one correction the executor left unapplied; dry run unless armed, inside the run budget. */
+  const superviseMove = async (fix: PendingFix, budget: ActionBudget): Promise<boolean> => {
+    pendingFixesRef.current = pendingFixesRef.current.filter((p) => p.stepId !== fix.stepId);
+    const idx = stepsRef.current.findIndex((s) => s.id === fix.stepId);
+    const step = stepsRef.current[idx];
+    const dry = !armedRef.current;
+    updateStep(idx, { status: 'running' });
+    const out = await perform(step, 'Supervisor', budget, dry);
+    applyOutcome(idx, out, dry);
+    const message = `Executor left "${step.name}" unapplied — supervisor ${dry ? 'dry run' : 'performed it'} at ${at(out.target.x, out.target.y)}: ${out.message}`;
+    note({ step: step.name, kind: 'movement', text: message, thinking: null });
+    addLog(dry ? 'Supervisor (dry run)' : 'Supervisor', message, out.ok ? 'ok' : 'error');
+    return !out.halt;
+  };
+
+  /** Carries out corrections the executor has not applied within the window; pauses while it is mid-step. */
+  const superviseMovement = async () => {
+    pendingFixesRef.current = pendingFixesRef.current.filter((p) => stepsRef.current.some((s) => s.id === p.stepId && s.status !== 'done'));
+    const stale = staleFixes(pendingFixesRef.current, stepsRef.current, Date.now());
+    if (!stale.length || supervisorMovingRef.current || abortedRef.current) return;
+    if (executorBusy({ autoBusy: autoBusyRef.current, replaying: replayingRef.current, recording: recordingRef.current, steps: stepsRef.current })) return;
+    supervisorMovingRef.current = true;
+    const budget = createBudget(settingsRef.current.actionBudget);
+    try {
+      for (const fix of stale) {
+        if (abortedRef.current || !(await superviseMove(fix, budget))) break;
+      }
+    } finally {
+      supervisorMovingRef.current = false;
+    }
+  };
+
+  /** One supervisor tick: movement for unapplied corrections, then a periodic review when due. */
+  const superviseTick = () => {
+    if (!agentsRef.current('supervisor')) return;
+    void superviseMovement();
+    if (stepsRef.current.length && Date.now() - lastReviewAt.current >= SUPERVISOR_INTERVAL_MS) void superviseRun();
+  };
+  const superviseTickRef = useRef(superviseTick);
+  superviseTickRef.current = superviseTick;
+
+  useEffect(() => {
+    const id = setInterval(() => superviseTickRef.current(), SUPERVISOR_TICK_MS);
+    return () => clearInterval(id);
+  }, []);
+
   /** Visual error detection: frame-to-frame cluster of changed cells → highlighted popup/mismatch. */
   const detectErrors = useCallback((prev: Frame, cur: Frame) => {
     if (popupRef.current && popupBaseRef.current && popupFrameRef.current) {
@@ -582,6 +691,7 @@ export function useAssist() {
       const dryRun = autoDryRef.current;
       autoDryRef.current = false;
       void learnFromRun(stepsRef.current, { dryRun, stopped: false });
+      void superviseRun();
     }
     if (out.halt) {
       setSettings((s) => ({ ...s, autoAct: false }));
@@ -592,7 +702,7 @@ export function useAssist() {
   /** Auto Act: with the AI online, the model handles popups and runs the next pending step. Disarmed = dry run. */
   const autoAct = async (frame: Frame) => {
     const { autoAct: on } = settingsRef.current;
-    if (!on || abortedRef.current || autoBusyRef.current || replayingRef.current || recordingRef.current) return;
+    if (!on || abortedRef.current || autoBusyRef.current || replayingRef.current || recordingRef.current || supervisorMovingRef.current) return;
     if (!aiOnline() || Date.now() - lastStepAt.current < 1500) return;
     autoBusyRef.current = true;
     try {
@@ -811,6 +921,7 @@ export function useAssist() {
       addLog('Goal reviewer', ok === total ? `All ${total} steps ${what}${goal ? ` for "${goal}"` : ''}` : `${ok}/${total} ${what} — re-plan the failed steps or let AI help clear blockers`, ok === total ? 'ok' : 'warn');
     }
     await learnFromRun(stepsRef.current, { dryRun, stopped: abortRef.current });
+    await superviseRun();
   };
 
   const stop = () => {
@@ -1027,7 +1138,7 @@ export function useAssist() {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
-    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern,
+    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
     onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
   };
