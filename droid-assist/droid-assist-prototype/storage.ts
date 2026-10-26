@@ -80,7 +80,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
-  for (const key of ['bridgeUrl', 'errorUrl', 'errorToken'] as const) {
+  for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken'] as const) {
     const v = stored[key];
     if (typeof v === 'string') out[key] = v;
   }

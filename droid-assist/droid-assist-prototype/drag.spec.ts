@@ -19,7 +19,7 @@ const drag = (patch: Partial<WorkflowStep> = {}): WorkflowStep => ({ id: 'd', na
 
 function deps(patch: Partial<StepDeps> = {}) {
   const lines: string[] = [];
-  const d: StepDeps = { bridgeUrl: 'http://pc', capture: vi.fn(async () => live), attempts: 1, retryMs: 1, dispatch: true, log: (m) => lines.push(m), ...patch };
+  const d: StepDeps = { bridgeUrl: 'http://pc', bridgeToken: '', capture: vi.fn(async () => live), attempts: 1, retryMs: 1, dispatch: true, log: (m) => lines.push(m), ...patch };
   return { d, lines };
 }
 
