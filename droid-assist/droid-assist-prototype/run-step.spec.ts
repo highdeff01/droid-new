@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runStep, type StepDeps } from './run-step.js';
+import { runStep, type Grounding, type StepDeps } from './run-step.js';
 import type { Frame, WorkflowStep } from './types.js';
 
 const W = 320;
@@ -90,5 +90,95 @@ describe('runStep', () => {
     const out = await runStep(step, d);
     expect(out.executed).toBe(true);
     expect(lines.some((l) => /no visible change/.test(l))).toBe(true);
+  });
+});
+
+describe('runStep grounding', () => {
+  const live = frame(1, image(100, 60));
+  const move: WorkflowStep = { id: 'm', name: 'Move to Files icon', action: 'move', target: 'Files icon', x: 0.25, y: 0.5, status: 'pending' };
+  const seen = (visible: boolean, reason = visible ? 'icon is there' : 'empty desktop') => ({ visible, reason });
+  const grounding = (confirm: Grounding['confirm'], relocate: Grounding['relocate'] = vi.fn(async () => null)): Grounding => ({ confirm, relocate });
+  const sentStep = (fetchSpy: ReturnType<typeof vi.fn>) => JSON.parse(fetchSpy.mock.calls[0][1].body).steps[0];
+
+  it('dispatches a real cursor move at a confirmed target', async () => {
+    const fetchSpy = completedRun();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { d } = deps([live], { grounding: grounding(vi.fn(async () => seen(true))) });
+    const out = await runStep(move, d);
+    expect(out).toMatchObject({ ok: true, executed: true });
+    const sent = sentStep(fetchSpy);
+    expect(sent).toMatchObject({ action: 'move', x: 480, y: 540 });
+    expect(sent.durationMs).toBeGreaterThanOrEqual(250);
+    expect(sent.durationMs).toBeLessThanOrEqual(550);
+  });
+
+  it('re-asks the planner once and dispatches at the confirmed new point', async () => {
+    const fetchSpy = completedRun();
+    vi.stubGlobal('fetch', fetchSpy);
+    const confirm = vi.fn<Grounding['confirm']>().mockResolvedValueOnce(seen(false)).mockResolvedValueOnce(seen(true));
+    const relocate = vi.fn<Grounding['relocate']>(async () => ({ x: 0.5, y: 0.75 }));
+    const { d } = deps([live], { grounding: grounding(confirm, relocate) });
+    const out = await runStep({ ...move, action: 'double_click' }, d);
+    expect(out.executed).toBe(true);
+    expect(relocate).toHaveBeenCalledTimes(1);
+    expect(relocate.mock.calls[0][2]).toContain('empty desktop');
+    expect(confirm.mock.calls[1][2]).toEqual({ x: 0.5, y: 0.75 });
+    expect(sentStep(fetchSpy)).toMatchObject({ action: 'double_click', x: 960, y: 810 });
+  });
+
+  it('never dispatches when the re-planned point is rejected too', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { d } = deps([live], { grounding: grounding(vi.fn(async () => seen(false)), vi.fn(async () => ({ x: 0.5, y: 0.75 }))) });
+    const out = await runStep(move, d);
+    expect(out).toMatchObject({ ok: false, executed: false });
+    expect(out.message).toMatch(/^Target "Files icon" not located/);
+    expect(out.message).toContain('(480, 540)px');
+    expect(out.message).toContain('(960, 810)px');
+    expect(out.message).toMatch(/not executed$/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('never dispatches when the re-plan cannot see the target', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { d } = deps([live], { grounding: grounding(vi.fn(async () => seen(false))) });
+    const out = await runStep(move, d);
+    expect(out.executed).toBe(false);
+    expect(out.message).toMatch(/re-plan found no such target/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('never dispatches when the AI check fails', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { d } = deps([live], { grounding: grounding(vi.fn(async () => { throw new Error('model offline'); })) });
+    const out = await runStep({ ...move, action: 'scroll', text: 'down' }, d);
+    expect(out.executed).toBe(false);
+    expect(out.message).toMatch(/could not be verified/);
+    expect(out.message).toContain('model offline');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects a red template match before asking the AI', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const confirm = vi.fn(async () => seen(true));
+    const blank = frame(2, image(-50, -50));
+    const { d } = deps([blank], { grounding: grounding(confirm) });
+    const out = await runStep({ ...step, target: 'Play button' }, d);
+    expect(out.executed).toBe(false);
+    expect(out.message).toMatch(/not found on the live screen.*best match/);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('skips the AI pass for a step without a named target', async () => {
+    vi.stubGlobal('fetch', completedRun());
+    const confirm = vi.fn(async () => seen(false));
+    const { d } = deps([live], { grounding: grounding(confirm) });
+    const out = await runStep({ ...move, target: undefined }, d);
+    expect(out.executed).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
   });
 });

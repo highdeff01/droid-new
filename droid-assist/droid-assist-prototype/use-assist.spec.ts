@@ -44,6 +44,8 @@ describe('useAssist flow and pattern memory', () => {
     const { result } = renderHook(() => useAssist());
     await act(async () => {});
     expect(result.current.cards.map((c) => c.id)).toContain('f1');
+    // The engine pings the AI endpoint on mount; only the planning itself must make no model call.
+    fetchSpy.mockClear();
     act(() => result.current.setGoal('dismiss the ads and play the videos'));
     await act(() => result.current.autoPlan());
     const planned = result.current.log.find((l) => l.source === 'Planner');

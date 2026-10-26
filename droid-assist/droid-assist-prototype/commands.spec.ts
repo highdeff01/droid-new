@@ -16,4 +16,16 @@ describe('parseCommand', () => {
     expect(parseCommand('/useful thing')).toMatchObject({ kind: 'error' });
     expect(parseCommand('/USE notepad')).toMatchObject({ kind: 'error' });
   });
+  it('parses /move with a multi-word target', () => {
+    expect(parseCommand('/move files icon')).toEqual({ kind: 'move', target: 'files icon' });
+  });
+  it('rejects /move without a target', () => {
+    expect(parseCommand('/move')).toMatchObject({ kind: 'error' });
+    expect(parseCommand('/move   ')).toMatchObject({ kind: 'error' });
+  });
+  it('names /move in the unknown-command error', () => {
+    const r = parseCommand('/hover icon');
+    expect(r).toMatchObject({ kind: 'error' });
+    expect(r && 'message' in r ? r.message : '').toMatch(/\/move/);
+  });
 });
