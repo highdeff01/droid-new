@@ -1,10 +1,24 @@
 import type { AssistEngine } from './use-assist.js';
-import type { SyncLevel } from './types.js';
+import type { MonitorMode, ScreenSource, SyncLevel } from './types.js';
 import type { AiStatus } from './ai.js';
+import { MONITOR_MODES } from './capture.js';
 import styles from './droid-assist.module.css';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
-const SOURCE_LABEL: Record<ScreenSource, string> = { demo: 'Demo desktop', screen: 'Screen share', bridge: 'Desktop bridge', native: 'Native capture' };
+const SOURCE_LABEL: Record<ScreenSource, string> = { none: 'None', demo: 'Demo desktop', screen: 'Screen capture', bridge: 'Desktop bridge' };
+const AI_LEVEL: Record<AiStatus['state'], SyncLevel> = { online: 'green', checking: 'yellow', offline: 'red' };
+const AI_LABEL: Record<AiStatus['state'], string> = { online: 'AI connected', checking: 'AI connecting…', offline: 'AI unavailable' };
+
+/** Live state of the AI endpoint: connected, connecting, or the reason it is unavailable. */
+export function AiStatusBadge({ status }: { status: AiStatus }) {
+  return (
+    <div className={styles.sync} data-level={AI_LEVEL[status.state]} title={status.detail} aria-live="polite">
+      <span className={styles.syncDot} />
+      <strong>{AI_LABEL[status.state]}</strong>
+      <span className={styles.syncDetail}>{status.detail}</span>
+    </div>
+  );
+}
 
 /** Monitor HUD: mode picker, capture interval, screenshot count, source and /use target. */
 export function MonitorStatus({ engine }: { engine: AssistEngine }) {
@@ -89,14 +103,15 @@ export function Hud({ engine }: { engine: AssistEngine }) {
           )}
           <button type="button" onClick={engine.explainScreen} disabled={aiOff || aiBusy} title={aiTitle}>👁 Point out</button>
         </div>
-        <div className={styles.goal}>
-          <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder='Goal, e.g. "play the game", "calculate 12*7", "search ad blocker"' aria-label="Goal" />
-          <button type="button" className={styles.primary} onClick={engine.autoPlan} disabled={aiOff || aiBusy} title={aiTitle}>{aiBusy ? '… thinking' : '✨ AI plan'}</button>
-        </div>
+        <form className={styles.goal} onSubmit={(e) => { e.preventDefault(); void engine.submitInput(); }}>
+          <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder='Goal or command, e.g. "/use notepad", "calculate 12*7", "search ad blocker"' aria-label="Goal" />
+          <button type="submit" className={styles.primary} disabled={aiBusy || (aiOff && !goal.trim().startsWith('/'))} title={aiTitle}>{aiBusy ? '… thinking' : '✨ AI plan'}</button>
+        </form>
       </div>
       <MonitorStatus engine={engine} />
       <div className={styles.hud2}>
         <SafetyControls engine={engine} />
+        <AiStatusBadge status={aiStatus} />
         <SyncStatus level={engine.sync.level} detail={engine.sync.detail} />
         <label><input type="checkbox" checked={settings.autoAct} onChange={(e) => setSettings({ ...settings, autoAct: e.target.checked })} disabled={aiOff} /> Auto act{aiOff && ' (AI unavailable)'}</label>
         <label><input type="checkbox" checked={settings.aiHelp} onChange={(e) => setSettings({ ...settings, aiHelp: e.target.checked })} disabled={aiOff} /> AI help{aiOff && ' (AI unavailable)'}</label>

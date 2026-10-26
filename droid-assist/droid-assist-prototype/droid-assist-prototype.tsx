@@ -33,6 +33,7 @@ function AssistScreen() {
         <div className={styles.bottom}>
           <ComparisonGallery engine={engine} />
           <AiHelpPanel engine={engine} />
+          <QwenThinkingPanel engine={engine} />
           <AgentsPanel engine={engine} />
           <LogPanel engine={engine} />
           <ActionHistoryPanel engine={engine} />

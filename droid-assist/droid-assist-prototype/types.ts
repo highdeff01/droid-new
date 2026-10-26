@@ -83,6 +83,32 @@ export interface WorkflowStep {
   driftPx?: number;
   /** Screenshot of the real desktop taken right after this step was executed. */
   shot?: Frame;
+  /** Visual evidence from the last execution: screenshots just before and just after the action. */
+  beforeFrame?: Frame;
+  afterFrame?: Frame;
+}
+
+/** Monitor modes, each with its own capture interval. */
+export type MonitorMode = 'app' | 'background' | 'advanced';
+
+/** Real mouse/keyboard actions recorded in the persistent action history. */
+export type InputAction = 'move' | 'click' | 'double_click' | 'type' | 'key' | 'scroll';
+
+/** One executed mouse or keyboard action, persisted for viewing and export. */
+export interface ActionRecord {
+  id: string;
+  time: number;
+  action: InputAction;
+  /** Native screen pixels the action targeted. */
+  x: number;
+  y: number;
+  text?: string;
+  /** Who performed it: Replay, Auto-Actor, AI help, ... */
+  source: string;
+  /** Where it was dispatched: the desktop bridge or the demo desktop. */
+  via: 'bridge' | 'demo';
+  ok: boolean;
+  message: string;
 }
 
 /** Alignment between the live screen and the active step. */
@@ -138,4 +164,8 @@ export interface AssistSettings {
   abortHotkey: string;
   /** Max real (bridge-dispatched) input actions per Auto Act / replay run. */
   actionBudget: number;
+  /** Ollama-compatible /api/chat URL every AI feature calls. */
+  aiUrl: string;
+  /** Model name sent with every AI request. */
+  aiModel: string;
 }

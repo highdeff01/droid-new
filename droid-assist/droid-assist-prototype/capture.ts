@@ -1,5 +1,18 @@
 import type { NativeCaptureApi, NativeFrame } from './electron/capture-api.js';
+import type { MonitorMode } from './types.js';
 import { SAMPLE_H, SAMPLE_W } from './drift.js';
+
+/** Label and fixed interval of each monitor mode; `null` means "use settings.captureMs". */
+export const MONITOR_MODES: Record<MonitorMode, { label: string; fixedMs: number | null }> = {
+  app: { label: 'App capture & monitor', fixedMs: null },
+  background: { label: 'Background monitor & control', fixedMs: 1000 },
+  advanced: { label: 'Advanced monitor', fixedMs: 250 },
+};
+
+/** Capture interval for a monitor mode. */
+export function monitorInterval(mode: MonitorMode, captureMs: number): number {
+  return MONITOR_MODES[mode].fixedMs ?? captureMs;
+}
 
 declare global {
   interface Window {

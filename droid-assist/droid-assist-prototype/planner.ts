@@ -63,10 +63,11 @@ Plan the concrete steps that achieve the user's goal on THIS screen. Look at the
 Reply ONLY with JSON: {"steps":[{"name":string,"action":"click"|"type"|"key"|"open_app"|"wait"|"search"|"calc"|"media","x":number,"y":number,"text"?:string}]}
 x and y are the target's center as fractions 0..1 of the screenshot width/height. "text" is the text to type, the key to press, the search query or the arithmetic expression.`;
 
-/** A plan the assistant proposes, with where it came from. */
+/** A plan the assistant proposes, with where it came from and the model's thinking (null when reused or absent). */
 export interface PlanResult {
   steps: WorkflowStep[];
   source: string;
+  thinking: string | null;
 }
 
 /** Converts one model step into a WorkflowStep; throws AiError when it breaks the contract. */

@@ -6,7 +6,7 @@ import type { AskFn } from './ai.js';
 import type { Frame, LearnedPattern, SavedCard, WorkflowStep } from './types.js';
 
 const frame = { id: 1, url: 'data:image/jpeg;base64,QUJD' } as Frame;
-const askReturning = (text: string) => vi.fn<AskFn>(async () => text);
+const askReturning = (text: string, thinking: string | null = null) => vi.fn<AskFn>(async () => ({ content: text, thinking }));
 const card: SavedCard = {
   id: 'c1',
   name: 'Open calculator app',
@@ -58,18 +58,18 @@ describe('decidePopup', () => {
   const box = { x: 0.3, y: 0.3, w: 0.4, h: 0.3 };
   it('closes where the model points', async () => {
     const ask = askReturning('{"close":true,"x":0.9,"y":0.1,"reason":"ad"}');
-    await expect(decidePopup(ask, frame, box)).resolves.toEqual({ close: true, x: 0.9, y: 0.1, reason: 'ad' });
+    await expect(decidePopup(ask, frame, box)).resolves.toEqual({ close: true, x: 0.9, y: 0.1, reason: 'ad', thinking: null });
     expect(ask.mock.calls[0][0].frame).toBe(frame);
   });
-  it('leaves it when the model says so', async () => {
-    await expect(decidePopup(askReturning('{"close":false,"reason":"content"}'), frame, box)).resolves.toEqual({ close: false, reason: 'content' });
+  it('leaves it when the model says so, carrying its thinking', async () => {
+    await expect(decidePopup(askReturning('{"close":false,"reason":"content"}', 'it is page content'), frame, box)).resolves.toEqual({ close: false, reason: 'content', thinking: 'it is page content' });
   });
 });
 
 describe('decideStep', () => {
   it('runs at the model target or waits', async () => {
-    await expect(decideStep(askReturning('{"run":true,"x":0.6,"y":0.7,"reason":"visible"}'), frame, step, 'play')).resolves.toEqual({ run: true, x: 0.6, y: 0.7, reason: 'visible' });
-    await expect(decideStep(askReturning('{"run":false,"reason":"not ready"}'), frame, step, 'play')).resolves.toEqual({ run: false, reason: 'not ready' });
+    await expect(decideStep(askReturning('{"run":true,"x":0.6,"y":0.7,"reason":"visible"}', 'button is visible'), frame, step, 'play')).resolves.toEqual({ run: true, x: 0.6, y: 0.7, reason: 'visible', thinking: 'button is visible' });
+    await expect(decideStep(askReturning('{"run":false,"reason":"not ready"}'), frame, step, 'play')).resolves.toEqual({ run: false, reason: 'not ready', thinking: null });
   });
 });
 
@@ -81,6 +81,47 @@ describe('describeScreen', () => {
   });
   it('rejects a reply without an answer', async () => {
     await expect(describeScreen(askReturning('{"items":[]}'), frame, 'q', '')).rejects.toBeInstanceOf(AiError);
+  });
+  it('returns the model thinking with the answer', async () => {
+    const r = await describeScreen(askReturning('{"answer":"Search","items":[]}', 'the box at top'), frame, 'where?', '');
+    expect(r.thinking).toBe('the box at top');
+  });
+});
+
+describe('planFromGoal thinking', () => {
+  it('returns the model thinking with a planned result and null for a reused card', async () => {
+    const planned = await planFromGoal('find dogs', [], frame, askReturning('{"steps":[{"name":"Search","action":"search","text":"dogs"}]}', 'need a search'));
+    expect(planned.thinking).toBe('need a search');
+    expect((await planFromGoal('open calculator app', [card], frame, askReturning('{}', 'unused'))).thinking).toBeNull();
+  });
+});
+
+describe('reflectStep', () => {
+  const outcome = { ok: true, message: 'Dispatched to PC at (10, 20)' };
+  const askSequence = (...replies: Array<{ content: string; thinking: string | null }>) => vi.fn<AskFn>(async () => replies.shift()!);
+
+  it('asks for a free-text reflection, then a JSON verdict, returning both with their thinking', async () => {
+    const ask = askSequence({ content: 'The dialog closed.', thinking: 'compare screens' }, { content: '{"success":true,"pattern_avoid":null,"pattern_add":"close dialogs first"}', thinking: 'it worked' });
+    const r = await reflectStep(ask, frame, step, outcome, 'play');
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(ask.mock.calls[0][0].json).toBeFalsy();
+    expect(ask.mock.calls[0][0].prompt).toContain('Press play');
+    expect(ask.mock.calls[1][0]).toMatchObject({ json: true, frame });
+    expect(ask.mock.calls[1][0].prompt).toContain('The dialog closed.');
+    expect(r).toEqual({
+      reflection: { text: 'The dialog closed.', thinking: 'compare screens' },
+      verdict: { success: true, pattern_avoid: null, pattern_add: 'close dialogs first', thinking: 'it worked' },
+    });
+  });
+
+  it('keeps a failure verdict and its pattern to avoid', async () => {
+    const ask = askSequence({ content: 'Missed.', thinking: null }, { content: '{"success":false,"pattern_avoid":"clicking the banner","pattern_add":""}', thinking: null });
+    expect((await reflectStep(ask, null, step, { ok: false, message: 'no change' }, '')).verdict).toEqual({ success: false, pattern_avoid: 'clicking the banner', pattern_add: null, thinking: null });
+  });
+
+  it('rejects a verdict whose success is not a boolean', async () => {
+    const ask = askSequence({ content: 'ok', thinking: null }, { content: '{"success":"yes"}', thinking: null });
+    await expect(reflectStep(ask, frame, step, outcome, '')).rejects.toBeInstanceOf(AiError);
   });
 });
 

@@ -3,7 +3,7 @@ import { AiError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, chat, createAiSession, parse
 import type { Frame } from './types.js';
 
 const cfg = { url: 'http://model.test/api/chat', model: 'test-model' };
-const reply = (content: unknown, status = 200) => new Response(JSON.stringify({ message: { role: 'assistant', content } }), { status });
+const reply = (content: unknown, status = 200, thinking?: unknown) => new Response(JSON.stringify({ message: { role: 'assistant', content, ...(thinking === undefined ? {} : { thinking }) } }), { status });
 const frame = { url: 'data:image/jpeg;base64,QUJD' } as Frame;
 
 function stubFetch(...responses: Array<Response | Error>) {
@@ -28,11 +28,22 @@ describe('ai defaults', () => {
 });
 
 describe('chat', () => {
-  it('posts a non-streaming Ollama chat to the configured URL and returns message.content', async () => {
+  it('posts a non-streaming Ollama chat with thinking enabled and returns message.content', async () => {
     const fn = stubFetch(reply(' hello '));
-    await expect(chat(cfg, [{ role: 'user', content: 'hi' }])).resolves.toBe('hello');
+    await expect(chat(cfg, [{ role: 'user', content: 'hi' }])).resolves.toEqual({ content: 'hello', thinking: null });
     expect((fn.mock.calls[0] as unknown as [string])[0]).toBe(cfg.url);
-    expect(bodyOf(fn)).toMatchObject({ model: 'test-model', stream: false, messages: [{ role: 'user', content: 'hi' }] });
+    expect(bodyOf(fn)).toMatchObject({ model: 'test-model', stream: false, think: true, messages: [{ role: 'user', content: 'hi' }] });
+  });
+
+  it('returns message.thinking alongside the content', async () => {
+    stubFetch(reply('{"a":1}', 200, ' The user wants a. '));
+    await expect(chat(cfg, [], true)).resolves.toEqual({ content: '{"a":1}', thinking: 'The user wants a.' });
+  });
+
+  it('reports thinking as null when it is empty or not a string', async () => {
+    stubFetch(reply('x', 200, '  '), reply('y', 200, 42));
+    expect((await chat(cfg, [])).thinking).toBeNull();
+    expect((await chat(cfg, [])).thinking).toBeNull();
   });
 
   it('rejects with the HTTP status on a non-OK reply', async () => {
@@ -86,9 +97,9 @@ describe('createAiSession', () => {
   it('sends the frame as bare base64, carries history and persists it', async () => {
     const saved = new Map<string, string>();
     const store = { getItem: (k: string) => saved.get(k) ?? null, setItem: (k: string, v: string) => void saved.set(k, v) };
-    const fn = stubFetch(reply('first'), reply('second'));
+    const fn = stubFetch(reply('first', 200, 'secret reasoning'), reply('second'));
     const session = createAiSession(store);
-    await session.ask(cfg, { system: 'sys', prompt: 'look', frame, context: ['[You] clicked'] });
+    await expect(session.ask(cfg, { system: 'sys', prompt: 'look', frame, context: ['[You] clicked'] })).resolves.toEqual({ content: 'first', thinking: 'secret reasoning' });
     await session.ask(cfg, { system: 'sys', prompt: 'again' });
     const first = bodyOf(fn, 0).messages;
     expect(first[1]).toMatchObject({ role: 'user', images: ['QUJD'] });
@@ -96,6 +107,7 @@ describe('createAiSession', () => {
     const second = bodyOf(fn, 1).messages.map((m: { role: string; content: string }) => [m.role, m.content]);
     expect(second.slice(2, 3)).toEqual([['assistant', 'first']]);
     expect(createAiSession(store).history()).toHaveLength(4);
+    expect(JSON.stringify(createAiSession(store).history())).not.toContain('secret reasoning');
   });
 
   it('does not record a failed turn', async () => {

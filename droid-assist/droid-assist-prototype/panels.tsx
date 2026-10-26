@@ -3,6 +3,9 @@ import type { AssistEngine } from './use-assist.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
+import { AiStatusBadge } from './hud.js';
+import type { LogEntry } from './types.js';
+import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
 import styles from './droid-assist.module.css';
 
 /** The N most recent frames with frame-to-frame drift, plus the AI-picked frames shown to the user. */
@@ -220,6 +223,47 @@ export function ActionHistoryPanel({ engine }: { engine: AssistEngine }) {
             <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.text ? ` "${a.text}"` : ''} · {a.via}
           </li>
         ))}
+      </ul>
+    </section>
+  );
+}
+
+const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', reflection: '🔁 Reflection', verdict: '⚖️ Verdict' };
+
+/** Tone of an entry: failures as errors, verdicts by their outcome, the rest informational. */
+function entryTone(e: ThinkingEntry): LogEntry['tone'] {
+  if (e.error) return 'error';
+  if (e.kind !== 'verdict') return 'info';
+  return e.text.startsWith('SUCCESS') ? 'ok' : 'warn';
+}
+
+/** One timeline entry: what the model answered and the thinking it returned — or plainly that there was none. */
+function ThinkingItem({ entry }: { entry: ThinkingEntry }) {
+  return (
+    <li data-tone={entryTone(entry)}>
+      <time>{new Date(entry.time).toLocaleTimeString()}</time> <b>{entry.step}</b> · {KIND_LABEL[entry.kind]}
+      {entry.error ? (
+        <p role="alert">AI call failed — {entry.error}</p>
+      ) : (
+        <>
+          <p>{entry.text}</p>
+          {entry.thinking ? <pre className={styles.muted}>{entry.thinking}</pre> : <p className={styles.muted}>No thinking returned by the model</p>}
+        </>
+      )}
+    </li>
+  );
+}
+
+/** Qwen thinking: per-step timeline of the model's thought, follow-up reflection and final verdict. */
+export function QwenThinkingPanel({ engine }: { engine: AssistEngine }) {
+  const { timeline, aiStatus, settings } = engine;
+  return (
+    <section className={styles.panel} aria-label="Qwen thinking">
+      <h3>Qwen thinking <small>{settings.aiModel}</small></h3>
+      {aiStatus.state === 'offline' && <p className={styles.muted} role="alert">{aiStatus.detail}</p>}
+      {!timeline.length && <p className={styles.muted}>No AI calls yet.</p>}
+      <ul className={styles.log}>
+        {timeline.map((e) => <ThinkingItem key={e.id} entry={e} />)}
       </ul>
     </section>
   );
