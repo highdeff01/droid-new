@@ -118,6 +118,78 @@ describe('useAssist Qwen thinking timeline', () => {
   });
 });
 
+describe('useAssist re-plan loop guard and parse failures', () => {
+  const planBody = (x: number) => ({ content: `{"steps":[{"name":"Hover Files","action":"move","target":"files icon","x":${x},"y":0.9}]}`, thinking: 'Files sits bottom-left.' });
+  const isPlan = (init: RequestInit) => typeof init.body === 'string' && init.body.includes('Goal: move mouse to files icon');
+
+  /** Stubs fetch: plan calls get `planReply(n)` for the n-th plan call, everything else a plain OK. */
+  function stubModel(planReply: (n: number) => Record<string, unknown>) {
+    let n = 0;
+    const fn = vi.fn(async (_url: string, init: RequestInit) => {
+      const message = isPlan(init) ? planReply(n++) : { content: 'OK' };
+      return new Response(JSON.stringify({ message: { role: 'assistant', ...message } }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fn);
+    return { planCalls: () => fn.mock.calls.filter(([, init]) => isPlan(init)).length };
+  }
+
+  async function mount() {
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    return result;
+  }
+
+  const guardLogs = (result: Awaited<ReturnType<typeof mount>>) => result.current.log.filter((l) => l.source === 'Planner' && /Re-plan guard/.test(l.message));
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('dedupes identical consecutive plans: logs once and skips further model calls', async () => {
+    const model = stubModel(() => planBody(0.1));
+    const result = await mount();
+    for (let i = 0; i < 4; i++) await act(() => result.current.autoPlan('move mouse to files icon'));
+    expect(model.planCalls()).toBe(2);
+    expect(guardLogs(result).filter((l) => /identical/.test(l.message))).toHaveLength(1);
+    expect(result.current.log.filter((l) => l.source === 'Planner' && l.tone === 'ok')).toHaveLength(1);
+  });
+
+  it('caps re-plans per goal at 3 on an unchanged screen and resumes after a new frame', async () => {
+    const { hooks } = installNative();
+    const model = stubModel((n) => planBody(0.1 + n / 20));
+    const result = await mount();
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(frame()));
+    for (let i = 0; i < 6; i++) await act(() => result.current.autoPlan('move mouse to files icon'));
+    expect(model.planCalls()).toBe(4);
+    expect(guardLogs(result).filter((l) => /cap/.test(l.message))).toHaveLength(1);
+    act(() => hooks.onFrame!(frame()));
+    await act(() => result.current.autoPlan('move mouse to files icon'));
+    expect(model.planCalls()).toBe(5);
+  });
+
+  it('does not start a second plan while one is still in flight', async () => {
+    const model = stubModel(() => planBody(0.1));
+    const result = await mount();
+    await act(() => Promise.all([result.current.autoPlan('move mouse to files icon'), result.current.autoPlan('move mouse to files icon')]));
+    expect(model.planCalls()).toBe(1);
+    expect(guardLogs(result).filter((l) => /still being thought out/.test(l.message))).toHaveLength(1);
+  });
+
+  it('logs prose instead of JSON as an AI parse failure and never shows it as a plan', async () => {
+    const prose = `Thinking Process: 1. Analyze the request. ${'The user wants to move the mouse. '.repeat(20)}`;
+    stubModel(() => ({ content: prose, thinking: 'hmm' }));
+    const result = await mount();
+    await act(() => result.current.autoPlan('move mouse to files icon'));
+    const parse = result.current.log.filter((l) => l.source === 'AI parse');
+    expect(parse).toHaveLength(1);
+    expect(parse[0].tone).toBe('error');
+    expect(parse[0].message).toContain('Thinking Process');
+    expect(parse[0].message.length).toBeLessThan(prose.length);
+    expect(result.current.steps).toHaveLength(0);
+    expect(result.current.timeline[0]).toMatchObject({ kind: 'thought', text: '' });
+    expect(result.current.timeline.some((e) => e.text.includes('Thinking Process'))).toBe(false);
+  });
+});
+
 describe('useAssist screen capture', () => {
   it('starts native capture at the configured rate and analyses every pushed frame', async () => {
     const { api, hooks } = installNative();

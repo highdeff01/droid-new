@@ -1,5 +1,5 @@
 import type { Annotation, Frame, WorkflowStep } from './types.js';
-import { AiError, VIEW_H, VIEW_W, parseJsonReply, toUnit } from './ai.js';
+import { AiError, VIEW_H, VIEW_W, parseJsonReply, stripThinking, toUnit } from './ai.js';
 import type { AiReply, AskFn } from './ai.js';
 import { uid } from './planner.js';
 
@@ -150,5 +150,5 @@ export async function reflectStep(ask: AskFn, frame: Frame | null, step: Workflo
     frame,
     json: true,
   });
-  return { reflection: { text: first.content, thinking: first.thinking }, verdict: parseVerdict(second) };
+  return { reflection: { text: stripThinking(first.content), thinking: first.thinking }, verdict: parseVerdict(second) };
 }
