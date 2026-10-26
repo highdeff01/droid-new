@@ -5,15 +5,17 @@ import { FAMILIAR_LIMIT } from './elements.js';
 import { HABIT_STALE_MS } from './habits.js';
 import { DEFAULT_STAGES } from './loop-control.js';
 import type { WatchNote, WatchProposal, WatchTest } from './watcher.js';
+import { DEFAULT_SETTINGS } from './use-assist.js';
+import { DEFAULT_GRID_OPACITY } from './grid-overlay.js';
 
-const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, changeCells: 6, monitorMode: 'app', aiView: '960x540', watchMs: 5000, autoAct: false, aiHelp: true, showTrail: true, showGrid: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b', autoContinue: false, maxIterations: 5, stages: DEFAULT_STAGES, errorUrl: '', errorForwarding: false, errorToken: '' };
+const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, changeCells: 6, monitorMode: 'app', watchMs: 5000, autoAct: false, aiHelp: true, showTrail: true, showGrid: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b', autoContinue: false, maxIterations: 5, stepRetries: 2, stages: DEFAULT_STAGES, errorUrl: '', errorForwarding: false, errorToken: '' };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
 
 describe('settings', () => {
   beforeEach(() => localStorage.clear());
 
   it('round-trips saved settings', () => {
-    const custom = { ...DEFAULTS, bridgeUrl: 'http://127.0.0.1:9000', captureMs: 1250, autoAct: true };
+    const custom = { ...DEFAULTS, bridgeUrl: 'http://127.0.0.1:9000', bridgeToken: 'tok', captureMs: 1250, autoAct: true };
     saveSettings(custom);
     expect(loadSettings(DEFAULTS)).toEqual(custom);
   });
@@ -26,6 +28,23 @@ describe('settings', () => {
   it('falls back per field on wrong types and out-of-range numbers', () => {
     localStorage.setItem('droid-assist.settings', '{"captureMs":"abc","autoAct":"yes","gallerySize":0,"checkpoints":99,"showTrail":false}');
     expect(loadSettings(DEFAULTS)).toEqual({ ...DEFAULTS, showTrail: false });
+  });
+
+  it('auto-continue defaults on for fresh settings and settings saved without it; an explicit off is kept', () => {
+    expect(loadSettings(DEFAULT_SETTINGS).autoContinue).toBe(true);
+    localStorage.setItem('droid-assist.settings', '{"bridgeUrl":"x"}');
+    expect(loadSettings(DEFAULT_SETTINGS).autoContinue).toBe(true);
+    localStorage.setItem('droid-assist.settings', '{"autoContinue":false}');
+    expect(loadSettings(DEFAULT_SETTINGS).autoContinue).toBe(false);
+  });
+
+  it('grid labels default off with a faint grid; the grid settings round-trip and invalid values fall back', () => {
+    expect(DEFAULT_SETTINGS).toMatchObject({ gridLabels: false, gridOpacity: DEFAULT_GRID_OPACITY });
+    expect(DEFAULT_GRID_OPACITY).toBeLessThan(0.28);
+    saveSettings({ ...DEFAULT_SETTINGS, gridLabels: true, gridOpacity: 0.3 });
+    expect(loadSettings(DEFAULT_SETTINGS)).toMatchObject({ gridLabels: true, gridOpacity: 0.3 });
+    localStorage.setItem('droid-assist.settings', '{"gridLabels":"yes","gridOpacity":1}');
+    expect(loadSettings(DEFAULT_SETTINGS)).toMatchObject({ gridLabels: false, gridOpacity: DEFAULT_GRID_OPACITY });
   });
 
   it('returns the defaults for corrupt or non-object JSON', () => {
@@ -97,6 +116,13 @@ describe('cards', () => {
     saveCards([{ ...card, steps: [{ id: 'm', name: 'Move to Files icon', action: 'move', target: 'Files icon', x: 0.4, y: 0.9, status: 'done' }] }]);
     const [loaded] = await loadCards();
     expect(loaded.steps[0]).toMatchObject({ action: 'move', target: 'Files icon' });
+  });
+
+  it('keeps a recorded step\'s measured delay so a saved flow replays with human timing', async () => {
+    saveCards([{ ...card, steps: [{ id: 'k', name: 'Press ctrl+s', action: 'key', text: 'ctrl+s', x: 0.5, y: 0.5, delayMs: 840, status: 'done' }, { id: 'bad', name: 'x', action: 'click', x: 0.1, y: 0.1, delayMs: -5, status: 'done' }] }]);
+    const [loaded] = await loadCards();
+    expect(loaded.steps[0]).toMatchObject({ action: 'key', text: 'ctrl+s', delayMs: 840 });
+    expect(loaded.steps[1].delayMs).toBeUndefined();
   });
 
   it('stores a step screenshot without its pixel buffer', () => {

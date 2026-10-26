@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { mapContext } from './element-map-studio.js';
-import { PLAN_SYSTEM, findSimilar, parseExpectations, planFromGoal, relevantPatterns, relocateTarget, replanDrag, similarity } from './planner.js';
+import { PLAN_SYSTEM, findSimilar, parseExpectations, planFromGoal, relevantPatterns, relocateTarget, replanDrag, replanStep, similarity } from './planner.js';
 import { decidePopup, decideStep, describeScreen, reflectStep } from './assist-ai.js';
 import { AiError, SAMPLE_VIEW, systemText } from './ai.js';
 import type { AskFn } from './ai.js';
@@ -324,6 +324,35 @@ describe('rearrangement planning', () => {
       const ask = askReturning('{"steps":[{"name":"Drag Files again","action":"drag","target":"Files icon","x":0.2,"y":0.2,"endX":0.5,"endY":0.6}]}');
       await replanDrag(ask, frame, dragStep, 'ended up above Game instead of below it');
       expect(ask.mock.calls[0][0].prompt).toContain('ended up above Game instead of below it');
+    });
+  });
+
+  describe('replanStep', () => {
+    it('returns a step keeping the original id and name with the new action/coords and the reply\'s thinking', async () => {
+      const ask = askReturning('{"steps":[{"name":"Press play again","action":"click","x":0.6,"y":0.7}]}', 'found it lower');
+      const result = await replanStep(ask, frame, step, 'the button moved');
+      expect(result?.step.id).toBe('s');
+      expect(result?.step.name).toBe('Press play');
+      expect(result?.step.action).toBe('click');
+      expect(result?.step.x).toBeCloseTo(0.6);
+      expect(result?.step.y).toBeCloseTo(0.7);
+      expect(result?.thinking).toBe('found it lower');
+    });
+
+    it('resolves null for {"steps":[]}', async () => {
+      expect(await replanStep(askReturning('{"steps":[]}'), frame, step, 'not visible anymore')).toBeNull();
+    });
+
+    it('mentions the failure feedback and the step name in the prompt', async () => {
+      const ask = askReturning('{"steps":[]}');
+      await replanStep(ask, frame, step, 'the button moved off-screen');
+      expect(ask.mock.calls[0][0].prompt).toContain('the button moved off-screen');
+      expect(ask.mock.calls[0][0].prompt).toContain('Press play');
+    });
+
+    it('replanDrag still throws when the model answers a non-drag step', async () => {
+      const ask = askReturning('{"steps":[{"name":"Click somewhere","action":"click","x":0.5,"y":0.5}]}');
+      await expect(replanDrag(ask, frame, dragStep, 'landed at the wrong spot')).rejects.toBeInstanceOf(AiError);
     });
   });
 });

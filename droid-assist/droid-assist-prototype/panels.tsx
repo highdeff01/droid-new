@@ -4,6 +4,7 @@ import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import { AiStatusBadge } from './hud.js';
+import { ModelPicker } from './model-picker.js';
 import type { FamiliarElement, Habit, LogEntry } from './types.js';
 import { isReliable, successRate } from './habits.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
@@ -17,6 +18,8 @@ import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
 import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
 import { AI_VIEWS, type AiView } from './ai.js';
+import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
+import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import styles from './droid-assist.module.css';
 
 const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity' };
@@ -148,7 +151,8 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
             <div>
               <input value={s.name} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} aria-label={`Step ${i + 1} name`} />
               <small>
-                {s.action}{s.target ? ` "${s.target}"` : ''} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}%{s.endX !== undefined && s.endY !== undefined ? ` → ${s.endTarget ? `"${s.endTarget}" ` : ''}${(s.endX * 100).toFixed(0)}%,${(s.endY * 100).toFixed(0)}%` : ''} · {s.status}
+                {s.action}{s.target ? ` "${s.target}"` : ''}{(s.action === 'key' || s.action === 'scroll') && s.text ? ` ${s.text}` : ''} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}%{s.endX !== undefined && s.endY !== undefined ? ` → ${s.endTarget ? `"${s.endTarget}" ` : ''}${(s.endX * 100).toFixed(0)}%,${(s.endY * 100).toFixed(0)}%` : ''} · {s.status}
+                {s.delayMs !== undefined && ` · after ${s.delayMs}ms`}
                 {s.driftPx !== undefined && ` · drift ${s.driftPx}px`}
                 {s.drift !== undefined && ` · match ${s.drift.toFixed(3)}`}
               </small>
@@ -315,8 +319,16 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>Screen-change threshold <b>{settings.changeCells} cells</b>
         <input type="range" min={2} max={40} value={settings.changeCells} onChange={(e) => setSettings({ ...settings, changeCells: +e.target.value })} aria-label="Screen-change threshold" />
       </label>
+      <label className={styles.setting}>Retries per failed step <b>{settings.stepRetries}</b>
+        <small>Each retry re-verifies and re-corrects the target and spends budget; then the planner re-plans the step once.</small>
+        <input type="range" min={STEP_RETRIES_MIN} max={STEP_RETRIES_MAX} value={settings.stepRetries} onChange={(e) => setSettings({ ...settings, stepRetries: +e.target.value })} aria-label="Retries per failed step" />
+      </label>
       <label className={styles.setting}>Max real input actions per run <b>{settings.actionBudget}</b>
         <input type="number" min={1} value={settings.actionBudget} onChange={(e) => setSettings({ ...settings, actionBudget: sanitizeBudget(e.target.valueAsNumber) })} />
+      </label>
+      <label className={styles.setting}>Max AI calls in flight <b>{settings.aiMaxInFlight}</b>
+        <small>Further calls wait in a shared queue: executor/grounding first, planner/verdict next, background agents last.</small>
+        <input type="range" min={AI_MAX_IN_FLIGHT_MIN} max={AI_MAX_IN_FLIGHT_MAX} value={settings.aiMaxInFlight} onChange={(e) => setSettings({ ...settings, aiMaxInFlight: +e.target.value })} aria-label="Max AI calls in flight" />
       </label>
       <label className={styles.setting}>Emergency-stop hotkey <b>{settings.abortHotkey}</b>
         <input
@@ -336,10 +348,15 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>Desktop bridge URL (pyautogui)
         <span className={styles.row}>
           <input value={settings.bridgeUrl} onChange={(e) => setSettings({ ...settings, bridgeUrl: e.target.value })} placeholder="/bridge or http://127.0.0.1:3000" />
-          <button type="button" onClick={async () => setBridge((await checkBridge(settings.bridgeUrl)).message)} disabled={!settings.bridgeUrl}>Test</button>
+          <button type="button" onClick={async () => setBridge((await checkBridge(settings.bridgeUrl, settings.bridgeToken)).message)} disabled={!settings.bridgeUrl}>Test</button>
           <button type="button" onClick={() => void engine.connectBridge()} disabled={!settings.bridgeUrl}>Connect</button>
         </span>
         {bridge && <small>{bridge}</small>}
+      </label>
+      <InsecureBridgeWarning bridgeUrl={settings.bridgeUrl} />
+      <label className={styles.setting}>Bridge auth token
+        <input type="password" value={settings.bridgeToken} onChange={(e) => setSettings({ ...settings, bridgeToken: e.target.value })} aria-label="Bridge auth token" autoComplete="off" />
+        <small>Must match DROID_BRIDGE_TOKEN on the bridge; sent as a Bearer token on every bridge call and never written to the activity log.</small>
       </label>
       <label className={styles.setting}>AI endpoint (Ollama /api/chat)
         <input value={settings.aiUrl} onChange={(e) => setSettings({ ...settings, aiUrl: e.target.value })} aria-label="AI endpoint URL" />
@@ -353,6 +370,7 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         </select>
         <small>Size of the screenshot the model sees; replies are scaled back to the 480x270 sample space.</small>
       </label>
+      <ModelPicker url={settings.aiUrl} model={settings.aiModel} onSelect={(aiModel) => setSettings({ ...settings, aiModel })} />
       <AiStatusBadge status={engine.aiStatus} />
       <ErrorForwardingSettings engine={engine} />
     </section>
@@ -554,12 +572,13 @@ export function LearnedCoordsPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement' };
+const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement', attempt: '🔄 Attempt' };
 
 /** Tone of an entry: failures as errors, verdicts and checks by their outcome, unready proposals as warnings, the rest informational. */
 function entryTone(e: ThinkingEntry): LogEntry['tone'] {
   if (e.error) return 'error';
   if (e.kind === 'proposal') return e.text.includes('NOT READY') ? 'warn' : 'info';
+  if (e.kind === 'attempt') return /— OK:/.test(e.text) ? 'ok' : 'warn';
   if (e.kind !== 'verdict' && e.kind !== 'check') return 'info';
   return /^(SUCCESS|PASS)/.test(e.text) ? 'ok' : 'warn';
 }

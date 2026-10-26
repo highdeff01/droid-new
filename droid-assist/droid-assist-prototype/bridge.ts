@@ -71,24 +71,59 @@ const NATIVE: Record<StepAction, (step: WorkflowStep, p: Point, end: Point | nul
   measure: () => [],
 };
 
-/** The native actions a step performs at its (drift-corrected) position on a srcW×srcH screen. */
+/**
+ * The native actions a step performs at its (drift-corrected) position on a srcW×srcH screen.
+ * A recorded step's measured human pause (`delayMs`) replaces the default delay of its first action.
+ */
 export function nativeActions(step: WorkflowStep, srcW: number, srcH: number): NativeAction[] {
   const p = { x: toPx(step.correctedX ?? step.x, srcW), y: toPx(step.correctedY ?? step.y, srcH) };
-  return NATIVE[step.action](step, p, dragEnd(step, srcW, srcH));
+  const [first, ...rest] = NATIVE[step.action](step, p, dragEnd(step, srcW, srcH));
+  if (!first) return [];
+  return typeof step.delayMs === 'number' ? [{ ...first, delayMs: step.delayMs }, ...rest] : [first, ...rest];
 }
 
 const base = (url: string) => url.replace(/\/$/, '');
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 
+/** The log message for a bridge call the bridge refused for a missing or wrong token. */
+export const BRIDGE_UNAUTHORIZED = 'Desktop bridge unauthorized — check bridge token in Settings';
+
+/** Request headers for a bridge call: JSON plus the bearer token when one is set. */
+export function bridgeHeaders(token: string, json = false): Record<string, string> {
+  return { ...(json ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+}
+
+/** Whether a bridge reply is an auth refusal (401 missing/wrong token, 403 forbidden). */
+const unauthorized = (res: Response) => res.status === 401 || res.status === 403;
+
+/** The failure message of a bridge reply that was not a success. */
+const failure = (res: Response, body: { error?: string } | null) => (unauthorized(res) ? BRIDGE_UNAUTHORIZED : body?.error ?? `Bridge HTTP ${res.status}`);
+
+const LOOPBACK = /^(localhost|.+\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
+
+/**
+ * Whether the bridge URL is plain http to a non-localhost host, so the token and every
+ * input command cross the network unencrypted. Relative (same-origin proxy) URLs are not.
+ */
+export function insecureBridgeUrl(bridgeUrl: string): boolean {
+  const trimmed = bridgeUrl.trim();
+  if (!/^http:\/\//i.test(trimmed)) return false;
+  try {
+    return !LOOPBACK.test(new URL(trimmed).hostname);
+  } catch {
+    return true;
+  }
+}
+
 /** Polls a replay run until the PC reports it finished; only "completed" means the input happened. */
-async function waitForRun(bridgeUrl: string, id: string, pollMs: number, timeoutMs: number): Promise<{ status: string; error?: string }> {
+async function waitForRun(bridgeUrl: string, token: string, id: string, pollMs: number, timeoutMs: number): Promise<{ status: string; error?: string }> {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
-    const res = await fetch(`${base(bridgeUrl)}/api/replay/${id}`, { signal: AbortSignal.timeout(4000) });
+    const res = await fetch(`${base(bridgeUrl)}/api/replay/${id}`, { headers: bridgeHeaders(token), signal: AbortSignal.timeout(4000) });
     const body = await res.json().catch(() => null);
     if (body?.run && TERMINAL.has(body.run.status)) return body.run;
-    if (!res.ok) return { status: 'failed', error: body?.error ?? `Bridge HTTP ${res.status}` };
+    if (!res.ok) return { status: 'failed', error: failure(res, body) };
     await new Promise((r) => setTimeout(r, pollMs));
   }
   return { status: 'failed', error: 'Timed out waiting for the PC to finish the step; its effect is uncertain' };
@@ -98,8 +133,9 @@ async function waitForRun(bridgeUrl: string, id: string, pollMs: number, timeout
  * Performs one step as real mouse/keyboard input through the Droid desktop bridge
  * (POST /api/replay, then polls the run). Succeeds only when the PC completed it.
  * @param srcW native screen width the step's normalized coordinates map onto
+ * @param token bridge auth token, sent as a bearer token on every call
  */
-export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: number, srcH: number, { pollMs = 250, timeoutMs = 60000 } = {}): Promise<BridgeResult> {
+export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: number, srcH: number, { token = '', pollMs = 250, timeoutMs = 60000 } = {}): Promise<BridgeResult> {
   if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };
   const actions = nativeActions(step, srcW, srcH);
   if (!actions.length) return { ok: false, message: `"${step.name}" has no end point — a drag needs both a start and an end; not sent` };
@@ -107,7 +143,7 @@ export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: 
   try {
     const res = await fetch(`${base(bridgeUrl)}/api/replay`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: bridgeHeaders(token, true),
       body: JSON.stringify({
         targetDevice: 'desktop',
         iterations: 1,
@@ -117,8 +153,8 @@ export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: 
       signal: AbortSignal.timeout(8000),
     });
     const body = await res.json().catch(() => null);
-    if (!res.ok || body?.success !== true || !body.run?.id) return { ok: false, message: body?.error ?? `Bridge HTTP ${res.status}` };
-    const run = await waitForRun(bridgeUrl, body.run.id, pollMs, timeoutMs);
+    if (!res.ok || body?.success !== true || !body.run?.id) return { ok: false, message: failure(res, body) };
+    const run = await waitForRun(bridgeUrl, token, body.run.id, pollMs, timeoutMs);
     if (run.status !== 'completed') return { ok: false, message: `PC ${run.status}: ${run.error ?? 'no reason given'}` };
     const to = actions[0].endX !== undefined ? ` → (${actions[0].endX}, ${actions[0].endY})px` : '';
     return { ok: true, message: `Performed ${actions.map((a) => a.action).join(' → ')} on the PC at (${x}, ${y})px${to}, run ${body.run.id}` };
@@ -128,18 +164,18 @@ export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: 
 }
 
 /** Takes a real desktop screenshot through the bridge (POST /api/replay/capture). */
-export async function captureDesktop(bridgeUrl: string): Promise<{ ok: true; frame: BridgeFrame } | { ok: false; message: string }> {
+export async function captureDesktop(bridgeUrl: string, token: string): Promise<{ ok: true; frame: BridgeFrame } | { ok: false; message: string }> {
   if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };
   try {
     const res = await fetch(`${base(bridgeUrl)}/api/replay/capture`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: bridgeHeaders(token, true),
       body: JSON.stringify({ targetDevice: 'desktop' }),
       signal: AbortSignal.timeout(8000),
     });
     const body = await res.json().catch(() => null);
     const frame = body?.frame;
-    if (!res.ok || body?.success !== true || !frame?.image) return { ok: false, message: body?.error ?? `Bridge HTTP ${res.status}` };
+    if (!res.ok || body?.success !== true || !frame?.image) return { ok: false, message: failure(res, body) };
     return { ok: true, frame: { image: frame.image, width: frame.width, height: frame.height } };
   } catch (error) {
     return { ok: false, message: `${BRIDGE_REQUIRED} (unreachable: ${errorText(error)})` };
@@ -147,11 +183,12 @@ export async function captureDesktop(bridgeUrl: string): Promise<{ ok: true; fra
 }
 
 /** Pings the bridge health endpoint. */
-export async function checkBridge(bridgeUrl: string): Promise<BridgeResult> {
+export async function checkBridge(bridgeUrl: string, token: string): Promise<BridgeResult> {
   if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };
   try {
-    const res = await fetch(`${base(bridgeUrl)}/api/health`, { signal: AbortSignal.timeout(4000) });
-    return res.ok ? { ok: true, message: 'Desktop bridge online' } : { ok: false, message: `${BRIDGE_REQUIRED} (health HTTP ${res.status})` };
+    const res = await fetch(`${base(bridgeUrl)}/api/health`, { headers: bridgeHeaders(token), signal: AbortSignal.timeout(4000) });
+    if (res.ok) return { ok: true, message: 'Desktop bridge online' };
+    return { ok: false, message: unauthorized(res) ? BRIDGE_UNAUTHORIZED : `${BRIDGE_REQUIRED} (health HTTP ${res.status})` };
   } catch (error) {
     return { ok: false, message: `${BRIDGE_REQUIRED} (offline: ${errorText(error)})` };
   }

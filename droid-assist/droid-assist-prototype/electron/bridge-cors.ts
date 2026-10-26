@@ -2,11 +2,11 @@
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
 /** URL patterns of the bridge endpoints sendToBridge / checkBridge call. */
-export const BRIDGE_URL_PATTERNS = ['*://*/api/replay', '*://*/api/health'];
+export const BRIDGE_URL_PATTERNS = ['*://*/api/replay', '*://*/api/replay/*', '*://*/api/health'];
 
 /**
  * Returns the response headers with any CORS headers replaced by permissive ones. The

@@ -27,6 +27,8 @@ export interface TrailPoint {
   y: number;
   t: number;
   click?: boolean;
+  /** A typing marker: the AI typed text at this point. */
+  typed?: boolean;
 }
 
 /**
@@ -151,6 +153,8 @@ export interface WorkflowStep {
   endY?: number;
   /** The on-screen thing a drag drops onto ("Archive folder"). */
   endTarget?: string;
+  /** Recorded human pause before this step (ms since the previous recorded input); replay sends it to the bridge. */
+  delayMs?: number;
   /** Screenshot captured when the step was recorded — the template for drift matching. */
   refFrame?: Frame;
   status: StepStatus;
@@ -215,6 +219,12 @@ export interface AssistSettings {
   captureMs: number;
   /** Size (cells of the 16x9 diff grid) the largest changed cluster must reach to count as a material screen change. */
   changeCells: number;
+  /** Drift: distance at the recorded spot up to which a target counts as unchanged (green). */
+  driftStable: number;
+  /** Drift: best-match distance up to which a moved target counts as found (yellow). */
+  driftMatched: number;
+  /** Drift: template search radius, in sample pixels of the 320x180 drift buffer. */
+  driftRadius: number;
   monitorMode: MonitorMode;
   /** How often the Screen watcher observes the live frame, in ms. */
   watchMs: number;
@@ -223,8 +233,14 @@ export interface AssistSettings {
   showTrail: boolean;
   /** Draw the labeled spatial grid (A1..H12) over the live preview. */
   showGrid: boolean;
+  /** Label every grid cell (A1..H12); off draws only the edge column numbers / row letters. */
+  gridLabels: boolean;
+  /** Alpha of the grid lines, kept low so the captured frame always shows through. */
+  gridOpacity: number;
   /** Base URL of the Droid desktop bridge (pyautogui replay endpoint). */
   bridgeUrl: string;
+  /** Shared secret the bridge requires on every call (Authorization: Bearer); masked in the UI, never logged. */
+  bridgeToken: string;
   /** Emergency-stop key combo, e.g. "Shift+Escape". */
   abortHotkey: string;
   /** Max real (bridge-dispatched) input actions per Auto Act / replay run. */
@@ -239,6 +255,10 @@ export interface AssistSettings {
   autoContinue: boolean;
   /** Max auto-continue rounds (verify → re-plan → run) after the first run. */
   maxIterations: number;
+  /** Retries of a failed step (re-verify, re-correct, retry) before the planner re-plans it once. */
+  stepRetries: number;
+  /** Cap on model calls in flight at once; further calls wait in the shared priority queue. */
+  aiMaxInFlight: number;
   /** Loop control: on/off per automation stage and agent (guardrails are never in it). */
   stages: StageMap;
   /** Error forwarding: the error-fix app's HTTP endpoint captured errors are POSTed to. */

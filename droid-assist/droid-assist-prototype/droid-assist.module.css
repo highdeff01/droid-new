@@ -10,6 +10,7 @@
 .safety { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .safety[data-aborted='true'] { padding: 4px 8px; border-radius: 10px; background: #450a0a; border: 2px solid #ef4444; }
 .aborted { color: #fecaca; font-size: 1.1em; letter-spacing: 0.08em; }
+.insecure { padding: 8px 12px; border-radius: 10px; background: #450a0a; border: 2px solid #ef4444; color: #fecaca; font-weight: 700; }
 .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; }
 .brand small { font-weight: 400; color: var(--muted); font-size: 12px; }
