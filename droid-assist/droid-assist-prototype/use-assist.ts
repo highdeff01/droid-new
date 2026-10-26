@@ -337,6 +337,18 @@ export function useAssist() {
     if (settings.autoAct) autoBudgetRef.current = createBudget(settingsRef.current.actionBudget);
   }, [settings.autoAct]);
 
+  /**
+   * Checked before every real dispatch: refuses (and halts the run) when aborted, when real
+   * input was disarmed mid-run, or when the run's action budget is spent.
+   */
+  const gateRealInput = useCallback((budget: ActionBudget): string | null => {
+    if (abortedRef.current) return 'Aborted — real input not sent';
+    if (!armedRef.current) return 'Real input disarmed — not sent';
+    if (spendAction(budget)) return null;
+    addLog('Safety', `Action budget reached: ${budget.limit} real input action(s) this run — stopping`, 'error');
+    return `Action budget of ${budget.limit} exceeded — not sent`;
+  }, [addLog]);
+
   const agentOn = useCallback((id: Agent['id']) => agents.find((a) => a.id === id)?.on ?? false, [agents]);
   const agentsRef = useRef(agentOn);
   agentsRef.current = agentOn;
@@ -403,10 +415,8 @@ export function useAssist() {
     }
     const { bridgeUrl, checkpoints } = settingsRef.current;
     if (!bridgeUrl) return refused(step, BRIDGE_REQUIRED);
-    if (!dryRun && !spendAction(budget)) {
-      addLog('Safety', `Action budget reached: ${budget.limit} real input action(s) this run — stopping`, 'error');
-      return refused(step, `Action budget of ${budget.limit} exceeded — not sent`);
-    }
+    const gate = dryRun ? null : gateRealInput(budget);
+    if (gate) return refused(step, gate);
     let size = { w: 1920, h: 1080 };
     const out = await runStep(step, {
       bridgeUrl,
