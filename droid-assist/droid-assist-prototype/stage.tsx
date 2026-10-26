@@ -1,14 +1,58 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { classifyGesture, type StagePoint } from './gesture.js';
+import { COLUMN_LABELS, GRID_COLS, GRID_ROWS, ROW_LABELS, cellLabel } from './grid.js';
 import styles from './droid-assist.module.css';
+
+/** The labeled spatial grid: light gridlines, column numbers / row letters on the edges, cell labels. */
+function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const cw = w / GRID_COLS;
+  const ch = h / GRID_ROWS;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let c = 1; c < GRID_COLS; c++) {
+    ctx.moveTo(c * cw, 0);
+    ctx.lineTo(c * cw, h);
+  }
+  for (let r = 1; r < GRID_ROWS; r++) {
+    ctx.moveTo(0, r * ch);
+    ctx.lineTo(w, r * ch);
+  }
+  ctx.stroke();
+  ctx.font = 'bold 10px sans-serif';
+  ctx.fillStyle = 'rgba(250, 204, 21, 0.9)';
+  COLUMN_LABELS.forEach((label, c) => ctx.fillText(label, c * cw + cw / 2 - 4, 10));
+  ROW_LABELS.forEach((label, r) => ctx.fillText(label, 2, r * ch + ch / 2 + 4));
+  ctx.font = '9px sans-serif';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+  for (let r = 0; r < GRID_ROWS; r++) {
+    for (let c = 0; c < GRID_COLS; c++) ctx.fillText(cellLabel({ row: r, col: c }), c * cw + 3, (r + 1) * ch - 3);
+  }
+}
+
+/** A test-click target: crosshair, ring and its label. */
+function drawHighlight(ctx: CanvasRenderingContext2D, x: number, y: number, label: string) {
+  ctx.strokeStyle = '#f43f5e';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(x, y, 16, 0, Math.PI * 2);
+  ctx.moveTo(x - 24, y);
+  ctx.lineTo(x + 24, y);
+  ctx.moveTo(x, y - 24);
+  ctx.lineTo(x, y + 24);
+  ctx.stroke();
+  ctx.fillStyle = '#f43f5e';
+  ctx.font = 'bold 12px sans-serif';
+  ctx.fillText(label, x + 20, Math.max(14, y - 20));
+}
 
 /**
  * The live screen with its semi-transparent overlay canvas: historical mouse trail,
  * step markers (recorded vs drift-corrected), AI annotations and the AI cursor.
  */
 export function Stage({ engine }: { engine: AssistEngine }) {
-  const { source, demoCanvasRef, frames, captureLost, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex } = engine;
+  const { source, demoCanvasRef, frames, captureLost, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex, highlight } = engine;
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [typed, setTyped] = useState('');
@@ -23,6 +67,8 @@ export function Stage({ engine }: { engine: AssistEngine }) {
     const h = (c.height = wrap.clientHeight);
     const ctx = c.getContext('2d')!;
     ctx.clearRect(0, 0, w, h);
+
+    if (settings.showGrid) drawGrid(ctx, w, h);
 
     if (settings.showTrail && trail.length > 1) {
       for (let i = 1; i < trail.length; i++) {
@@ -83,6 +129,8 @@ export function Stage({ engine }: { engine: AssistEngine }) {
         ctx.stroke();
       }
     });
+
+    if (highlight) drawHighlight(ctx, highlight.x * w, highlight.y * h, highlight.label);
 
     if (cursor) {
       ctx.fillStyle = 'rgba(244, 114, 182, 0.9)';

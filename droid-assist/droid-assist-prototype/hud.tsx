@@ -49,6 +49,16 @@ export function SyncStatus({ level, detail }: { level: SyncLevel; detail: string
   );
 }
 
+/** AI Stop: shown while the AI is busy or an auto-continue run is going; cancels the model call and the run. */
+export function AiStopButton({ engine }: { engine: AssistEngine }) {
+  if (!engine.aiWorking && !engine.continuing) return null;
+  return (
+    <button type="button" className={styles.danger} onClick={engine.stopAi} title="Cancel the in-flight AI call and stop auto-continue (latches ABORTED)">
+      ■ Stop AI{engine.continuing ? ' (auto-continue)' : ''}
+    </button>
+  );
+}
+
 /** Safety controls: one-click arm/disarm of real input, emergency stop and the ABORTED state. */
 export function SafetyControls({ engine }: { engine: AssistEngine }) {
   const { armed, aborted, settings } = engine;
@@ -112,6 +122,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
         >
           <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder='Goal or command, e.g. "move mouse to the files icon", "/move files icon", "/use notepad"' aria-label="Goal" />
           <button type="submit" className={styles.primary} disabled={aiBusy || (aiOff && !goal.trim().startsWith('/'))} title={aiTitle}>{aiBusy ? '… thinking' : '✨ AI plan / run'}</button>
+          <AiStopButton engine={engine} />
         </form>
       </div>
       <MonitorStatus engine={engine} />
@@ -121,7 +132,10 @@ export function Hud({ engine }: { engine: AssistEngine }) {
         <SyncStatus level={engine.sync.level} detail={engine.sync.detail} />
         <label><input type="checkbox" checked={settings.autoAct} onChange={(e) => setSettings({ ...settings, autoAct: e.target.checked })} disabled={aiOff} /> Auto act{aiOff && ' (AI unavailable)'}</label>
         <label><input type="checkbox" checked={settings.aiHelp} onChange={(e) => setSettings({ ...settings, aiHelp: e.target.checked })} disabled={aiOff} /> AI help{aiOff && ' (AI unavailable)'}</label>
+        <label title="After a replay, verify the goal on the live screen and keep planning and running until it is done"><input type="checkbox" checked={settings.autoContinue} onChange={(e) => setSettings({ ...settings, autoContinue: e.target.checked })} disabled={aiOff} /> Auto-continue{aiOff && ' (AI unavailable)'}</label>
+        <label>Max iterations <input type="number" min={1} max={20} value={settings.maxIterations} onChange={(e) => setSettings({ ...settings, maxIterations: Math.min(20, Math.max(1, Math.floor(e.target.valueAsNumber) || 1)) })} aria-label="Auto-continue max iterations" /></label>
         <label><input type="checkbox" checked={settings.showTrail} onChange={(e) => setSettings({ ...settings, showTrail: e.target.checked })} /> Trail</label>
+        <label title="Labeled A1..H12 grid on the preview; the AI answers with these cells"><input type="checkbox" checked={settings.showGrid} onChange={(e) => setSettings({ ...settings, showGrid: e.target.checked })} aria-label="Grid overlay" /> Grid</label>
         <div className={styles.progress} title="Auto progress (verified steps) + manual updates">
           <span>Progress {total ? Math.round((done / total) * 100) : 0}%</span>
           <span className={styles.bar}><span style={{ width: `${total ? (done / total) * 100 : 0}%` }} /></span>

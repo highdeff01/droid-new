@@ -182,3 +182,56 @@ describe('runStep grounding', () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 });
+
+describe('runStep habit seed', () => {
+  const live = frame(1, image(100, 60));
+  const target: WorkflowStep = { id: 'h', name: 'Click Save', action: 'click', target: 'Save button', x: 0.25, y: 0.5, status: 'pending' };
+  const seen = (visible: boolean, reason = visible ? 'icon is there' : 'empty desktop') => ({ visible, reason, thinking: null });
+  const grounding = (confirm: Grounding['confirm'], relocate: Grounding['relocate'] = vi.fn(async () => null)): Grounding => ({ confirm, relocate });
+
+  it('seeds the grounding pass from the habit position and verifies it once confirmed', async () => {
+    const confirm = vi.fn<Grounding['confirm']>(async () => seen(true));
+    const relocate = vi.fn<Grounding['relocate']>(async () => null);
+    const onVerified = vi.fn();
+    const seed = vi.fn(() => ({ x: 0.5, y: 0.5 }));
+    const { d, lines } = deps([live], { dispatch: false, grounding: grounding(confirm, relocate), seed, onVerified });
+    const out = await runStep(target, d);
+    expect(out.ok).toBe(true);
+    expect(confirm.mock.calls[0][2]).toEqual({ x: 0.5, y: 0.5 });
+    expect(relocate).not.toHaveBeenCalled();
+    expect(onVerified).toHaveBeenCalledTimes(1);
+    expect(onVerified).toHaveBeenCalledWith(live, target, { x: 0.5, y: 0.5 });
+    expect(lines.some((l) => l.includes('habit seed'))).toBe(true);
+  });
+
+  it('falls back to the drift-corrected point when the seed finds no match', async () => {
+    const confirm = vi.fn<Grounding['confirm']>(async () => seen(true));
+    const seed = vi.fn(() => null);
+    const { d } = deps([live], { dispatch: false, grounding: grounding(confirm), seed });
+    const out = await runStep(target, d);
+    expect(out.ok).toBe(true);
+    expect(confirm.mock.calls[0][2]).toEqual({ x: target.x, y: target.y });
+  });
+
+  it('re-asks the planner once when the seeded point is rejected, then verifies the relocated point', async () => {
+    const confirm = vi.fn<Grounding['confirm']>().mockResolvedValueOnce(seen(false)).mockResolvedValueOnce(seen(true));
+    const relocate = vi.fn<Grounding['relocate']>(async () => ({ x: 0.4, y: 0.3 }));
+    const onVerified = vi.fn();
+    const seed = vi.fn(() => ({ x: 0.5, y: 0.5 }));
+    const { d } = deps([live], { dispatch: false, grounding: grounding(confirm, relocate), seed, onVerified });
+    const out = await runStep(target, d);
+    expect(out.ok).toBe(true);
+    expect(onVerified).toHaveBeenCalledWith(live, target, { x: 0.4, y: 0.3 });
+  });
+
+  it('never calls onVerified when both the seeded and relocated points are rejected', async () => {
+    const confirm = vi.fn(async () => seen(false));
+    const relocate = vi.fn(async () => ({ x: 0.4, y: 0.3 }));
+    const onVerified = vi.fn();
+    const seed = vi.fn(() => ({ x: 0.5, y: 0.5 }));
+    const { d } = deps([live], { dispatch: false, grounding: grounding(confirm, relocate), seed, onVerified });
+    const out = await runStep(target, d);
+    expect(out.ok).toBe(false);
+    expect(onVerified).not.toHaveBeenCalled();
+  });
+});
