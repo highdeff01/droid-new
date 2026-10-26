@@ -18,6 +18,9 @@ import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, runVerdict, upsertCard } from './flow-memory.js';
+import { buildElementMap } from './element-map.js';
+import type { Calibration } from './calibration.js';
+import { remapStep, useMeasure } from './use-measure.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -235,6 +238,21 @@ export function useAssist() {
   const addLog = useCallback((from: string, message: string, tone: LogEntry['tone'] = 'info') => {
     setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone }, ...l].slice(0, LOG_LIMIT));
   }, []);
+
+  const annotationsRef = useRef(annotations);
+  annotationsRef.current = annotations;
+  /** The element map the ruler and the measure action resolve names against. */
+  const elementMap = useCallback(() => buildElementMap(annotationsRef.current, stepsRef.current, cardsRef.current), []);
+
+  /** Recalibration drift: workflow steps and saved flows move into the live layout. */
+  const rescaleStored = useCallback((cal: Calibration) => {
+    stepsRef.current = stepsRef.current.map((s) => remapStep(cal, s));
+    setSteps(stepsRef.current);
+    cardsRef.current = cardsRef.current.map((c) => ({ ...c, steps: c.steps.map((s) => remapStep(cal, s)) }));
+    setCards(cardsRef.current);
+  }, []);
+
+  const ruler = useMeasure({ frames, framesRef, elementMap, addLog, rescale: rescaleStored });
 
   // AI endpoint health: at startup and whenever the endpoint or model changes.
   useEffect(() => {
@@ -469,6 +487,24 @@ export function useAssist() {
    */
   const performStep = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     if (abortedRef.current) return refused(step, 'Aborted — real input not sent');
+    if (step.action === 'measure') return measureStep(step, actor);
+    const out = await performInput(step, actor, budget, dryRun);
+    ruler.noteGrounding(out);
+    return out;
+  };
+
+  /** The measure action: no input is sent and no budget spent; the result (or the loud error) goes to the log and the model. */
+  const measureStep = (step: WorkflowStep, actor: string): Performed => {
+    const target = { x: step.x, y: step.y };
+    try {
+      return { ok: true, executed: true, message: ruler.measureQuery(step.text ?? step.target ?? step.name, actor), target };
+    } catch (error) {
+      return { ok: false, executed: false, message: `Measurement failed — ${errorText(error)}`, target };
+    }
+  };
+
+  /** A real-input step on the demo desktop or through the bridge. */
+  const performInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     if (sourceRef.current === 'demo') {
       const out = await performOnDemo(step, dryRun);
       if (out.executed) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
@@ -491,6 +527,7 @@ export function useAssist() {
       dispatch: !dryRun,
       log: (m, tone) => addLog(actor, m, tone),
       grounding: aiOnline() ? grounding : undefined,
+      gateRetry: dryRun ? undefined : () => gateRealInput(budget),
     });
     if (out.executed) recordAction(step, out, actor, 'bridge', size.w, size.h);
     return out;
@@ -686,8 +723,12 @@ export function useAssist() {
     if (recordingRef.current) setTrail((t) => [...t, { x, y, t: Date.now() }].slice(-1500));
   }, []);
 
-  /** Stage click: while recording becomes a step (Alt+click records a hover/move); on the demo it acts. */
-  const onStageClick = useCallback((x: number, y: number, hover = false) => {
+  /** Stage click: in Ruler mode adds a ruler point; while recording becomes a step (Alt+click records a hover/move); on the demo it acts. */
+  const onStageClick = (x: number, y: number, hover = false) => {
+    if (ruler.on) {
+      ruler.addPoint({ x, y });
+      return;
+    }
     const frame = framesRef.current[0];
     if (recordingRef.current) {
       const n = stepsRef.current.length + 1;
@@ -698,7 +739,7 @@ export function useAssist() {
       return;
     }
     if (sourceRef.current === 'demo' && !hover) addLog('You', demoClick(x, y));
-  }, [addLog, demoClick]);
+  };
 
   /** Live-write while recording: typed text becomes a "type" step. */
   const onStageType = useCallback((text: string) => {
@@ -978,7 +1019,19 @@ export function useAssist() {
     if (await shareScreen()) setTarget(name);
   };
 
-  /** Submits the assist input: /use and /move run, anything else is planned as a goal. */
+  /** "/measure A to B [to C…]": measured on the live frame, drawn, kept and logged; an unknown element is a loud error. */
+  const measureCommand = async (query: string) => {
+    try {
+      ruler.measureQuery(query, '/measure');
+    } catch (error) {
+      addLog('/measure', `Measurement failed — ${errorText(error)}`, 'error');
+    }
+  };
+
+  /** Each slash command's runner. */
+  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand };
+
+  /** Submits the assist input: /use, /move and /measure run, anything else is planned as a goal. */
   const submitInput = async () => {
     const command = parseCommand(goal);
     if (!command) {
@@ -990,8 +1043,7 @@ export function useAssist() {
       return;
     }
     setGoal('');
-    if (command.kind === 'use') await attachTarget(command.target);
-    else await moveTo(command.target);
+    await COMMAND_RUNNERS[command.kind](command.target);
   };
 
   /** Explicit demo mode. */
@@ -1027,7 +1079,7 @@ export function useAssist() {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
-    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern,
+    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, ruler,
     onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
   };
