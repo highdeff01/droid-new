@@ -1,5 +1,5 @@
 import type { Annotation, Frame, WorkflowStep } from './types.js';
-import { AiError, VIEW_H, VIEW_W, parseJsonReply, toUnit } from './ai.js';
+import { AiError, VIEW_H, VIEW_W, parseJsonReply, stripThinking, toUnit } from './ai.js';
 import type { AiReply, AskFn } from './ai.js';
 import { GRID_PROMPT, gridRef, replyPoint } from './grid.js';
 import { uid } from './planner.js';
@@ -107,6 +107,34 @@ export async function describeScreen(ask: AskFn, frame: Frame, question: string,
   return { answer: r.answer.trim(), annotations: items.map(toAnnotation), thinking };
 }
 
+/** The model's check of the goal against the live screen after a run. */
+export interface GoalCheck extends Thought {
+  /** The goal is verifiably achieved on the screen. */
+  complete: boolean;
+  /** The last run moved the screen closer to the goal. */
+  progress: boolean;
+  reason: string;
+}
+
+/** One line per step of the run just finished: what it was and how it ended. */
+const runLine = (s: WorkflowStep) => `- ${stepText(s)}: ${s.status}`;
+
+/**
+ * Auto-continue verification: shown the live screen and the run's steps, the model says whether
+ * the goal is complete and whether the run made progress. Non-boolean fields are an AiError.
+ */
+export async function verifyGoal(ask: AskFn, frame: Frame | null, goal: string, ran: WorkflowStep[]): Promise<GoalCheck> {
+  const reply = await ask({
+    system: 'You are Droid Assist verifying whether the user\'s goal is achieved. The screenshot shows the screen now. Reply ONLY with JSON {"complete":boolean,"progress":boolean,"reason":string}: complete=true only if the screen shows the goal achieved; progress=true if the last steps moved the screen closer to it.',
+    prompt: `Goal: ${goal}\nSteps just run:\n${ran.map(runLine).join('\n') || '(none)'}`,
+    frame,
+    json: true,
+  });
+  const r = parseJsonReply(reply.content);
+  if (typeof r.complete !== 'boolean') throw new AiError(`AI goal check had no boolean "complete": ${String(r.complete)}`);
+  return { complete: r.complete, progress: r.progress === true, reason: String(r.reason ?? ''), thinking: reply.thinking };
+}
+
 /** What actually happened when a step ran. */
 export interface StepResult {
   ok: boolean;
@@ -152,5 +180,5 @@ export async function reflectStep(ask: AskFn, frame: Frame | null, step: Workflo
     frame,
     json: true,
   });
-  return { reflection: { text: first.content, thinking: first.thinking }, verdict: parseVerdict(second) };
+  return { reflection: { text: stripThinking(first.content), thinking: first.thinking }, verdict: parseVerdict(second) };
 }
