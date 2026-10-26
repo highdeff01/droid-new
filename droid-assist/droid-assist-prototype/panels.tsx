@@ -7,6 +7,8 @@ import { AiStatusBadge } from './hud.js';
 import type { Habit, LogEntry } from './types.js';
 import { isReliable, successRate } from './habits.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
+import type { ElementSource, ScreenElement } from './elements.js';
+import { gridRef } from './grid.js';
 import styles from './droid-assist.module.css';
 
 /** The N most recent frames with frame-to-frame drift, plus the AI-picked frames shown to the user. */
@@ -252,6 +254,37 @@ export function ActionHistoryPanel({ engine }: { engine: AssistEngine }) {
             <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.text ? ` "${a.text}"` : ''} · {a.via}
           </li>
         ))}
+      </ul>
+    </section>
+  );
+}
+
+const SOURCE_LABEL: Record<ElementSource, string> = { template: 'Template match', popup: 'Popup detected', familiar: 'Familiar' };
+
+/** One listed element: name, source, grid cell + coordinates, its patch and the Test click button. */
+function ElementItem({ engine, el }: { engine: AssistEngine; el: ScreenElement }) {
+  return (
+    <li data-tone={el.source === 'popup' ? 'warn' : 'info'}>
+      {el.patch && <img src={el.patch} alt={`${el.name} patch`} width={32} height={32} />}
+      <b>{el.name}</b> <small>{SOURCE_LABEL[el.source]}</small> · {gridRef(el)} = ({(el.x * 100).toFixed(1)}%, {(el.y * 100).toFixed(1)}%)
+      {el.lastSeen !== undefined && <small> · seen {new Date(el.lastSeen).toLocaleTimeString()}</small>}
+      <button type="button" onClick={() => void engine.testClick(el)} title={engine.armed ? 'Clicks this point on the PC (real input, budgeted)' : 'Highlights this point only (disarmed dry run)'}>
+        Test click
+      </button>
+      {el.source === 'familiar' && <button type="button" aria-label={`Forget ${el.name}`} onClick={() => engine.forgetFamiliar(el.id)}>✕</button>}
+    </li>
+  );
+}
+
+/** On-screen elements found by template matching and popup detection, plus the familiar-elements memory. */
+export function ElementsPanel({ engine }: { engine: AssistEngine }) {
+  const { elements, armed } = engine;
+  return (
+    <section className={styles.panel} aria-label="Elements">
+      <h3>Elements <small>{elements.length} · Test click {armed ? 'sends real input' : 'is highlight-only (disarmed)'}</small></h3>
+      {!elements.length && <p className={styles.muted}>Verified or used targets are remembered here with their grid cell and coordinates.</p>}
+      <ul className={styles.log}>
+        {elements.map((el) => <ElementItem key={el.id} engine={engine} el={el} />)}
       </ul>
     </section>
   );

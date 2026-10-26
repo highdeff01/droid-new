@@ -100,6 +100,19 @@ export interface Habit {
   pinned: boolean;
 }
 
+/** An on-screen element the assistant has verified or used, remembered across sessions. */
+export interface FamiliarElement {
+  id: string;
+  name: string;
+  /** Normalized 0..1 center of the element. */
+  x: number;
+  y: number;
+  /** Small JPEG data URL of the screen around the element. */
+  patch?: string;
+  /** When it was last verified or used (ms since epoch). */
+  lastSeen: number;
+}
+
 /** Status of a step during replay. */
 export type StepStatus = 'pending' | 'running' | 'done' | 'drift' | 'failed';
 
@@ -177,6 +190,8 @@ export interface AssistSettings {
   autoAct: boolean;
   aiHelp: boolean;
   showTrail: boolean;
+  /** Draw the labeled spatial grid (A1..H12) over the live preview. */
+  showGrid: boolean;
   /** Base URL of the Droid desktop bridge (pyautogui replay endpoint). */
   bridgeUrl: string;
   /** Emergency-stop key combo, e.g. "Shift+Escape". */

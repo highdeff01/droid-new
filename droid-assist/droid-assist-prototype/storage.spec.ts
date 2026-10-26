@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AssistSettings, Habit, LearnedPattern, LogEntry, SavedCard } from './types.js';
+import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard } from './types.js';
 import { HABIT_STALE_MS } from './habits.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadHabits, loadLog, loadPatterns, loadSettings, savePatterns, saveCards, saveHabits, saveLog, saveSettings } from './storage.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, saveFamiliar, savePatterns, saveCards, saveHabits, saveLog, saveSettings } from './storage.js';
+import { FAMILIAR_LIMIT } from './elements.js';
 
-const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b', autoContinue: false, maxIterations: 5 };
+const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, monitorMode: 'app', autoAct: false, aiHelp: true, showTrail: true, showGrid: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b', autoContinue: false, maxIterations: 5 };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
 
 describe('settings', () => {
@@ -181,5 +182,43 @@ describe('habits', () => {
     savePatterns([pat(1)]);
     expect(loadPatterns()).toEqual([pat(1)]);
     expect(loadHabits()).toEqual([]);
+  });
+});
+
+describe('familiar elements', () => {
+  beforeEach(() => localStorage.clear());
+  const fam = (n: number, patch?: string): FamiliarElement => ({ id: `el${n}`, name: `Element ${n}`, x: 0.1, y: 0.2, lastSeen: n, ...(patch ? { patch } : {}) });
+
+  it('round-trips under their own key, next to the patterns', () => {
+    savePatterns([{ id: 'p1', kind: 'add', pattern: 'p', context: '', time: 1 }]);
+    saveFamiliar([fam(1, 'data:image/jpeg;base64,QQ'), fam(2)]);
+    expect(localStorage.getItem('droid-assist.familiar')).not.toBeNull();
+    expect(loadFamiliar()).toEqual([fam(1, 'data:image/jpeg;base64,QQ'), fam(2)]);
+    expect(loadPatterns()).toHaveLength(1);
+  });
+
+  it('drops corrupt and invalid entries', () => {
+    localStorage.setItem('droid-assist.familiar', '{oops');
+    expect(loadFamiliar()).toEqual([]);
+    localStorage.setItem('droid-assist.familiar', JSON.stringify([fam(3), { ...fam(4), x: 2 }, { ...fam(5), name: ' ' }, { ...fam(6), patch: 'javascript:x' }, null]));
+    expect(loadFamiliar()).toEqual([fam(3)]);
+  });
+
+  it('keeps at most FAMILIAR_LIMIT entries', () => {
+    saveFamiliar(Array.from({ length: FAMILIAR_LIMIT + 5 }, (_, i) => fam(i)));
+    expect(loadFamiliar()).toHaveLength(FAMILIAR_LIMIT);
+  });
+
+  it('retries without patches when storage is full, leaving the patterns intact', () => {
+    savePatterns([{ id: 'p1', kind: 'add', pattern: 'p', context: '', time: 1 }]);
+    const real = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (v.includes('data:image')) throw new Error('QuotaExceededError');
+      real.call(this, k, v);
+    });
+    saveFamiliar([fam(1, 'data:image/jpeg;base64,QQ')]);
+    spy.mockRestore();
+    expect(loadFamiliar()).toEqual([fam(1)]);
+    expect(loadPatterns()).toHaveLength(1);
   });
 });

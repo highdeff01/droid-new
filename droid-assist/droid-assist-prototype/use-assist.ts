@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ActionRecord, Annotation, AssistSettings, Frame, Habit, InputAction, LearnedPattern, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
+import type { ActionRecord, Annotation, AssistSettings, FamiliarElement, Frame, Habit, InputAction, LearnedPattern, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
 import { POINTER_ACTIONS } from './types.js';
 import { SAMPLE_H, SAMPLE_W, boundingBox, boxDistance, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor } from './drift.js';
 import { AD_CYCLE, demoAd, demoPlayButton, drawDemoDesktop } from './demo-desktop.js';
@@ -11,12 +11,14 @@ import { DEFAULT_MAX_ITERATIONS, autoContinue, type ContinueStop, type RunReport
 import { addEntry, verdictText, type ThinkingEntry } from './thinking-timeline.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge } from './bridge.js';
 import { runStep, type Grounding, type StepOutcome } from './run-step.js';
-import { zoomFrame } from './grounding.js';
+import { patchAt, zoomFrame } from './grounding.js';
 import { parseCommand } from './commands.js';
 import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction, type ActionBudget } from './safety.js';
-import { LOG_LIMIT, loadCards, loadHabits, loadLog, loadPatterns, loadSettings, saveCards, saveHabits, saveLog, savePatterns, saveSettings } from './storage.js';
+import { LOG_LIMIT, loadCards, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, saveCards, saveFamiliar, saveHabits, saveLog, savePatterns, saveSettings } from './storage.js';
+import { forgetElement, listElements, rememberElement, type ScreenElement } from './elements.js';
+import { gridRef } from './grid.js';
 import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
@@ -105,6 +107,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   autoAct: false,
   aiHelp: true,
   showTrail: true,
+  showGrid: true,
   bridgeUrl: '',
   abortHotkey: DEFAULT_ABORT_HOTKEY,
   actionBudget: DEFAULT_ACTION_BUDGET,
@@ -150,6 +153,8 @@ export function useAssist() {
   const [patterns, setPatterns] = useState<LearnedPattern[]>(loadPatterns);
   /** Per-target, per-app habits learned from every executed step, applied to planning and grounding. */
   const [habits, setHabits] = useState<Habit[]>(() => loadHabits());
+  const [familiar, setFamiliar] = useState<FamiliarElement[]>(loadFamiliar);
+  const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
   const [progress, setProgress] = useState({ done: 0, manual: 0 });
@@ -240,6 +245,7 @@ export function useAssist() {
   useEffect(() => saveLog(log), [log]);
   useEffect(() => savePatterns(patterns), [patterns]);
   useEffect(() => saveHabits(habits), [habits]);
+  useEffect(() => saveFamiliar(familiar), [familiar]);
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
   }, [cards]);
@@ -587,16 +593,50 @@ export function useAssist() {
   };
 
   /**
+   * Familiar-elements memory: a pointer step whose target was verified or used is remembered
+   * by name with its point, a small patch of the screen around it and the time.
+   */
+  const rememberTarget = async (step: WorkflowStep, out: Performed) => {
+    if (!out.ok || !POINTER_ACTIONS.has(step.action)) return;
+    const frame = out.shot ?? framesRef.current[0];
+    const patch = frame ? await patchAt(frame, out.target).catch(() => undefined) : undefined;
+    setFamiliar((list) => rememberElement(list, { id: uid('el'), name: step.target ?? step.name, x: out.target.x, y: out.target.y, patch, lastSeen: Date.now() }));
+  };
+
+  const forgetFamiliar = (id: string) => setFamiliar((list) => forgetElement(list, id));
+
+  /**
    * performStep, then reflect-after-step: every step the pipeline ran gets the model's reflection
    * and verdict, and the verdict of a step that really ran (not a dry run) updates its habit.
    */
   const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     const out = await performStep(step, actor, budget, dryRun);
+    void rememberTarget(step, out);
     if (out.halt || !aiOnline()) return out;
     const verdict = await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
     if (verdict && !dryRun) learnHabit(step, verdict);
     return out;
   };
+
+  /**
+   * Test click: highlights the element on the preview; while armed, clicks its exact point
+   * through the same gated pipeline (abort, arm, a fresh one-click budget). Disarmed is a dry run.
+   */
+  const testClick = async (el: ScreenElement) => {
+    setHighlight({ x: el.x, y: el.y, label: el.name });
+    setTimeout(() => setHighlight((h) => (h && h.x === el.x && h.y === el.y ? null : h)), 3000);
+    const where = `${gridRef(el)} (${pct(el.x)}, ${pct(el.y)})`;
+    if (!armedRef.current) {
+      addLog('Test click', `"${el.name}" highlighted at ${where} — real input disarmed, dry run (nothing sent)`, 'info');
+      return;
+    }
+    const step: WorkflowStep = { id: uid('test'), name: `Test click "${el.name}"`, action: 'click', x: el.x, y: el.y, status: 'pending' };
+    const out = await performStep(step, 'Test click', createBudget(settingsRef.current.actionBudget), false);
+    if (out.executed) void rememberTarget({ ...step, target: el.name }, out);
+    addLog('Test click', `"${el.name}" at ${where}: ${out.message}`, out.ok ? 'ok' : 'error');
+  };
+
+  const elements = listElements(steps, annotations, familiar);
 
   const updateStep = (index: number, patch: Partial<WorkflowStep>) => {
     if (patch.status && patch.status !== stepsRef.current[index]?.status) statusChangesRef.current++;
@@ -1210,6 +1250,7 @@ export function useAssist() {
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
     armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, continuing, habits, deleteHabit, pinHabit,
+    familiar, forgetFamiliar, elements, highlight, testClick,
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageType, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
