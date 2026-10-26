@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AssistSettings, Habit, LearnedPattern, LogEntry, SavedCard } from './types.js';
+import { HABIT_STALE_MS } from './habits.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadHabits, loadLog, loadPatterns, loadSettings, savePatterns, saveCards, saveHabits, saveLog, saveSettings } from './storage.js';
 import type { AssistSettings, FamiliarElement, LearnedPattern, LogEntry, SavedCard } from './types.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadFamiliar, loadLog, loadPatterns, loadSettings, saveFamiliar, savePatterns, saveCards, saveLog, saveSettings } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
@@ -143,40 +146,43 @@ describe('learned patterns', () => {
   });
 });
 
-describe('familiar elements', () => {
+describe('habits', () => {
   beforeEach(() => localStorage.clear());
-  const fam = (n: number, patch?: string): FamiliarElement => ({ id: `el${n}`, name: `Element ${n}`, x: 0.1, y: 0.2, lastSeen: n, ...(patch ? { patch } : {}) });
-
-  it('round-trips under their own key, next to the patterns', () => {
-    savePatterns([{ id: 'p1', kind: 'add', pattern: 'p', context: '', time: 1 }]);
-    saveFamiliar([fam(1, 'data:image/jpeg;base64,QQ'), fam(2)]);
-    expect(localStorage.getItem('droid-assist.familiar')).not.toBeNull();
-    expect(loadFamiliar()).toEqual([fam(1, 'data:image/jpeg;base64,QQ'), fam(2)]);
-    expect(loadPatterns()).toHaveLength(1);
+  const habit = (overrides: Partial<Habit> = {}): Habit => ({
+    id: 'h1', target: 'Save button', context: 'Notepad', attempts: 3, successes: 2, lastUsed: 1000,
+    lessons: [{ kind: 'avoid', text: 'double click', time: 1 }], pinned: false,
+    anchor: { x: 0.5, y: 0.4, patch: [1, 2, 3, 4], size: 2, time: 1 },
+    ...overrides,
   });
 
-  it('drops corrupt and invalid entries', () => {
-    localStorage.setItem('droid-assist.familiar', '{oops');
-    expect(loadFamiliar()).toEqual([]);
-    localStorage.setItem('droid-assist.familiar', JSON.stringify([fam(3), { ...fam(4), x: 2 }, { ...fam(5), name: ' ' }, { ...fam(6), patch: 'javascript:x' }, null]));
-    expect(loadFamiliar()).toEqual([fam(3)]);
+  it('round-trips a valid habit with anchor and lessons under its own key', () => {
+    saveHabits([habit()], 1000);
+    expect(localStorage.getItem('droid-assist.habits')).not.toBeNull();
+    expect(loadHabits(1000)).toEqual([habit()]);
   });
 
-  it('keeps at most FAMILIAR_LIMIT entries', () => {
-    saveFamiliar(Array.from({ length: FAMILIAR_LIMIT + 5 }, (_, i) => fam(i)));
-    expect(loadFamiliar()).toHaveLength(FAMILIAR_LIMIT);
+  it('returns [] for corrupt JSON', () => {
+    localStorage.setItem('droid-assist.habits', '{bad');
+    expect(loadHabits()).toEqual([]);
   });
 
-  it('retries without patches when storage is full, leaving the patterns intact', () => {
-    savePatterns([{ id: 'p1', kind: 'add', pattern: 'p', context: '', time: 1 }]);
-    const real = Storage.prototype.setItem;
-    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
-      if (v.includes('data:image')) throw new Error('QuotaExceededError');
-      real.call(this, k, v);
-    });
-    saveFamiliar([fam(1, 'data:image/jpeg;base64,QQ')]);
-    spy.mockRestore();
-    expect(loadFamiliar()).toEqual([fam(1)]);
-    expect(loadPatterns()).toHaveLength(1);
+  it('drops invalid entries, keeping only the valid habit', () => {
+    localStorage.setItem('droid-assist.habits', JSON.stringify([habit(), { id: 1 }, null]));
+    expect(loadHabits(1000)).toEqual([habit()]);
+  });
+
+  it('saveHabits prunes a stale unpinned habit but keeps a stale pinned one', () => {
+    const now = 1_000_000_000;
+    const stale = habit({ id: 'stale', lastUsed: now - HABIT_STALE_MS - 1, pinned: false, anchor: undefined });
+    const stalePinned = habit({ id: 'stalePinned', lastUsed: now - HABIT_STALE_MS - 1, pinned: true, anchor: undefined });
+    saveHabits([stale, stalePinned], now);
+    expect(loadHabits(now)).toEqual([stalePinned]);
+  });
+
+  it('leaves existing LearnedPattern data untouched when no habit key exists', () => {
+    const pat = (n: number): LearnedPattern => ({ id: `p${n}`, kind: 'avoid', pattern: `pattern ${n}`, context: 'notepad', time: n });
+    savePatterns([pat(1)]);
+    expect(loadPatterns()).toEqual([pat(1)]);
+    expect(loadHabits()).toEqual([]);
   });
 });
