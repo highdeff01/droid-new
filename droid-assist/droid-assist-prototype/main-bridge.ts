@@ -222,6 +222,10 @@ export function createMainBridge(config: MainBridgeConfig, events: MainBridgeEve
   };
 
   const retryLater = (reason: string) => {
+    // One failure may be reported twice (listener onError and the rejected listen()); retiring the
+    // session's generation drops the duplicate, and only one retry timer is ever pending.
+    generation += 1;
+    deps.clearTimeout(retry);
     drop();
     settleAll(reason);
     const delay = backoffDelay(attempt++, config.backoffMinMs, config.backoffMaxMs);

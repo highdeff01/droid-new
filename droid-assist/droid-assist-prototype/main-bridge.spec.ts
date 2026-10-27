@@ -302,6 +302,28 @@ describe('LIFECYCLE', () => {
     expect(timers.at(-1)?.ms).toBe(350);
   });
 
+  it('a listener failure reported twice schedules one retry, and stop() leaves the bridge off for good', async () => {
+    let handlers: ListenHandlers | undefined;
+    const listen = vi.fn((_o: ListenOptions, h: ListenHandlers): Promise<void> => {
+      handlers = h;
+      h.onError('port in use');
+      return Promise.reject(new Error('port in use'));
+    });
+    const native = { listen, send: vi.fn(), stop: vi.fn() } as unknown as MainBridgeNativeApi;
+    const { events } = fakeEvents();
+    const { setTimeout, clearTimeout, timers } = manualTimers();
+    const bridge = createMainBridge({ ...baseConfig(), mode: 'listen' }, events, { fetch: vi.fn(), native, setTimeout, clearTimeout });
+    bridge.start();
+    await flushMicrotasks();
+    expect(handlers).toBeDefined();
+    expect(timers.map((t) => t.ms)).toEqual([1000]);
+    expect(bridge.state().status).toBe('error');
+    bridge.stop();
+    timers.forEach((t) => t.fn());
+    expect(bridge.state().status).toBe('off');
+    expect(listen).toHaveBeenCalledTimes(1);
+  });
+
   it('stop(): sets status off and ignores any late transport callbacks', () => {
     const native = fakeNative();
     const { events } = fakeEvents();
