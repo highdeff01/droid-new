@@ -390,6 +390,11 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         <small>Size of the screenshot the model sees; replies are scaled back to the 480x270 sample space.</small>
       </label>
       <ModelPicker url={settings.aiUrl} model={settings.aiModel} onSelect={(aiModel) => setSettings({ ...settings, aiModel })} />
+      <label className={styles.setting}>
+        <input type="checkbox" checked={settings.aiThink} onChange={(e) => setSettings({ ...settings, aiThink: e.target.checked })} aria-label="Model thinking" />
+        Model thinking (may slow replies / empty answers)
+        <small>Off sends think:false; small models can spend the whole reply thinking and return an empty answer.</small>
+      </label>
       <AiStatusBadge status={engine.aiStatus} />
       <ErrorForwardingSettings engine={engine} />
       <BackupSettings />
@@ -629,8 +634,11 @@ function entryTone(e: ThinkingEntry): LogEntry['tone'] {
   return /^(SUCCESS|PASS)/.test(e.text) ? 'ok' : 'warn';
 }
 
+/** What the panel says when an entry carries no thinking: plainly why, never invented reasoning. */
+const thinkingAbsentText = (think: boolean) => (think ? 'No thinking returned by the model' : 'No thinking — thinking is disabled in Settings');
+
 /** One timeline entry: what the model answered and the thinking it returned — or plainly that there was none. */
-function ThinkingItem({ entry }: { entry: ThinkingEntry }) {
+function ThinkingItem({ entry, think }: { entry: ThinkingEntry; think: boolean }) {
   return (
     <li data-tone={entryTone(entry)}>
       <time>{new Date(entry.time).toLocaleTimeString()}</time> <b>{entry.step}</b> · {KIND_LABEL[entry.kind]}
@@ -639,7 +647,7 @@ function ThinkingItem({ entry }: { entry: ThinkingEntry }) {
       ) : (
         <>
           <p>{entry.text}</p>
-          {entry.thinking ? <pre className={styles.muted}>{entry.thinking}</pre> : <p className={styles.muted}>No thinking returned by the model</p>}
+          {entry.thinking ? <pre className={styles.muted}>{entry.thinking}</pre> : <p className={styles.muted}>{thinkingAbsentText(think)}</p>}
         </>
       )}
     </li>
@@ -727,7 +735,7 @@ export function QwenThinkingPanel({ engine }: { engine: AssistEngine }) {
       {aiStatus.state === 'offline' && <p className={styles.muted} role="alert">{aiStatus.detail}</p>}
       {!timeline.length && <p className={styles.muted}>No AI calls yet.</p>}
       <ul className={styles.log}>
-        {timeline.map((e) => <ThinkingItem key={e.id} entry={e} />)}
+        {timeline.map((e) => <ThinkingItem key={e.id} entry={e} think={settings.aiThink} />)}
       </ul>
     </section>
   );

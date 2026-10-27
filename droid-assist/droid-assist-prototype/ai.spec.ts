@@ -34,11 +34,32 @@ describe('ai defaults', () => {
 });
 
 describe('chat', () => {
-  it('posts a non-streaming Ollama chat with thinking enabled and returns message.content', async () => {
+  it('posts a non-streaming Ollama chat with thinking off by default and returns message.content', async () => {
     const fn = stubFetch(reply(' hello '));
     await expect(chat(cfg, [{ role: 'user', content: 'hi' }])).resolves.toEqual({ content: 'hello', thinking: null });
     expect((fn.mock.calls[0] as unknown as [string])[0]).toBe(cfg.url);
-    expect(bodyOf(fn)).toMatchObject({ model: 'test-model', stream: false, think: true, messages: [{ role: 'user', content: 'hi' }] });
+    expect(bodyOf(fn)).toMatchObject({ model: 'test-model', stream: false, think: false, messages: [{ role: 'user', content: 'hi' }] });
+  });
+
+  it('sends think as the config asks: false and true are both sent explicitly', async () => {
+    const fn = stubFetch(reply('a'), reply('b'));
+    await chat({ ...cfg, think: false }, []);
+    await chat({ ...cfg, think: true }, []);
+    expect(bodyOf(fn, 0).think).toBe(false);
+    expect(bodyOf(fn, 1).think).toBe(true);
+  });
+
+  it('with thinking on, the thinking-only retry sends think:true again and keeps the reply', async () => {
+    const fn = stubFetch(reply('', 200, 't'), reply('ok'));
+    await expect(chat({ ...cfg, think: true }, [])).resolves.toEqual({ content: 'ok', thinking: 't' });
+    expect(bodyOf(fn, 0).think).toBe(true);
+    expect(bodyOf(fn, 1).think).toBe(true);
+  });
+
+  it('with thinking off, an empty reply without thinking rejects with no retry', async () => {
+    const fn = stubFetch(reply(''));
+    await expect(chat({ ...cfg, think: false }, [])).rejects.toThrow(/no message content and no thinking/);
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it('returns message.thinking alongside the content', async () => {
