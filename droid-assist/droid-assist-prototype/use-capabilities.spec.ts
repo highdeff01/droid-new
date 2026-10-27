@@ -30,6 +30,7 @@ function setup(over: Partial<CapabilityDeps> = {}) {
     }),
     newBudget: () => createBudget(10),
     armed: () => false,
+    dispatch: () => ({ real: false, label: 'Dry run', reason: 'real input disarmed' }) as ReturnType<CapabilityDeps['dispatch']>,
     live: () => frame(0),
     ask: () => null,
     learn: (o) => learned.push(o),
@@ -149,6 +150,14 @@ describe('useAssist capabilities', () => {
     await act(() => result.current.submitInput());
     expect(result.current.scripts.map((s) => s.name)).toEqual(['Greet']);
     expect(JSON.parse(localStorage.getItem('droid-assist.scripts') ?? '[]')[0].name).toBe('Greet');
+  });
+
+  it('armed without a bridge never reports a sent step', async () => {
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.toggleArmed());
+    const r = await act(() => result.current.invokeCapability({ kind: 'main' }, 'computer.control', { action: 'key', text: 'Enter' }));
+    expect(r.message).not.toMatch(/sent to the bridge/);
+    expect(r.data).toEqual({ real: false });
   });
 
   it('exposes the registry to agents through the permission-checked path', async () => {

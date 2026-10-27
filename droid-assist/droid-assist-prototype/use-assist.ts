@@ -2646,6 +2646,7 @@ export function useAssist() {
     dryRun: (actor, step) => performStep(step, actor, createBudget(settingsRef.current.actionBudget), true),
     newBudget: () => createBudget(settingsRef.current.actionBudget),
     armed: () => armedRef.current,
+    dispatch: () => dispatchState({ armed: armedRef.current, bridgeOnline, executorOn: settingsRef.current.stages.executor, aborted: abortedRef.current }),
     live: () => framesRef.current[0] ?? null,
     ask: (stage) => (aiOnline() ? askFor(stage) : null),
     learn: (outcomes) => commitHabits(outcomes.reduce((list, o) => recordOutcome(list, o), habitsRef.current)),

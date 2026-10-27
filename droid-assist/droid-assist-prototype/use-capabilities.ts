@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { Frame, LogEntry, StepAction, WorkflowStep } from './types.js';
 import { STEP_ACTIONS } from './types.js';
-import type { ActionBudget } from './safety.js';
+import type { ActionBudget, DispatchState } from './safety.js';
 import type { AskFn } from './ai.js';
 import type { HabitOutcome } from './habits.js';
 import { STAGES, type StageId } from './loop-control.js';
@@ -30,6 +30,8 @@ export interface CapabilityDeps {
   /** A fresh action budget for one capability run. */
   newBudget: () => ActionBudget;
   armed: () => boolean;
+  /** Where input goes right now: real only when armed with the bridge online; the label says why not. */
+  dispatch: () => DispatchState;
   /** The latest captured frame, or null before the first. */
   live: () => Frame | null;
   /** The AskFn of a stage while the AI is online, null when it is offline. */
@@ -48,7 +50,7 @@ const CONTROL_ACTIONS: readonly StepAction[] = STEP_ACTIONS.filter((a) => a !== 
 const str = (v: unknown, fallback = '') => (typeof v === 'string' ? v : fallback);
 const lines = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
 const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
-const mode = (dryRun: boolean) => (dryRun ? 'dry run — real input disarmed' : 'armed — sent to the bridge');
+const mode = (d: DispatchState) => (d.real ? 'sent to the bridge' : `${d.label} — ${d.reason}, no real input sent`);
 
 /** Runs `steps` one by one on the real-input path; stops at the first failure or halt. */
 async function runSteps(deps: CapabilityDeps, label: string, steps: WorkflowStep[]): Promise<CapabilityResult> {
@@ -58,7 +60,7 @@ async function runSteps(deps: CapabilityDeps, label: string, steps: WorkflowStep
     const out = await deps.runBriefed(label, step, budget, dryRun);
     if (!out.ok) return { ok: false, message: `${label}: "${step.name}" failed${out.halt ? ' (run halted)' : ''} — ${out.message}` };
   }
-  return { ok: true, message: `${label}: ${steps.length} step(s) ran (${mode(dryRun)})` };
+  return { ok: true, message: `${label}: ${steps.length} step(s) ran (${mode(deps.dispatch())})`, data: { real: deps.dispatch().real } };
 }
 
 /** A single computer-control step from params. */
