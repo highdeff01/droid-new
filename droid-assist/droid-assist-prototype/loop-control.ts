@@ -37,6 +37,7 @@ export const STAGES = [
   { id: 'elementMap', group: 'agent', name: 'Element-mapping intercept', description: 'Remembers used targets as familiar elements', verifies: false },
   { id: 'subagents', group: 'agent', name: 'Subagent testing', description: 'Test-clicks single elements from the Elements panel', verifies: false },
   { id: 'variations', group: 'agent', name: 'Background variations', description: 'Keeps superseded goals running as background variations (pauses while the main executor needs the screen)', verifies: false },
+  { id: 'trainer', group: 'agent', name: 'Element trainer', description: 'Trains mapped elements (exclusive test runs, link/popup exploration, research) and proposes their perform functions', verifies: false },
 ] as const satisfies ReadonlyArray<Omit<Stage, 'id'> & { id: string }>;
 
 /** The id of a stage or agent. */

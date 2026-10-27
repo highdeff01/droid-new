@@ -763,6 +763,7 @@ describe('useAssist auto-continue and AI stop', () => {
 
 describe('useAssist loop control', () => {
   const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'variations'] as const;
+  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'trainer'] as const;
 
   /** A model whose reflection call hangs until cancelled; every other prompt gets a plain answer. */
   function hangingReflect() {
@@ -1364,5 +1365,74 @@ describe('useAssist habits', () => {
     const { result } = renderHook(() => useAssist());
     expect(result.current.habits.map((h) => h.id)).toEqual(['h1', 'h2']);
     expect(result.current.patterns.map((p) => p.id)).toEqual(['p1', 'p2']);
+  });
+});
+
+describe('useAssist element auto-mapping, perform and training', () => {
+  /** A native frame: black with white filled rectangles [x0, y0, x1, y1] in 320x180 sample pixels. */
+  const painted = (rects: Array<[number, number, number, number]>): NativeFrame => {
+    const f = frame();
+    for (let i = 3; i < f.pixels.length; i += 4) f.pixels[i] = 255;
+    for (const [x0, y0, x1, y1] of rects) {
+      for (let y = y0; y < y1; y++) f.pixels.fill(255, (y * 320 + x0) * 4, (y * 320 + x1) * 4);
+    }
+    return f;
+  };
+
+  it('auto-maps every element of each captured frame and keeps a moved element\'s ghost with counts', async () => {
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(painted([[20, 20, 60, 40], [200, 120, 260, 150]])));
+    expect(result.current.elementMap).toHaveLength(2);
+    expect(result.current.elementMap.every((e) => e.origin === 'auto' && e.timesSeen === 1)).toBe(true);
+    act(() => hooks.onFrame!(painted([[20, 20, 60, 40], [200, 120, 260, 150]])));
+    expect(result.current.elementMap.map((e) => e.timesSeen)).toEqual([2, 2]);
+    act(() => hooks.onFrame!(painted([[20, 20, 60, 40], [230, 120, 290, 150]])));
+    expect(result.current.elementMap).toHaveLength(2);
+    const moved = result.current.elementMap.find((e) => e.moves?.length)!;
+    expect(moved.moves).toMatchObject([{ cause: 'self' }]);
+    expect(moved.positions?.map((p) => p.count).sort()).toEqual([1, 2]);
+    expect(result.current.log.find((l) => l.source === 'Auto-scan')?.message).toMatch(/1 moved/);
+    expect(JSON.parse(localStorage.getItem('droid-assist.element-map')!).find((e: { id: string }) => e.id === moved.id).positions).toHaveLength(2);
+  });
+
+  it('maps nothing per frame with auto-scan off, and on demand with Scan now', async () => {
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.setSettings({ ...result.current.settings, autoScan: false }));
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(painted([[100, 60, 160, 90]])));
+    expect(result.current.elementMap).toEqual([]);
+    act(() => result.current.scanNow());
+    expect(result.current.elementMap).toHaveLength(1);
+  });
+
+  it('sets a user perform and adds an auto-navigate step that references the element', async () => {
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(painted([[100, 60, 160, 90]])));
+    const id = result.current.elementMap[0].id;
+    act(() => result.current.addNavigateStep(id));
+    expect(result.current.steps).toEqual([]);
+    expect(result.current.log[0].message).toMatch(/no perform function/);
+    act(() => result.current.setElementPerform(id, { kind: 'type', text: 'hello', source: 'user' }));
+    expect(result.current.elementMap[0].perform).toMatchObject({ kind: 'type', text: 'hello', source: 'user' });
+    act(() => result.current.addNavigateStep(id));
+    expect(result.current.steps[0]).toMatchObject({ action: 'type', text: 'hello', mappedId: id });
+    expect(result.current.steps[0].x).toBeCloseTo(130 / 320, 1);
+  });
+
+  it('trains an element on its own background task as a disarmed dry run and reports it', async () => {
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(painted([[100, 60, 160, 90]])));
+    await act(() => result.current.trainMapped(result.current.elementMap[0].id));
+    expect(result.current.training).toMatchObject({ mode: 'background' });
+    expect(result.current.training?.status).not.toBe('running');
+    expect(result.current.training?.entries.length).toBeGreaterThan(0);
+    expect(result.current.log.some((l) => l.source === 'Trainer' && /dry run/.test(l.message))).toBe(true);
   });
 });

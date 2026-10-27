@@ -6,21 +6,80 @@ import { gridRef } from './grid.js';
 export const MAP_COLS = 24;
 export const MAP_ROWS = 16;
 
-/** Most mapped elements kept. */
-export const MAP_LIMIT = 80;
+/** Most mapped elements kept (user-drawn and auto-scanned together). */
+export const MAP_LIMIT = 160;
 
 /** Smallest box side (fraction of the screen) a drag must span to become an element. */
 export const MIN_BOX = 0.005;
 
-/** An element the user mapped by drawing its boundary on the live frame. Normalized 0..1. */
+/** What an auto-scanned element looks like it is. */
+export type ElementKind = 'button' | 'icon' | 'text' | 'input' | 'region';
+
+/** Who moved an element: a user action, an AI action, or nobody (it moved by itself). */
+export type MoveCause = 'user' | 'ai' | 'self';
+
+/** One position an element was seen at, and how often. */
+export interface PositionRecord {
+  box: Box;
+  /** Times the element was seen at this position. */
+  count: number;
+  firstSeen: number;
+  lastSeen: number;
+}
+
+/** One observed move of an element. */
+export interface MoveEvent {
+  time: number;
+  cause: MoveCause;
+  from: Box;
+  to: Box;
+}
+
+/** A coarse appearance signature (mean luminance 0..255, edge density 0..1) used to re-find a moved element. */
+export interface Appearance {
+  lum: number;
+  edges: number;
+}
+
+/** The action a perform function runs on its element. */
+export type PerformKind = 'click' | 'double_click' | 'type' | 'drag';
+
+/** What to do with an element once navigated to it; set by the user or proposed by the AI. */
+export interface PerformFn {
+  kind: PerformKind;
+  /** The text a `type` perform types (after clicking the element). */
+  text?: string;
+  /** A drag's drop point, normalized 0..1. */
+  to?: { x: number; y: number };
+  /** A drag's drop target: another mapped element (its current centre is used). */
+  toElementId?: string;
+  source: 'user' | 'ai';
+  /** Why the AI proposed it. */
+  reason?: string;
+}
+
+/** An element in the map: drawn by the user or found by the auto-scan. Normalized 0..1. */
 export interface MappedElement {
   id: string;
   name: string;
+  /** Where it is now (its latest position). */
   box: Box;
   /** When it was mapped (ms since epoch). */
   mappedAt: number;
   /** The frame it was drawn on — the template its boundary is verified against. */
   frame?: Frame;
+  /** Drawn by the user, or found by the auto-scan; absent = user. */
+  origin?: 'user' | 'auto';
+  kind?: ElementKind;
+  appearance?: Appearance;
+  /** Scans that saw it, in total. */
+  timesSeen?: number;
+  lastSeen?: number;
+  /** Every position it was seen at, with counts; the ones away from `box` are its ghosts. */
+  positions?: PositionRecord[];
+  /** Observed moves, oldest first. */
+  moves?: MoveEvent[];
+  perform?: PerformFn;
 }
 
 type Point = { x: number; y: number };
