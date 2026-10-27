@@ -1,6 +1,6 @@
 import type { AssistSettings, FamiliarElement, Habit, HabitAnchor, HabitLesson, LearnedPattern, LogEntry, MonitorMode, SavedCard, StepAction, WorkflowStep } from './types.js';
 import { STEP_ACTIONS } from './types.js';
-import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
+import { decodeFrame, decodeFrames, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 import { sanitizeBudget } from './safety.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { MAP_LIMIT, type MappedElement } from './element-map-studio.js';
@@ -15,6 +15,9 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
+import { OPERATION_LIMIT, OPERATION_SOURCES, type OperationSource, type SavedOperation } from './saved-operations.js';
+import { OPERATION_RETRIES_MAX, OPERATION_RETRIES_MIN } from './operation-retry.js';
+import { PLAYBACK_WINDOW_SEC_MAX, PLAYBACK_WINDOW_SEC_MIN } from './playback.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -23,7 +26,7 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', operations: 'droid-assist.operations' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -34,7 +37,7 @@ const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'operationRetries' | 'playbackWindowSec', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
@@ -48,6 +51,8 @@ const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | '
   gridOpacity: GRID_OPACITY_RANGE,
   aiMaxInFlight: [AI_MAX_IN_FLIGHT_MIN, AI_MAX_IN_FLIGHT_MAX],
   aiTimeoutMs: [AI_TIMEOUT_MS_MIN, AI_TIMEOUT_MS_MAX],
+  operationRetries: [OPERATION_RETRIES_MIN, OPERATION_RETRIES_MAX],
+  playbackWindowSec: [PLAYBACK_WINDOW_SEC_MIN, PLAYBACK_WINDOW_SEC_MAX],
 };
 
 /** A step as persisted: its screenshot without the pixel buffer. */
@@ -354,4 +359,45 @@ export const loadTriggers = (): Trigger[] => listOf(readJson(KEYS.triggers), isT
 /** Persists the triggers, capped at TRIGGER_LIMIT. */
 export function saveTriggers(triggers: Trigger[]) {
   writeJson(KEYS.triggers, triggers.slice(0, TRIGGER_LIMIT));
+}
+
+/** An operation as persisted: step and reference screenshots without their pixel buffers. */
+type StoredOperation = Omit<SavedOperation, 'steps' | 'screenshots'> & { steps: StoredStep[]; screenshots: StoredFrame[] };
+
+/** A valid stored operation with its valid steps and screenshots, or null. */
+function parseOperation(v: unknown): StoredOperation | null {
+  if (!isObject(v) || !isStr(v.id) || !isStr(v.name) || !Array.isArray(v.steps)) return null;
+  const steps = v.steps.map(parseStep).filter((s): s is StoredStep => s !== null);
+  const counter = (n: unknown) => (isNum(n) && n >= 0 ? Math.floor(n) : 0);
+  const runs = counter(v.runs);
+  return {
+    id: v.id,
+    name: v.name,
+    goal: typeof v.goal === 'string' && v.goal.trim() ? v.goal : v.name,
+    steps,
+    screenshots: Array.isArray(v.screenshots) ? v.screenshots.filter(isStoredFrame) : [],
+    source: OPERATION_SOURCES.includes(v.source as OperationSource) ? (v.source as OperationSource) : 'recorded',
+    savedAt: isNum(v.savedAt) ? v.savedAt : 0,
+    runs,
+    successes: Math.min(runs, counter(v.successes)),
+    ...(isNum(v.lastRun) ? { lastRun: v.lastRun } : {}),
+  };
+}
+
+/** The stored saved operations (at most OPERATION_LIMIT) with screenshots decoded; invalid entries are dropped. */
+export async function loadOperations(): Promise<SavedOperation[]> {
+  const stored = readJson(KEYS.operations);
+  if (!Array.isArray(stored)) return [];
+  const ops = stored.map(parseOperation).filter((o): o is StoredOperation => o !== null).slice(0, OPERATION_LIMIT);
+  return Promise.all(ops.map(async (o) => ({ ...o, steps: await Promise.all(o.steps.map(restoreStep)), screenshots: await decodeFrames(o.screenshots) })));
+}
+
+/** Persists the saved operations; when they do not fit, retries without screenshots. */
+export function saveOperations(ops: SavedOperation[]) {
+  const toStored = (keepFrames: boolean): StoredOperation[] => ops.slice(0, OPERATION_LIMIT).map((o) => ({
+    ...o,
+    steps: o.steps.map(({ refFrame, beforeFrame: _b, afterFrame: _a, shot: _s, ...s }) => (keepFrames && refFrame ? { ...s, refFrame: toStoredFrame(refFrame) } : s)),
+    screenshots: keepFrames ? o.screenshots.map(toStoredFrame) : [],
+  }));
+  if (!writeJson(KEYS.operations, toStored(true))) writeJson(KEYS.operations, toStored(false));
 }

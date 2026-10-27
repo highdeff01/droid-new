@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
-import { ELEMENT_EVENTS, conditionText, type ElementEvent, type Trigger, type TriggerDraft, type TriggerKind, type TriggerTarget } from './triggers.js';
+import { ELEMENT_EVENTS, conditionText, targetText, type ElementEvent, type Trigger, type TriggerDraft, type TriggerKind, type TriggerTarget } from './triggers.js';
 import styles from './droid-assist.module.css';
 
 /** The datetime-local value for a time (local clock, minutes). */
@@ -10,6 +10,13 @@ const localInput = (t: number) => {
 };
 
 const DRAFT_TARGET = 'draft';
+/** Prefix of an operation's value in the target select (card ids have none). */
+const OPERATION_PREFIX = 'op:';
+
+const toTarget = (v: string): TriggerTarget => {
+  if (v === DRAFT_TARGET) return { kind: 'draft' };
+  return v.startsWith(OPERATION_PREFIX) ? { kind: 'operation', operationId: v.slice(OPERATION_PREFIX.length) } : { kind: 'card', cardId: v };
+};
 
 /** The panel form's fields, turned into a trigger draft on submit. */
 interface Form {
@@ -24,7 +31,6 @@ interface Form {
   maxRuns: number;
 }
 
-const toTarget = (v: string): TriggerTarget => (v === DRAFT_TARGET ? { kind: 'draft' } : { kind: 'card', cardId: v });
 
 const DRAFT_OF: Record<TriggerKind, (f: Form) => TriggerDraft> = {
   element: (f) => ({ kind: 'element', name: f.name, target: toTarget(f.target), cooldownSec: f.cooldownSec, maxRuns: f.maxRuns, elementId: f.elementId, event: f.event }),
@@ -33,7 +39,7 @@ const DRAFT_OF: Record<TriggerKind, (f: Form) => TriggerDraft> = {
 
 /** One trigger: condition, target, counters, enable toggle, Run now and delete. */
 function TriggerItem({ engine, t }: { engine: AssistEngine; t: Trigger }) {
-  const flow = t.target.kind === 'draft' ? 'draft card' : engine.cards.find((c) => c.id === (t.target as { cardId: string }).cardId)?.name ?? 'deleted flow';
+  const flow = t.target.kind === 'draft' ? 'draft card' : targetText(t.target, engine.cards, engine.operations);
   return (
     <li data-tone={t.enabled ? 'ok' : 'info'}>
       <label><input type="checkbox" checked={t.enabled} onChange={() => engine.toggleTrigger(t.id)} aria-label={`Enable ${t.name}`} /> <b>{t.name}</b></label>
@@ -46,7 +52,7 @@ function TriggerItem({ engine, t }: { engine: AssistEngine; t: Trigger }) {
 
 /** Triggers: run a saved flow or the draft card when a mapped element appears / disappears / changes, or on a schedule. */
 export function TriggersPanel({ engine }: { engine: AssistEngine }) {
-  const { triggers, elementMap, cards, armed } = engine;
+  const { triggers, elementMap, cards, operations, armed } = engine;
   const [form, setForm] = useState<Form>(() => ({ kind: 'element', name: '', target: DRAFT_TARGET, elementId: '', event: 'appear', at: localInput(Date.now() + 60_000), everySec: 0, cooldownSec: 30, maxRuns: 0 }));
   const set = (patch: Partial<Form>) => setForm({ ...form, ...patch });
   const elementId = form.elementId || elementMap[0]?.id || '';
@@ -69,6 +75,7 @@ export function TriggersPanel({ engine }: { engine: AssistEngine }) {
         <select value={form.target} onChange={(e) => set({ target: e.target.value })} aria-label="Trigger runs">
           <option value={DRAFT_TARGET}>Draft card (current plan)</option>
           {cards.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          {operations.map((o) => <option key={o.id} value={`${OPERATION_PREFIX}${o.id}`}>Operation: {o.name}</option>)}
         </select>
         {form.kind === 'element' ? (
           <>

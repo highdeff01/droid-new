@@ -24,6 +24,8 @@ import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
 import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, type AiView } from './ai.js';
 import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-history.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
+import { OPERATION_RETRIES_MAX, OPERATION_RETRIES_MIN } from './operation-retry.js';
+import { PLAYBACK_WINDOW_SEC_MAX, PLAYBACK_WINDOW_SEC_MIN } from './playback.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { BackupSettings } from './backup-panel.js';
 import styles from './droid-assist.module.css';
@@ -334,6 +336,14 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>Retries per failed step <b>{settings.stepRetries}</b>
         <small>Each retry re-verifies and re-corrects the target and spends budget; then the planner re-plans the step once.</small>
         <input type="range" min={STEP_RETRIES_MIN} max={STEP_RETRIES_MAX} value={settings.stepRetries} onChange={(e) => setSettings({ ...settings, stepRetries: +e.target.value })} aria-label="Retries per failed step" />
+      </label>
+      <label className={styles.setting}>Retries of a detected operation <b>{settings.operationRetries}</b>
+        <small>After a run or playback, the best variant of a recently performed operation is retried up to this many times, each verified by screenshot comparison (0 = off).</small>
+        <input type="range" min={OPERATION_RETRIES_MIN} max={OPERATION_RETRIES_MAX} value={settings.operationRetries} onChange={(e) => setSettings({ ...settings, operationRetries: +e.target.value })} aria-label="Retries of a detected operation" />
+      </label>
+      <label className={styles.setting}>Playback window <b>{settings.playbackWindowSec} s</b>
+        <small>How far back the playback of the main app's actions reaches (30 s to 10 min).</small>
+        <input type="range" min={PLAYBACK_WINDOW_SEC_MIN} max={PLAYBACK_WINDOW_SEC_MAX} step={30} value={settings.playbackWindowSec} onChange={(e) => setSettings({ ...settings, playbackWindowSec: +e.target.value })} aria-label="Playback window seconds" />
       </label>
       <label className={styles.setting}>Max real input actions per run <b>{settings.actionBudget}</b>
         <input type="number" min={1} value={settings.actionBudget} onChange={(e) => setSettings({ ...settings, actionBudget: sanitizeBudget(e.target.valueAsNumber) })} />

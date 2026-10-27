@@ -21,4 +21,8 @@ describe('withBridgeCors', () => {
     expect(BRIDGE_URL_PATTERNS.some((p) => p.endsWith('/api/replay'))).toBe(true);
     expect(BRIDGE_URL_PATTERNS.some((p) => p.endsWith('/api/health'))).toBe(true);
   });
+
+  it('includes a pattern containing "/api/ai/action-history"', () => {
+    expect(BRIDGE_URL_PATTERNS.some((p) => p.includes('/api/ai/action-history'))).toBe(true);
+  });
 });

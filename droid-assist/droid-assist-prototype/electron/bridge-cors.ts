@@ -6,7 +6,7 @@ const CORS_HEADERS: Record<string, string> = {
 };
 
 /** URL patterns of the bridge endpoints sendToBridge / checkBridge call. */
-export const BRIDGE_URL_PATTERNS = ['*://*/api/replay', '*://*/api/replay/*', '*://*/api/health'];
+export const BRIDGE_URL_PATTERNS = ['*://*/api/replay', '*://*/api/replay/*', '*://*/api/health', '*://*/api/ai/action-history*'];
 
 /**
  * Returns the response headers with any CORS headers replaced by permissive ones. The
