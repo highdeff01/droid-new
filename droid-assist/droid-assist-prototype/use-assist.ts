@@ -1131,10 +1131,7 @@ export function useAssist() {
     if (!out.ok && !out.bridgeFailed) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
     if (out.halt || !aiOnline()) return out;
     const verdict = await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
-    if (verdict && !dryRun) {
-      learnHabit(step, verdict);
-      tracer.emit({ kind: 'verdict', stepId: step.id, name: step.name, success: verdict.success });
-    }
+    if (verdict && !dryRun) learnHabit(step, verdict);
     return { ...out, verdict };
   };
 
@@ -1507,8 +1504,8 @@ export function useAssist() {
     setSteps(stepsRef.current);
   };
 
-  /** Writes a real outcome onto its step: done only when executed, failed otherwise. */
-  const applyOutcome = (index: number, out: Performed, dryRun: boolean, before: Frame | null = null) => {
+  /** Writes a real outcome onto its step: done only when executed, failed otherwise; the tracer sees the step, then its screenshot verdict. */
+  const applyOutcome = (index: number, out: Performed & { verdict?: StepVerdict | null }, dryRun: boolean, before: Frame | null = null) => {
     const c = out.correction;
     const measured = { correctedX: out.target.x, correctedY: out.target.y, drift: c?.matchDistance, driftPx: c?.driftPx };
     if (dryRun && out.ok) {
@@ -1518,7 +1515,10 @@ export function useAssist() {
     const evidence = out.executed ? { beforeFrame: before ?? undefined, afterFrame: out.shot ?? framesRef.current[0] } : {};
     updateStep(index, { status: out.executed ? 'done' : 'failed', ...measured, ...(out.shot ? { shot: out.shot } : {}), ...evidence });
     const step = stepsRef.current[index];
-    if (step) tracer.emit({ kind: 'step', stepId: step.id, name: step.name, ok: out.ok, executed: out.executed, detail: out.message });
+    if (step) {
+      tracer.emit({ kind: 'step', stepId: step.id, name: step.name, ok: out.ok, executed: out.executed, detail: out.message });
+      if (out.verdict) tracer.emit({ kind: 'verdict', stepId: step.id, name: step.name, success: out.verdict.success });
+    }
     if (!out.executed) return;
     if (stageOn('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
   };
