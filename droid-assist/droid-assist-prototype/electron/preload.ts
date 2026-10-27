@@ -28,6 +28,12 @@ const api: NativeCaptureApi = {
     dropListeners();
     ipcRenderer.send(CAPTURE_CHANNELS.stop);
   },
+  listDisplays() {
+    return ipcRenderer.invoke(CAPTURE_CHANNELS.displays);
+  },
+  selectDisplay(id) {
+    ipcRenderer.send(CAPTURE_CHANNELS.selectDisplay, id);
+  },
 };
 
 contextBridge.exposeInMainWorld('droidNative', api);

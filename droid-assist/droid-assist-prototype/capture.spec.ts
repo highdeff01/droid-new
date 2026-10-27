@@ -18,6 +18,8 @@ function stubApi() {
     }),
     setCaptureInterval: vi.fn(),
     stopCapture: vi.fn(),
+    listDisplays: vi.fn(async () => []),
+    selectDisplay: vi.fn(),
   };
   return { api, calls };
 }

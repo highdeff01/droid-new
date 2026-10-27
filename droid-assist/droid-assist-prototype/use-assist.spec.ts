@@ -24,6 +24,8 @@ function installNative() {
     }),
     setCaptureInterval: vi.fn(),
     stopCapture: vi.fn(),
+    listDisplays: vi.fn(async () => []),
+    selectDisplay: vi.fn(),
   };
   window.droidNative = api;
   return { api, hooks };

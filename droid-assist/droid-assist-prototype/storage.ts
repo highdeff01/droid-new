@@ -98,6 +98,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   }
   if (typeof stored.aiView === 'string' && Object.hasOwn(AI_VIEWS, stored.aiView)) out.aiView = stored.aiView as AiView;
   if (typeof stored.monitorMode === 'string' && MODES.includes(stored.monitorMode as MonitorMode)) out.monitorMode = stored.monitorMode as MonitorMode;
+  if (stored.displayId === null || (typeof stored.displayId === 'string' && stored.displayId)) out.displayId = stored.displayId;
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
   out.stages = sanitizeStages(stored.stages ?? defaults.stages);
   return out;

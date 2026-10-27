@@ -5,6 +5,7 @@ import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import { AiStatusBadge, InsecureBridgeWarning } from './hud.js';
 import { ModelPicker } from './model-picker.js';
+import { DisplayPicker } from './display-picker.js';
 import { BridgeWizard } from './bridge-wizard.js';
 import type { FamiliarElement, Habit, LogEntry } from './types.js';
 import { isReliable, successRate } from './habits.js';
@@ -306,6 +307,12 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
   return (
     <section className={styles.panel}>
       <h3>Settings</h3>
+      {window.droidNative && (
+        <div className={styles.setting}>Capture display
+          <small>Native capture screenshots this display; input is sent to it. Falls back to the primary when it is unplugged.</small>
+          <DisplayPicker engine={engine} />
+        </div>
+      )}
       <label className={styles.setting}>Gallery frames <b>{settings.gallerySize}</b>
         <input type="range" min={4} max={30} value={settings.gallerySize} onChange={(e) => setSettings({ ...settings, gallerySize: +e.target.value })} />
       </label>

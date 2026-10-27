@@ -146,6 +146,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   driftMatched: MATCHED,
   driftRadius: SEARCH_RADIUS,
   monitorMode: 'app',
+  displayId: null,
   watchMs: 5000,
   autoAct: false,
   aiHelp: true,
@@ -995,7 +996,10 @@ export function useAssist() {
       bridgeUrl,
       bridgeToken,
       capture: async () => {
-        const f = await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current);
+        // Native multi-monitor capture: verify on the chosen display's own frames, which carry
+        // its desktop origin so input lands on that display; otherwise the bridge's screenshot.
+        const native = sourceRef.current === 'screen' && captureRef.current?.kind === 'native' ? framesRef.current[0] : undefined;
+        const f = native ?? await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current);
         size = { w: f.srcW, h: f.srcH };
         return f;
       },
@@ -1835,6 +1839,11 @@ export function useAssist() {
     captureRef.current?.setInterval(intervalMs);
   }, [intervalMs]);
 
+  // The running native capture follows the chosen display live (Settings or the HUD quick-switch).
+  useEffect(() => {
+    captureRef.current?.selectDisplay(settings.displayId);
+  }, [settings.displayId]);
+
   useEffect(() => () => captureRef.current?.stop(), []);
 
   /**
@@ -2356,6 +2365,7 @@ export function useAssist() {
   /** Captures the real screen: Electron native capture, else the browser picker. Resolves whether it started. */
   const shareScreen = async (): Promise<boolean> => {
     const capture = createScreenCapture();
+    capture.selectDisplay(settingsRef.current.displayId);
     try {
       await capture.start(monitorInterval(settingsRef.current.monitorMode, settingsRef.current.captureMs), { onImage: onScreenImage, onLost: onCaptureLost });
     } catch (error) {

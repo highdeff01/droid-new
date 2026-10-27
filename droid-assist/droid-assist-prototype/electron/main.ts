@@ -3,12 +3,14 @@ import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, session, type WebContents } from 'electron';
 import { CAPTURE_CHANNELS } from './capture-api.js';
 import { startCaptureLoop, type CaptureLoop } from './capture-loop.js';
-import { grabPrimaryScreen } from './screen-grab.js';
+import { grabScreen, listDisplays } from './screen-grab.js';
 import { BRIDGE_URL_PATTERNS, withBridgeCors } from './bridge-cors.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** One capture loop per renderer. */
 const loops = new Map<number, CaptureLoop>();
+/** The display each renderer captures from; absent = primary. */
+const selected = new Map<number, string | null>();
 
 function stopLoop(contents: WebContents) {
   loops.get(contents.id)?.stop();
@@ -20,7 +22,7 @@ function registerCaptureIpc() {
   ipcMain.handle(CAPTURE_CHANNELS.start, (event, intervalMs: number) => {
     const contents = event.sender;
     stopLoop(contents);
-    const loop = startCaptureLoop(grabPrimaryScreen, {
+    const loop = startCaptureLoop(() => grabScreen(selected.get(contents.id) ?? null), {
       frame: (frame) => { if (!contents.isDestroyed()) contents.send(CAPTURE_CHANNELS.frame, frame); },
       error: (message) => {
         loops.delete(contents.id);
@@ -28,8 +30,10 @@ function registerCaptureIpc() {
       },
     }, intervalMs);
     loops.set(contents.id, loop);
-    contents.once('destroyed', () => stopLoop(contents));
+    contents.once('destroyed', () => { stopLoop(contents); selected.delete(contents.id); });
   });
+  ipcMain.handle(CAPTURE_CHANNELS.displays, () => listDisplays());
+  ipcMain.on(CAPTURE_CHANNELS.selectDisplay, (event, id: string | null) => { selected.set(event.sender.id, id); });
   ipcMain.on(CAPTURE_CHANNELS.setInterval, (event, intervalMs: number) => loops.get(event.sender.id)?.setInterval(intervalMs));
   ipcMain.on(CAPTURE_CHANNELS.stop, (event) => stopLoop(event.sender));
 }
