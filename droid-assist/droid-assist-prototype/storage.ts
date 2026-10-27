@@ -14,6 +14,7 @@ import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
+import { CREW_SIZE_MAX, CREW_SIZE_MIN } from './crew.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
@@ -34,7 +35,8 @@ const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize', [number, number]> = {
+  crewSize: [CREW_SIZE_MIN, CREW_SIZE_MAX],
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
@@ -87,6 +89,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     const v = stored[key];
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
+  out.crewSize = Math.round(out.crewSize);
   for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }

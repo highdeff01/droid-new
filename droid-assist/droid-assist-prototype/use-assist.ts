@@ -21,7 +21,7 @@ import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, selfTestBridge, 
 import { DRY_RUN, dragEndError, runStep, type Grounding, type StepOutcome } from './run-step.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
-import { parseCommand } from './commands.js';
+import { parseCommand, type CommandName } from './commands.js';
 import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, fullJpeg, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, dispatchState, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
@@ -40,6 +40,8 @@ import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
 import { REVERSE_ACTOR, reverseOffer } from './reverse.js';
+import { CREW_SIZE_DEFAULT, parseIntercept } from './crew.js';
+import { useCrew } from './use-crew.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, newPattern, runVerdict, upsertCard } from './flow-memory.js';
 import { SUPERVISOR_INTERVAL_MS, SUPERVISOR_TICK_MS, applyFixes, executorBusy as supervisorExecutorBusy, habitPatterns, isConfident, reviewRun, reviewText, staleFixes, type PendingFix, type SupervisorReview, type SupervisorState } from './supervisor.js';
 import { BUS_AGENTS, elementLine, forward, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
@@ -144,6 +146,7 @@ const observationSummary = (o: Observation) => `${o.notes.length} note(s), ${o.p
 
 /** Default settings. */
 export const DEFAULT_SETTINGS: AssistSettings = {
+  crewSize: CREW_SIZE_DEFAULT,
   gallerySize: 10,
   checkpoints: 6,
   captureMs: 500,
@@ -363,6 +366,8 @@ export function useAssist() {
   const lastReviewAt = useRef(Date.now());
   const supervisorRef = useRef(supervisor);
   const busRef = useRef<BusMessage[]>([]);
+  /** The crew's API, for callbacks defined before the crew hook runs. */
+  const crewApiRef = useRef<ReturnType<typeof useCrew> | null>(null);
   const knownRef = useRef<ForwardedElement[]>([]);
   /** True while link/route subagents hold the screen; Auto Act pauses meanwhile. */
   const subRunningRef = useRef(false);
@@ -876,6 +881,7 @@ export function useAssist() {
     });
     busRef.current = updated;
     setBus(updated);
+    crewApiRef.current?.observeElement(element);
     addLog('Agent bus', `${BUS_AGENTS[from]} forwarded "${element.name}" at ${at(element.x, element.y)} to ${queued.length} agent(s)`, 'info');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addLog]);
@@ -2296,6 +2302,24 @@ export function useAssist() {
   /** AI Stop: the emergency-stop path, which also cancels the in-flight model call. */
   const stopAi = () => triggerAbort('AI stop button');
 
+  /** The coordinated crew the main AI commands: sentinels, path checkers, adjusters, test runners and monitors. */
+  const crew = useCrew({
+    crewSize: settings.crewSize,
+    goal,
+    steps,
+    history,
+    addLog,
+    performStep,
+    newBudget: () => createBudget(settingsRef.current.actionBudget),
+    isArmed: () => armedRef.current,
+    hasFrames: () => framesRef.current.length > 0,
+    knowledge,
+    stopRun: stop,
+  });
+  useEffect(() => {
+    crewApiRef.current = crew;
+  });
+
   /** Runs `fn` with the AI busy flag set. */
   const withAi = async (fn: () => Promise<void>) => {
     setAiBusy(true);
@@ -2635,10 +2659,38 @@ export function useAssist() {
     }
   };
 
-  /** Each slash command's runner. */
-  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange };
+  /** /crew locate <element> asks its sentinel; /crew test <what> runs a background-then-main test. */
+  const crewCommand = async (text: string) => {
+    const [, verb = '', rest = ''] = /^(\S+)\s*(.*)$/.exec(text.trim()) ?? [];
+    if (verb.toLowerCase() === 'locate' && rest) {
+      crew.locateElement(rest);
+      return;
+    }
+    if (verb.toLowerCase() === 'test' && rest) {
+      await crew.runTest(crew.detectTest('main AI', `run a test "${rest}"`) ?? { from: 'main AI', reason: 'requested', text: rest });
+      return;
+    }
+    addLog('/crew', 'Usage: /crew locate <element> · /crew test <element or reason>', 'warn');
+  };
 
-  /** Submits the assist input: /use, /move, /measure and /arrange run, anything else is planned as a goal. */
+  /** /intercept routes an intercept to the crew: it pauses, factors it in and proposes. */
+  const interceptCommand = async (text: string) => {
+    crew.intercept(parseIntercept(text));
+  };
+
+  /** /backtrack <n> moves the cursor back along the last n steps. */
+  const backtrackCommand = async (text: string) => {
+    const n = Number.parseInt(text, 10);
+    if (!Number.isFinite(n) || n < 1) return addLog('/backtrack', 'Usage: /backtrack <number of recent steps>, e.g. /backtrack 3', 'warn');
+    await crew.backtrack(n);
+  };
+
+  /** Each slash command's runner. */
+  const COMMAND_RUNNERS: Record<Exclude<CommandName, 'test'>, (target: string) => Promise<void>> = {
+    use: attachTarget, move: moveTo, measure: measureCommand, arrange, crew: crewCommand, intercept: interceptCommand, backtrack: backtrackCommand,
+  };
+
+  /** Submits the assist input: slash commands run, anything else is planned as a goal. */
   const submitInput = async () => {
     const command = parseCommand(goal);
     if (!command) {
@@ -2958,6 +3010,7 @@ export function useAssist() {
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
     dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
     reverse, reverseLast, reversing, briefings,
+    crew,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
   };
 }
