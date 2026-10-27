@@ -123,13 +123,23 @@ export const notesFor = (operation: string, notes: OperationNote[]) => (operatio
 /** The successful runs of operations like `operation`, newest first. */
 export const successesFor = (operation: string, runs: RunSummary[]) => (operation.trim() ? runs.filter((r) => r.outcome === 'success' && similarOperation(operation, r.goal)) : []);
 
+/** The quoted step names in a failed run's automatic avoid pattern. */
+const patternSteps = (text: string) => [...text.matchAll(/"([^"]+)" \(/g)].map((m) => m[1]);
+
+/** True when `p` is a failed run's automatic pattern whose every step a kept failure reminder already lists. */
+function coveredByFailures(p: LearnedPattern, failures: FailureRecord[]): boolean {
+  if (!p.pattern.endsWith(FAILURE_PATTERN_SUFFIX)) return false;
+  const names = patternSteps(p.pattern);
+  return names.length > 0 && names.every((n) => failures.some((f) => f.steps.some((s) => s.startsWith(`"${n}" (`))));
+}
+
 /**
  * Avoid patterns learned for this kind of operation (or for any operation). A failed run's
- * automatic pattern is left out while its failure reminder (`hasFailures`) already lists the steps.
+ * automatic pattern is left out when the similar failure reminders already list all its steps.
  */
-const patternEntries = (operation: string, patterns: LearnedPattern[], hasFailures: boolean): BlacklistEntry[] => patterns
+const patternEntries = (operation: string, patterns: LearnedPattern[], failures: FailureRecord[]): BlacklistEntry[] => patterns
   .filter((p) => p.kind === 'avoid' && (!p.context.trim() || similarOperation(operation, p.context)))
-  .filter((p) => !(hasFailures && p.pattern.endsWith(FAILURE_PATTERN_SUFFIX)))
+  .filter((p) => !coveredByFailures(p, failures))
   .map((p) => ({ source: 'pattern', text: p.pattern }));
 
 /** Avoid lessons of the habits for the operation's targets, or whose target the operation names. */
@@ -158,7 +168,7 @@ export function blacklistFor(operation: string, targets: string[], src: MemorySo
   const failures = similarFailures(operation, src.memory.failures);
   const allTargets = [...targets, ...failures.flatMap((f) => f.targets)];
   const seen = new Set<string>();
-  return interleave([failureEntries(failures), patternEntries(operation, src.patterns, failures.length > 0), habitEntries(operation, allTargets, src.habits)]).filter((e) => {
+  return interleave([failureEntries(failures), patternEntries(operation, src.patterns, failures), habitEntries(operation, allTargets, src.habits)]).filter((e) => {
     const key = norm(e.text);
     if (seen.has(key)) return false;
     seen.add(key);

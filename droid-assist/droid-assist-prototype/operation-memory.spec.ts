@@ -88,6 +88,15 @@ describe('blacklistFor', () => {
     expect(blacklistFor('send email to bob', [], sources({ patterns: [failurePattern('send email to bob', steps)] })).map((e) => e.source)).toEqual(['pattern']);
   });
 
+  it('keeps a failed-run pattern whose step no kept failure reminder lists', () => {
+    const send = [step('Click Send', 'failed', { target: 'Send button' })];
+    const body = [step('Type body', 'failed')];
+    const memory = addFailure(EMPTY_MEMORY, failureFromRun('send email to bob', 'Replay', send, null, 1));
+    const list = blacklistFor('send email to bob', [], sources({ memory, patterns: [failurePattern('send email to bob', body), failurePattern('send email to bob', send)] }));
+    expect(list.map((e) => e.source).sort()).toEqual(['failure', 'pattern']);
+    expect(list.find((e) => e.source === 'pattern')?.text).toContain('"Type body"');
+  });
+
   it('is empty for an empty operation with no targets', () => {
     expect(blacklistFor('  ', [], sources({ patterns: [pattern('avoid', 'x', '')] }))).toEqual([]);
   });
