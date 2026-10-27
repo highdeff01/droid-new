@@ -49,6 +49,7 @@ export interface OperationMemory {
   notes: OperationNote[];
 }
 
+/** Memory before anything was remembered. */
 export const EMPTY_MEMORY: OperationMemory = { failures: [], notes: [] };
 
 /** Where a blacklisted method was learned. */
