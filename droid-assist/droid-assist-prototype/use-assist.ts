@@ -2369,9 +2369,13 @@ export function useAssist() {
     return true;
   };
 
-  /** Switches the monitor to real desktop screenshots from the bridge, after a health check. */
-  const connectBridge = async (): Promise<boolean> => {
-    const health = await checkBridge(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken);
+  /**
+   * Switches the monitor to real desktop screenshots from the bridge, after a health check.
+   * `target` connects to a bridge just verified by the wizard, before its settings re-render.
+   */
+  const connectBridge = async (target?: { url: string; token: string }): Promise<boolean> => {
+    const { url, token } = target ?? { url: settingsRef.current.bridgeUrl, token: settingsRef.current.bridgeToken };
+    const health = await checkBridge(url, token);
     if (!health.ok) {
       addLog('Bridge', health.message, 'error');
       captureError({ kind: 'bridge', message: health.message });

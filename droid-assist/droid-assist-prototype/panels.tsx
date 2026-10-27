@@ -5,6 +5,7 @@ import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import { AiStatusBadge, InsecureBridgeWarning } from './hud.js';
 import { ModelPicker } from './model-picker.js';
+import { BridgeWizard } from './bridge-wizard.js';
 import type { FamiliarElement, Habit, LogEntry } from './types.js';
 import { isReliable, successRate } from './habits.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
@@ -360,6 +361,12 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         {bridge && <small>{bridge}</small>}
       </label>
       <InsecureBridgeWarning bridgeUrl={settings.bridgeUrl} />
+      <BridgeWizard
+        bridgeUrl={settings.bridgeUrl}
+        token={settings.bridgeToken}
+        onFill={(bridgeUrl, bridgeToken) => setSettings({ ...settings, bridgeUrl, bridgeToken })}
+        onConnect={(url, token) => engine.connectBridge({ url, token })}
+      />
       <label className={styles.setting}>Bridge auth token
         <input type="password" value={settings.bridgeToken} onChange={(e) => setSettings({ ...settings, bridgeToken: e.target.value })} aria-label="Bridge auth token" autoComplete="off" />
         <small>Must match DROID_BRIDGE_TOKEN on the bridge; sent as a Bearer token on every bridge call and never written to the activity log.</small>

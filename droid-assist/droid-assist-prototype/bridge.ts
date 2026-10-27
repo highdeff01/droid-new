@@ -182,11 +182,11 @@ export async function captureDesktop(bridgeUrl: string, token: string): Promise<
   }
 }
 
-/** Pings the bridge health endpoint. */
-export async function checkBridge(bridgeUrl: string, token: string): Promise<BridgeResult> {
+/** Pings the bridge health endpoint, giving up after `timeoutMs`. */
+export async function checkBridge(bridgeUrl: string, token: string, timeoutMs = 4000): Promise<BridgeResult> {
   if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };
   try {
-    const res = await fetch(`${base(bridgeUrl)}/api/health`, { headers: bridgeHeaders(token), signal: AbortSignal.timeout(4000) });
+    const res = await fetch(`${base(bridgeUrl)}/api/health`, { headers: bridgeHeaders(token), signal: AbortSignal.timeout(timeoutMs) });
     if (res.ok) return { ok: true, message: 'Desktop bridge online' };
     return { ok: false, message: unauthorized(res) ? BRIDGE_UNAUTHORIZED : `${BRIDGE_REQUIRED} (health HTTP ${res.status})` };
   } catch (error) {
