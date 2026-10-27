@@ -11,6 +11,8 @@ import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingP
 import { AgentBusPanel, CrewPanel, SubagentReportPanel } from './bus-panels.js';
 import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
 import { AgentBusPanel, ResolutionPanel, SubagentReportPanel } from './bus-panels.js';
+import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
+import { AgentBusPanel, CrewPanel, SubagentReportPanel } from './bus-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
 import { ProjectsPanel } from './projects-panel.js';
 import { AccessPathsPanel } from './access-paths-panel.js';

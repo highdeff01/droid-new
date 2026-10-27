@@ -169,6 +169,31 @@ class AssistMailboxTest(unittest.TestCase):
     def test_unknown_request_id_is_404(self):
         self.assertEqual(self.call("GET", "/api/assist/requests/nope")[0], 404)
         self.assertEqual(self.call("POST", "/api/assist/requests/nope/result", body={"ok": True, "result": "x"})[0], 404)
+class PerformTest(unittest.TestCase):
+    def test_live_drag_presses_and_releases_as_separate_actions(self):
+        import droid_bridge
+
+        calls = []
+
+        class FakeGui:
+            def moveTo(self, *a, **k):
+                calls.append(("moveTo", a))
+
+            def mouseDown(self, *a):
+                calls.append(("mouseDown", a))
+
+            def mouseUp(self, *a):
+                calls.append(("mouseUp", a))
+
+        original = droid_bridge._gui
+        droid_bridge._gui = FakeGui
+        try:
+            droid_bridge.perform({"action": "mouse_down", "x": 10, "y": 20, "delayMs": 0})
+            droid_bridge.perform({"action": "move", "x": 30, "y": 40, "durationMs": 40, "delayMs": 0})
+            droid_bridge.perform({"action": "mouse_up", "x": 30, "y": 40, "delayMs": 0})
+        finally:
+            droid_bridge._gui = original
+        self.assertEqual(calls, [("moveTo", (10, 20)), ("mouseDown", ()), ("moveTo", (30, 40)), ("mouseUp", (30, 40))])
 
 
 if __name__ == "__main__":

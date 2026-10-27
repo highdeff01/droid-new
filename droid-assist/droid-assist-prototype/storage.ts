@@ -169,6 +169,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'aiOverlap'] as const) {
   for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'aiThink'] as const) {
   for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'aiThink', 'aiOverlap'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'liveDrag', 'showGrid', 'gridLabels'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
   if (typeof stored.masterPrompt === 'string' && stored.masterPrompt.length <= MASTER_PROMPT_MAX) out.masterPrompt = stored.masterPrompt;

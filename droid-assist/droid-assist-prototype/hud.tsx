@@ -96,6 +96,19 @@ export function AiStopButton({ engine }: { engine: AssistEngine }) {
 }
 
 /**
+ * Stop plan: shown while a plan, crew or live drag is going; halts it (AI calls cancelled, agents parked,
+ * a live drag released) without disarming or stopping the monitor and the watchers — unlike the emergency stop.
+ */
+export function StopPlanButton({ engine }: { engine: AssistEngine }) {
+  if (!engine.aiWorking && !engine.continuing && !engine.replaying && !engine.crewRunning && !engine.liveDragging) return null;
+  return (
+    <button type="button" onClick={engine.stopPlan} title="Stop the current plan and agent crew; stays armed, monitor and watchers keep running (no ABORTED latch)">
+      ⏹ Stop plan{engine.crewRunning ? ' (crew)' : ''}
+    </button>
+  );
+}
+
+/**
  * Persistent real-input indicator: "Real input ACTIVE" only while armed, the bridge is connected
  * and the executor stage is on; otherwise "Dry run" with the reason. Plus the end-to-end
  * "Verify real input" self-test (one harmless cursor move through the bridge).
@@ -248,6 +261,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
           <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder='Goal or command, e.g. "move mouse to the files icon", "/move files icon", "/use notepad"' aria-label="Goal" />
           <button type="submit" className={styles.primary} disabled={aiBusy || (aiOff && !goal.trim().startsWith('/'))} title={aiTitle}>{aiBusy ? '… thinking' : '✨ AI plan / run'}</button>
           <AiStopButton engine={engine} />
+          <StopPlanButton engine={engine} />
         </form>
       </div>
       <MonitorStatus engine={engine} />
@@ -265,6 +279,8 @@ export function Hud({ engine }: { engine: AssistEngine }) {
         <label><input type="checkbox" checked={settings.aiHelp} onChange={(e) => setSettings({ ...settings, aiHelp: e.target.checked })} disabled={aiOff} /> AI help{aiOff && ' (AI unavailable)'}</label>
         <label title="After a replay, verify the goal on the live screen and keep planning and running until it is done"><input type="checkbox" checked={settings.autoContinue} onChange={(e) => setSettings({ ...settings, autoContinue: e.target.checked })} disabled={aiOff} /> Auto-continue{aiOff && ' (AI unavailable)'}</label>
         <label>Max iterations <input type="number" min={1} max={20} value={settings.maxIterations} onChange={(e) => void engine.invoke('setting.maxIterations', { value: Math.min(20, Math.max(1, Math.floor(e.target.valueAsNumber) || 1)) })} aria-label="Auto-continue max iterations" /></label>
+        <label title="Armed bridge drags run segment by segment, corrected live by the coordinate-agent swarm (needs the Live drag swarm stage)"><input type="checkbox" checked={settings.liveDrag} onChange={(e) => setSettings({ ...settings, liveDrag: e.target.checked })} aria-label="Live drag" /> Live drag</label>
+        <label>Max iterations <input type="number" min={1} max={20} value={settings.maxIterations} onChange={(e) => setSettings({ ...settings, maxIterations: Math.min(20, Math.max(1, Math.floor(e.target.valueAsNumber) || 1)) })} aria-label="Auto-continue max iterations" /></label>
         <label><input type="checkbox" checked={settings.showTrail} onChange={(e) => setSettings({ ...settings, showTrail: e.target.checked })} /> Trail</label>
         <label title="Labeled A1..H12 grid on the preview; the AI answers with these cells"><input type="checkbox" checked={settings.showGrid} onChange={(e) => setSettings({ ...settings, showGrid: e.target.checked })} aria-label="Grid overlay" /> Grid</label>
         <label title="Label every cell (A1..H12); off shows only the edge numbers and letters"><input type="checkbox" checked={settings.gridLabels} onChange={(e) => setSettings({ ...settings, gridLabels: e.target.checked })} disabled={!settings.showGrid} aria-label="Grid cell labels" /> Grid labels</label>

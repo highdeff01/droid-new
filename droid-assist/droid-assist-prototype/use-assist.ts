@@ -20,7 +20,7 @@ import { DEFAULT_MAX_ITERATIONS, autoContinue, judgeCheck, type ContinueStop, ty
 import { DEFAULT_CHANGE_CELLS, assessChange, changeText, detectChange, type ChangeAssessment, type ScreenChange } from './screen-change.js';
 import { localProposal, proposalText, proposeStep, type Proposal, type ProposalContext } from './proposal.js';
 import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './thinking-timeline.js';
-import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, selfTestBridge, type BridgeResult } from './bridge.js';
+import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, pointerAction, selfTestBridge, sendNative, type BridgeResult } from './bridge.js';
 import { DRY_RUN, dragEndError, runStep, type Grounding, type StepOutcome } from './run-step.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
@@ -145,6 +145,8 @@ import type { FramePayload, InboundMessage, InterceptKind, InterceptPayload, Run
 import { DEFAULT_OPERATION_RETRIES } from './operation-retry.js';
 import { DEFAULT_PLAYBACK_WINDOW_SEC } from './playback.js';
 import { useOperations } from './use-operations.js';
+import { CREW_AGENTS, createScreenLock, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
+import { runLiveDrag, type DragIntervention, type LiveDragResult, type SwarmAgent } from './drag-swarm.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -317,6 +319,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   aiView: DEFAULT_AI_VIEW,
   aiThink: false,
   autoContinue: true,
+  liveDrag: false,
   maxIterations: DEFAULT_MAX_ITERATIONS,
   stepRetries: DEFAULT_STEP_RETRIES,
   operationRetries: DEFAULT_OPERATION_RETRIES,
@@ -458,6 +461,12 @@ export function useAssist() {
   /** The latest link/route subagent test report; null before the first. */
   const [subReport, setSubReport] = useState<SubagentReport | null>(null);
   const [subRunning, setSubRunning] = useState(false);
+  /** The agent crew the main AI commands (/crew) and whether a crew run is going. */
+  const [crew, setCrew] = useState<CrewAgent[]>(() => CREW_AGENTS.map((id) => ({ id, status: 'waiting', task: null, lastReport: null })));
+  const [crewRunning, setCrewRunning] = useState(false);
+  /** The coordinate agents of the running (or last) live drag. */
+  const [swarm, setSwarm] = useState<SwarmAgent[]>([]);
+  const [liveDragging, setLiveDragging] = useState(false);
   const [plays, setPlays] = useState(0);
   const [armed, setArmed] = useState(false);
   /** The last health check or bridge call reached the PC (and the PC did not fail it). */
@@ -637,6 +646,13 @@ export function useAssist() {
   const knownRef = useRef<ForwardedElement[]>([]);
   /** True while link/route subagents hold the screen; Auto Act pauses meanwhile. */
   const subRunningRef = useRef(false);
+  const crewRef = useRef<CrewAgent[]>([]);
+  const crewRunningRef = useRef(false);
+  /** Real input from crew agents goes through one lock: two agents never move the pointer at once. */
+  const screenLockRef = useRef(createScreenLock());
+  /** The user's pending live-drag intervention (re-aim or release), taken before the next segment. */
+  const dragControlRef = useRef<DragIntervention | null>(null);
+  const liveDragRef = useRef(false);
   const elementMapRef = useRef<MappedElement[]>([]);
   /** Recent user and AI inputs, for blaming element moves on whoever caused them. */
   const actorInputsRef = useRef<ActorInput[]>([]);
@@ -1876,6 +1892,7 @@ export function useAssist() {
     if (!bridgeUrl) return refused(step, BRIDGE_REQUIRED);
     const gate = dryRun ? null : gateRealInput(budget);
     if (gate) return refused(step, gate);
+    if (!dryRun && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) return performLiveDrag(step, actor);
     let size = { w: 1920, h: 1080 };
     const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), {
       bridgeUrl,
@@ -1931,6 +1948,67 @@ export function useAssist() {
     const planned = await compensateStep(step, actor);
     const out = await dispatchInput(planned, actor, budget, dryRun);
     noteLanding(planned, out);
+  /** Why a live drag must let go before its next segment: abort, disarm or Stop plan; null to go on. */
+  const liveDragHalt = (): string | null => {
+    if (abortedRef.current) return 'Aborted';
+    if (!armedRef.current) return 'Real input disarmed';
+    return abortRef.current ? 'Plan stopped' : null;
+  };
+
+  /** Main-AI freeflow during a live drag: asks the planner once where the lost drop target is now. */
+  const relocateDrop = async (step: WorkflowStep, lostAt: { x: number; y: number }) => {
+    const frame = framesRef.current[0];
+    if (!frame || !aiOnline() || !stageOn('planner')) return null;
+    const target = { ...step, action: 'move' as const, x: lostAt.x, y: lostAt.y, target: step.endTarget ?? `${step.name} drop point` };
+    const found = await relocateTarget(askFor('planner'), frame, target, 'the drop target moved while the drag was in progress');
+    return found && { x: found.x, y: found.y };
+  };
+
+  /**
+   * Live parallel drag (Live drag setting + 'dragTrackers' stage, armed bridge only): the coordinate-agent
+   * swarm tracks every segment on the live frames and the executor sends press → corrected segment moves →
+   * release. The guardrails are checked before every segment and the button is always released on a stop.
+   */
+  const performLiveDrag = async (step: WorkflowStep, actor: string): Promise<Performed> => {
+    const { bridgeUrl, bridgeToken } = settingsRef.current;
+    const end = { x: step.endX ?? step.x, y: step.endY ?? step.y };
+    const start = { x: step.correctedX ?? step.x, y: step.correctedY ?? step.y };
+    let before: Frame;
+    try {
+      before = framesRef.current[0] ?? await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current);
+    } catch (error) {
+      return { ok: false, executed: false, halt: true, bridgeFailed: true, message: `${BRIDGE_REQUIRED} (unreachable: ${errorText(error)})`, target: start };
+    }
+    const origin = { x: before.originX ?? 0, y: before.originY ?? 0 };
+    const send = (input: 'mouse_down' | 'move' | 'mouse_up', p: { x: number; y: number }) => sendNative(bridgeUrl, { id: step.id, name: step.name }, [pointerAction(input, p, before.srcW, before.srcH, origin)], { token: bridgeToken, pollMs: 50, timeoutMs: 10000 });
+    dragControlRef.current = null;
+    liveDragRef.current = true;
+    setLiveDragging(true);
+    let res: LiveDragResult;
+    try {
+      res = await runLiveDrag({
+        start, end, send,
+        ref: step.refFrame?.data ?? before.data,
+        drift: driftThresholds(),
+        live: () => framesRef.current[0]?.data ?? null,
+        halt: liveDragHalt,
+        intervention: () => {
+          const ask = dragControlRef.current;
+          dragControlRef.current = null;
+          return ask;
+        },
+        relocate: (lostAt) => relocateDrop(step, lostAt),
+        onAgents: setSwarm,
+        log: (m) => addLog(actor, m, 'info'),
+      });
+    } finally {
+      liveDragRef.current = false;
+      setLiveDragging(false);
+    }
+    const shot = await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current).catch(() => undefined);
+    const out: Performed = { ok: res.ok, executed: res.pressed, halt: res.halted, message: res.message, target: start, end: res.releasedAt, live: before, shot, bridgeFailed: !res.pressed };
+    if (out.executed) recordAction(step, out, actor, 'bridge', before.srcW, before.srcH);
+    noteBridge(step, out, actor);
     return out;
   };
 
@@ -4016,6 +4094,103 @@ export function useAssist() {
   useEffect(() => {
     crewApiRef.current = crew;
   });
+  /**
+   * Stop plan: halts the current plan, agent crew and live drag — the run-stop flag is set, in-flight
+   * and queued AI calls are cancelled, crew agents park and a live drag releases the mouse — without
+   * disarming, latching ABORTED, turning Auto Act off or stopping the monitor and the watchers.
+   */
+  const stopPlan = () => {
+    abortRef.current = true;
+    cancelAi();
+    if (liveDragRef.current) dragControlRef.current = { kind: 'release' };
+    addLog('Stop plan', `Plan stopped by user — in-flight AI calls cancelled${crewRunningRef.current ? ', crew agents parked' : ''}${liveDragRef.current ? ', live drag released' : ''}; real input stays ${armedRef.current ? 'armed' : 'disarmed'}, monitor and watchers keep running`, 'warn');
+  };
+
+  /** User intervention in a live drag: re-aim the drop point, or (null) release at once. */
+  const interveneDrag = (point: { x: number; y: number } | null) => {
+    if (!liveDragRef.current) return addLog('Live drag', 'No live drag in progress — nothing to adjust', 'warn');
+    dragControlRef.current = point ? { kind: 'aim', point } : { kind: 'release' };
+    addLog('Live drag', point ? `User re-aims the drop point to ${at(point.x, point.y)}` : 'User releases the drag now', 'warn');
+  };
+
+  /** The crew run must stop: Stop plan, abort, or the crew or planner stage unchecked. */
+  const crewStopped = () => abortRef.current || abortedRef.current || !stageOn('crew') || !stageOn('planner');
+
+  /** An agent report goes to the Screen watcher notes. */
+  const noteCrewReport = (report: CrewReport) => {
+    const merged = mergeNotes(watcherRef.current.notes, [reportNote(report)], Date.now());
+    updateWatcher((w) => ({ ...w, notes: merged.notes }));
+    addLog('Agent crew', `${report.agent} reports on "${report.task}": ${report.found}`, report.ok ? 'ok' : 'warn');
+  };
+
+  /**
+   * One crew agent works one command on its own thread: it plans the task on the live frame through
+   * its own 'crew' AI call, then runs each step grounded through the guarded pipeline — its real input
+   * serialized behind the screen lock — and reports what it found.
+   */
+  const runCrewAgent = async (command: CrewCommand, budget: ActionBudget, dryRun: boolean): Promise<CrewReport> => {
+    const label = `Crew ${command.agent}`;
+    const report = (ok: boolean, found: string, point?: { x: number; y: number }): CrewReport => ({ agent: command.agent, task: command.task, ok, found, ...(point ? { point } : {}) });
+    const plan = await thought(`${label}: ${command.task}`, () => planFromGoal(command.task, [], framesRef.current[0] ?? null, askFor('crew'), knownRef.current.map(elementLine), patternsRef.current), planSummary);
+    if (!plan.steps.length) return report(true, plan.thinking ?? 'nothing to act on — the task needs no input');
+    let point: { x: number; y: number } | undefined;
+    for (const step of plan.steps) {
+      if (crewStopped()) return report(false, `parked before "${step.name}" — nothing more sent`, point);
+      const out = await screenLockRef.current(async () => {
+        const local = recordLocal(label, step, `the main AI asked ${command.agent} to "${command.task}"`);
+        const briefed = await brief(label, { kind: 'go', step, proposal: local });
+        return briefed.kind === 'go' ? execute(briefed.step, label, budget, dryRun, briefed.proposal) : refused(step, `"${step.name}" not justified by the pre-action briefing`);
+      });
+      if (!out.ok) return report(false, `${step.name}: ${out.message}`, point);
+      point = out.target;
+    }
+    return report(true, `${plan.steps.length} step(s) ${dryRun ? `verified (${DRY_RUN})` : 'done'}: ${stepsText(plan.steps)}`, point);
+  };
+
+  /** Log tone of each way a crew run ends. */
+  const CREW_TONE: Record<CrewStop, LogEntry['tone']> = { done: 'ok', stopped: 'warn', cap: 'warn', stalled: 'warn' };
+
+  /**
+   * "/crew <goal>": the AI-directed command loop. The main AI (planner stage) thinks, commands crew
+   * agents, they work in parallel (each with its own queued AI call and grounding) and report back,
+   * then wait for its next command — until done, stalled, Max iterations rounds, or Stop plan / abort.
+   */
+  const runCrewGoal = async (text: string) => {
+    if (abortedRef.current) return addLog('Agent crew', 'Crew refused — ABORTED is active; clear the abort first', 'error');
+    if (crewRunningRef.current) return addLog('Agent crew', 'A crew run is already going', 'warn');
+    if (!stageOn('crew') || !stageOn('planner')) return addLog('Agent crew', `${stageOff(stageOn('crew') ? 'planner' : 'crew')} — no crew run`, 'warn');
+    const dryRun = !armedRef.current;
+    const budget = createBudget(settingsRef.current.actionBudget);
+    abortRef.current = false;
+    crewRunningRef.current = true;
+    setCrewRunning(true);
+    addLog('Agent crew', `Crew of ${CREW_AGENTS.length} for "${text}"${dryRun ? ' (real input disarmed: dry run)' : ''}`, 'info');
+    try {
+      await withAi(async () => {
+        const out = await runCrew({
+          agents: CREW_AGENTS,
+          maxRounds: settingsRef.current.maxIterations,
+          decide: (reports, round) => thought(`Crew round ${round}: ${text}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, text, crewRef.current, reports), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
+          work: (c) => runCrewAgent(c, budget, dryRun),
+          shouldStop: crewStopped,
+          onAgents: (agents) => {
+            crewRef.current = agents;
+            setCrew(agents);
+          },
+          onReport: noteCrewReport,
+          onDecision: (d, round) => {
+            if (d.ignored.length) addLog('Agent crew', `Round ${round}: ignored command(s) for ${d.ignored.join(', ')} (unknown agent or a second command)`, 'warn');
+          },
+        });
+        addLog('Agent crew', `Crew ${out.stop} after ${out.rounds} round(s), ${out.reports.length} report(s) — ${out.summary}`, CREW_TONE[out.stop]);
+      });
+    } catch (error) {
+      addLog('Agent crew', aiFailure('AI unavailable — crew stopped', error), 'error');
+    } finally {
+      crewRunningRef.current = false;
+      setCrewRunning(false);
+    }
+  };
 
   /** Runs `fn` with the AI busy flag set. */
   const withAi = async (fn: () => Promise<void>) => {
@@ -4894,6 +5069,7 @@ export function useAssist() {
     addLog(actor, replicaLine(r), 'ok', [r.crop]);
     return r;
   };
+  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'crew', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, crew: runCrewGoal };
 
   /** "/replicate <name> x,y,w,h" or "/replicate <mapped element>": the AI snips and saves the element itself. */
   const replicateCommand = async (arg: string) => {
@@ -5836,6 +6012,7 @@ export function useAssist() {
     triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger, packs,
     ...ops,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
+    crew, crewRunning, runCrewGoal, stopPlan, swarm, liveDragging, interveneDrag,
     aiHistory, trimAiHistory, resetAiSession,
     memory, operations, addOperationNote, forgetMemory,
     operations: operationDb.operations, exportOperations: operationDb.exportOperations, clearOperations: operationDb.clearOperations,

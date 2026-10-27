@@ -18,7 +18,7 @@ export const BRIDGE_REQUIRED = 'Desktop bridge not connected — connect the bri
 
 /** One native action as the Droid replay engine (python-service/replay.py, pyautogui) accepts it. */
 export interface NativeAction {
-  action: 'click' | 'double_click' | 'move' | 'drag' | 'scroll' | 'type_text' | 'press_key' | 'hotkey' | 'wait';
+  action: 'click' | 'double_click' | 'move' | 'drag' | 'scroll' | 'type_text' | 'press_key' | 'hotkey' | 'wait' | 'mouse_down' | 'mouse_up';
   x: number;
   y: number;
   /** A `drag`'s release point (pyautogui mouseDown at x,y → moveTo(endX, endY, duration) → mouseUp). */
@@ -86,6 +86,11 @@ export function nativeActions(step: WorkflowStep, srcW: number, srcH: number, or
   return typeof step.delayMs === 'number' ? [{ ...first, delayMs: step.delayMs }, ...rest] : [first, ...rest];
 }
 
+/** One drag segment's raw input (press, short move, release) at a normalized point of a srcW×srcH screen at `origin`. */
+export function pointerAction(action: 'mouse_down' | 'move' | 'mouse_up', p: Point, srcW: number, srcH: number, origin: Point = { x: 0, y: 0 }): NativeAction {
+  return { action, x: toPx(p.x, srcW) + origin.x, y: toPx(p.y, srcH) + origin.y, delayMs: 0, ...(action === 'move' ? { durationMs: 40 } : {}) };
+}
+
 const base = (url: string) => url.replace(/\/$/, '');
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
@@ -144,6 +149,22 @@ export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: 
   if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };
   const actions = nativeActions(step, srcW, srcH, origin);
   if (!actions.length) return { ok: false, message: `"${step.name}" has no end point — a drag needs both a start and an end; not sent` };
+  return sendNative(bridgeUrl, { id: step.id, name: step.name }, actions, { token, pollMs, timeoutMs });
+}
+
+/** Options of one bridge replay run. */
+export interface SendOptions {
+  token?: string;
+  pollMs?: number;
+  timeoutMs?: number;
+}
+
+/**
+ * Sends native actions as one replay run (POST /api/replay, then polls it). Succeeds only when
+ * the PC completed it. `label` names the run's steps.
+ */
+export async function sendNative(bridgeUrl: string, label: { id: string; name: string }, actions: NativeAction[], { token = '', pollMs = 250, timeoutMs = 60000 }: SendOptions = {}): Promise<BridgeResult> {
+  if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };
   const { x, y } = actions[0];
   try {
     const res = await fetch(`${base(bridgeUrl)}/api/replay`, {
@@ -153,7 +174,7 @@ export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: 
         targetDevice: 'desktop',
         iterations: 1,
         confirmation: true,
-        steps: actions.map((a, i) => ({ id: `${step.id}-${i}`, name: `${step.name} (${a.action})`, ...a })),
+        steps: actions.map((a, i) => ({ id: `${label.id}-${i}`, name: `${label.name} (${a.action})`, ...a })),
       }),
       signal: AbortSignal.timeout(8000),
     });

@@ -47,6 +47,8 @@ export const STAGES = [
   { id: 'workarounds', group: 'agent', name: 'Workarounds', description: 'After a failed step the AI proposes workflow edits: new, removed or reordered steps and alternate targets', verifies: false },
   { id: 'workflowCreation', group: 'agent', name: 'Workflow creation', description: 'AI turns successful sequences into new workflow packs, verified by an agent before proposing', verifies: false },
   { id: 'goalTracer', group: 'agent', name: 'Goal tracer', description: 'Traces the active goal live: step outcomes, verdicts and agent reports; flags off-path, stalls and completion', verifies: false },
+  { id: 'crew', group: 'agent', name: 'Agent crew', description: 'Crew agents work the main AI\'s commands (/crew), each with its own AI call and grounding, then report back and wait', verifies: false },
+  { id: 'dragTrackers', group: 'agent', name: 'Live drag swarm', description: 'Coordinate agents track each drag segment live and correct the path in real time (with Live drag on)', verifies: false },
 ] as const satisfies ReadonlyArray<Omit<Stage, 'id'> & { id: string }>;
 
 /** The id of a stage or agent. */
