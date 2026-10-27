@@ -2141,7 +2141,7 @@ export function useAssist() {
     !!popup && s.x >= popup.x && s.x <= popup.x + popup.w && s.y >= popup.y && s.y <= popup.y + popup.h;
 
   /** Runs one replay step, clearing a covering popup first when AI help is on, after a recorded what/why proposal. */
-  const replayStep = async (i: number, budget: ActionBudget, dryRun: boolean, label: string): Promise<Performed & { verdict?: StepVerdict | null }> => {
+  const replayStep = async (i: number, budget: ActionBudget, dryRun: boolean, label: string, pin?: { x: number; y: number }): Promise<Performed & { verdict?: StepVerdict | null }> => {
     const planned = stepsRef.current[i];
     setActiveIndex(i);
     updateStep(i, { status: 'running' });
@@ -2165,7 +2165,7 @@ export function useAssist() {
       return { ok: false, executed: false, halt: true, message: `Stopped before "${planned.name}" — not executed`, target: { x: planned.x, y: planned.y } };
     }
     const before = framesRef.current[0] ?? null;
-    const out = await execute(j.step, label, budget, dryRun, j.proposal);
+    const out = await execute(pin ? { ...j.step, ...pin } : j.step, label, budget, dryRun, j.proposal);
     applyOutcome(i, out, dryRun, before);
     addLog(label, `${planned.name}: ${out.message}`, out.ok ? 'ok' : 'error');
     return out;
@@ -2476,15 +2476,15 @@ export function useAssist() {
     return true;
   };
 
-  /** Grounds step `i` on the element map or learned coordinates; resolves whether its target has a point at all. */
-  const placeTarget = (i: number): boolean => {
+  /** Grounds step `i` on the element map or learned coordinates: the point that pins its input, null when memory does not know it. */
+  const placeTarget = (i: number): { x: number; y: number } | null => {
     const s = stepsRef.current[i];
-    if (!POINTER_ACTIONS.has(s.action)) return true;
+    if (!POINTER_ACTIONS.has(s.action)) return null;
     const loc = locateTarget(s.target ?? s.name, elementMapRef.current, familiarRef.current);
-    if (!loc) return !s.unlocated;
+    if (!loc) return null;
     updateStep(i, { x: loc.x, y: loc.y, unlocated: undefined });
     addLog(CHAIN, `Located "${s.target ?? s.name}" from the ${loc.source} at ${at(loc.x, loc.y)}`);
-    return true;
+    return { x: loc.x, y: loc.y };
   };
 
   /**
@@ -2535,7 +2535,8 @@ export function useAssist() {
     addLog(CHAIN, `Objective ${i + 1}/${chainRef.current!.objectives.length}: ${o.what} — why: ${o.why}`);
     const before = framesRef.current[0];
     if (!(await walkPath(o.path, budget, dryRun))) return settleObjective(i, refused(o.step, 'Stopped while moving along the path'), before);
-    let out = placeTarget(i) ? await replayStep(i, budget, dryRun, CHAIN) : null;
+    const pin = placeTarget(i) ?? undefined;
+    let out = pin || !stepsRef.current[i].unlocated ? await replayStep(i, budget, dryRun, CHAIN, pin) : null;
     if (!out?.ok && !out?.halt && (await discover(i, budget, dryRun))) out = await replayStep(i, budget, dryRun, CHAIN);
     return settleObjective(i, out, before);
   };
