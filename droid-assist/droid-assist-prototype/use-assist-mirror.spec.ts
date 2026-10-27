@@ -143,6 +143,38 @@ describe('useAssist mirror input', () => {
     expect(lines(result, 'Mirror').every((l) => l.message.includes('dry run — not dispatched'))).toBe(true);
   });
 
+  it('ruler and element-map modes take precedence: drag, scroll and keys are not mirrored', async () => {
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.toggleMirror());
+    act(() => result.current.toggleMapMode());
+    act(() => result.current.onStageScroll(0.5, 0.5, 120));
+    act(() => result.current.onStageKey({ key: 'a', ctrlKey: false, altKey: false, shiftKey: false, metaKey: false }));
+    await act(async () => {});
+    expect(lines(result, 'Mirror').filter((l) => l.message.startsWith('DRY RUN'))).toEqual([]);
+  });
+
+  it('armed but the bridge is not connected: the badge says dry run and nothing reaches the bridge', async () => {
+    withBridge();
+    const calls: Call[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push({ url: String(url), body: null });
+      throw new TypeError('Failed to fetch');
+    }));
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.toggleArmed());
+    act(() => result.current.toggleMirror());
+    expect(result.current.mirror.real).toBe(false);
+    expect(result.current.mirror.label).toMatch(/^Mirror DRY RUN/);
+    let out: Awaited<ReturnType<typeof result.current.mirrorInput>> | undefined;
+    await act(async () => {
+      out = await result.current.mirrorInput({ kind: 'click', x: 0.5, y: 0.5 });
+    });
+    expect(out!.executed).toBe(false);
+    expect(replayPosts(calls)).toEqual([]);
+    expect(lines(result, 'Mirror')[0].message).toMatch(/^DRY RUN · .*dry run — not dispatched/);
+  });
+
   it('kill switch turns mirror input off and keeps it off until the abort is cleared', () => {
     const { result } = renderHook(() => useAssist());
     act(() => result.current.toggleMirror());

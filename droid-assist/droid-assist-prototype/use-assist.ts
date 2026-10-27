@@ -322,6 +322,10 @@ export function useAssist() {
   const mirrorBudgetRef = useRef<ActionBudget>(createBudget(settings.actionBudget));
   /** The last mirrored wheel gesture, so a burst of wheel events dispatches one scroll. */
   const mirrorScrollRef = useRef<{ dir: 'up' | 'down'; at: number } | null>(null);
+  /** Stage modes that take precedence over mirror input, current as of the last render. */
+  const stageModeRef = useRef({ ruler: false, map: false });
+  /** Bridge reachability as of the last render, so mirror input dispatches only when its badge says LIVE. */
+  const mirrorBridgeRef = useRef(false);
   /** Trims and resets of the AI history land here (wired to the log once addLog exists). */
   const historyChangeRef = useRef<HistoryChangeFn>(() => undefined);
   const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage, renderView, (c) => historyChangeRef.current(c)));
@@ -1458,7 +1462,8 @@ export function useAssist() {
    */
   const mirrorInput = async (ev: MirrorEvent, actor = 'Mirror', budget = mirrorBudgetRef.current): Promise<Performed> => {
     const step = mirrorStep(ev, uid('mirror'));
-    const dryRun = !armedRef.current;
+    // Same condition as the mirror badge: LIVE only when armed with a connected bridge, otherwise a labeled dry run.
+    const dryRun = !armedRef.current || !mirrorBridgeRef.current;
     const out = await performStep(step, actor, budget, dryRun);
     const message = dryRun && !out.message.includes(DRY_RUN) ? `${out.message} — ${DRY_RUN}` : out.message;
     addLog(actor, `${dryRun ? 'DRY RUN · ' : ''}${step.name}: ${message}`, out.ok ? (dryRun ? 'info' : 'ok') : 'error');
@@ -2182,6 +2187,10 @@ export function useAssist() {
     lastInputRef.current = now;
     setSteps(stepsRef.current);
   }, []);
+  /** Whether stage gestures go to the mirror: mirror on and no ruler or element-map mode (recording is checked first by each handler). */
+  stageModeRef.current = { ruler: ruler.on, map: mapMode };
+  mirrorBridgeRef.current = bridgeOnline;
+  const mirroring = () => mirrorOnRef.current && !stageModeRef.current.ruler && !stageModeRef.current.map;
 
   /** Stage pointer input: trail while recording. */
   const onStageMove = useCallback((x: number, y: number) => {
@@ -2203,7 +2212,7 @@ export function useAssist() {
       addLog('Recorder', `Captured ${hover ? 'mouse move' : 'click'} at (${pct(x)}, ${pct(y)}) with screenshot`, 'info');
       return;
     }
-    if (mirrorOnRef.current) {
+    if (mirroring()) {
       void mirrorRef.current({ kind: 'click', x, y });
       return;
     }
@@ -2220,14 +2229,14 @@ export function useAssist() {
       addLog('Recorder', `Captured key ${combo}`, 'info');
       return;
     }
-    if (mirrorOnRef.current) void mirrorRef.current({ kind: 'key', combo });
+    if (mirroring()) void mirrorRef.current({ kind: 'key', combo });
   }, [addLog, appendRecorded]);
 
   /** Mouse wheel at (x, y): one scroll step (recorded or mirrored) per gesture (same-direction wheel events in a burst merge). */
   const onStageScroll = useCallback((x: number, y: number, deltaY: number) => {
     if (deltaY === 0) return;
     if (!recordingRef.current) {
-      if (mirrorOnRef.current) mirrorScroll(x, y, deltaY);
+      if (mirroring()) mirrorScroll(x, y, deltaY);
       return;
     }
     const now = Date.now();
@@ -2254,7 +2263,7 @@ export function useAssist() {
       addLog('Recorder', `Captured drag from (${pct(from.x)}, ${pct(from.y)}) to (${pct(to.x)}, ${pct(to.y)}) with screenshot`, 'info');
       return;
     }
-    if (mirrorOnRef.current) {
+    if (mirroring()) {
       void mirrorRef.current({ kind: 'drag', x: from.x, y: from.y, endX: to.x, endY: to.y });
       return;
     }
@@ -2264,7 +2273,7 @@ export function useAssist() {
   /** Live-write: typed text becomes a "type" step while recording, and is typed on the PC while mirror input is on. */
   const onStageType = useCallback((text: string) => {
     if (!text) return;
-    if (mirrorOnRef.current && !recordingRef.current) {
+    if (mirroring() && !recordingRef.current) {
       void mirrorRef.current({ kind: 'type', text });
       return;
     }
