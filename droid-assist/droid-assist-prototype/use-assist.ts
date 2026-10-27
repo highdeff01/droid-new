@@ -52,7 +52,7 @@ import { anchoredHabit, habitLine, recordOutcome, relevantHabits, seedFromAnchor
 import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingIssues, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { addSnip, clampBox, parseSnipArgs, snipFrame, snipText, type Snip, type SnipBy, type SnipSize, type SnipSource } from './snip.js';
-import { fromSnip, reroute, toSnip, type RerouteDecision, type RerouteDeps } from './reroute.js';
+import { fromSnip, reroute, targetRegion, toSnip, type RerouteDecision, type RerouteDeps } from './reroute.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
 
@@ -993,6 +993,7 @@ export function useAssist() {
     if (abortedRef.current) return refused(step, 'Aborted — real input not sent');
     if (!stageOn('executor')) return refused(step, `${stageOff('executor')} — not executed`);
     if (step.action === 'measure') return measureStep(step, actor);
+    if (step.action === 'snip') return snipStep(step);
     const out = await performInput(step, actor, budget, dryRun);
     ruler.noteGrounding(out);
     if (out.ok) markOutcome(step, out);
@@ -1021,6 +1022,14 @@ export function useAssist() {
   };
 
   /** The measure action: no input is sent and no budget spent; the result (or the loud error) goes to the log and the model. */
+  /** A planned "snip" step: the AI or an agent screenshots the region its text names (else around its point). */
+  const snipStep = async (step: WorkflowStep): Promise<Performed> => {
+    const req = parseSnipArgs(step.text ?? '');
+    const box = 'error' in req ? targetRegion(step) : req.box;
+    const s = 'error' in req ? await snip(box, { label: step.name }) : await snip(box, { size: req.size, displayId: req.displayId, label: step.name });
+    return { ok: !!s, executed: false, message: s ? `Snipped ${snipText(s)}` : `"${step.name}": nothing to snip`, target: { x: step.x, y: step.y } };
+  };
+
   const measureStep = (step: WorkflowStep, actor: string): Performed => {
     const target = { x: step.x, y: step.y };
     try {

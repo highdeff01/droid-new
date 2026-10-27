@@ -80,3 +80,12 @@ describe('snipFrame — snip by region', () => {
     expect(out).toMatchObject({ id: 7, url: 'data:image/jpeg;base64,SNIP', srcW: 1000, srcH: 1000, originX: 3920, originY: 500, source: 'screen' });
   });
 });
+
+describe('snip as a planner step', () => {
+  it('is a step action the AI and agents can plan', async () => {
+    const { STEP_ACTIONS } = await import('./types.js');
+    const { PLAN_SYSTEM } = await import('./planner.js');
+    expect(STEP_ACTIONS).toContain('snip');
+    expect(PLAN_SYSTEM).toMatch(/"snip" sends no input/);
+  });
+});

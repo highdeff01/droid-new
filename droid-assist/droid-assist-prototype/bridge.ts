@@ -69,6 +69,7 @@ const NATIVE: Record<StepAction, (step: WorkflowStep, p: Point, end: Point | nul
   media: (_s, p) => [keys(p, 'playpause')],
   wait: (_s, p) => [at(p, 'wait', { delayMs: 800 })],
   measure: () => [],
+  snip: () => [],
 };
 
 /**
