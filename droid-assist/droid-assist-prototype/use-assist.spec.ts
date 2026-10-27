@@ -259,6 +259,61 @@ describe('useAssist drag recorder and guardrails', () => {
   });
 });
 
+describe('useAssist reverse of the last real action', () => {
+  async function draggedOnDemo() {
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.useDemo());
+    act(() => result.current.toggleRecording());
+    act(() => result.current.onStageDrag({ x: 0.9, y: 0.2 }, { x: 0.4, y: 0.5 }));
+    act(() => result.current.toggleRecording());
+    act(() => result.current.toggleArmed());
+    await act(() => result.current.replay());
+    return result;
+  }
+
+  it('offers to drag the element back to its start right after the drag', async () => {
+    const result = await draggedOnDemo();
+    expect(result.current.reverse?.record).toMatchObject({ action: 'drag', x: 864, y: 108, endX: 384, endY: 270 });
+    expect(result.current.reverse?.reversal).toMatchObject({ ok: true, steps: [{ action: 'drag', x: 0.4, y: 0.5, endX: 0.9, endY: 0.2 }] });
+  });
+
+  it('a disarmed reverse is a dry run: nothing performed, the offer stays', async () => {
+    const result = await draggedOnDemo();
+    act(() => result.current.toggleArmed());
+    await act(() => result.current.reverseLast());
+    expect(result.current.history).toHaveLength(1);
+    expect(result.current.log.some((l) => l.source === 'Reverse' && /dry run/.test(l.message))).toBe(true);
+    expect(result.current.reverse).not.toBeNull();
+  });
+
+  it('an armed reverse drags back, is logged with the action and leaves nothing to reverse', async () => {
+    const result = await draggedOnDemo();
+    await act(() => result.current.reverseLast());
+    expect(result.current.history[0]).toMatchObject({ action: 'drag', source: 'Reverse', x: 384, y: 270, endX: 864, endY: 108 });
+    expect(result.current.log.some((l) => l.source === 'Reverse' && /^reversed: drag/.test(l.message))).toBe(true);
+    expect(result.current.reverse).toBeNull();
+  });
+
+  it('sends nothing while aborted', async () => {
+    const result = await draggedOnDemo();
+    act(() => result.current.triggerAbort('test'));
+    await act(() => result.current.reverseLast());
+    expect(result.current.history).toHaveLength(1);
+    expect(result.current.log.some((l) => l.source === 'Reverse' && /reversal failed.*Aborted/.test(l.message))).toBe(true);
+  });
+
+  it('says "cannot reverse" for a non-invertible key and sends nothing', async () => {
+    localStorage.setItem('droid-assist.action-history', JSON.stringify([{ id: 'k', time: 1, action: 'key', x: 960, y: 540, srcW: 1920, srcH: 1080, text: 'enter', source: 'Replay', via: 'demo', ok: true, message: 'ok' }]));
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    expect(result.current.reverse?.reversal.ok).toBe(false);
+    await act(() => result.current.reverseLast());
+    expect(result.current.history).toHaveLength(1);
+    expect(result.current.log.some((l) => l.message.startsWith('Cannot reverse key'))).toBe(true);
+  });
+});
+
 describe('useAssist key and scroll recorder with human timing', () => {
   const press = (key: string, mods: Partial<{ ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }> = {}) => ({ key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...mods });
 
