@@ -15,6 +15,8 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
+import { ACCESS_PATH_LIMIT, isAccessProfile, type AccessProfile } from './access-paths.js';
+import { APPROVAL_LIMIT, isApprovalItem, sanitizePolicy, type ApprovalItem } from './approvals.js';
 import { PORTFOLIO_LIMIT, isPortfolioEntry, type PortfolioEntry } from './portfolio.js';
 import { PROFILE_LIMIT, isProfileEvent, type ProfileEvent } from './user-profile.js';
 import { SECTION_LIMIT, isKnowledgeSection, type KnowledgeSection } from './knowledge-sections.js';
@@ -35,11 +37,12 @@ export const PATTERN_LIMIT = 100;
 const PATTERN_KINDS: ReadonlyArray<LearnedPattern['kind']> = ['avoid', 'add'];
 
 const ACTIONS: readonly StepAction[] = STEP_ACTIONS;
-const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
+/** Every monitor mode. */
+export const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
+export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
@@ -108,6 +111,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   if (stored.displayId === null || (typeof stored.displayId === 'string' && stored.displayId)) out.displayId = stored.displayId;
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
   out.stages = sanitizeStages(stored.stages ?? defaults.stages);
+  out.operationPolicy = sanitizePolicy(stored.operationPolicy, defaults.operationPolicy);
   return out;
 }
 
@@ -361,6 +365,18 @@ export function saveTriggers(triggers: Trigger[]) {
   writeJson(KEYS.triggers, triggers.slice(0, TRIGGER_LIMIT));
 }
 
+/** The stored access-path profiles; invalid entries are dropped. */
+export const loadAccessPaths = (): AccessProfile[] => listOf(readJson(KEYS.accessPaths), isAccessProfile, ACCESS_PATH_LIMIT);
+
+/** Persists the access-path profiles, capped at ACCESS_PATH_LIMIT. */
+export function saveAccessPaths(profiles: AccessProfile[]) {
+  writeJson(KEYS.accessPaths, profiles.slice(0, ACCESS_PATH_LIMIT));
+/** The stored approval queue (newest first); invalid entries are dropped. */
+export const loadApprovals = (): ApprovalItem[] => listOf(readJson(KEYS.approvals), isApprovalItem, APPROVAL_LIMIT);
+
+/** Persists the approval queue, capped at APPROVAL_LIMIT. */
+export function saveApprovals(items: ApprovalItem[]) {
+  writeJson(KEYS.approvals, items.slice(0, APPROVAL_LIMIT));
 /** Every actor's stored portfolio entries; invalid entries are dropped. */
 export const loadPortfolios = (): PortfolioEntry[] => listOf(readJson(KEYS.portfolios), isPortfolioEntry, PORTFOLIO_LIMIT);
 

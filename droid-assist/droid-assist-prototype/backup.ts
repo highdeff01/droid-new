@@ -14,6 +14,7 @@ export const BACKUP_STORES = {
   habits: { key: 'droid-assist.habits', label: 'Habits', shape: 'list' },
   familiar: { key: 'droid-assist.familiar', label: 'Familiar elements', shape: 'list' },
   elementMap: { key: 'droid-assist.element-map', label: 'Element map', shape: 'list' },
+  accessPaths: { key: 'droid-assist.access-paths', label: 'Access paths', shape: 'list' },
   cards: { key: 'droid-assist.cards', label: 'Saved flow cards', shape: 'list' },
   patterns: { key: 'droid-assist.patterns', label: 'Learned patterns', shape: 'list' },
   log: { key: 'droid-assist.log', label: 'Activity log', shape: 'list' },

@@ -18,6 +18,40 @@ const card: SavedCard = {
 };
 const step: WorkflowStep = { id: 's', name: 'Press play', action: 'click', x: 0.5, y: 0.5, status: 'pending' };
 
+describe('planFromGoal capabilities', () => {
+  const list = 'backup.export() — Export a backup now\nrelax.mode(on:boolean) — Relaxation mode';
+
+  it('adds the compact capability list to the plan prompt only when given', async () => {
+    const ask = askReturning('{"steps":[{"name":"Click","action":"click","x":0.1,"y":0.1}]}');
+    await planFromGoal('press the thing', [], frame, ask, [], [], list);
+    await planFromGoal('press the thing', [], frame, ask);
+    const [withList, without] = ask.mock.calls.map((c) => systemText(c[0].system, SAMPLE_VIEW));
+    expect(withList).toContain('"capabilities":[{"id":string');
+    expect(withList).toContain('relax.mode(on:boolean) — Relaxation mode');
+    expect(without).not.toContain('capabilities');
+  });
+
+  it('accepts a plan with only capability requests and no steps', async () => {
+    const ask = askReturning('{"steps":[],"capabilities":[{"id":"backup.export"},{"id":"relax.mode","params":{"on":true}}]}');
+    const plan = await planFromGoal('export a backup now and relax', [], frame, ask, [], [], list);
+    expect(plan.steps).toEqual([]);
+    expect(plan.capabilities).toEqual([{ id: 'backup.export', params: {} }, { id: 'relax.mode', params: { on: true } }]);
+  });
+
+  it('returns steps and capability requests together', async () => {
+    const ask = askReturning('{"steps":[{"name":"Click","action":"click","x":0.1,"y":0.1}],"capabilities":[{"id":"workflow.save","params":{"name":"Run"}}]}');
+    const plan = await planFromGoal('click it then save as a workflow', [], frame, ask, [], [], list);
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.capabilities).toEqual([{ id: 'workflow.save', params: { name: 'Run' } }]);
+  });
+
+  it('still fails an empty plan without capability requests, and a malformed request', async () => {
+    await expect(planFromGoal('x', [], frame, askReturning('{"steps":[],"capabilities":[]}'), [], [], list)).rejects.toThrow(/no steps/);
+    await expect(planFromGoal('x', [], frame, askReturning('{"steps":[],"capabilities":[{"params":{}}]}'), [], [], list)).rejects.toThrow(/unusable capability/);
+    await expect(planFromGoal('x', [], frame, askReturning('{"steps":[],"capabilities":"backup"}'), [], [], list)).rejects.toThrow(/not a list/);
+  });
+});
+
 describe('planFromGoal', () => {
   it('reuses a similar saved card without calling the model', async () => {
     const ask = askReturning('{}');

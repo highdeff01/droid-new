@@ -2,10 +2,14 @@ import { Routes, Route } from 'react-router-dom';
 import { useAssist } from './use-assist.js';
 import { Stage } from './stage.js';
 import { Hud } from './hud.js';
-import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
+import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, CapabilitiesPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
 import { AgentBusPanel, SubagentReportPanel } from './bus-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
+import { AccessPathsPanel } from './access-paths-panel.js';
+import { ApprovalsPanel } from './approvals-panel.js';
 import { StatsPanel } from './stats-panel.js';
+import { LiveBriefingPanel } from './live-briefing-panel.js';
+import { CapabilitiesPanel } from './capabilities-panel.js';
 import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
 import { VariationsPanel } from './variations-panel.js';
 import styles from './droid-assist.module.css';
@@ -27,6 +31,7 @@ function AssistScreen() {
       </header>
       <main className={styles.main}>
         <Hud engine={engine} />
+        <LiveBriefingPanel engine={engine} />
         <div className={styles.work}>
           <Stage engine={engine} />
           <div className={styles.side}>
@@ -43,6 +48,8 @@ function AssistScreen() {
             <StatsPanel engine={engine} />
             <WatcherPanel engine={engine} />
             <TriggersPanel engine={engine} />
+            <ApprovalsPanel engine={engine} />
+            <CapabilitiesPanel engine={engine} />
           </div>
         </div>
         <div className={styles.bottom}>
@@ -55,6 +62,7 @@ function AssistScreen() {
           <AgentsPanel engine={engine} />
           <PortfoliosPanel engine={engine} />
           <LoopControlPanel engine={engine} />
+          <CapabilitiesPanel engine={engine} />
           <SettingsPanel engine={engine} />
           <AgentBusPanel engine={engine} />
           <SubagentReportPanel engine={engine} />
