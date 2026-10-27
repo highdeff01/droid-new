@@ -7,6 +7,8 @@ import { nativeSystemInfo, scanFolder } from './system-scan.js';
 import { startCaptureLoop, type CaptureLoop } from './capture-loop.js';
 import { grabDisplay, grabScreen, listDisplays } from './screen-grab.js';
 import { BRIDGE_URL_PATTERNS, withBridgeCors } from './bridge-cors.js';
+import { MAIN_BRIDGE_CHANNELS, type ListenOptions } from './main-bridge-api.js';
+import { startMainBridgeListener, type MainBridgeListener } from './main-bridge-server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** One capture loop per renderer. */
@@ -60,6 +62,32 @@ function registerSystemIpc() {
     const r = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
     return r.canceled ? null : r.filePaths[0] ?? null;
   });
+/** One main-app bridge listener per renderer. */
+const listeners = new Map<number, MainBridgeListener>();
+
+function stopListener(contents: WebContents) {
+  listeners.get(contents.id)?.stop();
+  listeners.delete(contents.id);
+}
+
+/** Wires the main-app bridge IPC: the HTTP + WebSocket listener the main Droid app connects to runs here. */
+function registerMainBridgeIpc() {
+  ipcMain.handle(MAIN_BRIDGE_CHANNELS.listen, async (event, options: ListenOptions) => {
+    const contents = event.sender;
+    stopListener(contents);
+    const emit = (channel: string, value: string) => { if (!contents.isDestroyed()) contents.send(channel, value); };
+    const listener = startMainBridgeListener(options, {
+      onOpen: (peer) => emit(MAIN_BRIDGE_CHANNELS.open, peer),
+      onMessage: (text) => emit(MAIN_BRIDGE_CHANNELS.message, text),
+      onClose: (reason) => emit(MAIN_BRIDGE_CHANNELS.close, reason),
+      onError: (message) => { listeners.delete(contents.id); emit(MAIN_BRIDGE_CHANNELS.error, message); },
+    });
+    listeners.set(contents.id, listener);
+    contents.once('destroyed', () => stopListener(contents));
+    await listener.ready;
+  });
+  ipcMain.handle(MAIN_BRIDGE_CHANNELS.send, (event, text: string) => listeners.get(event.sender.id)?.send(text) ?? false);
+  ipcMain.on(MAIN_BRIDGE_CHANNELS.stop, (event) => stopListener(event.sender));
 }
 
 function createWindow() {
@@ -87,6 +115,7 @@ void app.whenReady().then(() => {
   });
   registerCaptureIpc();
   registerSystemIpc();
+  registerMainBridgeIpc();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

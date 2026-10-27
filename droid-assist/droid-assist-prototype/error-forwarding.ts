@@ -2,7 +2,7 @@ import type { Frame, LogEntry } from './types.js';
 import { uid } from './planner.js';
 
 /** What failed: the AI, a step, drift (red), the desktop bridge, the self-test watcher run, or the Settings test. */
-export type ErrorKind = 'ai' | 'step' | 'drift' | 'bridge' | 'watcher' | 'test';
+export type ErrorKind = 'ai' | 'step' | 'drift' | 'bridge' | 'watcher' | 'test' | 'main-app';
 
 /** The structured report POSTed to the error-fix endpoint. */
 export interface ErrorReport {
@@ -59,7 +59,7 @@ export const SEND_TIMEOUT_MS = 8_000;
 /** Pause before the single retry of an automatic send. */
 export const RETRY_DELAY_MS = 1_000;
 
-export const ERROR_KINDS: readonly ErrorKind[] = ['ai', 'step', 'drift', 'bridge', 'watcher', 'test'];
+export const ERROR_KINDS: readonly ErrorKind[] = ['ai', 'step', 'drift', 'bridge', 'watcher', 'test', 'main-app'];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));

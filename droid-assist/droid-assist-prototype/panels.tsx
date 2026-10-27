@@ -3,9 +3,9 @@ import type { AssistEngine } from './use-assist.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
-import { AiStatusBadge, InsecureBridgeWarning } from './hud.js';
+import { AiStatusBadge, InsecureBridgeWarning, MainBridgeBadge } from './hud.js';
 import { ModelPicker } from './model-picker.js';
-import type { FamiliarElement, Frame, Habit, LogEntry } from './types.js';
+import type { AssistSettings, FamiliarElement, Frame, Habit, LogEntry } from './types.js';
 import type { Box } from './assist-ai.js';
 import type { Briefing } from './briefing.js';
 import { OBJECTIVE_TONE, type ChainRun } from './chain.js';
@@ -29,6 +29,8 @@ import { WAKE_MS_MAX, WAKE_MS_MIN } from './wake.js';
 import { contextText } from './context-workflow.js';
 import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js';
 import { GOAL_STALL_MAX, GOAL_STALL_MIN, WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
+import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js';
+import { MAIN_BRIDGE_BACKOFF_MAX_MS, MAIN_BRIDGE_BACKOFF_MIN_MS, MAIN_BRIDGE_PORT_MAX, MAIN_BRIDGE_PORT_MIN, WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
 import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
 import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, MASTER_PROMPT_MAX, type AiView } from './ai.js';
@@ -381,6 +383,43 @@ export function AgentsPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
+/** Settings › Main app bridge: enabled, listen/dial, address, token and reconnect backoff, with the live status. */
+function MainBridgeSettings({ engine }: { engine: AssistEngine }) {
+  const { settings, setSettings } = engine;
+  const set = (patch: Partial<AssistSettings>) => setSettings({ ...settings, ...patch });
+  const clamp = (v: number, min: number, max: number, fallback: number) => (Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : fallback);
+  const listen = settings.mainBridgeMode === 'listen';
+  return (
+    <fieldset className={styles.setting} aria-label="Main app bridge">
+      <legend>Main app bridge</legend>
+      <MainBridgeBadge state={engine.mainBridge} />
+      <label><input type="checkbox" checked={settings.mainBridgeEnabled} onChange={(e) => set({ mainBridgeEnabled: e.target.checked })} aria-label="Main app bridge enabled" /> Enabled — starts with this app</label>
+      <label>Mode
+        <select value={settings.mainBridgeMode} onChange={(e) => set({ mainBridgeMode: e.target.value as AssistSettings['mainBridgeMode'] })} aria-label="Main app bridge mode">
+          <option value="listen">Listen — wait for the main app to connect</option>
+          <option value="dial">Dial — connect to the main app URL</option>
+        </select>
+      </label>
+      {listen ? (
+        <span className={styles.row}>
+          <input value={settings.mainBridgeHost} onChange={(e) => set({ mainBridgeHost: e.target.value })} aria-label="Main app bridge host" placeholder="127.0.0.1" />
+          <input type="number" min={MAIN_BRIDGE_PORT_MIN} max={MAIN_BRIDGE_PORT_MAX} value={settings.mainBridgePort} onChange={(e) => set({ mainBridgePort: clamp(e.target.valueAsNumber, MAIN_BRIDGE_PORT_MIN, MAIN_BRIDGE_PORT_MAX, settings.mainBridgePort) })} aria-label="Main app bridge port" />
+        </span>
+      ) : (
+        <input value={settings.mainBridgeUrl} onChange={(e) => set({ mainBridgeUrl: e.target.value })} aria-label="Main app URL" placeholder="http://127.0.0.1:5000 or ws://host:port" />
+      )}
+      <label>Token (optional)
+        <input type="password" value={settings.mainBridgeToken} onChange={(e) => set({ mainBridgeToken: e.target.value })} aria-label="Main app bridge token" autoComplete="off" />
+        <small>Sent as ?token= on the WebSocket and as a Bearer token over HTTP; never written to the activity log.</small>
+      </label>
+      <span className={styles.row}>
+        <label>Retry after <input type="number" min={MAIN_BRIDGE_BACKOFF_MIN_MS} max={10000} step={250} value={settings.mainBridgeBackoffMinMs} onChange={(e) => set({ mainBridgeBackoffMinMs: clamp(e.target.valueAsNumber, MAIN_BRIDGE_BACKOFF_MIN_MS, 10000, settings.mainBridgeBackoffMinMs) })} aria-label="Main app bridge first retry (ms)" /> ms</label>
+        <label>up to <input type="number" min={1000} max={MAIN_BRIDGE_BACKOFF_MAX_MS} step={1000} value={settings.mainBridgeBackoffMaxMs} onChange={(e) => set({ mainBridgeBackoffMaxMs: clamp(e.target.valueAsNumber, 1000, MAIN_BRIDGE_BACKOFF_MAX_MS, settings.mainBridgeBackoffMaxMs) })} aria-label="Main app bridge longest retry (ms)" /> ms</label>
+      </span>
+    </fieldset>
+  );
+}
+
 /** Settings: gallery size, drift checkpoints, capture rate, budget, hotkey, bridge, AI endpoint. */
 export function SettingsPanel({ engine }: { engine: AssistEngine }) {
   const { settings, setSettings } = engine;
@@ -479,6 +518,7 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         <input type="password" value={settings.bridgeToken} onChange={(e) => setSettings({ ...settings, bridgeToken: e.target.value })} aria-label="Bridge auth token" autoComplete="off" />
         <small>Must match DROID_BRIDGE_TOKEN on the bridge; sent as a Bearer token on every bridge call and never written to the activity log.</small>
       </label>
+      <MainBridgeSettings engine={engine} />
       <label className={styles.setting}>AI endpoint (Ollama /api/chat)
         <input value={settings.aiUrl} onChange={(e) => setSettings({ ...settings, aiUrl: e.target.value })} aria-label="AI endpoint URL" />
       </label>

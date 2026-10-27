@@ -137,6 +137,8 @@ import type { Got } from './presentation-sources.js';
 import { drawWorldScreen, worldImageAt } from './presentation-project.js';
 import { DEFAULT_EXECUTION_MODE, EXECUTION_MODES, modeCaptureMs, modeChangeText, modeStatus, resolveAiDirective, type ExecutionMode, type ModeActor, type ModeDirective } from './execution-mode.js';
 import { DEFAULT_AUTO_APPLY, autoApplyDecision, bestGrounding, groundGoal, groundedStep, groundingShift, judgeCandidate, judgmentText, type KnownGrounding, type HeldCandidate, type Judgment } from './aggressive.js';
+import { NOT_CONNECTED, createMainBridge, type MainBridge, type MainBridgeConfig, type MainBridgeState } from './main-bridge.js';
+import type { FramePayload, InboundMessage, InterceptKind, InterceptPayload, RunScriptPayload } from './main-bridge-protocol.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -162,15 +164,38 @@ function toFrame(src: CanvasImageSource, srcW: number, srcH: number, id: number,
   return { id, time: Date.now(), url: view.toDataURL('image/jpeg', 0.7), full: fullJpeg(src, srcW, srcH), data: sctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H), srcW, srcH, source };
 }
 
+/** A JPEG/PNG data URL decoded and drawn into a Frame; a zero size falls back to the image's own. */
+async function imageFrame(dataUrl: string, width: number, height: number, id: number, source: Frame['source']): Promise<Frame> {
+  const img = new Image();
+  img.src = dataUrl;
+  await img.decode();
+  return toFrame(img, width || img.naturalWidth, height || img.naturalHeight, id, source);
+}
+
 /** A real desktop screenshot from the bridge as a Frame; throws with the bridge's reason. */
 async function desktopFrame(bridgeUrl: string, token: string, id: number): Promise<Frame> {
   const shot = await captureDesktop(bridgeUrl, token);
   if (!shot.ok) throw new Error(shot.message);
-  const img = new Image();
-  img.src = shot.frame.image;
-  await img.decode();
-  return toFrame(img, shot.frame.width || img.naturalWidth, shot.frame.height || img.naturalHeight, id, 'desktop');
+  return imageFrame(shot.frame.image, shot.frame.width, shot.frame.height, id, 'desktop');
 }
+
+/** The main app bridge's connection settings. */
+const mainBridgeConfig = (s: AssistSettings): MainBridgeConfig => ({
+  enabled: s.mainBridgeEnabled,
+  mode: s.mainBridgeMode,
+  host: s.mainBridgeHost,
+  port: s.mainBridgePort,
+  url: s.mainBridgeUrl,
+  token: s.mainBridgeToken,
+  backoffMinMs: s.mainBridgeBackoffMinMs,
+  backoffMaxMs: s.mainBridgeBackoffMaxMs,
+});
+
+/** One workflow step as a run_script command for the main app (normalized coordinates). */
+const runScriptPayload = ({ name, action, x, y, endX, endY, text, target }: WorkflowStep): RunScriptPayload => ({ name, action, x, y, endX, endY, text, target });
+
+/** Bus recipients of an intercept that carries no position: agents that only take notes, never a point. */
+const NOTE_ONLY_AGENTS: BusAgentId[] = ['progress', 'goal', 'supervisor'];
 
 /** Workflow actions that are real mouse/keyboard input, as recorded in the action history. */
 const INPUT_ACTIONS: Partial<Record<StepAction, InputAction>> = { click: 'click', double_click: 'double_click', move: 'move', drag: 'drag', scroll: 'scroll', type: 'type', key: 'key' };
@@ -309,6 +334,14 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   systemRefreshSec: DEFAULT_SYSTEM_REFRESH_SEC,
   notifyAutoAct: DEFAULT_AUTO_ACT,
   systemFolders: [],
+  mainBridgeEnabled: true,
+  mainBridgeMode: 'listen',
+  mainBridgeHost: '127.0.0.1',
+  mainBridgePort: 8787,
+  mainBridgeUrl: '',
+  mainBridgeToken: '',
+  mainBridgeBackoffMinMs: 1000,
+  mainBridgeBackoffMaxMs: 30000,
 };
 
 /** A background agent the user can toggle; each also has an inbox on the inter-agent bus. */
@@ -420,6 +453,9 @@ export function useAssist() {
   const [armed, setArmed] = useState(false);
   /** The last health check or bridge call reached the PC (and the PC did not fail it). */
   const [bridgeOnline, setBridgeOnline] = useState(false);
+  /** The main Droid app's connection: off, waiting for it, connecting, connected or failed with the last error. */
+  const [mainBridge, setMainBridge] = useState<MainBridgeState>({ status: 'off', lastError: null, peer: null });
+  const mainBridgeRef = useRef<MainBridge | null>(null);
   const [aborted, setAborted] = useState(false);
   const [aiStatus, setAiStatus] = useState<AiStatus>({ state: 'checking', detail: 'Connecting to the AI endpoint…' });
   const [aiAnswer, setAiAnswer] = useState('');
@@ -1458,6 +1494,12 @@ export function useAssist() {
     goal: (e) => `Noted "${e.name}" for goal review`,
     supervisor: (e) => `Noted "${e.name}" for link/route tests`,
     sidetest: (e) => `Noted "${e.name}" for side tests`,
+    mainApp: (e, from) => {
+      const bridge = mainBridgeRef.current;
+      if (bridge?.state().status !== 'connected') return `${NOT_CONNECTED} ("${e.name}")`;
+      void bridge.send('intercept_notice', { from: BUS_AGENTS[from], element: { name: e.name, x: e.x, y: e.y } });
+      return `Sent "${e.name}" to the main app as an intercept notice`;
+    },
   };
 
   /** Why no project may take a turn now: a guardrail (abort, disarmed, executor kill-switch) or its loop-control stage; null = go on. */
@@ -1512,7 +1554,7 @@ export function useAssist() {
     const { bus: next, queued } = forward(busRef.current, from, element, to);
     let updated = next;
     queued.forEach((m) => {
-      if (m.to !== 'habits' && !agentsRef.current(m.to)) return;
+      if (m.to !== 'habits' && m.to !== 'mainApp' && !agentsRef.current(m.to)) return;
       updated = markHandled(updated, m.id, busHandlers[m.to](element, from));
     });
     busRef.current = updated;
@@ -1765,12 +1807,32 @@ export function useAssist() {
   };
 
   /**
+   * Performs a step on the main Droid app's preview: browser-local actions run here; input is sent
+   * as a run_script command (gated like every real action) and the main app's result is the outcome.
+   * Disarmed it is a dry run and nothing is sent. A failed command is forwarded as a main-app error.
+   */
+  const performOnMainApp = async (step: WorkflowStep, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
+    const target = { x: step.x, y: step.y };
+    const local = LOCAL_ACTIONS[step.action];
+    if (local) return { ...(await local(step)), executed: true, target };
+    if (POINTER_ACTIONS.has(step.action)) aim(target);
+    if (dryRun) return { ok: true, executed: false, message: `main app — ${DRY_RUN}`, target };
+    const gate = gateRealInput(budget);
+    if (gate) return refused(step, gate);
+    const result = await (mainBridgeRef.current?.request('run_script', runScriptPayload(step)) ?? Promise.resolve({ ok: false, message: NOT_CONNECTED }));
+    const message = `Main app: ${result.message}`;
+    if (!result.ok) captureError({ kind: 'main-app', message, goal: goalRef.current, step: step.name });
+    return { ok: result.ok, executed: result.ok, message, target, shot: framesRef.current[0], bridgeFailed: !result.ok };
+  };
+
+  /**
    * A real-input step on the demo desktop or through the bridge. Armed with a bridge URL, every
    * step goes to the bridge whatever the screen source; the demo simulates only dry runs or when
    * no bridge is configured. A bridge failure fails the step loudly, never a simulated success.
    */
   const dispatchInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
+    if (sourceRef.current === 'main-app') return performOnMainApp(step, budget, dryRun);
     if (sourceRef.current === 'demo' && (dryRun || !bridgeUrl)) {
       const out = await performOnDemo(step, dryRun);
       if (out.executed) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
@@ -4538,6 +4600,74 @@ export function useAssist() {
       ? { source: 'Bridge', category: 'bridge', severity: 'info', title: 'Desktop bridge connected' }
       : { source: 'Bridge', category: 'bridge', severity: 'warning', title: 'Desktop bridge disconnected' });
   }, [bridgeOnline, notify]);
+  /** Switches the stage to the main app's preview frames (only while it is connected). */
+  const selectMainApp = (): boolean => {
+    if (mainBridgeRef.current?.state().status !== 'connected') {
+      addLog('Main app', 'The main app is not connected — its preview cannot be selected', 'warn');
+      return false;
+    }
+    attachSource('main-app');
+    void mainBridgeRef.current.send('request_frame', {});
+    addLog('Main app', 'Main app preview selected — the AI now sees and acts on it', 'ok');
+    return true;
+  };
+
+  /** One preview frame from the main app: decoded into a Frame and analysed like any captured frame. */
+  const onMainAppFrame = async ({ image, width, height }: FramePayload) => {
+    try {
+      const frame = await imageFrame(image, width, height, ++frameId.current, 'main-app');
+      if (sourceRef.current === 'main-app') processRef.current(frame);
+    } catch (error) {
+      addLog('Main app', `Main app frame could not be decoded: ${errorText(error)}`, 'error');
+    }
+  };
+
+  /** What each intercept kind does beyond going on the agent bus. */
+  const INTERCEPT_ROUTES: Record<InterceptKind, (p: InterceptPayload) => void> = {
+    element_moved: () => void mainBridgeRef.current?.send('request_frame', {}),
+    error_occurred: (p) => captureError({ kind: 'main-app', message: p.message, goal: goalRef.current }),
+    test_requested: (p) => void testRoutes(parseTestSpec(p.test ?? '')),
+  };
+
+  /** An intercept from the main app: logged, put on the agent bus from the main app, then routed by kind. */
+  const onMainAppIntercept = (p: InterceptPayload) => {
+    addLog('Main app', `Intercept ${p.kind}: ${p.message}`, p.kind === 'error_occurred' ? 'error' : 'info');
+    const element = p.element ?? { name: `${p.kind}: ${p.message}`, x: 0.5, y: 0.5 };
+    forwardElement('mainApp', element, p.element ? undefined : NOTE_ONLY_AGENTS);
+    INTERCEPT_ROUTES[p.kind](p);
+  };
+
+  const mainAppHandlers = { onMainAppFrame, onMainAppIntercept, selectMainApp };
+  const mainAppRef = useRef(mainAppHandlers);
+  mainAppRef.current = mainAppHandlers;
+
+  // Main app bridge: starts with the app (listen or dial), reconnects with backoff, restarts when its settings change.
+  const mainConfigKey = JSON.stringify(mainBridgeConfig(settings));
+  useEffect(() => {
+    const onMessage = (m: InboundMessage) => {
+      if (m.type === 'frame') void mainAppRef.current.onMainAppFrame(m.payload);
+      else if (m.type === 'intercept') mainAppRef.current.onMainAppIntercept(m.payload);
+      else if (m.type === 'hello') addLog('Main app', `Hello from ${m.payload.app}`, 'info');
+    };
+    const onState = (state: MainBridgeState) => {
+      setMainBridge(state);
+      if (state.status === 'connected' && !demoChosenRef.current && sourceRef.current === 'demo') mainAppRef.current.selectMainApp();
+      if (state.status !== 'connected' && sourceRef.current === 'main-app') addLog('Main app', 'Main app preview lost — monitoring paused until it reconnects', 'warn');
+    };
+    const bridge = createMainBridge(JSON.parse(mainConfigKey) as MainBridgeConfig, { onState, onMessage, onLog: (m, tone) => addLog('Main app', m, tone) });
+    mainBridgeRef.current = bridge;
+    bridge.start();
+    return () => {
+      bridge.stop();
+      mainBridgeRef.current = null;
+    };
+  }, [mainConfigKey, addLog]);
+
+  // Report state: the main app hears the engine's source, arming and run state whenever they change while connected.
+  useEffect(() => {
+    if (mainBridge.status !== 'connected') return;
+    void mainBridgeRef.current?.send('report_state', { source, armed, running: replaying, goal: goalRef.current, steps: steps.length });
+  }, [mainBridge.status, source, armed, replaying, steps.length]);
 
   /** "/use <target>": launch/focus the app on the PC via the bridge, or attach to its window via screen share. */
   const attachTarget = async (name: string) => {
@@ -4993,8 +5123,8 @@ export function useAssist() {
     setWatcher(watcherRef.current);
   };
 
-  /** A capture source is live: the demo, the bridge, or a running (not lost) screen capture. */
-  const captureLive = () => sourceRef.current === 'demo' || sourceRef.current === 'bridge' || (sourceRef.current === 'screen' && !!captureRef.current);
+  /** A capture source is live: the demo, the bridge, the connected main app, or a running (not lost) screen capture. */
+  const captureLive = () => sourceRef.current === 'demo' || sourceRef.current === 'bridge' || (sourceRef.current === 'main-app' && mainBridgeRef.current?.state().status === 'connected') || (sourceRef.current === 'screen' && !!captureRef.current);
 
   /**
    * Tests a proposal's on-screen target as a click through the shared pipeline: a dry run unless
@@ -5632,6 +5762,8 @@ export function useAssist() {
     knowledge: kb, removeStep, variations,
     shareScreen, connectBridge, connectAi, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
     bridgeOnline, verifyRealInput,
+    /** The main Droid app bridge's live state, and selecting its preview as the screen source. */
+    mainBridge, selectMainApp,
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
     dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
     reverse, reverseLast, reversing, briefings, chain, runChain,
