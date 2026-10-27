@@ -23,10 +23,10 @@ export function BackupSettings({ onExport }: { onExport?: () => void } = {}) {
   const [backup, setBackup] = useState<Backup | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const exportAll = onExport ?? (() => downloadText(backupFileName(), JSON.stringify(exportBackup(), null, 2), 'application/json'));
-  /** Downloads every store and keeps the same export as the last good export the Restore button returns to. */
+  /** Exports every store (through `onExport` when given) and keeps it as the last good export the Restore button returns to. */
   const exportAll = () => {
-    downloadText(backupFileName(), JSON.stringify(exportBackup(), null, 2), 'application/json');
+    if (onExport) onExport();
+    else downloadText(backupFileName(), JSON.stringify(exportBackup(), null, 2), 'application/json');
     snapshotLastGood();
   };
 

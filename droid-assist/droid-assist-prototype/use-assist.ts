@@ -5,8 +5,7 @@ import { MATCHED, SAMPLE_H, SAMPLE_W, SEARCH_RADIUS, STABLE, boundingBox, boxDis
 import { AD_CYCLE, demoAd, demoDrag, demoFileAt, demoPlayButton, drawDemoDesktop, findIcon, initialDemoFile, initialDemoIcons, moveIcon, type DemoFile, type DemoIcon } from './demo-desktop.js';
 import { AI_PLAN_SOURCE, calculate, generateCard, patternLine, planFromGoal, planRemaining, relevantPatterns, relocateTarget, replanDrag, replanStep, uid } from './planner.js';
 import { checkMoved, sameElement, verifyArrangement, type Expectation, type MovedElement } from './rearrange.js';
-import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi, stripThinking } from './ai.js';
-import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi, thinkingOnlyNotice } from './ai.js';
+import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi, stripThinking, thinkingOnlyNotice } from './ai.js';
 import { OVERLAP_PREFIX, firstValid } from './ai-overlap.js';
 import { STAGE_LABEL, appContextSections, escalationNotice, suggestedGoal, type EscalationEvent, type EscalationHooks } from './ai-escalation.js';
 import type { AiReply, AiStatus, AskFn, AskRequest, HistoryChangeFn } from './ai.js';
@@ -27,24 +26,15 @@ import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './groundin
 import { parseCommand, type CommandName } from './commands.js';
 import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, fullJpeg, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
-import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, dispatchState, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
-import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './recorder.js';
-import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, saveOperationMemory, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
-import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, loadAccessPaths, saveAccessPaths, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
-import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, loadRouteProfiles, loadFixMethods, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher, saveRouteProfiles, saveFixMethods } from './storage.js';
-import { LOG_LIMIT, loadCards, loadDossiers, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveDossiers, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
-import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSections, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSections, saveSettings, saveTriggers, saveWatcher } from './storage.js';
-import { SCROLL_MERGE_MS, continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './recorder.js';
+import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, dispatchState, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent, sanitizeBudget } from './safety.js';
+import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay, SCROLL_MERGE_MS } from './recorder.js';
+import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, saveOperationMemory, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher, loadAccessPaths, saveAccessPaths, loadRouteProfiles, loadFixMethods, saveRouteProfiles, saveFixMethods, loadDossiers, saveDossiers, loadScreenSections, saveScreenSections, loadPersonas, savePersonas, loadOpsState, saveOpsState } from './storage.js';
 import { mirrorMode, mirrorStep, type MirrorEvent } from './mirror-input.js';
 import { addEntry as addPortfolioEntry, createPersona, upsertPersona, type Persona, type PortfolioKind } from './persona.js';
 import { logSightings, monitorChanges, perspective, planLanes, type ElementReport, type Lane, type Perspective, type Sighting } from './element-relevance.js';
 import { askPlayTurn, type PlayTurn } from './play-turn.js';
-import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadPersonas, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, savePersonas, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
-import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadOpsState, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, saveOperationMemory, saveOpsState, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
-import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
-import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
-import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, targetText, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
-import { appendSummary, runSummary, type RunSummary } from './run-stats.js';
+import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft, targetText } from './triggers.js';
+import { appendSummary, runSummary, type RunSummary, runTotals } from './run-stats.js';
 import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, recallNotes, reorderSteps, type NoteKind, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
 import { DEFAULT_WAKE_MS } from './wake.js';
 import type { DecisionHandlers, WakeDecision } from './wake-decision.js';
@@ -58,9 +48,9 @@ import { catchPlan, mergeScan, motionOf, motionTiming, trackingContext, type Act
 import { navigateStep, parsePerformProposal, performRequest, performText, resolveMappedStep, setPerform } from './element-perform.js';
 import { RESEARCH_SYSTEM, trainElement, type TrainingDeps, type TrainingReport } from './element-training.js';
 import { cropFrame, identifyAndVerify, identifyRequest, noteChange, parseIdentification, recentlySent, type AgentCheck, type ChangeHit, type IdentifyInput, type IdentifyOutcome, type IdentifyReason, type Identification } from './identify.js';
-import type { Box } from './assist-ai.js';
+import type { Box, StepVerdict } from './assist-ai.js';
 import { decodeFrames, toStoredFrame } from './frame-codec.js';
-import { loadStoredFrames, putStoredFrame } from './frame-store.js';
+import { loadStoredFrames, putStoredFrame, pruneCorruptFrames } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
 import { REVERSE_ACTOR, reverseOffer } from './reverse.js';
 import { CREW_SIZE_DEFAULT, parseIntercept } from './crew.js';
@@ -76,7 +66,6 @@ import { buildElementMap } from './element-map.js';
 import type { Calibration } from './calibration.js';
 import { remapStep, useMeasure } from './use-measure.js';
 import { anchoredHabit, habitLine, recordOutcome, relevantHabits, seedFromAnchor, strengthenHabit, togglePin } from './habits.js';
-import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingIssues, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { addSnip, clampBox, parseSnipArgs, snipFrame, snipText, type Snip, type SnipBy, type SnipSize, type SnipSource } from './snip.js';
 import { fromSnip, reroute, targetRegion, toSnip, type RerouteDecision, type RerouteDeps } from './reroute.js';
@@ -84,7 +73,7 @@ import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
 import { useKnowledge } from './use-knowledge.js';
 import { useVariations } from './use-variations.js';
-import { FAILURE_CONTEXT_LIMIT, RECENT_LINES, addFailure, addNote, failureFromRun, failureLine, forget, memoryBlock, newFailure, objectiveText, operationGroups, similarFailures, type FailureRecord, type OperationMemory } from './operation-memory.js';
+import { FAILURE_CONTEXT_LIMIT, RECENT_LINES, addFailure, addNote as addOperationMemoryNote, failureFromRun, failureLine, forget, memoryBlock, newFailure, objectiveText, operationGroups, similarFailures, type FailureRecord, type OperationMemory } from './operation-memory.js';
 import { toStep } from './project.js';
 import { useProjects } from './use-projects.js';
 import { findWorldElement, initialWorld, onWorldToggle, worldClick, worldContext, worldDoubleClick, worldDrag, worldKey, worldTick, worldType, type World, type WorldResult } from './test-world.js';
@@ -93,16 +82,15 @@ import { MAX_DISCOVERY, OBJECTIVE_TONE, chainReport, discoverTarget, isChainGoal
 import { applyReach, currentPath, deletePath, editPath, isHopAction, learnPaths, parseHops, pathLine, pathOutcome, pathSteps, reachTarget, relevantPaths, runPath, usablePath, type AccessProfile, type Reach } from './access-paths.js';
 import { useResolution } from './use-resolution.js';
 import { DISAGREEMENT_THRESHOLD } from './resolution-center.js';
-import { dropGoal, loadGoals, projectId, queueGoal, saveGoals, settleGoal, startGoal, type GoalRecord } from './goal-tracer.js';
+import { dropGoal, loadGoals, projectId, queueGoal, saveGoals, settleGoal, startGoal, type GoalRecord } from './goal-objectives.js';
+import { DEFAULT_GOAL_STALL, type GoalSource } from './goal-tracer.js';
 import { ALL_PROJECTS, addUserNote, loadKnowledge, markInjected, noteLine, pendingNotesFor, saveKnowledge, type UserNote } from './knowledge-store.js';
 import { MAIN_AI, markPreferred, type PreferredShot } from './live-briefing.js';
 import { LIVE_SETTINGS, applyLiveSetting, capabilityPrompt, permission, requesterName, type AgentId, type CapabilityRequest, type LiveSetting, type Params, type Requester } from './capabilities.js';
-import { useCapabilities } from './use-capabilities.js';
+import { useCapabilities, type CapabilityDeps } from './use-capabilities.js';
 import { useCapabilityRegistry } from './use-capability-registry.js';
 import type { AssistStatus } from './main-app-bridge.js';
 import { backupFileName, exportBackup } from './backup.js';
-import { runTotals } from './run-stats.js';
-import { sanitizeBudget } from './safety.js';
 
 /** The main AI and the main Droid app as capability requesters. */
 const AI: Requester = { kind: 'ai' };
@@ -118,23 +106,19 @@ import { buildMemory, memoryLines } from './enhanced-memory.js';
 import { addSection, buildProfiles, changeInScope, createSection, inScope, findSection, parseBoxArg, parseSectionProposals, recordEvent, removeSection, scopeLines, scopeSections, scopedMapped, sectionMemoryLines, sectionsRequest, type ScreenSection, type SectionEvent } from './sections.js';
 import { extractReplica, parseReplicaNaming, replicaLine, replicaToFamiliar, replicaToMapped, replicateRequest, type Replica } from './replicate.js';
 import { DEFAULT_SIDE_TEST_MODE, busFeedback, feedbackLine, findingsToNotes, runSideTest, sentinelScan, splitSideArgs, textFindings, type SentinelAlert, type SideTestDeps, type SideTestPlan, type SideTestResult, type WatchedPosition } from './side-test.js';
-import type { CommandName } from './commands.js';
-import { DEFAULT_AUTO_APPLY, DEFAULT_SCAN_SEC, DEFAULT_STRESS_CYCLES } from './initiative.js';
+import { DEFAULT_AUTO_APPLY as DEFAULT_INITIATIVE_AUTO_APPLY, DEFAULT_SCAN_SEC, DEFAULT_STRESS_CYCLES } from './initiative.js';
 import { useInitiative } from './use-initiative.js';
 import { testTargets } from './self-test.js';
-import { DEFAULT_GOAL_STALL, type GoalSource } from './goal-tracer.js';
 import { useGoalTracer } from './use-goal-tracer.js';
 import { DEFAULT_AUTO_ACT, actionStep, actionText, diskSuggestion, habitSuggestions, suggestWithAi, type AssistNotification } from './notifications.js';
 import { DEFAULT_BREAK_MINUTES, backgroundTestsAllowed, breakPeriodMs, breakText, relaxInterval, relaxStep } from './relax.js';
 import { DEFAULT_SYSTEM_REFRESH_SEC, diskLow, formatBytes, recentOperations } from './system-info.js';
 import { recoverStorage, recoveryFile, recoveryFileName, recoveryText, restoreLastGood, snapshotLastGood, type RecoveryReport } from './recovery.js';
-import { pruneCorruptFrames } from './frame-store.js';
 import { useNotifications } from './use-notifications.js';
 import { useSystemInfo } from './use-system-info.js';
 import type { CaptureInput } from './error-forwarding.js';
 import { captureDraft, elementDraft, errorDraft, errorSection, ideaDraft, projectOf, trackDraft, type OperationDraft } from './operation-log.js';
-import { useOperations } from './use-operations.js';
-import { useCapabilities, type CapabilityDeps } from './use-capabilities.js';
+import { useOperationDatabase, useOperations } from './use-operations.js';
 import { usePresentations } from './use-presentations.js';
 import { askResearch } from './presentation-caps.js';
 import type { Got } from './presentation-sources.js';
@@ -145,10 +129,8 @@ import { NOT_CONNECTED, createMainBridge, type MainBridge, type MainBridgeConfig
 import type { FramePayload, InboundMessage, InterceptKind, InterceptPayload, RunScriptPayload } from './main-bridge-protocol.js';
 import { DEFAULT_OPERATION_RETRIES } from './operation-retry.js';
 import { DEFAULT_PLAYBACK_WINDOW_SEC } from './playback.js';
-import { useOperations } from './use-operations.js';
 import { CREW_AGENTS, createScreenLock, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
 import { runLiveDrag, type DragIntervention, type LiveDragResult, type SwarmAgent } from './drag-swarm.js';
-import { FAILURE_CONTEXT_LIMIT, RECENT_LINES, addFailure, addNote, failureFromRun, failureLine, forget, memoryBlock, newFailure, objectiveText, operationGroups, similarFailures, type FailureRecord, type OperationMemory } from './operation-memory.js';
 import { OPS_AGENTS, OPS_SYSTEM, addEvidence, addOpsReport, changeKey, changeLine, dedupeLog, enabledOps, loopReport, mapDelta, markEvidence, monitorChange, opsAgent, opsFor, parseOpsTarget, patchOpsAgent, shouldReport, tagLog, type MonitorChange, type OpsAgentId, type OpsState, type TestCandidate } from './operations.js';
 import { createOpsWorkers, type Applied, type OpsWorkResult } from './ops-workers.js';
 import { placeWindow } from './window-placement.js';
@@ -347,7 +329,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   scanSec: DEFAULT_SCAN_SEC,
   selfTestMode: 'background',
   stressCycles: DEFAULT_STRESS_CYCLES,
-  autoApply: DEFAULT_AUTO_APPLY,
+  initiativeAutoApply: DEFAULT_INITIATIVE_AUTO_APPLY,
   relaxMode: false,
   breakMinutes: DEFAULT_BREAK_MINUTES,
   systemRefreshSec: DEFAULT_SYSTEM_REFRESH_SEC,
@@ -440,7 +422,7 @@ export function useAssist() {
   /** Targets whose saved path was already counted during the current run (not re-counted when the run is learned). */
   const pathCountedRef = useRef(new Set<string>());
   /** Named screen sections with their per-section histories (persisted), and the sections the goal is secluded to. */
-  const [sections, setSections] = useState<ScreenSection[]>(loadSections);
+  const [sections, setSections] = useState<ScreenSection[]>(loadScreenSections);
   const [scope, setScope] = useState<string[]>([]);
   /** Elements the AI replicated by itself, newest first; side-test results, newest first. */
   const [replicas, setReplicas] = useState<Replica[]>([]);
@@ -469,7 +451,7 @@ export function useAssist() {
   const [subReport, setSubReport] = useState<SubagentReport | null>(null);
   const [subRunning, setSubRunning] = useState(false);
   /** The agent crew the main AI commands (/crew) and whether a crew run is going. */
-  const [crew, setCrew] = useState<CrewAgent[]>(() => CREW_AGENTS.map((id) => ({ id, status: 'waiting', task: null, lastReport: null })));
+  const [crewAgents, setCrewAgents] = useState<CrewAgent[]>(() => CREW_AGENTS.map((id) => ({ id, status: 'waiting', task: null, lastReport: null })));
   const [crewRunning, setCrewRunning] = useState(false);
   /** The Operations agents: statuses, reports and the before/after evidence trail (persisted), and whether an /ops run is going. */
   const [ops, setOps] = useState<OpsState>(loadOpsState);
@@ -501,12 +483,12 @@ export function useAssist() {
   /** The multi-element chain being run or last run: its objective breakdown and completion report. */
   const [chain, setChain] = useState<ChainRun | null>(null);
   const chainRef = useRef<ChainRun | null>(null);
-  /** Goal-tracer records (persisted): the current objective, next goals and settled ones. */
-  const [goals, setGoals] = useState<GoalRecord[]>(() => loadGoals());
+  /** Objective records (persisted): the current objective, next goals and settled ones. */
+  const [objectives, setObjectives] = useState<GoalRecord[]>(() => loadGoals());
   /** User notes in the knowledge store (persisted), injected once into each targeted project's next AI call. */
   const [userNotes, setUserNotes] = useState<UserNote[]>(() => loadKnowledge());
   /** Key frames the main AI and the agents marked as preferred, newest first. */
-  const [preferred, setPreferred] = useState<PreferredShot[]>([]);
+  const [preferred, setPreferredShots] = useState<PreferredShot[]>([]);
   /** The last execution-mode change as logged, shown in every briefing; null before the first. */
   const [modeChange, setModeChange] = useState<string | null>(null);
   const modeChangeRef = useRef<string | null>(null);
@@ -772,15 +754,14 @@ export function useAssist() {
   patternsRef.current = patterns;
   habitsRef.current = habits;
   /** Every store cross-referenced into one queryable memory view (Memory panel, briefing, AI context). */
-  const memory = useMemo(() => buildMemory({ cards, habits, patterns, runs, tests: watcher.tests, dossiers }), [cards, habits, patterns, runs, watcher.tests, dossiers]);
-  const memoryRef = useRef(memory);
-  memoryRef.current = memory;
+  const enhancedMemory = useMemo(() => buildMemory({ cards, habits, patterns, runs, tests: watcher.tests, dossiers }), [cards, habits, patterns, runs, watcher.tests, dossiers]);
+  const enhancedMemoryRef = useRef(enhancedMemory);
+  enhancedMemoryRef.current = enhancedMemory;
   familiarRef.current = familiar;
   targetRef.current = target;
   scopeRef.current = scope;
 
-  const intervalMs = relaxInterval(monitorInterval(settings.monitorMode, settings.captureMs), settings.relaxMode);
-  const intervalMs = monitorInterval(settings.monitorMode, modeCaptureMs(settings.executionMode, settings.captureMs));
+  const intervalMs = relaxInterval(monitorInterval(settings.monitorMode, modeCaptureMs(settings.executionMode, settings.captureMs)), settings.relaxMode);
 
   // Persistence: settings, log and cards.
   useEffect(() => saveSettings(settings), [settings]);
@@ -791,7 +772,7 @@ export function useAssist() {
   useEffect(() => saveFamiliar(familiar), [familiar]);
   useEffect(() => saveHabits(habits), [habits]);
   useEffect(() => saveRunSummaries(runs), [runs]);
-  useEffect(() => void saveGoals(goals), [goals]);
+  useEffect(() => void saveGoals(objectives), [objectives]);
   useEffect(() => void saveKnowledge(userNotes), [userNotes]);
   useEffect(() => saveDossiers(dossiers), [dossiers]);
   useEffect(() => saveWatcher(watcher), [watcher]);
@@ -800,7 +781,7 @@ export function useAssist() {
   useEffect(() => saveAccessPaths(accessPaths), [accessPaths]);
   useEffect(() => saveRouteProfiles(routeProfiles), [routeProfiles]);
   useEffect(() => saveFixMethods(fixMethods), [fixMethods]);
-  useEffect(() => saveSections(sections), [sections]);
+  useEffect(() => saveScreenSections(sections), [sections]);
   useEffect(() => saveOpsState(ops), [ops]);
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
@@ -839,24 +820,20 @@ export function useAssist() {
   const takeNote = useCallback((kind: NoteKind, text: string, source: string) => {
     watcherRef.current = { ...watcherRef.current, notes: mergeNotes(watcherRef.current.notes, [{ kind, text, source, ...(goalRef.current.trim() ? { op: goalRef.current.trim() } : {}) }]).notes };
     setWatcher(watcherRef.current);
+  }, []);
+
   /**
-   * Every engine event lands here. With the Logging agent on, each entry is tagged with its operation
-   * and an entry identical to the newest is folded into it instead of duplicated.
+   * Every engine event lands here, tagged with its project; an error line is also kept as an 'error' note
+   * so errors stay recallable. With the Logging agent on, each entry is tagged with its operation and an
+   * entry identical to the newest is folded into it instead of duplicated.
    */
   const addLog = useCallback((from: string, message: string, tone: LogEntry['tone'] = 'info', shots?: string[]) => {
-    const entry: LogEntry = { id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}) };
+    const project = projectId(goalRef.current);
+    const entry: LogEntry = { id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}), ...(project ? { project } : {}) };
+    if (tone === 'error') takeNote('error', message, from);
     if (!settingsRef.current.stages.opsLogging) return setLog((l) => [entry, ...l].slice(0, LOG_LIMIT));
     const tagged = tagLog(entry, operationRef.current ?? goalRef.current);
     setLog((l) => dedupeLog(l, tagged, LOG_LIMIT));
-  }, []);
-
-  /** Every log line; an error line is also kept as an 'error' note so errors stay recallable. */
-  const addLog = useCallback((from: string, message: string, tone: LogEntry['tone'] = 'info', shots?: string[]) => {
-    const project = projectId(goalRef.current);
-    setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}), ...(project ? { project } : {}) }, ...l].slice(0, LOG_LIMIT));
-  }, []);
-    setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}) }, ...l].slice(0, LOG_LIMIT));
-    if (tone === 'error') takeNote('error', message, from);
   }, [takeNote]);
 
   /** The operation an AI turn belongs to: a subagent's slice while one runs, else the goal. */
@@ -944,12 +921,10 @@ export function useAssist() {
   /** Error forwarding: reports carry the recent log and the current frame. */
   const errorForwarding = useErrorForwarding(settings, addLog, () => ({ log: logRef.current, frame: framesRef.current[0] ?? null }), (what, ok) =>
     notify({ source: 'Error forwarding', category: 'errors', severity: ok ? 'info' : 'warning', title: `${what} ${ok ? 'delivered' : 'not delivered'}` }));
-  const captureError = errorForwarding.capture;
   /** The approval system: the dispatch gate, the point filter, the queue and its run-check. */
   const approvals = useApprovals(settings, () => patternsRef.current, addLog);
-  const errorForwarding = useErrorForwarding(settings, addLog, () => ({ log: logRef.current, frame: framesRef.current[0] ?? null }));
   /** The operation database: every element, track, capture, error and idea operation with its input and output. */
-  const operationDb = useOperations();
+  const operationDb = useOperationDatabase();
   const recordRaw = operationDb.record;
   /** Records an operation by `agent` in `section`, scoped to the loaded flow (else the goal). */
   const recordOp = useCallback((agent: string, section: string, draft: OperationDraft) => {
@@ -1024,11 +999,11 @@ export function useAssist() {
   }, [addLog]);
 
   /** Queues a next goal on the goal tracer. */
-  const queueNextGoal = useCallback((text: string) => setGoals((g) => queueGoal(g, text)), []);
+  const queueNextGoal = useCallback((text: string) => setObjectives((g) => queueGoal(g, text)), []);
   /** Drops a goal record from the goal tracer. */
-  const removeGoal = useCallback((id: string) => setGoals((g) => dropGoal(g, id)), []);
+  const removeGoal = useCallback((id: string) => setObjectives((g) => dropGoal(g, id)), []);
   /** Marks a frame as a preferred key frame on behalf of `by`. */
-  const preferFrame = useCallback((frame: Frame, by: string, reason: string) => setPreferred((p) => markPreferred(p, frame, by, reason)), []);
+  const preferFrame = useCallback((frame: Frame, by: string, reason: string) => setPreferredShots((p) => markPreferred(p, frame, by, reason)), []);
 
   // AI status changes are notifications: going offline, and coming back online after being offline.
   const aiWasRef = useRef<AiStatus['state']>('checking');
@@ -1039,7 +1014,6 @@ export function useAssist() {
     if (aiStatus.state === 'offline') notify({ source: 'AI', category: 'ai', severity: 'warning', title: `AI went offline — ${aiStatus.detail}` });
     else if (was === 'offline') notify({ source: 'AI', category: 'ai', severity: 'info', title: `AI back online — ${aiStatus.detail}` });
   }, [aiStatus, notify]);
-  }, [settings.aiUrl, settings.aiModel, settings.aiThink, addLog, captureError]);
 
   /** Whether a loop-control stage is checked; read live so a toggle applies mid-run. */
   const stageOn = (id: StageId) => settingsRef.current.stages[id];
@@ -1101,23 +1075,15 @@ export function useAssist() {
    */
   const askAi = useCallback(async (req: AskRequest, stage: StageId): Promise<AiReply> => {
     if (!settingsRef.current.stages[stage]) throw new AiCancelled(stageOff(stage));
-    const context = req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
     const memory = operationMemoryBlock(req.context === undefined);
     const project = projectId(goalRef.current);
     const injected = pendingNotesFor(userNotesRef.current, project);
-    const context = [...injected.map(noteLine), ...(req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`))];
     const recent = req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
-    const context = [...memoryLines(memoryRef.current, currentOperation()), ...recent];
+    const context = [...injected.map(noteLine), ...memoryLines(enhancedMemoryRef.current, currentOperation()), ...recent];
     const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage), req.signal);
-    const ctxReq = { ...req, context };
+    const ctxReq = { ...req, context, memory };
     setAiCalls((n) => n + 1);
     try {
-      const reply = await aiQueueRef.current.run(stage, (timeoutMs) => {
-        const { aiUrl, aiModel, aiView } = settingsRef.current;
-        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs }, { ...req, context, memory, signal });
-        const { aiUrl, aiModel, aiView, aiThink } = settingsRef.current;
-        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs, think: aiThink }, { ...req, context, signal });
-      }, signal);
       const reply = settingsRef.current.aiOverlap
         ? await firstValid([
           (s) => queuedAsk(ctxReq, stage, linkSignals(signal, s)),
@@ -1144,9 +1110,7 @@ export function useAssist() {
     } finally {
       setAiCalls((n) => n - 1);
     }
-  }, [addLog, captureError, queuedAsk]);
-  }, [captureError, injectNotes]);
-  }, [addLog, captureError, queuedAsk, thinkingOnlyOutput]);
+  }, [addLog, captureError, queuedAsk, injectNotes, thinkingOnlyOutput]);
 
   /** The AskFn of one loop-control stage. */
   const askFor = useCallback((stage: StageId): AskFn => (req) => askAi(req, stage), [askAi]);
@@ -1313,9 +1277,7 @@ export function useAssist() {
     relocate: async (live, step, feedback) => {
       const { point } = await thought(step.name, async () => {
         const crop = await zoomFrame(live, step).catch(() => undefined);
-        const next = await relocateTarget(askFor('grounding'), live, step, feedback, [...mapContext(elementMapRef.current), ...inventoryLines(inventoryRef.current)], crop);
-        return { point: next, thinking: next?.thinking ?? null };
-        const next = await relocateTarget(askFor('grounding'), live, step, feedback, sectionContext(), crop);
+        const next = await relocateTarget(askFor('grounding'), live, step, feedback, [...sectionContext(), ...inventoryLines(inventoryRef.current)], crop);
         return { point: next && pointInScope(next) ? next : null, thinking: next?.thinking ?? null };
       }, (r) => (r.point ? `Re-planned "${step.target ?? step.name}" at ${at(r.point.x, r.point.y)}` : `Re-planned: "${step.target ?? step.name}" is not visible`));
       return point;
@@ -1349,10 +1311,9 @@ export function useAssist() {
     const summary = runSummary({ goal: runGoal, steps: runSteps, startedAt, ...opts, session: sessionRef.current, flowId: flowRef.current });
     setRuns((r) => appendSummary(r, summary));
     tracer.emit({ kind: 'run', runId: summary.id, outcome: summary.outcome, flowId: flowRef.current });
-  }, [tracer]);
     if (summary.outcome === 'success') notify({ source: 'Goals', category: 'goal', severity: 'info', title: `Goal completed: ${runGoal || '(no goal)'}` });
     if (summary.outcome === 'failed') notify({ source: 'Goals', category: 'goal', severity: 'warning', title: `Goal failed: ${runGoal || '(no goal)'}` });
-  }, [notify]);
+  }, [tracer, notify]);
 
   /**
    * Run memory: a successful real run is saved as a flow; a failed one records its failure
@@ -1382,8 +1343,7 @@ export function useAssist() {
     } catch (error) {
       addLog('Patterns', `AI unavailable — no patterns learned from this run: ${errorText(error)}`, 'warn');
     }
-  }, [addLog, addPatterns, askFor, autoSaveFlow, recordRun, rememberFailure]);
-  }, [addLog, addPatterns, askFor, autoSaveFlow, commitAccessPaths, recordRun]);
+  }, [addLog, addPatterns, askFor, autoSaveFlow, recordRun, rememberFailure, commitAccessPaths]);
 
   const triggerAbort = useCallback((reason: string) => {
     abortRef.current = true;
@@ -1391,13 +1351,11 @@ export function useAssist() {
     cancelAi();
     setAborted(true);
     setSettings((s) => ({ ...s, autoAct: false }));
-    addLog('Safety', `ABORTED (${reason}) — Auto Act, replay, auto-continue, monitor automation and in-flight AI calls halted`, 'error');
     notify({ source: 'Safety', category: 'abort', severity: 'critical', title: `Automation aborted (${reason})` });
-  }, [addLog, cancelAi, notify]);
     mirrorOnRef.current = false;
     setMirrorOn(false);
     addLog('Safety', `ABORTED (${reason}) — Auto Act, replay, auto-continue, mirror input, AI play, monitor automation and in-flight AI calls halted`, 'error');
-  }, [addLog, cancelAi]);
+  }, [addLog, cancelAi, notify]);
 
   const clearAbort = () => {
     abortedRef.current = false;
@@ -1465,6 +1423,12 @@ export function useAssist() {
   /** Coordinate learner: records one observation in the familiar memory and the target's dossier, and logs a target that moved. */
   const learnCoords = (obs: CoordObservation, by: Mover = 'user') => {
     commitDossiers(recordSighting(dossiersRef.current, { name: obs.name, x: obs.x, y: obs.y, time: obs.time, by }));
+    const { list, moved } = learnCoordinate(familiarRef.current, obs);
+    familiarRef.current = list;
+    setFamiliar((latest) => learnCoordinate(latest, obs).list);
+    if (moved) addLog('Coordinate learner', `"${moved.name}" moved (${pct(moved.from.x)}, ${pct(moved.from.y)}) → (${pct(moved.to.x)}, ${pct(moved.to.y)}) — coordinates updated`, 'info');
+  };
+
   /**
    * Switches the execution mode (user from the HUD, or the AI contextually) and logs who changed it,
    * from what, to what and why. Re-selecting the current mode logs nothing. Never touches arming,
@@ -1488,13 +1452,6 @@ export function useAssist() {
     else if (r.kind === 'rejected') addLog('Mode', r.text, 'warn');
   };
 
-  /** Coordinate learner: records one observation in the familiar memory and logs a target that moved. */
-  const learnCoords = (obs: CoordObservation) => {
-    const { list, moved } = learnCoordinate(familiarRef.current, obs);
-    familiarRef.current = list;
-    setFamiliar((latest) => learnCoordinate(latest, obs).list);
-    if (moved) addLog('Coordinate learner', `"${moved.name}" moved (${pct(moved.from.x)}, ${pct(moved.from.y)}) → (${pct(moved.to.x)}, ${pct(moved.to.y)}) — coordinates updated`, 'info');
-  };
 
   /** The learned position of the step's target on `live` (learner on, anchor matched), or null. */
   const learnedPoint = (live: Frame, step: WorkflowStep) => {
@@ -1582,6 +1539,7 @@ export function useAssist() {
       void bridge.send('intercept_notice', { from: BUS_AGENTS[from], element: { name: e.name, x: e.x, y: e.y } });
       return `Sent "${e.name}" to the main app as an intercept notice`;
     },
+    operations: (e) => `Monitor agent tracks "${e.name}" at ${at(e.x, e.y)}; testing agent can test it`,
   };
 
   /** Why no project may take a turn now: a guardrail (abort, disarmed, executor kill-switch) or its loop-control stage; null = go on. */
@@ -1626,11 +1584,9 @@ export function useAssist() {
   });
   const projectInjectRef = useRef(projectEngine.injectRunning);
   projectInjectRef.current = projectEngine.injectRunning;
-    operations: (e) => `Monitor agent tracks "${e.name}" at ${at(e.x, e.y)}; testing agent can test it`,
-  };
 
-  /** Whether a bus recipient handles a message now: habits always, the Operations agents while their Monitor is on, others while switched on. */
-  const recipientOn = (id: BusAgentId) => (id === 'habits' ? true : id === 'operations' ? stageOn('opsMonitor') : agentsRef.current(id));
+  /** Whether a bus recipient handles a message now: habits and the main app always, the Operations agents while their Monitor is on, others while switched on. */
+  const recipientOn = (id: BusAgentId) => (id === 'habits' || id === 'mainApp' ? true : id === 'operations' ? stageOn('opsMonitor') : agentsRef.current(id));
 
   /**
    * Forwards a discovered element from one agent into the inboxes of the others (all of them by
@@ -1641,7 +1597,6 @@ export function useAssist() {
     const { bus: next, queued } = forward(busRef.current, from, element, to);
     let updated = next;
     queued.forEach((m) => {
-      if (m.to !== 'habits' && m.to !== 'mainApp' && !agentsRef.current(m.to)) return;
       if (!recipientOn(m.to)) return;
       updated = markHandled(updated, m.id, busHandlers[m.to](element, from));
     });
@@ -1761,13 +1716,11 @@ export function useAssist() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** Draws the shown demo scene (Desktop or test World) onto `ctx`. */
-  const drawDemo = (ctx: CanvasRenderingContext2D) => drawDemoDesktop(ctx, DEMO_W, DEMO_H, tickRef.current, adDismissed(), demoFileRef.current, demoIconsRef.current, activeWorld());
   /** Decoded images of the presentation embedded in the demo world, by data URL. */
   const worldImagesRef = useRef(new Map<string, HTMLImageElement>());
-  /** The demo desktop at the current tick, with the embedded presentation on its in-world screen. */
+  /** Draws the shown demo scene (Desktop or test World) at the current tick, with the embedded presentation on its in-world screen. */
   const drawDemo = (ctx: CanvasRenderingContext2D) => {
-    drawDemoDesktop(ctx, DEMO_W, DEMO_H, tickRef.current, adDismissed(), demoFileRef.current, demoIconsRef.current);
+    drawDemoDesktop(ctx, DEMO_W, DEMO_H, tickRef.current, adDismissed(), demoFileRef.current, demoIconsRef.current, activeWorld());
     const embed = studio.currentEmbed();
     if (!embed) return;
     const url = embed.images[worldImageAt(embed, tickRef.current)];
@@ -1985,6 +1938,9 @@ export function useAssist() {
     const planned = await compensateStep(step, actor);
     const out = await dispatchInput(planned, actor, budget, dryRun);
     noteLanding(planned, out);
+    return out;
+  };
+
   /** Why a live drag must let go before its next segment: abort, disarm or Stop plan; null to go on. */
   const liveDragHalt = (): string | null => {
     if (abortedRef.current) return 'Aborted';
@@ -2493,6 +2449,7 @@ export function useAssist() {
     }
   };
 
+  /**
    * The image a snip of `displayId` is cut from: the live frame for the captured display (or none
    * named), else a native full-resolution grab of that display (desktop app only).
    */
@@ -2706,6 +2663,9 @@ export function useAssist() {
     addLog(actor, `"${profile.target}" path v${currentPath(profile).version}: ${ok ? 'reached' : `failed at hop ${(run.failedHop ?? 0) + 1}`} — ${run.last?.message ?? 'no hop ran'}`, ok ? 'ok' : 'error');
     if (dryRun || run.last?.halt) return;
     countPath(profile, { via: 'path', out: run.last!, failedHop: run.failedHop });
+  };
+
+  /**
    * Mirror input: one gesture on the preview (by the user or the AI) as real input through
    * performStep — armed it dispatches to the PC through the bridge, disarmed it is a labeled dry run;
    * abort, the executor stage and the budget refuse it. Never a simulated success.
@@ -2799,7 +2759,7 @@ export function useAssist() {
   };
 
   /** Cross-references a turn's element reports into the log, perspective and lanes; the side agents report changes. */
-  const crossReference = (reports: ElementReport[]) => {
+  const crossReferenceTurn = (reports: ElementReport[]) => {
     const s = playRef.current;
     const turn = s.turn + 1;
     const next = logSightings(s.sightings, reports, turn);
@@ -2837,7 +2797,7 @@ export function useAssist() {
       addLog('AI play', aiFailure('AI unavailable — no play turn', error), 'error');
       return null;
     }
-    const view = crossReference(reply.elements);
+    const view = crossReferenceTurn(reply.elements);
     note({ step: `Play turn ${view.turn} · ${persona.name}`, kind: 'thought', text: view.summary, thinking: reply.thinking });
     const out = reply.action ? await mirrorInput(reply.action, `AI play · ${persona.name}`, playRef.current.budget) : null;
     const did = reply.did || (reply.action ? mirrorStep(reply.action, 'x').name : 'Waited');
@@ -3094,16 +3054,11 @@ export function useAssist() {
     });
   };
 
-  /** The planning context a proposal is justified against; `redo` marks a re-proposal. */
-  const proposalContext = (actor: string, redo?: string): ProposalContext => ({
+  /** The planning context a proposal for `step` by `actor` is justified against; `redo` marks a re-proposal. */
+  const proposalContext = (actor: string, step: WorkflowStep, redo?: string): ProposalContext => ({
     goal: goalRef.current,
     change: currentChange(),
     patterns: [...relevantPatterns(goalRef.current, patternsRef.current).map(patternLine), ...crossReference(actor, goalRef.current)],
-  /** The planning context a proposal for `step` is justified against; `redo` marks a re-proposal. */
-  const proposalContext = (step: WorkflowStep, redo?: string): ProposalContext => ({
-    goal: goalRef.current,
-    change: currentChange(),
-    patterns: relevantPatterns(goalRef.current, patternsRef.current).map(patternLine),
     related: operationDb.related(`${step.name} ${step.target ?? ''}`, goalRef.current),
     redo,
   });
@@ -3134,8 +3089,7 @@ export function useAssist() {
   /** The model's what/why for `step` on the live screen, recorded on the timeline and in the log. */
   const proposeNow = async (actor: string, step: WorkflowStep, redo?: string): Promise<Proposal> => {
     const frame = framesRef.current[0] ?? null;
-    const p = await thought(step.name, () => proposeStep(askFor('executor'), frame, step, proposalContext(actor, redo)), proposalText, 'proposal');
-    const p = await thought(step.name, () => proposeStep(askFor('executor'), frame, step, proposalContext(step, redo)), proposalText, 'proposal');
+    const p = await thought(step.name, () => proposeStep(askFor('executor'), frame, step, proposalContext(actor, step, redo)), proposalText, 'proposal');
     logProposal(actor, step, p, !!redo);
     return p;
   };
@@ -3226,14 +3180,15 @@ export function useAssist() {
   };
 
   /** What the briefing cross-references the plan against. */
-  const knowledge = (): Knowledge => ({ map: elementMapRef.current, familiar: familiarRef.current, habits: habitsRef.current, patterns: patternsRef.current, failures: memoryRef.current.failures, context: habitContext() });
-  const knowledge = (): Knowledge => ({ map: elementMapRef.current, familiar: familiarRef.current, habits: habitsRef.current, patterns: patternsRef.current, dossiers: dossiersRef.current, memory: memoryRef.current, context: habitContext() });
+  const knowledge = (): Knowledge => ({
+    map: elementMapRef.current, familiar: familiarRef.current, habits: habitsRef.current, patterns: patternsRef.current,
+    failures: memoryRef.current.failures, dossiers: dossiersRef.current, memory: enhancedMemoryRef.current, context: habitContext(),
+  });
 
   /** A fresh briefing of `step` with `proposal` on the live frame. */
   const buildBriefingFor = (step: WorkflowStep, proposal: Proposal) => buildBriefing({
     goal: goalRef.current, steps: stepsRef.current, step, proposal, live: framesRef.current[0] ?? null,
     knowledge: knowledge(), thresholds: driftThresholds(), online: aiOnline(), goalProgress: tracer.briefingLine(),
-    knowledge: knowledge(), thresholds: driftThresholds(), online: aiOnline(),
     mode: modeStatus(settingsRef.current.executionMode, modeChangeRef.current),
   });
 
@@ -3599,10 +3554,13 @@ export function useAssist() {
       addLog('Recorder', `Captured ${hover ? 'mouse move' : 'click'} at (${pct(x)}, ${pct(y)}) with screenshot`, 'info');
       return;
     }
-    if (sourceRef.current === 'demo' && !hover) addLog('You', demoClick(x, y).message);
+    if (mirroring()) {
+      void mirrorRef.current({ kind: 'click', x, y });
+      return;
+    }
     if (sourceRef.current === 'demo' && !hover) {
       noteInput({ x, y }, 'user');
-      addLog('You', demoClick(x, y));
+      addLog('You', demoClick(x, y).message);
     }
   };
 
@@ -3612,31 +3570,24 @@ export function useAssist() {
     addLog('You', demoClick(x, y, true).message);
   };
 
-  /** Recorded key press (with modifiers) on the focused stage: becomes a key step; outside recording it goes to the demo's focused window. The abort hotkey is never recorded. */
-  const onStageKey = useCallback((e: HotkeyEvent) => {
-    if (matchesHotkey(e, settingsRef.current.abortHotkey)) return;
-    if (!recordingRef.current) {
-      if (sourceRef.current === 'demo' && worldOnRef.current) addLog('You', demoTextKey(e.key).message);
-      return;
-    }
-    if (mirroring()) {
-      void mirrorRef.current({ kind: 'click', x, y });
-      return;
-    }
-    if (sourceRef.current === 'demo' && !hover) addLog('You', demoClick(x, y));
-  };
-
-  /** Key press on the focused stage: recorded as a key step while recording, dispatched while mirror input is on. The abort hotkey is never either. */
+  /**
+   * Key press on the focused stage: recorded as a key step while recording, dispatched while mirror input is on,
+   * otherwise sent to the demo's focused window. The abort hotkey is never any of them.
+   */
   const onStageKey = useCallback((e: HotkeyEvent) => {
     if (matchesHotkey(e, settingsRef.current.abortHotkey)) return;
     const combo = keyCombo(e);
-    if (!combo) return;
     if (recordingRef.current) {
+      if (!combo) return;
       appendRecorded(keyStep(uid('step'), combo));
       addLog('Recorder', `Captured key ${combo}`, 'info');
       return;
     }
-    if (mirroring()) void mirrorRef.current({ kind: 'key', combo });
+    if (mirroring()) {
+      if (combo) void mirrorRef.current({ kind: 'key', combo });
+      return;
+    }
+    if (sourceRef.current === 'demo' && worldOnRef.current) addLog('You', demoTextKey(e.key).message);
   }, [addLog, appendRecorded]);
 
   /** Mouse wheel at (x, y): one scroll step (recorded or mirrored) per gesture (same-direction wheel events in a burst merge). */
@@ -3831,7 +3782,7 @@ export function useAssist() {
     const picks = shots.map((f, i) => ({ f, score: i === 0 ? 1 : frameDistance(shots[i - 1].data, f.data) })).sort((a, b) => b.score - a.score).slice(0, 3).map((p) => p.f);
     if (picks.length) setPinned(picks);
     picks.forEach((f) => preferFrame(f, MAIN_AI, 'most informative change of the run'));
-    if (!dryRun && runGoal.trim()) setGoals((g) => settleGoal(g, runGoal, ok === ran.length && ran.length > 0));
+    if (!dryRun && runGoal.trim()) setObjectives((g) => settleGoal(g, runGoal, ok === ran.length && ran.length > 0));
     if (candidatesRef.current.length) {
       addLog(label, `Run paused — ${candidatesRef.current.length} aggressive candidate(s) wait for your Apply; not reviewed or learned from as a failure`, 'info');
       return { ok, total: ran.length, dryRun, stopped: abortRef.current };
@@ -3847,7 +3798,6 @@ export function useAssist() {
       }
     }
     if (!abortRef.current) await confirmGoal(runGoal, ran, dryRun);
-    await learnFromRun(ran, { dryRun, stopped: abortRef.current });
     // ■ Stop or a spent action budget both end the run as stopped (callers hold, never retry, a stopped run).
     const stopped = abortRef.current || (!dryRun && budget.used >= budget.limit && ok < ran.length);
     await learnFromRun(ran, { dryRun, stopped });
@@ -4229,7 +4179,7 @@ export function useAssist() {
           shouldStop: crewStopped,
           onAgents: (agents) => {
             crewRef.current = agents;
-            setCrew(agents);
+            setCrewAgents(agents);
           },
           onReport: noteCrewReport,
           onDecision: (d, round) => {
@@ -4470,20 +4420,15 @@ export function useAssist() {
     remindFailures(text, 'Planner');
     const paths = relevantPaths(text, habitContext(), accessPathsRef.current);
     if (paths.length) addLog('Access paths', `Applying ${paths.length} saved path(s) to planning: ${paths.map(pathLine).join(' | ')}`, 'info');
-    setGoals((g) => startGoal(g, text));
+    setObjectives((g) => startGoal(g, text));
     let planned = false;
     let requested: CapabilityRequest[] = [];
     planningRef.current = true;
     await withAi(async () => {
       try {
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current, capabilityPrompt(capabilities.registry.list, AI)), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [EXECUTION_MODES[settingsRef.current.executionMode].hint, ...knownInScope(), ...sectionContext(), ...trackingContext(elementMapRef.current), ...inventoryLines(inventoryRef.current), ...applied.map(habitLine), ...tracer.memory(text)], patternsRef.current, capabilityPrompt(capabilities.registry.list, AI)), planSummary);
         requested = plan.capabilities;
         if (!plan.steps.length) return;
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...trackingContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...inventoryLines(inventoryRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownInScope(), ...sectionContext(), ...applied.map(habitLine)], patternsRef.current), planSummary);
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine), ...tracer.memory(text)], patternsRef.current), planSummary);
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [EXECUTION_MODES[settingsRef.current.executionMode].hint, ...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
         if (planGuardRef.current.after(plan.steps) === 'duplicate') {
           addLog('Planner', `Re-plan guard: the plan for "${text.trim()}" is identical to the previous one — kept the current steps and will not ask the model again until the screen or a step changes`, 'warn');
           return;
@@ -4495,7 +4440,7 @@ export function useAssist() {
         planned = next.length > 0;
         kb.recordAi('work', `Planned ${next.length} step(s) for "${text.trim()}" (${why})`);
         for (const a of agents.filter((x) => x.on)) kb.recordFor(a.id, 'work', `Assigned to "${text.trim()}": ${a.description}`);
-        if (planned) ops.suggestFor(text);
+        if (planned) savedOps.suggestFor(text);
       } catch (error) {
         addLog('Planner', aiFailure('AI plan failed — no steps created', error), 'error');
       } finally {
@@ -4523,8 +4468,7 @@ export function useAssist() {
     }
     await withAi(async () => {
       try {
-        const { steps: planned } = await thought(`/move ${name}`, () => planFromGoal(`Move the mouse cursor onto the ${name} (hover, do not click)`, [], framesRef.current[0] ?? null, askFor('planner'), [...mapContext(elementMapRef.current), ...inventoryLines(inventoryRef.current)]), planSummary);
-        const { steps: planned } = await thought(`/move ${name}`, () => planFromGoal(`Move the mouse cursor onto the ${name} (hover, do not click)`, [], framesRef.current[0] ?? null, askFor('planner'), sectionContext()), planSummary);
+        const { steps: planned } = await thought(`/move ${name}`, () => planFromGoal(`Move the mouse cursor onto the ${name} (hover, do not click)`, [], framesRef.current[0] ?? null, askFor('planner'), [...sectionContext(), ...inventoryLines(inventoryRef.current)]), planSummary);
         const move = planned.find((s) => s.action === 'move');
         if (!move) {
           addLog('/move', `AI did not plan a mouse move to "${name}" (it proposed ${planned.map((s) => s.action).join(', ')}) — nothing executed`, 'error');
@@ -4736,8 +4680,7 @@ export function useAssist() {
   const subagentPipeline = async (task: SubagentTask, dryRun: boolean, label: string): Promise<SubagentOutcome> => {
     const base = { dry: dryRun, shots: [] as Frame[], thinking: [] as string[] };
     const stopped = () => abortRef.current || abortedRef.current;
-    const plan = await thought(`${label}: ${task.label}`, () => planFromGoal(task.goal, [], framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...inventoryLines(inventoryRef.current)], patternsRef.current), planSummary);
-    const plan = await thought(`${label}: ${task.label}`, () => planFromGoal(task.goal, [], framesRef.current[0] ?? null, askFor('planner'), [...knownInScope(), ...sectionContext()], patternsRef.current), planSummary);
+    const plan = await thought(`${label}: ${task.label}`, () => planFromGoal(task.goal, [], framesRef.current[0] ?? null, askFor('planner'), [...knownInScope(), ...sectionContext(), ...inventoryLines(inventoryRef.current)], patternsRef.current), planSummary);
     if (plan.thinking) base.thinking.push(plan.thinking);
     const budget = createBudget(task.budget);
     let last: { x: number; y: number } | undefined;
@@ -5264,8 +5207,6 @@ export function useAssist() {
     await autoPlan(scenario.goal);
     addLog('/scenario', `${scenario.title} checklist: ${progressLines(scenario, worldRef.current).join(' · ')}`, scenarioComplete(scenario, worldRef.current) ? 'ok' : 'warn');
   };
-  /** Each slash command's runner. */
-  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'snip', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, snip: snipCommand };
   /**
    * AI replication: snips `box` from the live frame (cropFrame), extracts its crop, size, colours, text and
    * bounds, optionally asks the model to name and read it, and saves it as a mapped and familiar element for
@@ -5289,8 +5230,6 @@ export function useAssist() {
     addLog(actor, replicaLine(r), 'ok', [r.crop]);
     return r;
   };
-  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'crew', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, crew: runCrewGoal };
-  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'crew' | 'ops', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, crew: runCrewGoal, ops: runOps };
 
   /** "/replicate <name> x,y,w,h" or "/replicate <mapped element>": the AI snips and saves the element itself. */
   const replicateCommand = async (arg: string) => {
@@ -5448,12 +5387,6 @@ export function useAssist() {
     await runSide({ name: `Research: ${query || where}`, target: url ? '' : where, mode: settingsRef.current.sideTestMode, research: url ? `${where} ${query}`.trim() : query || where });
   };
 
-  /** Each slash command's runner. */
-  const COMMAND_RUNNERS: Record<Exclude<CommandName, 'test'>, (target: string) => Promise<void>> = {
-    use: attachTarget, move: moveTo, measure: measureCommand, arrange,
-    section: sectionCommand, scope: scopeCommand, replicate: replicateCommand, sidetest: sideTestCommand, research: researchCommand,
-  };
-
   /** The capability registry: presentations, scripts, simulations, video notes and computer control on the real-input path. */
   const capDeps: CapabilityDeps = {
     runBriefed: async (actor, step, budget, dryRun) => {
@@ -5499,11 +5432,7 @@ export function useAssist() {
   });
   const caps = useCapabilities(capDeps, studio.capabilities);
 
-  /** Each slash command's runner. */
-  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'scenario' | 'do', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, scenario: scenarioCommand, do: caps.doCommand };
-
-  /** Submits the assist input: /use, /move, /measure, /arrange and /do run, anything else is planned as a goal. */
-  /** /crew locate <element> asks its sentinel; /crew test <what> runs a background-then-main test. */
+  /** /crew locate <element> asks its sentinel; /crew test <what> runs a background-then-main test; any other /crew text is a goal for the AI-directed crew. */
   const crewCommand = async (text: string) => {
     const [, verb = '', rest = ''] = /^(\S+)\s*(.*)$/.exec(text.trim()) ?? [];
     if (verb.toLowerCase() === 'locate' && rest) {
@@ -5514,7 +5443,7 @@ export function useAssist() {
       await crew.runTest(crew.detectTest('main AI', `run a test "${rest}"`) ?? { from: 'main AI', reason: 'requested', text: rest });
       return;
     }
-    addLog('/crew', 'Usage: /crew locate <element> · /crew test <element or reason>', 'warn');
+    await runCrewGoal(text);
   };
 
   /** /intercept routes an intercept to the crew: it pauses, factors it in and proposes. */
@@ -5531,7 +5460,9 @@ export function useAssist() {
 
   /** Each slash command's runner. */
   const COMMAND_RUNNERS: Record<Exclude<CommandName, 'test'>, (target: string) => Promise<void>> = {
-    use: attachTarget, move: moveTo, measure: measureCommand, arrange, crew: crewCommand, intercept: interceptCommand, backtrack: backtrackCommand,
+    use: attachTarget, move: moveTo, measure: measureCommand, arrange, scenario: scenarioCommand, do: caps.doCommand, snip: snipCommand,
+    crew: crewCommand, intercept: interceptCommand, backtrack: backtrackCommand, ops: runOps,
+    section: sectionCommand, scope: scopeCommand, replicate: replicateCommand, sidetest: sideTestCommand, research: researchCommand,
   };
 
   /** Submits the assist input: slash commands run, anything else is planned as a goal. */
@@ -5604,12 +5535,8 @@ export function useAssist() {
     const out = await performStep(step, actor, budget, dryRun);
     if (!out.halt && aiOnline()) await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
     const verdict = out.ok ? 'passed' : 'failed';
-    updateWatcher((w) => ({ ...w, tests: addTest(w.tests, { proposalId: p.id, tried, happened: out.message, verdict, dryRun }), proposals: patchProposal(w.proposals, p.id, { tested: true }) }));
-    addLog('Screen watcher', `Test ${verdict}: ${tried} — ${out.message}`, out.ok ? 'ok' : 'warn');
-    recordOp(actor, 'screenWatcher', ideaDraft('tested', p, `${tried} — ${out.message}`, out.ok));
-    if (out.ok) return;
-    addPatterns([newPattern('avoid', `${tried} failed — ${out.message}`, p.text)]);
-    addLog('Patterns', `Watcher test failed — learned: avoid ${tried}`, 'warn');
+    const proposal = watcherRef.current.proposals.find((x) => x.id === of.proposalId);
+    if (proposal) recordOp(actor, 'screenWatcher', ideaDraft('tested', proposal, `${tried} — ${out.message}`, out.ok));
     updateWatcher((w) => ({ ...w, tests: addTest(w.tests, { proposalId: of.proposalId, tried, happened: out.message, verdict, dryRun }), proposals: patchProposal(w.proposals, of.proposalId, { tested: true }) }));
     addLog(of.source, `Test ${verdict}: ${tried} — ${out.message}`, out.ok ? 'ok' : 'warn');
     if (!out.ok) {
@@ -5831,6 +5758,15 @@ export function useAssist() {
 
   /** Stores `draft` with the current steps as a Library card (a saved operation); returns its id. */
   const storeCard = (draft: { name: string; description: string }) => {
+    const id = uid('card');
+    flowRef.current = id;
+    setCards((c) => [{ id, ...draft, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
+    addLog('Library', `Saved "${draft.name}"`, 'ok');
+    kb.noteSignal('saved', draft.name);
+    setDraftCard(null);
+    return id;
+  };
+
   /** Highlights a point on the preview for 3 s. */
   const flash = (h: { x: number; y: number; label: string }) => {
     setHighlight(h);
@@ -5872,17 +5808,6 @@ export function useAssist() {
   afterRunRef.current = initiativeApi.afterRun;
 
   const saveCard = () => {
-    if (!draftCard) return;
-    const id = uid('card');
-    flowRef.current = id;
-    setCards((c) => [{ id, ...draft, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
-    addLog('Library', `Saved "${draft.name}"`, 'ok');
-    kb.noteSignal('saved', draft.name);
-    setDraftCard(null);
-    return id;
-  };
-
-  const saveCard = () => {
     if (draftCard) storeCard(draftCard);
   };
 
@@ -5912,7 +5837,7 @@ export function useAssist() {
   };
 
   /** Saved operations, playback of the main app's last 30 s, and detect + retry, all running through runReplay. */
-  const ops = useOperations({
+  const savedOps = useOperations({
     addLog,
     settings: () => settingsRef.current,
     liveFrame: () => framesRef.current[0] ?? null,
@@ -5929,7 +5854,7 @@ export function useAssist() {
     runs,
   });
   const patchTrigger = (id: string, fn: (t: Trigger) => Trigger) => setTriggerList(triggersRef.current.map((t) => (t.id === id ? fn(t) : t)));
-  const targetLabel = (t: Trigger) => targetText(t.target, cardsRef.current, ops.operations);
+  const targetLabel = (t: Trigger) => targetText(t.target, cardsRef.current, savedOps.operations);
 
   /** Creates a trigger from the Triggers panel; appear/disappear need an element mapped with its template frame. */
   const addTrigger = (draft: TriggerDraft) => {
@@ -5977,7 +5902,7 @@ export function useAssist() {
     }
     const now = Date.now();
     const skip = fireGate(t, now);
-    const target = resolveTarget(t.target, cardsRef.current, draftCard, ops.operations);
+    const target = resolveTarget(t.target, cardsRef.current, draftCard, savedOps.operations);
     const refusal = skip ? skip.detail : abortedRef.current ? 'ABORTED is active; clear the abort first' : 'error' in target ? `cannot run — ${target.error}` : null;
     if (refusal !== null || 'error' in target) {
       addLog(!skip && abortedRef.current ? 'Safety' : 'Triggers', `"${t.name}" skipped (${why}): ${refusal}`, skip?.reason === 'cooldown' ? 'info' : 'warn');
@@ -5989,11 +5914,11 @@ export function useAssist() {
     addLog('Triggers', `Fired "${t.name}" (${why}) — running ${target.name}, run ${fired.runs}${fired.maxRuns ? ` of ${fired.maxRuns}` : ''}`, 'info');
     if (!fired.enabled && t.enabled) addLog('Triggers', `"${t.name}" ${fired.kind === 'schedule' && fired.everySec === 0 ? 'was a one-time schedule' : `reached its run limit (${fired.maxRuns})`} — disabled`, 'info');
     if (target.card) loadCard(target.card);
-    if (target.operation) ops.loadOperation(target.operation);
+    if (target.operation) savedOps.loadOperation(target.operation);
     triggerBusyRef.current = true;
     try {
       const outcome = await runReplay(false, { label: `Trigger "${t.name}"`, goal: target.operation?.goal ?? triggeredGoal(target.card) });
-      if (target.operation) ops.countOutcome(target.operation.id, outcome);
+      if (target.operation) savedOps.countOutcome(target.operation.id, outcome);
       const result = outcomeText(outcome);
       addLog('Triggers', `"${t.name}" result: ${result.text}`, result.tone);
     } finally {
@@ -6046,7 +5971,7 @@ export function useAssist() {
 
   /** Keeps a note for an operation; it rides with every AI turn of that kind of operation. */
   const addOperationNote = (operation: string, text: string) => {
-    memoryRef.current = addNote(memoryRef.current, operation, text);
+    memoryRef.current = addOperationMemoryNote(memoryRef.current, operation, text);
     setMemory(memoryRef.current);
   };
 
@@ -6120,7 +6045,7 @@ export function useAssist() {
     return `scheduled "${created.name}" (${created.id}) ${conditionText(created, elementMapRef.current)}`;
   };
 
-  const snip = async (box: Box) => {
+  const snipToLog = async (box: Box) => {
     const f = framesRef.current[0];
     if (!f) throw new Error('no captured frame yet — share the screen or connect the bridge first');
     const crop = await cropFrame(f, box);
@@ -6166,7 +6091,7 @@ export function useAssist() {
       downloadText(name, JSON.stringify(exportBackup(), null, 2), 'application/json');
       return `backup downloaded as ${name}`;
     },
-    exportHistory, snip, rulerToggle: ruler.toggle,
+    exportHistory, snip: snipToLog, rulerToggle: ruler.toggle,
     recalibrate: () => (ruler.recalibrateNow('manual') ? 'recalibrated' : 'no baseline to recalibrate against'),
     measure: ruler.measureQuery, toggleMapMode,
     elements: () => [...elements.map((e) => `${e.name} at ${at(e.x, e.y)} (${e.source})`), ...elementMap.map((e) => `${e.name} at ${at(boxCenter(e.box).x, boxCenter(e.box).y)} (mapped)`)],
@@ -6227,8 +6152,9 @@ export function useAssist() {
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
     armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
-    ruler, continuing, habits, deleteHabit, pinHabit, runs, dossiers, preferPosition, memory,
-    ruler, continuing, habits, deleteHabit, pinHabit, runs,
+    ruler, continuing, habits, deleteHabit, pinHabit, runs, dossiers, preferPosition,
+    /** The cross-referenced memory view: methods, element usage, paths, goals and positions. */
+    memory: enhancedMemory,
     /** Every operation's traced goal (newest first) and the Goal tracer's live status. */
     goals, tracerStatus: tracer.status(),
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
@@ -6238,20 +6164,22 @@ export function useAssist() {
     sections, scope, saveSection, deleteSection, proposeSections, replicas, sideResults,
     /** Section profiles (elements with dossiers, logs, changes) and their cross-referenced memory lines. */
     sectionProfiles: buildProfiles(sections, elementMap, familiar, frames[0]),
-    watcher, acceptProposal, dismissProposal, testProposal,
-    approvals: approvals.items, approvalTree: approvals.tree, approveItem, editItem, rejectItem, runApprovalCheck, setOperationPolicy,
     watcher, acceptProposal, dismissProposal, testProposal, wake,
+    approvals: approvals.items, approvalTree: approvals.tree, approveItem, editItem, rejectItem, runApprovalCheck, setOperationPolicy,
     initiative: initiativeApi.initiative, acceptInitiative: initiativeApi.acceptInitiative, dismissInitiative: initiativeApi.dismissInitiative,
-    scanNow: initiativeApi.scanNow, stressTest: initiativeApi.stressTest, testTargets: testTargets(elementMap, familiar),
-    triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger,
-    accessPaths, editAccessPath, deleteAccessPath, testAccessPath,
+    initiativeScanNow: initiativeApi.scanNow, stressTest: initiativeApi.stressTest, testTargets: testTargets(elementMap, familiar),
     triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger, packs,
-    ...ops,
+    accessPaths, editAccessPath, deleteAccessPath, testAccessPath,
+    /** Saved operations, the main app's playback and detect + retry. */
+    ...savedOps,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
-    crew, crewRunning, runCrewGoal, stopPlan, swarm, liveDragging, interveneDrag,
+    /** The coordinated crew (sentinels, testers, intercepts) and the AI-directed crew agents (/crew <goal>). */
+    crew, crewAgents, crewRunning, runCrewGoal, stopPlan, swarm, liveDragging, interveneDrag,
     aiHistory, trimAiHistory, resetAiSession,
-    memory, operations, addOperationNote, forgetMemory,
-    operations: operationDb.operations, exportOperations: operationDb.exportOperations, clearOperations: operationDb.clearOperations,
+    /** Per-operation memory (failures, notes) and its per-operation groups. */
+    operationMemory: memory, memoryOperations: operations, addOperationNote, forgetMemory,
+    /** The operation database: every element, track, capture, error and idea operation. */
+    dbOperations: operationDb.operations, exportOperations: operationDb.exportOperations, clearOperations: operationDb.clearOperations,
     ops, opsRunning, runOps, opsFor: (operation: string) => opsFor(operation, ops, log),
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
@@ -6262,26 +6190,22 @@ export function useAssist() {
     /** The main Droid app bridge's live state, and selecting its preview as the screen source. */
     mainBridge, selectMainApp,
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
-    dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
-    reverse, reverseLast, reversing, briefings, chain, runChain,
     dispatch,
     /** What the preview does with input right now: passive, LIVE to the PC, or a labeled dry run. */
     mirror: mirrorMode(mirrorOn, dispatch),
     mirrorOn, toggleMirror, mirrorInput,
     personas, personaId, selectPersona, addPersona, deletePersona, playTurn, playTurns, playing, sightings, playView, lanes,
-    reverse, reverseLast, reversing, briefings,
+    reverse, reverseLast, reversing, briefings, chain, runChain,
     /** The per-project lifecycle engine and its approval queue. */
     projects: projectEngine,
     /** The AI resolution center: disagreements, resolutions, recovery operations and the approval queue. */
     resolution,
-    goals, queueNextGoal, removeGoal, userNotes, addNote, preferred, preferFrame,
+    objectives, queueNextGoal, removeGoal, userNotes, addNote, preferred, preferFrame,
     /** The capability registry and its artifacts; `invokeCapability` is the one permission-checked path for the main AI, the user and agents. */
     artifactCapabilities: caps.registry, invokeCapability: caps.invoke, presentations: caps.presentations, scripts: caps.scripts, artifactKnowledge: caps.knowledge,
     /** The capability registry: the single dispatch surface for buttons, the AI, agents and the main app. */
     capabilities: capabilities.registry.list, invocations: capabilities.invocations, invoke: capabilities.invoke, requestCapability, relaxed: !!relaxedRef.current,
     inventory, routes, routeProfiles, plotRoute, runRoute, fixMethods, pendingFix, runFixScript, dismissFix, retest, retestFlow,
-    crew,
-    capabilities: caps.registry, invokeCapability: caps.invoke, presentations: caps.presentations, scripts: caps.scripts, knowledge: caps.knowledge,
     /** The presentation studio: slideshows, movies, projects, composition approvals, rich notifications and the in-world embed. */
     studio,
     setMode, modeChange, candidates, applyCandidate, dismissCandidate,

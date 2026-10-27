@@ -23,15 +23,10 @@ import { MAP_COLS, MAP_ROWS, boxCenter, mapCells, type MappedElement, type Perfo
 import { countHere, ghostPositions, motionOf, motionTiming, type MotionKind } from './element-tracking.js';
 import { PERFORM_KINDS, checkPerform, performText } from './element-perform.js';
 import { TRAIN_MODES, type TrainMode, type TrainingReport } from './element-training.js';
-import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
+import { WATCH_MS_MAX, WATCH_MS_MIN, GOAL_STALL_MAX, GOAL_STALL_MIN, MAIN_BRIDGE_BACKOFF_MAX_MS, MAIN_BRIDGE_BACKOFF_MIN_MS, MAIN_BRIDGE_PORT_MAX, MAIN_BRIDGE_PORT_MIN } from './storage.js';
 import { proposalStep, recallNotes, type NoteKind, type WatchProposal } from './watcher.js';
 import { WAKE_MS_MAX, WAKE_MS_MIN } from './wake.js';
 import { contextText } from './context-workflow.js';
-import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js';
-import { GOAL_STALL_MAX, GOAL_STALL_MIN, WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
-import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js';
-import { MAIN_BRIDGE_BACKOFF_MAX_MS, MAIN_BRIDGE_BACKOFF_MIN_MS, MAIN_BRIDGE_PORT_MAX, MAIN_BRIDGE_PORT_MIN, WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
-import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
 import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, MASTER_PROMPT_MAX, type AiView } from './ai.js';
 import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-history.js';
@@ -377,8 +372,6 @@ export function AgentsPanel({ engine }: { engine: AssistEngine }) {
       {agents.map((a) => (
         <label key={a.id} className={styles.agent}>
           <input type="checkbox" checked={a.on} onChange={(e) => void engine.invoke(`agent.${a.id}`, { on: e.target.checked })} />
-          <span><strong>{a.name}</strong><small>{a.description}</small></span>
-          <input type="checkbox" checked={a.on} onChange={(e) => setAgents(agents.map((x) => (x.id === a.id ? { ...x, on: e.target.checked } : x)))} />
           <span><strong>{a.name}</strong><small>{a.description}</small>{a.id === 'goalTracer' && <small aria-label="Goal tracer status">Live: {engine.tracerStatus}</small>}</span>
         </label>
       ))}
@@ -899,7 +892,6 @@ function ThinkingItem({ entry, think }: { entry: ThinkingEntry; think: boolean }
         <>
           <p>{entry.text}</p>
           {entry.frame && <img src={entry.frame.url} alt={`Snip for ${entry.step}`} style={{ maxWidth: '100%' }} />}
-          {entry.thinking ? <pre className={styles.muted}>{entry.thinking}</pre> : <p className={styles.muted}>No thinking returned by the model</p>}
           {entry.thinking ? <pre className={styles.muted}>{entry.thinking}</pre> : <p className={styles.muted}>{thinkingAbsentText(think)}</p>}
         </>
       )}
@@ -988,6 +980,9 @@ function ChainBreakdown({ chain }: { chain: ChainRun }) {
         </ul>
       )}
     </div>
+  );
+}
+
 /** One snip: the image, its region and size, and Save to element map. */
 function SnipItem({ engine, s }: { engine: AssistEngine; s: Snip }) {
   const [name, setName] = useState('');
@@ -1028,8 +1023,7 @@ export function SnipGalleryPanel({ engine }: { engine: AssistEngine }) {
 
 /** Pre-action briefing: the reasoning and evidence for each step, recorded before it dispatches. */
 export function BriefingPanel({ engine }: { engine: AssistEngine }) {
-  const { briefings, settings, chain } = engine;
-  const { briefings, settings, replicas } = engine;
+  const { briefings, settings, chain, replicas } = engine;
   return (
     <section className={styles.panel} aria-label="Pre-action briefing">
       <h3>Pre-action briefing <small>{settings.stages.briefing ? `${briefings.length} recorded` : 'stage unchecked in Loop control'}</small></h3>

@@ -2,41 +2,29 @@ import { Routes, Route } from 'react-router-dom';
 import { useAssist } from './use-assist.js';
 import { Stage } from './stage.js';
 import { Hud } from './hud.js';
-import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, CapabilitiesPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
-import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, SnipGalleryPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
-import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SectionsPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
-import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WakePanel, WatcherPanel, WorkflowPanel } from './panels.js';
-import { AgentBusPanel, SubagentReportPanel } from './bus-panels.js';
-import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
-import { AgentBusPanel, CrewPanel, SubagentReportPanel } from './bus-panels.js';
-import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
-import { AgentBusPanel, ResolutionPanel, SubagentReportPanel } from './bus-panels.js';
-import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
-import { AgentBusPanel, CrewPanel, SubagentReportPanel } from './bus-panels.js';
+import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, CapabilitiesPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel, SnipGalleryPanel, SectionsPanel, WakePanel } from './panels.js';
+import { AgentBusPanel, AgentCrewPanel, SubagentReportPanel, CrewPanel, ResolutionPanel } from './bus-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
 import { ProjectsPanel } from './projects-panel.js';
 import { AccessPathsPanel } from './access-paths-panel.js';
 import { ApprovalsPanel } from './approvals-panel.js';
 import { StatsPanel } from './stats-panel.js';
-import { OperationMemoryPanel } from './memory-panel.js';
+import { OperationMemoryPanel, MemoryPanel } from './memory-panel.js';
 import { LiveBriefingPanel } from './live-briefing-panel.js';
 import { ArtifactsPanel } from './capabilities-panel.js';
 import { PersonaPanel } from './persona-panel.js';
-import { CapabilitiesPanel } from './capabilities-panel.js';
 import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
 import { VariationsPanel } from './variations-panel.js';
 import { InventoryPanel, RetestPanel, RoutesPanel } from './screen-ai-panels.js';
-import { MemoryPanel } from './memory-panel.js';
 import { InitiativePanel } from './initiative-panel.js';
 import { GoalsPanel } from './goals-panel.js';
 import { SystemPanel } from './system-panel.js';
 import { NotificationsPanel } from './notifications-panel.js';
 import { DatabasePanel } from './database-panel.js';
-import { CapabilitiesPanel } from './capabilities-panel.js';
 import { PresentationPanel } from './presentation-panel.js';
 import { NotificationStack } from './notification-stack.js';
 import { OperationsPanel } from './operations-panel.js';
-import { OperationsPanel } from './ops-panel.js';
+import { OperationsPanel as OpsAgentsPanel } from './ops-panel.js';
 import styles from './droid-assist.module.css';
 
 /** The Droid Assist workspace: live screen + overlay, HUDs, workflow, gallery, agents and log. */
@@ -90,7 +78,6 @@ function AssistScreen() {
             <ProjectsPanel engine={engine} />
             <ApprovalsPanel engine={engine} />
             <ArtifactsPanel engine={engine} />
-            <CapabilitiesPanel engine={engine} />
             <PresentationPanel engine={engine} />
             <OperationsPanel engine={engine} />
           </div>
@@ -109,7 +96,8 @@ function AssistScreen() {
           <SettingsPanel engine={engine} />
           <AgentBusPanel engine={engine} />
           <CrewPanel engine={engine} />
-          <OperationsPanel engine={engine} />
+          <AgentCrewPanel engine={engine} />
+          <OpsAgentsPanel engine={engine} />
           <SubagentReportPanel engine={engine} />
           <ResolutionPanel engine={engine} />
           <LogPanel engine={engine} />

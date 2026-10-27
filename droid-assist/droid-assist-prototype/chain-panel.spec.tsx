@@ -11,7 +11,7 @@ const objective = (name: string, status: ChainObjective['status'], reason?: stri
   step: { id: name, name, action: 'click', x: 0.5, y: 0.5, target: name, status: 'pending' },
 });
 
-const panel = (chain: ChainRun | null) => render(<BriefingPanel engine={{ briefings: [], settings: { stages: { briefing: true } }, chain } as unknown as AssistEngine} />);
+const panel = (chain: ChainRun | null) => render(<BriefingPanel engine={{ briefings: [], replicas: [], settings: { stages: { briefing: true } }, chain } as unknown as AssistEngine} />);
 
 describe('BriefingPanel chain breakdown', () => {
   it('lists every objective with its what, why and status', () => {

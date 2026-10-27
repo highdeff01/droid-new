@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { downloadText } from './action-history.js';
-import { OPERATION_LIMIT, clearOperations as clearStore, loadOperations, putOperation, type OperationRecord } from './operation-db.js';
+import { OPERATION_LIMIT, clearOperations as clearStore, loadOperations as loadOperationRecords, putOperation, type OperationRecord } from './operation-db.js';
 import { buildOperation, type OperationDraft, type OperationScope } from './operation-log.js';
 import { RELATED_LIMIT, exportOperations as exportEnvelope, relatedLines, type OperationQuery } from './operation-query.js';
+import type { AssistSettings, Frame, Habit, LogEntry, WorkflowStep } from './types.js';
+import type { RunOutcome } from './triggers.js';
+import type { RunSummary } from './run-stats.js';
+import { loadOperations, saveOperations } from './storage.js';
+import { countRun, createOperation, notifySuggestion, referenceShots, suggestOperations, suggestionText, upsertOperation, type OperationSource, type SavedOperation } from './saved-operations.js';
+import { DEFAULT_SCREEN, fetchPlayback, type Playback } from './playback.js';
+import { bestVariant, detectRecent, verifyRetry, type DetectedOperation } from './operation-retry.js';
 
 /** Records loaded from the store merged under the ones written before the load finished, newest first. */
 function mergeLoaded(current: OperationRecord[], stored: OperationRecord[]): OperationRecord[] {
@@ -14,7 +21,7 @@ function mergeLoaded(current: OperationRecord[], stored: OperationRecord[]): Ope
  * The operation database in the engine: every recorded operation is kept in memory (newest
  * first, pruned to OPERATION_LIMIT) and written to IndexedDB in the background.
  */
-export function useOperations() {
+export function useOperationDatabase() {
   const [operations, setOperations] = useState<OperationRecord[]>([]);
   const ref = useRef(operations);
   const publish = (next: OperationRecord[]) => {
@@ -24,7 +31,7 @@ export function useOperations() {
 
   useEffect(() => {
     let live = true;
-    void loadOperations().then((stored) => live && publish(mergeLoaded(ref.current, stored)));
+    void loadOperationRecords().then((stored) => live && publish(mergeLoaded(ref.current, stored)));
     return () => {
       live = false;
     };
@@ -54,13 +61,7 @@ export function useOperations() {
   }, []);
 
   return { operations, record, related, exportOperations, clearOperations };
-import type { AssistSettings, Frame, Habit, LogEntry, WorkflowStep } from './types.js';
-import type { RunOutcome } from './triggers.js';
-import type { RunSummary } from './run-stats.js';
-import { loadOperations, saveOperations } from './storage.js';
-import { countRun, createOperation, notifySuggestion, referenceShots, suggestOperations, suggestionText, upsertOperation, type OperationSource, type SavedOperation } from './saved-operations.js';
-import { DEFAULT_SCREEN, fetchPlayback, type Playback } from './playback.js';
-import { bestVariant, detectRecent, verifyRetry, type DetectedOperation } from './operation-retry.js';
+}
 
 /** What the operations features need from the engine. */
 export interface OperationDeps {

@@ -177,6 +177,9 @@ export function CrewNotices({ engine }: { engine: AssistEngine }) {
     <ul className={styles.hud2} role="status" aria-label="Crew notifications">
       {latest.map((n) => <li key={n.id}>ℹ <b>{n.agentId}</b> {n.text}</li>)}
     </ul>
+  );
+}
+
 /** Execution mode selector, the last mode change, and the auto-apply bounds aggressive mode stays within. */
 export function ModeControls({ engine }: { engine: AssistEngine }) {
   const { settings, setSettings, modeChange } = engine;
@@ -228,7 +231,6 @@ export function Hud({ engine }: { engine: AssistEngine }) {
               <button type="button" onClick={engine.useDemo}>Use demo desktop</button>
             </>
           )}
-          <button type="button" className={recording ? styles.danger : ''} onClick={() => void engine.invoke('record.toggle')} disabled={replaying}>
           {engine.mainBridge.status === 'connected' && source !== 'main-app' && (
             <button type="button" onClick={engine.selectMainApp} title="The AI sees and acts on the main Droid app's preview">📱 Use main app preview</button>
           )}
@@ -243,13 +245,10 @@ export function Hud({ engine }: { engine: AssistEngine }) {
               <button type="button" onClick={() => void engine.invoke('replay.run', { selfTest: true })} disabled={recording || !total} title="Verifies each step on the live desktop; sends no input">🧪 AI self-test (no input)</button>
             </>
           )}
-          <button type="button" onClick={() => void engine.invoke('research.ask')} disabled={aiOff || aiBusy} title={aiTitle}>👁 Point out</button>
-          <button type="button" className={engine.ruler.on ? styles.primary : ''} onClick={() => void engine.invoke('ruler.toggle')} aria-pressed={engine.ruler.on} title="Ruler mode: click points on the screen to measure distances">📏 Ruler{engine.ruler.on ? ' (on)' : ''}</button>
-          <button type="button" onClick={() => void engine.invoke('ruler.recalibrate')} title="Re-measure the baseline references on the live frame and rescale stored coordinates on drift">⟲ Recalibrate</button>
           <button type="button" onClick={() => void engine.explainScreen()} disabled={aiOff || aiBusy} title={aiTitle}>👁 Point out</button>
           <button type="button" className={engine.ruler.on ? styles.primary : ''} onClick={engine.ruler.toggle} aria-pressed={engine.ruler.on} title="Ruler mode: click points on the screen to measure distances">📏 Ruler{engine.ruler.on ? ' (on)' : ''}</button>
-          <button type="button" className={engine.snipMode ? styles.primary : ''} onClick={engine.toggleSnipMode} aria-pressed={engine.snipMode} title="Snip: drag a region of the screen to save it to the snip gallery">✂ Snip{engine.snipMode ? ' (drag)' : ''}</button>
           <button type="button" onClick={() => engine.ruler.recalibrateNow('manual')} title="Re-measure the baseline references on the live frame and rescale stored coordinates on drift">⟲ Recalibrate</button>
+          <button type="button" className={engine.snipMode ? styles.primary : ''} onClick={engine.toggleSnipMode} aria-pressed={engine.snipMode} title="Snip: drag a region of the screen to save it to the snip gallery">✂ Snip{engine.snipMode ? ' (drag)' : ''}</button>
         </div>
         <form
           className={styles.goal}
@@ -272,7 +271,6 @@ export function Hud({ engine }: { engine: AssistEngine }) {
         <SafetyControls engine={engine} />
         <ReverseControl engine={engine} />
         <AiStatusBadge status={aiStatus} config={{ url: settings.aiUrl, model: settings.aiModel }} />
-        <AiStatusBadge status={aiStatus} />
         <MainBridgeBadge state={engine.mainBridge} />
         <SyncStatus level={engine.sync.level} detail={engine.sync.detail} />
         <label><input type="checkbox" checked={settings.autoAct} onChange={(e) => void engine.invoke('autoact.set', { on: e.target.checked })} disabled={aiOff} /> Auto act{aiOff && ' (AI unavailable)'}</label>

@@ -35,7 +35,9 @@ export const AGENT_STAGE = {
   supervisor: 'supervisor',
   elementMap: 'elementMap',
   subagents: 'subagents',
-} as const satisfies Record<BusAgentId | 'identify' | 'elementMap' | 'subagents', StageId>;
+  sidetest: 'sideTests',
+  operations: 'opsMonitor',
+} as const satisfies Record<Exclude<BusAgentId, 'mainApp'> | 'identify' | 'elementMap' | 'subagents', StageId>;
 
 export type AgentId = keyof typeof AGENT_STAGE;
 

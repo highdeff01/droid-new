@@ -29,6 +29,7 @@ function installNative() {
     stopCapture: vi.fn(),
     listDisplays: vi.fn(async () => []),
     selectDisplay: vi.fn(),
+    grabDisplay: vi.fn(),
   };
   window.droidNative = api;
   return hooks;
@@ -116,7 +117,7 @@ describe('AI initiative: periodic scanning', () => {
   it('auto-apply on but disarmed: an input action still stays a proposal', async () => {
     const fetchMock = model();
     const result = await mountLive(fetchMock);
-    act(() => result.current.setSettings((s) => ({ ...s, autoApply: { ...s.autoApply, scan: true } })));
+    act(() => result.current.setSettings((s) => ({ ...s, initiativeAutoApply: { ...s.initiativeAutoApply, scan: true } })));
     await act(() => vi.advanceTimersByTimeAsync(21_000));
     const popup = result.current.initiative.proposals.find((p) => p.text.startsWith('[popup]'))!;
     expect(popup.status).toBe('pending');
@@ -139,7 +140,7 @@ describe('AI initiative: self-testing and the heavy element tester', () => {
   it('sets up a self-test of a familiar element as a proposal; accepting runs it through the agent pipeline as a dry run while disarmed', async () => {
     const result = await mountDemo();
     act(() => result.current.setSettings((s) => ({ ...s, selfTestMode: 'foreground' })));
-    await act(() => result.current.scanNow());
+    await act(() => result.current.initiativeScanNow());
     const test = result.current.initiative.proposals.find((p) => p.category === 'selfTest')!;
     expect(test).toMatchObject({ status: 'pending', text: 'Test that "Play button" still clicks correctly', step: { action: 'click', target: 'Play button', x: 0.5, y: 0.62 } });
     await act(() => result.current.acceptInitiative(test.id));
@@ -152,7 +153,7 @@ describe('AI initiative: self-testing and the heavy element tester', () => {
   it('refuses to self-test while ABORTED', async () => {
     const result = await mountDemo();
     act(() => result.current.triggerAbort('test'));
-    await act(() => result.current.scanNow());
+    await act(() => result.current.initiativeScanNow());
     expect(result.current.initiative.proposals).toHaveLength(0);
   });
 
@@ -203,7 +204,7 @@ describe('AI initiative: workflow creation and workarounds', () => {
     await act(() => result.current.replay(false));
     expect(initiativeLog(result).some((m) => /learned candidate ".*" \(1 step\(s\)\) — an agent verifies it before it is proposed/.test(m))).toBe(true);
     expect(result.current.initiative.proposals.filter((p) => p.category === 'workflow')).toHaveLength(0);
-    await act(() => result.current.scanNow());
+    await act(() => result.current.initiativeScanNow());
     const pack = result.current.initiative.proposals.find((p) => p.category === 'workflow')!;
     expect(pack.status).toBe('pending');
     expect(pack.text).toMatch(/^New workflow ".*" \(1 step\(s\), agent-verified\)$/);
@@ -213,7 +214,7 @@ describe('AI initiative: workflow creation and workarounds', () => {
     expect(result.current.cards.some((c) => c.name === pack.pack!.name && c.steps.length === 1)).toBe(true);
     // The same sequence again is already known: no second pack.
     await act(() => result.current.replay(false));
-    await act(() => result.current.scanNow());
+    await act(() => result.current.initiativeScanNow());
     expect(result.current.initiative.proposals.filter((p) => p.category === 'workflow')).toHaveLength(1);
   }, 30_000);
 
@@ -222,7 +223,7 @@ describe('AI initiative: workflow creation and workarounds', () => {
     act(() => result.current.setGoal('press the ghost'));
     act(() => result.current.setSteps([{ ...click, name: 'Press ghost', target: 'Ghost', x: 0.03, y: 0.03 }]));
     await act(() => result.current.replay(false));
-    await act(() => result.current.scanNow());
+    await act(() => result.current.initiativeScanNow());
     expect(result.current.initiative.proposals.filter((p) => p.category === 'workflow')).toHaveLength(0);
     expect(initiativeLog(result).some((m) => /not proposed — agent verification failed: FAIL "Press ghost" — no reference screenshot/.test(m))).toBe(true);
   }, 20_000);
@@ -232,13 +233,13 @@ describe('AI initiative: workflow creation and workarounds', () => {
     act(() => result.current.toggleStage('workflowCreation', false));
     act(() => result.current.setSteps([click]));
     await act(() => result.current.replay(false));
-    await act(() => result.current.scanNow());
+    await act(() => result.current.initiativeScanNow());
     expect(result.current.initiative.proposals.filter((p) => p.category === 'workflow')).toHaveLength(0);
   }, 20_000);
 
   it('a failed step gets a logged workaround proposal; auto-apply edits the workflow', async () => {
     const result = await mountDemo();
-    act(() => result.current.setSettings((s) => ({ ...s, autoApply: { ...s.autoApply, workaround: true } })));
+    act(() => result.current.setSettings((s) => ({ ...s, initiativeAutoApply: { ...s.initiativeAutoApply, workaround: true } })));
     // A drag with no drop point really fails (nothing is dispatched).
     const bad: WorkflowStep = { id: 'b', name: 'Bad drag', action: 'drag', x: 0.3, y: 0.4, status: 'pending' };
     act(() => result.current.setSteps([bad]));

@@ -5,7 +5,7 @@ import type { RunOutcome } from './triggers.js';
 import { applyDecision, createProject, injectInfo, isFinished, toPlanned, transition, type InjectionSource, type Project } from './project.js';
 import { decide, dropProject, enqueue, pendingFor, type ApprovalState, type Decided, type Decision } from './approval-queue.js';
 import { STOPPED_NOTE, runProjectTurn, type PlanRequest, type TurnDeps } from './project-turn.js';
-import { loadApprovals, loadProjects, saveApprovals, saveProjects } from './storage.js';
+import { loadApprovalQueue, loadProjects, saveApprovalQueue, saveProjects } from './storage.js';
 
 /** How often the project scheduler looks for a project whose turn is due. */
 export const PROJECT_TICK_MS = 2000;
@@ -60,14 +60,14 @@ export function useProjects(deps: ProjectEngineDeps) {
   const depsRef = useRef(deps);
   depsRef.current = deps;
   const [projects, setProjects] = useState<Project[]>(loadProjects);
-  const [approvals, setApprovals] = useState<ApprovalState>(loadApprovals);
+  const [approvals, setApprovals] = useState<ApprovalState>(loadApprovalQueue);
   const [running, setRunning] = useState<string | null>(null);
   const projectsRef = useRef(projects);
   const approvalsRef = useRef(approvals);
   const runningRef = useRef<string | null>(null);
   const cursorRef = useRef<string | null>(null);
   useEffect(() => saveProjects(projects), [projects]);
-  useEffect(() => saveApprovals(approvals), [approvals]);
+  useEffect(() => saveApprovalQueue(approvals), [approvals]);
 
   const commitProjects = useCallback((next: Project[]) => {
     projectsRef.current = next;

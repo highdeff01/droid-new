@@ -12,7 +12,7 @@ function deps(over: Partial<CrewDeps> = {}): CrewDeps {
     crewSize: 10, goal: '', steps: [], history: [], addLog: vi.fn(),
     performStep: vi.fn(async (s: WorkflowStep): Promise<StepOutcome> => ({ ok: true, executed: false, message: 'dry', target: { x: s.x, y: s.y } })),
     newBudget: () => ({}) as ActionBudget, isArmed: () => false, hasFrames: () => true,
-    knowledge: () => ({ map: [], familiar: [], habits: [], patterns: [], context: '' }), stopRun: vi.fn(), sendResult: vi.fn(),
+    knowledge: () => ({ map: [], familiar: [], habits: [], patterns: [], failures: [], dossiers: [], memory: [], context: '' }), stopRun: vi.fn(), sendResult: vi.fn(),
     ...over,
   };
 }

@@ -17,7 +17,7 @@ import type { Knowledge } from './cross-reference.js';
 import type { MappedElement } from './element-map-studio.js';
 import type { FamiliarElement, WorkflowStep } from './types.js';
 
-const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], familiar: [], habits: [], patterns: [], context: 'Files App', ...over });
+const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], familiar: [], habits: [], patterns: [], failures: [], dossiers: [], memory: [], context: 'Files App', ...over });
 
 const mapped = (over: Partial<MappedElement> = {}): MappedElement => ({ id: 'e1', name: 'Files', box: { x: 0.1, y: 0.2, w: 0.2, h: 0.2 }, mappedAt: 0, ...over });
 

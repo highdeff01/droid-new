@@ -46,7 +46,7 @@ export function captureDraft(op: string, input: string, output: string, ok = tru
 }
 
 /** The section each error kind is raised in. */
-const ERROR_SECTION: Record<ErrorKind, string> = { ai: 'ai', step: 'executor', drift: 'drift', bridge: 'bridge', watcher: 'screenWatcher', test: 'errors' };
+const ERROR_SECTION: Record<ErrorKind, string> = { ai: 'ai', step: 'executor', drift: 'drift', bridge: 'bridge', watcher: 'screenWatcher', test: 'errors', 'main-app': 'mainBridge' };
 
 /** The scope fields an error belongs to, from its kind. */
 export const errorSection = (kind: ErrorKind) => ERROR_SECTION[kind];

@@ -12,7 +12,7 @@ const group: OperationGroup = {
   successes: [{ id: 'r1', time: 3, session: 's', goal: 'export the sales report as pdf', attempted: 2, succeeded: 2, durationMs: 1000, outcome: 'success' }],
 };
 
-const engine = (operations: OperationGroup[]) => ({ operations, addOperationNote: vi.fn(), forgetMemory: vi.fn(), opsFor: () => ({ reports: [], evidence: [], log: [] }) }) as unknown as AssistEngine;
+const engine = (operations: OperationGroup[]) => ({ memoryOperations: operations, addOperationNote: vi.fn(), forgetMemory: vi.fn(), opsFor: () => ({ reports: [], evidence: [], log: [] }) }) as unknown as AssistEngine;
 
 afterEach(cleanup);
 
@@ -47,7 +47,7 @@ describe('OperationMemoryPanel', () => {
 
 describe('OpsSection', () => {
   const opsEngine = (opsFor: () => { reports: unknown[]; evidence: unknown[]; log: unknown[] }) =>
-    ({ operations: [group], addOperationNote: vi.fn(), forgetMemory: vi.fn(), opsFor }) as unknown as AssistEngine;
+    ({ memoryOperations: [group], addOperationNote: vi.fn(), forgetMemory: vi.fn(), opsFor }) as unknown as AssistEngine;
 
   it('renders reports, evidence and tagged log in the operation block when engine.opsFor returns them', () => {
     const report = { id: 'rp1', agent: 'apply', task: 'click Save', ok: true, found: 'clicked at (0.5, 0.5)', op: group.operation };

@@ -10,8 +10,7 @@ import type { WatchTest } from './watcher.js';
 const target = 'Play button';
 const point = { x: 0.5, y: 0.5 };
 
-const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], familiar: [], habits: [], patterns: [], failures: [], context: 'Media App', ...over });
-const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], familiar: [], habits: [], patterns: [], dossiers: [], memory: [], context: 'Media App', ...over });
+const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], familiar: [], habits: [], patterns: [], failures: [], dossiers: [], memory: [], context: 'Media App', ...over });
 
 const mapped = (over: Partial<MappedElement> = {}): MappedElement => ({ id: 'e1', name: 'Play icon', box: { x: 0, y: 0, w: 0.1, h: 0.1 }, mappedAt: 0, ...over });
 
@@ -117,6 +116,9 @@ describe('crossReference — failure reminders', () => {
 
   it('ignores failures on other targets', () => {
     expect(crossReference(target, point, knowledge({ failures: [failure(['Settings gear'])] })).filter((c) => c.source === 'failure')).toEqual([]);
+  });
+});
+
 describe('crossReference — position dossiers', () => {
   const seen = (x: number, y: number, time: number): PositionDossier[] => recordObservation([], { name: 'Play button', x, y, time, by: 'user' });
 

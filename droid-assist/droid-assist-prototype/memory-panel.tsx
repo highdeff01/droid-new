@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { blacklistLine, type OperationGroup } from './operation-memory.js';
 import { opsAgent } from './operations.js';
+import { currentPosition, dossierLine, type PositionDossier } from './position-dossier.js';
+import { MEMORY_STATUSES, memoryFor, type MemoryEntry, type MemoryKind } from './enhanced-memory.js';
 import styles from './droid-assist.module.css';
 
 const when = (t: number) => new Date(t).toLocaleString();
@@ -98,14 +100,12 @@ function OperationBlock({ group, engine }: { group: OperationGroup; engine: Assi
 export function OperationMemoryPanel({ engine }: { engine: AssistEngine }) {
   return (
     <section className={styles.panel} aria-label="Operation memory">
-      <h3>Operation memory <small>{engine.operations.length}</small></h3>
-      {!engine.operations.length && <p className={styles.muted}>No operations remembered yet. Failed runs, notes and successful runs appear here per operation.</p>}
-      {engine.operations.map((g) => <OperationBlock key={g.operation} group={g} engine={engine} />)}
-import { useMemo, useState } from 'react';
-import type { AssistEngine } from './use-assist.js';
-import { currentPosition, dossierLine, type PositionDossier } from './position-dossier.js';
-import { MEMORY_STATUSES, memoryFor, type MemoryEntry, type MemoryKind } from './enhanced-memory.js';
-import styles from './droid-assist.module.css';
+      <h3>Operation memory <small>{engine.memoryOperations.length}</small></h3>
+      {!engine.memoryOperations.length && <p className={styles.muted}>No operations remembered yet. Failed runs, notes and successful runs appear here per operation.</p>}
+      {engine.memoryOperations.map((g) => <OperationBlock key={g.operation} group={g} engine={engine} />)}
+    </section>
+  );
+}
 
 const KIND_LABEL: Record<MemoryKind, string> = { method: 'Method', usage: 'Element usage', path: 'Path', goal: 'Goal', position: 'Position' };
 const STATUS_TONE: Record<MemoryEntry['status'], string> = { blacklisted: 'error', important: 'ok', recent: 'info' };

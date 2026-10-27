@@ -6,7 +6,7 @@ import { OPERATION_DB, loadOperations, resetOperationDb } from './operation-db.j
 import { elementDraft, errorDraft } from './operation-log.js';
 import { proposeStep } from './proposal.js';
 import type { Frame, WorkflowStep } from './types.js';
-import { useOperations } from './use-operations.js';
+import { useOperationDatabase } from './use-operations.js';
 import { observeScreen } from './watcher.js';
 
 const frame = { id: 1, url: 'data:image/jpeg;base64,QUJD' } as Frame;
@@ -40,14 +40,14 @@ describe('cross-reference injection into the AI prompts', () => {
   });
 });
 
-describe('useOperations', () => {
+describe('useOperationDatabase', () => {
   beforeEach(async () => {
     await resetOperationDb();
     await deleteDb();
   });
 
   it('writes each recorded operation to IndexedDB and pulls the relevant ones for an idea', async () => {
-    const { result } = renderHook(() => useOperations());
+    const { result } = renderHook(() => useOperationDatabase());
     act(() => {
       result.current.record(scope, elementDraft('map', 'Export menu', 'box', 'mapped'));
       result.current.record({ ...scope, agent: 'Errors', section: 'bridge' }, errorDraft({ kind: 'bridge', message: 'Bridge refused the connection', goal: 'export the report' }));
@@ -62,11 +62,11 @@ describe('useOperations', () => {
   });
 
   it('loads stored operations on mount and clears them', async () => {
-    const first = renderHook(() => useOperations());
+    const first = renderHook(() => useOperationDatabase());
     act(() => first.result.current.record(scope, elementDraft('map', 'Export menu', 'box', 'mapped')));
     await waitFor(async () => expect(await loadOperations()).toHaveLength(1));
     first.unmount();
-    const { result } = renderHook(() => useOperations());
+    const { result } = renderHook(() => useOperationDatabase());
     await waitFor(() => expect(result.current.operations).toHaveLength(1));
     act(() => result.current.clearOperations());
     expect(result.current.operations).toEqual([]);

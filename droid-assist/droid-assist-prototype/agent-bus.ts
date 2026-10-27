@@ -1,10 +1,7 @@
 import { uid } from './planner.js';
 
-/** Every participant of the inter-agent bus: the background agents plus the habit system. */
-export type BusAgentId = 'popup' | 'drift' | 'progress' | 'goal' | 'screen' | 'coords' | 'supervisor' | 'habits' | 'sidetest';
-/** Every participant of the inter-agent bus: the background agents, the habit system and the main Droid app. */
-export type BusAgentId = 'popup' | 'drift' | 'progress' | 'goal' | 'screen' | 'coords' | 'supervisor' | 'habits' | 'mainApp';
-export type BusAgentId = 'popup' | 'drift' | 'progress' | 'goal' | 'screen' | 'coords' | 'supervisor' | 'habits' | 'operations';
+/** Every participant of the inter-agent bus: the background agents, the habit system, the side tester, the main Droid app and the Operations agents. */
+export type BusAgentId = 'popup' | 'drift' | 'progress' | 'goal' | 'screen' | 'coords' | 'supervisor' | 'habits' | 'sidetest' | 'mainApp' | 'operations';
 
 /** Display name of each bus participant. */
 export const BUS_AGENTS: Readonly<Record<BusAgentId, string>> = {

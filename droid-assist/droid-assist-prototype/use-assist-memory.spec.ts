@@ -97,7 +97,7 @@ describe('failure-reminder triggers', () => {
     const result = await mount();
     const calc = { kind: 'link' as const, items: ['Calc'], goal: 'test Calc' };
     await act(() => result.current.testRoutes(calc));
-    expect(result.current.memory.failures[0]).toMatchObject({ actor: 'Subagent 1', targets: ['Calc'] });
+    expect(result.current.operationMemory.failures[0]).toMatchObject({ actor: 'Subagent 1', targets: ['Calc'] });
     expect(JSON.parse(localStorage.getItem('droid-assist.memory')!).failures).toHaveLength(1);
     await act(() => result.current.testRoutes(calc));
     expect(result.current.log.some((l) => l.source === 'Memory' && /^Subagent 1 — a similar operation failed before/.test(l.message))).toBe(true);
@@ -108,8 +108,8 @@ describe('notes and the panel groups', () => {
   it('keeps notes per operation and forgets them', async () => {
     const result = await mount();
     act(() => result.current.addOperationNote('Rename the project folder', 'Press F2 instead of right-click'));
-    expect(result.current.operations.map((g) => [g.operation, g.notes.map((n) => n.text)])).toEqual([['Rename the project folder', ['Press F2 instead of right-click']]]);
-    act(() => result.current.forgetMemory(result.current.memory.notes[0].id));
-    expect(result.current.operations).toEqual([]);
+    expect(result.current.memoryOperations.map((g) => [g.operation, g.notes.map((n) => n.text)])).toEqual([['Rename the project folder', ['Press F2 instead of right-click']]]);
+    act(() => result.current.forgetMemory(result.current.operationMemory.notes[0].id));
+    expect(result.current.memoryOperations).toEqual([]);
   });
 });

@@ -146,7 +146,7 @@ describe('backtrackSteps', () => {
 });
 
 describe('groundSuggestion', () => {
-  const emptyKnowledge: Knowledge = { map: [], familiar: [], habits: [], patterns: [], context: '' };
+  const emptyKnowledge: Knowledge = { map: [], familiar: [], habits: [], patterns: [], failures: [], dossiers: [], memory: [], context: '' };
 
   it('is not grounded with no history and says so', () => {
     const result = groundSuggestion('Play button', { x: 0.5, y: 0.5 }, emptyKnowledge);

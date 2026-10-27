@@ -854,15 +854,7 @@ describe('useAssist auto-continue and AI stop', () => {
 });
 
 describe('useAssist loop control', () => {
-  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'variations'] as const;
-  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'trainer'] as const;
-  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'sideTests'] as const;
-  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'wake', 'contextWorkflow'] as const;
-  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'initiativeScan', 'selfTest', 'workarounds', 'workflowCreation'] as const;
-  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'goalTracer'] as const;
-  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'projects'] as const;
-  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'crew', 'dragTrackers'] as const;
-  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'crew', 'dragTrackers', 'opsMonitor', 'opsLogging', 'opsTesting', 'opsApply', 'opsRecheck', 'opsReapply', 'opsLoopControl', 'opsPlacement', 'opsScreenshots'] as const;
+  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'variations', 'trainer', 'sideTests', 'wake', 'contextWorkflow', 'initiativeScan', 'selfTest', 'workarounds', 'workflowCreation', 'goalTracer', 'projects', 'crew', 'dragTrackers', 'opsMonitor', 'opsLogging', 'opsTesting', 'opsApply', 'opsRecheck', 'opsReapply', 'opsLoopControl', 'opsPlacement', 'opsScreenshots'] as const;
 
   /** A model whose reflection call hangs until cancelled; every other prompt gets a plain answer. */
   function hangingReflect() {
@@ -1131,7 +1123,7 @@ describe('useAssist agent forwarding and subagent link tests', () => {
   it('forwards an element from any agent into every other inbox', () => {
     const { result } = renderHook(() => useAssist());
     act(() => result.current.forwardElement('drift', { name: 'Search box', x: 0.5, y: 0.1 }));
-    expect(new Set(result.current.bus.map((m) => m.to)).size).toBe(8);
+    expect(new Set(result.current.bus.map((m) => m.to)).size).toBe(10);
     expect(result.current.bus.every((m) => m.status === 'handled')).toBe(true);
     expect(result.current.knownElements[0].name).toBe('Search box');
     expect(result.current.patterns[0]).toMatchObject({ kind: 'add' });
@@ -1320,7 +1312,7 @@ describe('useAssist Screen watcher', () => {
     await act(() => vi.advanceTimersByTimeAsync(5000 * 3 + 100));
     expect(watcherCalls(fetchMock)).toBeGreaterThanOrEqual(2);
     // A static screen: the same notes and proposal every round are kept once.
-    expect(result.current.watcher.notes.map((n) => n.text)).toEqual(['Files sidebar item at the left', 'An ad covers the top right']);
+    expect(result.current.watcher.notes.filter((n) => n.kind !== 'error').map((n) => n.text)).toEqual(['Files sidebar item at the left', 'An ad covers the top right']);
     expect(result.current.watcher.proposals).toHaveLength(1);
     expect(result.current.timeline.some((e) => e.step === 'Screen watcher' && e.thinking === 'watching')).toBe(true);
     // Its background test ran once (no bridge here, so it failed) and fed the pattern system.
@@ -1329,7 +1321,7 @@ describe('useAssist Screen watcher', () => {
     expect(result.current.watcher.tests[0].tried).toMatch(/Dry-run click on "Files sidebar item"/);
     expect(result.current.patterns.some((p) => p.kind === 'avoid' && /Files sidebar item/.test(p.pattern))).toBe(true);
     expect(result.current.history).toHaveLength(0);
-    expect(JSON.parse(localStorage.getItem('droid-assist.watcher')!).notes).toHaveLength(2);
+    expect(JSON.parse(localStorage.getItem('droid-assist.watcher')!).notes.filter((n: { kind: string }) => n.kind !== 'error')).toHaveLength(2);
   });
 
   it('makes no model call while its stage is off, and none without a live capture', async () => {
@@ -1548,6 +1540,9 @@ describe('useAssist element auto-mapping, perform and training', () => {
     expect(result.current.training?.status).not.toBe('running');
     expect(result.current.training?.entries.length).toBeGreaterThan(0);
     expect(result.current.log.some((l) => l.source === 'Trainer' && /dry run/.test(l.message))).toBe(true);
+  });
+});
+
 describe('useAssistExecutionModes', () => {
   it('defaults to thoughtful, with the capture interval unmodified', () => {
     const { result } = renderHook(() => useAssist());
@@ -1633,6 +1628,9 @@ describe('useAssistExecutionModes', () => {
       expect(modeLog?.message).toMatch(/rejected/);
       expect(result.current.armed).toBe(false);
     });
+  });
+});
+
 describe('useAssist thinking-on escalation', () => {
   const THOUGHT = 'Search is probably in the top bar. Try clicking the search icon.';
 

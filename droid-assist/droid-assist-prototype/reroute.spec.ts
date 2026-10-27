@@ -7,7 +7,7 @@ const fakeImage = (): ImageData => ({ width: 1, height: 1, data: new Uint8Clampe
 const fakeFrame = (id: number): Frame => ({ id, time: id, url: `data:image/jpeg;base64,F${id}`, data: fakeImage(), srcW: 100, srcH: 100, source: 'screen' });
 const step = (over: Partial<WorkflowStep> = {}): WorkflowStep => ({ id: 's1', name: 'Open settings', action: 'click', target: 'Settings gear', x: 0.5, y: 0.5, status: 'pending', ...over });
 const habit = (over: Partial<Habit> = {}): Habit => ({ id: 'h1', target: 'Settings gear', context: '', attempts: 4, successes: 4, lastUsed: 0, lessons: [], pinned: false, anchor: { x: 0.9, y: 0.1, patch: [], size: 0, time: 0 }, ...over } as Habit);
-const empty: Knowledge = { map: [], familiar: [], habits: [], patterns: [], context: '' };
+const empty: Knowledge = { map: [], familiar: [], habits: [], patterns: [], failures: [], dossiers: [], memory: [], context: '' };
 const knowledge: Knowledge = {
   ...empty,
   map: [{ id: 'm1', name: 'Settings gear', box: { x: 0.1, y: 0.1, w: 0.1, h: 0.1 }, mappedAt: 0 }],

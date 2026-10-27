@@ -424,8 +424,6 @@ export function createAiSession(store: HistoryStore | null, render?: RenderFn, o
     const shots = await screenshots([...(req.frame ? [req.frame] : []), ...(req.frames ?? [])], cfg.view, render);
     const images = [...shots.urls, ...(req.crops ?? []).map((c) => c.url)].map(toBase64);
     const user: ChatMessage = { role: 'user', content: `${content}${memory}`, ...(images.length ? { images } : {}) };
-    const system = systemText(req.system, shots.view);
-    const user: ChatMessage = { role: 'user', content, ...(images.length ? { images } : {}) };
     const system = withMasterPrompt(systemText(req.system, shots.view), cfg.masterPrompt);
     const turns = history.map(({ role, content: text }) => ({ role, content: text }));
     const reply = await chat(cfg, [{ role: 'system', content: system }, ...turns, user], req.json, cfg.timeoutMs, signal, escalation);

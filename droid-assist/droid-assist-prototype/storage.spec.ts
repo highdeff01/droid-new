@@ -1,18 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard } from './types.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveOperationMemory, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadApprovals, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadProjects, loadRunSummaries, loadSettings, loadWatcher, saveApprovals, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveProjects, saveSettings, saveWatcher } from './storage.js';
+import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard, WorkflowStep } from './types.js';
+import { LOG_LIMIT, PATTERN_LIMIT, SYSTEM_FOLDER_LIMIT, loadAccessPaths, loadApprovalQueue, loadCards, loadDossiers, loadElementMap, loadFamiliar, loadGoals, loadHabits, loadLog, loadNotifications, loadOperationMemory, loadOperations, loadPatterns, loadPersonas, loadProjects, loadRunSummaries, loadSettings, loadWatcher, saveAccessPaths, saveApprovalQueue, saveCards, saveDossiers, saveElementMap, saveFamiliar, saveGoals, saveHabits, saveLog, saveNotifications, saveOperationMemory, saveOperations, savePatterns, savePersonas, saveProjects, saveRunSummaries, saveSettings, saveWatcher } from './storage.js';
 import { PROJECT_LIMIT, createProject, type PlannedStep, type Project } from './project.js';
 import { EMPTY_APPROVALS, decide, enqueue } from './approval-queue.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadAccessPaths, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveAccessPaths, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadDossiers, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveDossiers, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadGoals, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveGoals, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
-import { LOG_LIMIT, PATTERN_LIMIT, SYSTEM_FOLDER_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadNotifications, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, saveNotifications, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { DEFAULT_AUTO_ACT, NOTIFICATION_LIMIT, type AssistNotification } from './notifications.js';
 import type { Persona } from './persona.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadPersonas, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, savePersonas, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
-import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard, WorkflowStep } from './types.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperations, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveOperations, saveSettings, saveWatcher } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { HABIT_STALE_MS } from './habits.js';
 import { DEFAULT_STAGES } from './loop-control.js';
@@ -495,23 +487,23 @@ describe('approvals', () => {
     const { state: queued } = enqueue(EMPTY_APPROVALS, 'proj_1', [step(1)], 5);
     const decided = decide(queued, queued.queue[0].id, { kind: 'approve' }, 'notepad', 10);
     expect(decided).not.toBeNull();
-    saveApprovals(decided!.state);
-    expect(loadApprovals()).toEqual(decided!.state);
+    saveApprovalQueue(decided!.state);
+    expect(loadApprovalQueue()).toEqual(decided!.state);
   });
 
   it('returns EMPTY_APPROVALS when missing or corrupt', () => {
-    expect(loadApprovals()).toEqual(EMPTY_APPROVALS);
-    localStorage.setItem('droid-assist.approvals', '{nope');
-    expect(loadApprovals()).toEqual(EMPTY_APPROVALS);
-    localStorage.setItem('droid-assist.approvals', '[1,2]');
-    expect(loadApprovals()).toEqual(EMPTY_APPROVALS);
+    expect(loadApprovalQueue()).toEqual(EMPTY_APPROVALS);
+    localStorage.setItem('droid-assist.approval-queue', '{nope');
+    expect(loadApprovalQueue()).toEqual(EMPTY_APPROVALS);
+    localStorage.setItem('droid-assist.approval-queue', '[1,2]');
+    expect(loadApprovalQueue()).toEqual(EMPTY_APPROVALS);
   });
 
   it('drops invalid requests', () => {
     const { state: queued } = enqueue(EMPTY_APPROVALS, 'proj_1', [step(1), step(2)], 5);
     const [valid, invalid] = queued.queue;
-    localStorage.setItem('droid-assist.approvals', JSON.stringify({ queue: [valid, null, { ...invalid, step: { id: 'bad' } }], learned: [] }));
-    expect(loadApprovals()).toEqual({ queue: [valid], learned: [] });
+    localStorage.setItem('droid-assist.approval-queue', JSON.stringify({ queue: [valid, null, { ...invalid, step: { id: 'bad' } }], learned: [] }));
+    expect(loadApprovalQueue()).toEqual({ queue: [valid], learned: [] });
   });
 });
 
@@ -540,6 +532,9 @@ describe('loadAccessPaths', () => {
   it('keeps at most ACCESS_PATH_LIMIT entries', () => {
     saveAccessPaths(Array.from({ length: ACCESS_PATH_LIMIT + 5 }, (_, i) => profile(i)));
     expect(loadAccessPaths()).toHaveLength(ACCESS_PATH_LIMIT);
+  });
+});
+
 describe('loadDossiers', () => {
   beforeEach(() => localStorage.clear());
 
@@ -570,6 +565,9 @@ describe('loadDossiers', () => {
     expect(loaded).toHaveLength(100);
     expect(loaded[0]).toEqual(dossier(119, 119));
     expect(loaded.map((d) => d.lastSeen)).not.toContain(19);
+  });
+});
+
 describe('goals', () => {
   beforeEach(() => localStorage.clear());
 
@@ -622,6 +620,9 @@ describe('goals', () => {
     expect(loadGoals()).toEqual([valid]);
     localStorage.setItem('droid-assist.goals', '{nope');
     expect(loadGoals()).toEqual([]);
+  });
+});
+
 describe('settings: system & relax', () => {
   beforeEach(() => localStorage.clear());
 
@@ -707,6 +708,9 @@ describe('notifications', () => {
   it('returns [] for corrupt JSON', () => {
     localStorage.setItem('droid-assist.notifications', '{bad');
     expect(loadNotifications()).toEqual([]);
+  });
+});
+
 describe('loadSettingsExecutionMode', () => {
   beforeEach(() => localStorage.clear());
 
@@ -738,6 +742,9 @@ describe('loadSettingsExecutionMode', () => {
     const loaded = loadSettings(DEFAULTS);
     expect(loaded.executionMode).toBe('watching');
     expect(loaded.monitorMode).toBe('background');
+  });
+});
+
 describe('loadPersonas', () => {
   beforeEach(() => localStorage.clear());
 
@@ -769,6 +776,9 @@ describe('loadPersonas', () => {
       null,
     ]));
     expect(loadPersonas()).toEqual([{ ...persona(3), entries: [{ kind: 'learned', text: 'ok', time: 3 }] }]);
+  });
+});
+
 describe('loadSettings: playbackWindowSec', () => {
   beforeEach(() => localStorage.clear());
 

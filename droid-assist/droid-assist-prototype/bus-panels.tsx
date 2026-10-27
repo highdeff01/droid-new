@@ -76,8 +76,8 @@ export function AgentBusPanel({ engine }: { engine: AssistEngine }) {
 }
 
 /** The agent crew: each agent's status, its last command and report; plus the live drag swarm and its controls. */
-export function CrewPanel({ engine }: { engine: AssistEngine }) {
-  const { crew, crewRunning, swarm, liveDragging, stopPlan, interveneDrag } = engine;
+export function AgentCrewPanel({ engine }: { engine: AssistEngine }) {
+  const { crewAgents: crew, crewRunning, swarm, liveDragging, stopPlan, interveneDrag } = engine;
   return (
     <section className={styles.panel} aria-label="Agent crew">
       <h3>Agent crew <small>{crewRunning ? 'running' : 'idle'} · {crew.filter((a) => a.status === 'working').length} working</small></h3>

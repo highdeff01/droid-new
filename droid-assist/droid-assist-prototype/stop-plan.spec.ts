@@ -55,8 +55,8 @@ describe('/crew: the AI-directed command loop', () => {
     const second = m.calls.filter((c) => c.body.includes('directing a crew'))[1].body;
     expect(second).toMatch(/agent-1 \(ok\) on \\"crew task one\\"/);
     expect(second).toMatch(/agent-3 \(ok\) on \\"crew task two\\"/);
-    expect(result.current.crew.find((a) => a.id === 'agent-1')).toMatchObject({ status: 'waiting', task: 'crew task one' });
-    expect(result.current.crew.find((a) => a.id === 'agent-2')).toMatchObject({ status: 'waiting', task: null });
+    expect(result.current.crewAgents.find((a) => a.id === 'agent-1')).toMatchObject({ status: 'waiting', task: 'crew task one' });
+    expect(result.current.crewAgents.find((a) => a.id === 'agent-2')).toMatchObject({ status: 'waiting', task: null });
     expect(result.current.watcher.notes.map((n) => n.text)).toEqual(expect.arrayContaining([expect.stringMatching(/^Crew agent-1 \(ok\) on "crew task one"/), expect.stringMatching(/^Crew agent-3 \(ok\) on "crew task two"/)]));
     expect(result.current.log.find((l) => l.source === 'Agent crew' && /^Crew done/.test(l.message))?.message).toMatch(/after 2 round\(s\), 2 report\(s\) — both computed/);
     expect(result.current.crewRunning).toBe(false);
@@ -99,7 +99,7 @@ describe('Stop plan', () => {
     expect(m.hung.every((s) => s.aborted)).toBe(true);
     await act(() => run);
     expect(m.count('directing a crew')).toBe(1);
-    expect(result.current.crew.every((a) => a.status === 'parked')).toBe(true);
+    expect(result.current.crewAgents.every((a) => a.status === 'parked')).toBe(true);
     expect(result.current.aborted).toBe(false);
     expect(result.current.armed).toBe(true);
     expect(result.current.settings.autoAct).toBe(true);

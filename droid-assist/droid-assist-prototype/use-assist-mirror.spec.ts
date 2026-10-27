@@ -55,6 +55,7 @@ async function shareNativeScreen(result: Engine) {
     stopCapture: vi.fn(),
     listDisplays: vi.fn(async () => []),
     selectDisplay: vi.fn(),
+    grabDisplay: vi.fn(),
   };
   window.droidNative = api;
   await act(() => result.current.shareScreen());

@@ -18,23 +18,23 @@ import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { CREW_SIZE_MAX, CREW_SIZE_MIN } from './crew.js';
 import { PROJECT_LIMIT, isProject, pruneProjects, type Project } from './project.js';
-import { APPROVAL_LIMIT, EMPTY_APPROVALS, LEARNED_LIMIT, isApprovalRequest, isLearnedMethod, type ApprovalState } from './approval-queue.js';
+import { APPROVAL_LIMIT as APPROVAL_QUEUE_LIMIT, EMPTY_APPROVALS, LEARNED_LIMIT, isApprovalRequest, isLearnedMethod, type ApprovalState } from './approval-queue.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
 import { EMPTY_MEMORY, FAILURE_LIMIT, OPERATION_NOTE_LIMIT, isFailureRecord, isOperationNote, type OperationMemory } from './operation-memory.js';
 import { ACCESS_PATH_LIMIT, isAccessProfile, type AccessProfile } from './access-paths.js';
 import { APPROVAL_LIMIT, isApprovalItem, sanitizePolicy, type ApprovalItem } from './approvals.js';
-import { PERSONA_LIMIT, PORTFOLIO_KINDS, PORTFOLIO_LIMIT, type Persona, type PortfolioEntry, type PortfolioKind } from './persona.js';
+import { PERSONA_LIMIT, PORTFOLIO_KINDS, PORTFOLIO_LIMIT as PERSONA_PORTFOLIO_LIMIT, type Persona, type PortfolioEntry as PersonaPortfolioEntry, type PortfolioKind } from './persona.js';
 import { PORTFOLIO_LIMIT, isPortfolioEntry, type PortfolioEntry } from './portfolio.js';
 import { PROFILE_LIMIT, isProfileEvent, type ProfileEvent } from './user-profile.js';
 import { SECTION_LIMIT, isKnowledgeSection, type KnowledgeSection } from './knowledge-sections.js';
 import { VARIATION_LIMIT, VARIATION_STATUSES, type Variation, type VariationStatus } from './variations.js';
-import { PACK_TEST_LIMIT, type GoalSource, type PackKind, type PackTestResult, type WorkflowPack } from './packs.js';
+import { PACK_TEST_LIMIT, type GoalSource as PackGoalSource, type PackKind, type PackTestResult, type WorkflowPack } from './packs.js';
 import type { SubagentStatus } from './subagents.js';
-import { PROFILE_LIMIT, type RouteHop, type RouteProfile } from './route-plot.js';
+import { PROFILE_LIMIT as ROUTE_PROFILE_LIMIT, type RouteHop, type RouteProfile } from './route-plot.js';
 import { FIX_ACTIONS, FIX_METHOD_LIMIT, type FixMethod } from './fix-script.js';
 import { DOSSIER_LIMIT, pruneDossiers, type PositionDossier } from './position-dossier.js';
 import { SIDE_TEST_MODES, type SideTestMode } from './side-test.js';
-import { SECTION_EVENT_LIMIT, SECTION_LIMIT, type ScreenSection, type SectionEvent } from './sections.js';
+import { SECTION_EVENT_LIMIT, SECTION_LIMIT as SCREEN_SECTION_LIMIT, type ScreenSection, type SectionEvent } from './sections.js';
 import { WAKE_MS_MAX, WAKE_MS_MIN } from './wake.js';
 import { EMPTY_INITIATIVE, INITIATIVE_CATEGORIES, INITIATIVE_LOG_LIMIT, INITIATIVE_PROPOSAL_LIMIT, INITIATIVE_STATUSES, SCAN_SEC_MAX, SCAN_SEC_MIN, SELF_TEST_MODES, STRESS_CYCLES_MAX, STRESS_CYCLES_MIN, STRESS_LIMIT } from './initiative.js';
 import type { AutoApplyMap, InitiativeCategory, InitiativeEntry, InitiativeProposal, InitiativeState, InitiativeStatus, SelfTestMode, StressReport } from './initiative.js';
@@ -43,14 +43,15 @@ import { NOTIFICATION_LIMIT, isNotification, sanitizeAutoAct, type AssistNotific
 import { BREAK_MINUTES_RANGE } from './relax.js';
 import { SYSTEM_REFRESH_SEC_RANGE } from './system-info.js';
 
-/** Most folders the System panel reports on. */
-export const SYSTEM_FOLDER_LIMIT = 10;
 import { isExecutionMode } from './execution-mode.js';
 import { sanitizeAutoApply } from './aggressive.js';
 import { OPERATION_LIMIT, OPERATION_SOURCES, type OperationSource, type SavedOperation } from './saved-operations.js';
 import { OPERATION_RETRIES_MAX, OPERATION_RETRIES_MIN } from './operation-retry.js';
 import { PLAYBACK_WINDOW_SEC_MAX, PLAYBACK_WINDOW_SEC_MIN } from './playback.js';
 import { readOpsState, type OpsState } from './operations.js';
+
+/** Most folders the System panel reports on. */
+export const SYSTEM_FOLDER_LIMIT = 10;
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -68,17 +69,40 @@ export const MAIN_BRIDGE_BACKOFF_MAX_MS = 120000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', portfolios: 'droid-assist.portfolios', profile: 'droid-assist.user-profile', sections: 'droid-assist.knowledge-sections', variations: 'droid-assist.variations', accessPaths: 'droid-assist.access-paths', approvals: 'droid-assist.approvals' } as const;
+const KEYS = {
+  settings: 'droid-assist.settings',
+  cards: 'droid-assist.cards',
+  log: 'droid-assist.log',
+  patterns: 'droid-assist.patterns',
+  outbox: 'droid-assist.outbox',
+  habits: 'droid-assist.habits',
+  familiar: 'droid-assist.familiar',
+  watcher: 'droid-assist.watcher',
+  elementMap: 'droid-assist.element-map',
+  triggers: 'droid-assist.triggers',
+  runs: 'droid-assist.runs',
+  portfolios: 'droid-assist.portfolios',
+  profile: 'droid-assist.user-profile',
+  sections: 'droid-assist.knowledge-sections',
+  variations: 'droid-assist.variations',
+  accessPaths: 'droid-assist.access-paths',
+  approvals: 'droid-assist.approvals',
+  packs: 'droid-assist.packs',
+  routes: 'droid-assist.routes',
+  fixMethods: 'droid-assist.fix-methods',
+  dossiers: 'droid-assist.dossiers',
+  initiative: 'droid-assist.initiative',
+  goals: 'droid-assist.goals',
+  notifications: 'droid-assist.notifications',
+  operations: 'droid-assist.operations',
+  memory: 'droid-assist.memory',
+  ops: 'droid-assist.ops',
+  projects: 'droid-assist.projects',
+  personas: 'droid-assist.personas',
+  approvalQueue: 'droid-assist.approval-queue',
+  screenSections: 'droid-assist.sections',
+} as const;
 const STEP_STATUSES: readonly StepStatus[] = ['pending', 'running', 'done', 'drift', 'failed'];
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', packs: 'droid-assist.packs' } as const;
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', routes: 'droid-assist.routes', fixMethods: 'droid-assist.fix-methods' } as const;
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', dossiers: 'droid-assist.dossiers' } as const;
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', sections: 'droid-assist.sections' } as const;
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', initiative: 'droid-assist.initiative' } as const;
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', goals: 'droid-assist.goals' } as const;
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', notifications: 'droid-assist.notifications' } as const;
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', operations: 'droid-assist.operations' } as const;
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', memory: 'droid-assist.memory', ops: 'droid-assist.ops' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -90,15 +114,8 @@ export const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize', [number, number]> = {
+export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec', [number, number]> = {
   crewSize: [CREW_SIZE_MIN, CREW_SIZE_MAX],
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'wakeMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'scanSec' | 'stressCycles', [number, number]> = {
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'goalStall', [number, number]> = {
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'breakMinutes' | 'systemRefreshSec', [number, number]> = {
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs', [number, number]> = {
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'operationRetries' | 'playbackWindowSec', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
@@ -164,21 +181,11 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     const v = stored[key];
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'autoScan'] as const) {
   out.crewSize = Math.round(out.crewSize);
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels'] as const) {
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'relaxMode'] as const) {
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'aiOverlap'] as const) {
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'aiThink'] as const) {
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'aiThink', 'aiOverlap'] as const) {
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'liveDrag', 'showGrid', 'gridLabels'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'liveDrag', 'showGrid', 'gridLabels', 'autoScan', 'relaxMode', 'aiThink', 'aiOverlap', 'mainBridgeEnabled'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
   if (typeof stored.masterPrompt === 'string' && stored.masterPrompt.length <= MASTER_PROMPT_MAX) out.masterPrompt = stored.masterPrompt;
-  for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken'] as const) {
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'mainBridgeEnabled'] as const) {
-    if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
-  }
   for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken', 'mainBridgeUrl', 'mainBridgeToken'] as const) {
     const v = stored[key];
     if (typeof v === 'string') out[key] = v;
@@ -192,6 +199,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   if (typeof stored.monitorMode === 'string' && MODES.includes(stored.monitorMode as MonitorMode)) out.monitorMode = stored.monitorMode as MonitorMode;
   out.executionMode = isExecutionMode(stored.executionMode) ? stored.executionMode : defaults.executionMode;
   out.autoApply = sanitizeAutoApply(stored.autoApply ?? defaults.autoApply);
+  out.initiativeAutoApply = sanitizeInitiativeAutoApply(stored.initiativeAutoApply, defaults.initiativeAutoApply);
   if (BRIDGE_MODES.includes(stored.mainBridgeMode as AssistSettings['mainBridgeMode'])) out.mainBridgeMode = stored.mainBridgeMode as AssistSettings['mainBridgeMode'];
   if (out.mainBridgeBackoffMaxMs < out.mainBridgeBackoffMinMs) out.mainBridgeBackoffMaxMs = defaults.mainBridgeBackoffMaxMs;
   if (stored.displayId === null || (typeof stored.displayId === 'string' && stored.displayId)) out.displayId = stored.displayId;
@@ -200,17 +208,16 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   out.operationPolicy = sanitizePolicy(stored.operationPolicy, defaults.operationPolicy);
   if (SIDE_TEST_MODES.includes(stored.sideTestMode as SideTestMode)) out.sideTestMode = stored.sideTestMode as SideTestMode;
   if (typeof stored.selfTestMode === 'string' && SELF_TEST_MODES.includes(stored.selfTestMode as SelfTestMode)) out.selfTestMode = stored.selfTestMode as SelfTestMode;
-  out.autoApply = sanitizeAutoApply(stored.autoApply, defaults.autoApply);
+  out.notifyAutoAct = sanitizeAutoAct(stored.notifyAutoAct ?? defaults.notifyAutoAct);
+  if (Array.isArray(stored.systemFolders)) out.systemFolders = [...new Set(stored.systemFolders.filter(isStr).map((p) => p.trim()))].slice(0, SYSTEM_FOLDER_LIMIT);
   return out;
 }
 
-/** A stored auto-apply map over `defaults`: only boolean values of known categories are kept. */
-function sanitizeAutoApply(raw: unknown, defaults: AutoApplyMap): AutoApplyMap {
+/** A stored AI initiative auto-apply map over `defaults`: only boolean values of known categories are kept. */
+function sanitizeInitiativeAutoApply(raw: unknown, defaults: AutoApplyMap): AutoApplyMap {
   const out = { ...defaults };
   if (!isObject(raw)) return out;
   for (const c of INITIATIVE_CATEGORIES) if (typeof raw[c] === 'boolean') out[c] = raw[c] as boolean;
-  out.notifyAutoAct = sanitizeAutoAct(stored.notifyAutoAct ?? defaults.notifyAutoAct);
-  if (Array.isArray(stored.systemFolders)) out.systemFolders = [...new Set(stored.systemFolders.filter(isStr).map((p) => p.trim()))].slice(0, SYSTEM_FOLDER_LIMIT);
   return out;
 }
 
@@ -289,7 +296,7 @@ export function saveCards(cards: SavedCard[]) {
 }
 
 const PACK_KINDS: ReadonlyArray<PackKind> = ['recorded', 'combined'];
-const GOAL_SOURCES: ReadonlyArray<GoalSource> = ['input', 'ai', 'user', null];
+const PACK_GOAL_SOURCES: ReadonlyArray<PackGoalSource> = ['input', 'ai', 'user', null];
 const TEST_STATUSES: ReadonlyArray<SubagentStatus> = ['pass', 'fail', 'aborted', 'skipped'];
 type StoredPack = Omit<WorkflowPack, 'steps'> & { steps: StoredStep[] };
 
@@ -306,7 +313,7 @@ function parsePack(v: unknown): StoredPack | null {
     name: v.name,
     kind: PACK_KINDS.includes(v.kind as PackKind) ? (v.kind as PackKind) : 'recorded',
     goal,
-    goalSource: goal && GOAL_SOURCES.includes(v.goalSource as GoalSource) ? (v.goalSource as GoalSource) : null,
+    goalSource: goal && PACK_GOAL_SOURCES.includes(v.goalSource as PackGoalSource) ? (v.goalSource as PackGoalSource) : null,
     steps: v.steps.map(parseStep).filter((s): s is StoredStep => s !== null),
     tests: Array.isArray(v.tests) ? v.tests.filter(isPackTest).slice(0, PACK_TEST_LIMIT) : [],
     savedAt: isNum(v.savedAt) ? v.savedAt : 0,
@@ -571,6 +578,8 @@ export const loadDossiers = (): PositionDossier[] => listOf(readJson(KEYS.dossie
 export function saveDossiers(dossiers: PositionDossier[]) {
   let kept = pruneDossiers(dossiers);
   while (!writeJson(KEYS.dossiers, kept) && kept.length) kept = kept.slice(0, Math.floor(kept.length / 2));
+}
+
 function isStepTrace(v: unknown): v is StepTrace {
   return isObject(v) && typeof v.name === 'string' && STEP_STATES.includes(v.state as StepState) && isNum(v.at)
     && optNum(v.doneAt) && optNum(v.verifiedAt) && optNum(v.failedAt);
@@ -632,11 +641,11 @@ function isProfile(v: unknown): v is RouteProfile {
 }
 
 /** The stored access-path (route) profiles; invalid entries are dropped. */
-export const loadRouteProfiles = (): RouteProfile[] => listOf(readJson(KEYS.routes), isProfile, PROFILE_LIMIT);
+export const loadRouteProfiles = (): RouteProfile[] => listOf(readJson(KEYS.routes), isProfile, ROUTE_PROFILE_LIMIT);
 
-/** Persists the route profiles, capped at PROFILE_LIMIT. */
+/** Persists the route profiles, capped at ROUTE_PROFILE_LIMIT. */
 export function saveRouteProfiles(profiles: RouteProfile[]) {
-  writeJson(KEYS.routes, profiles.slice(0, PROFILE_LIMIT));
+  writeJson(KEYS.routes, profiles.slice(0, ROUTE_PROFILE_LIMIT));
 }
 
 /** A fix-method step: an allowed fix action at a point inside the screen. */
@@ -661,14 +670,16 @@ function fixStep(v: unknown): WorkflowStep {
 /** Persists the fix methods, capped at FIX_METHOD_LIMIT. */
 export function saveFixMethods(methods: FixMethod[]) {
   writeJson(KEYS.fixMethods, methods.slice(0, FIX_METHOD_LIMIT));
-function isPortfolioEntry(v: unknown): v is PortfolioEntry {
+}
+
+function isPersonaPortfolioEntry(v: unknown): v is PersonaPortfolioEntry {
   return isObject(v) && PORTFOLIO_KINDS.includes(v.kind as PortfolioKind) && isStr(v.text) && isNum(v.time);
 }
 
 /** A valid stored persona (invalid portfolio entries dropped), or null. */
 function parsePersona(v: unknown): Persona | null {
   if (!isObject(v) || !isStr(v.id) || !isStr(v.name) || typeof v.character !== 'string' || !isNum(v.createdAt)) return null;
-  return { id: v.id, name: v.name, character: v.character, createdAt: v.createdAt, entries: listOf(v.entries, isPortfolioEntry, PORTFOLIO_LIMIT) };
+  return { id: v.id, name: v.name, character: v.character, createdAt: v.createdAt, entries: listOf(v.entries, isPersonaPortfolioEntry, PERSONA_PORTFOLIO_LIMIT) };
 }
 
 /** The stored persona portfolios (at most PERSONA_LIMIT); invalid personas are dropped. */
@@ -706,6 +717,8 @@ export function loadOperationMemory(): OperationMemory {
 export function saveOperationMemory(memory: OperationMemory) {
   const kept = { failures: memory.failures.slice(0, FAILURE_LIMIT), notes: memory.notes.slice(0, OPERATION_NOTE_LIMIT) };
   if (!writeJson(KEYS.memory, kept)) writeJson(KEYS.memory, { ...kept, failures: kept.failures.map((f) => ({ ...f, shots: [] })) });
+}
+
 /** The stored projects, pruned to PROJECT_LIMIT (unfinished first); invalid entries are dropped. */
 export const loadProjects = (): Project[] => pruneProjects(listOf(readJson(KEYS.projects), isProject, Infinity));
 
@@ -716,15 +729,17 @@ export function saveProjects(projects: Project[]) {
 }
 
 /** The stored approval queue and learned methods; invalid entries are dropped. */
-export function loadApprovals(): ApprovalState {
-  const stored = readJson(KEYS.approvals);
+export function loadApprovalQueue(): ApprovalState {
+  const stored = readJson(KEYS.approvalQueue);
   if (!isObject(stored)) return EMPTY_APPROVALS;
-  return { queue: listOf(stored.queue, isApprovalRequest, APPROVAL_LIMIT), learned: listOf(stored.learned, isLearnedMethod, LEARNED_LIMIT) };
+  return { queue: listOf(stored.queue, isApprovalRequest, APPROVAL_QUEUE_LIMIT), learned: listOf(stored.learned, isLearnedMethod, LEARNED_LIMIT) };
 }
 
 /** Persists the approval queue and learned methods, capped per list. */
-export function saveApprovals(state: ApprovalState) {
-  writeJson(KEYS.approvals, { queue: state.queue.slice(0, APPROVAL_LIMIT), learned: state.learned.slice(0, LEARNED_LIMIT) });
+export function saveApprovalQueue(state: ApprovalState) {
+  writeJson(KEYS.approvalQueue, { queue: state.queue.slice(0, APPROVAL_QUEUE_LIMIT), learned: state.learned.slice(0, LEARNED_LIMIT) });
+}
+
 /** The stored access-path profiles; invalid entries are dropped. */
 export const loadAccessPaths = (): AccessProfile[] => listOf(readJson(KEYS.accessPaths), isAccessProfile, ACCESS_PATH_LIMIT);
 
@@ -787,6 +802,9 @@ export const loadSections = (): KnowledgeSection[] => listOf(readJson(KEYS.secti
 
 /** Persists the knowledge sections, capped at SECTION_LIMIT. */
 export function saveSections(sections: KnowledgeSection[]) {
+  writeJson(KEYS.sections, sections.slice(0, SECTION_LIMIT));
+}
+
 const isBox = (v: unknown) => isObject(v) && isNum(v.x) && isNum(v.y) && isNum(v.w) && isNum(v.h);
 
 function isSectionEvent(v: unknown): v is SectionEvent {
@@ -798,12 +816,14 @@ function isSection(v: unknown): v is ScreenSection {
 }
 
 /** The stored screen sections with their histories; invalid sections and events are dropped. */
-export const loadSections = (): ScreenSection[] =>
-  listOf(readJson(KEYS.sections), isSection, SECTION_LIMIT).map((s) => ({ ...s, events: listOf(s.events, isSectionEvent, SECTION_EVENT_LIMIT) }));
+export const loadScreenSections = (): ScreenSection[] =>
+  listOf(readJson(KEYS.screenSections), isSection, SCREEN_SECTION_LIMIT).map((s) => ({ ...s, events: listOf(s.events, isSectionEvent, SECTION_EVENT_LIMIT) }));
 
-/** Persists the screen sections, capped at SECTION_LIMIT. */
-export function saveSections(sections: ScreenSection[]) {
-  writeJson(KEYS.sections, sections.slice(0, SECTION_LIMIT));
+/** Persists the screen sections, capped at SCREEN_SECTION_LIMIT. */
+export function saveScreenSections(sections: ScreenSection[]) {
+  writeJson(KEYS.screenSections, sections.slice(0, SCREEN_SECTION_LIMIT));
+}
+
 const isCategory = (v: unknown) => INITIATIVE_CATEGORIES.includes(v as InitiativeCategory);
 
 function isInitiativeProposal(v: unknown): v is InitiativeProposal {
@@ -831,12 +851,16 @@ export function loadInitiative(): InitiativeState {
 /** Persists the AI initiative state, capped per list. */
 export function saveInitiative(state: InitiativeState) {
   writeJson(KEYS.initiative, { proposals: state.proposals.slice(0, INITIATIVE_PROPOSAL_LIMIT), log: state.log.slice(0, INITIATIVE_LOG_LIMIT), stress: state.stress.slice(0, STRESS_LIMIT) });
+}
+
 /** The stored notifications (newest first, at most NOTIFICATION_LIMIT); invalid entries are dropped. */
 export const loadNotifications = (): AssistNotification[] => listOf(readJson(KEYS.notifications), isNotification, NOTIFICATION_LIMIT);
 
 /** Persists the newest NOTIFICATION_LIMIT notifications. */
 export function saveNotifications(list: AssistNotification[]) {
   writeJson(KEYS.notifications, list.slice(0, NOTIFICATION_LIMIT));
+}
+
 /** An operation as persisted: step and reference screenshots without their pixel buffers. */
 type StoredOperation = Omit<SavedOperation, 'steps' | 'screenshots'> & { steps: StoredStep[]; screenshots: StoredFrame[] };
 

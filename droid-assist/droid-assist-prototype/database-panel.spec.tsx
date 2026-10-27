@@ -15,7 +15,7 @@ const operations = [
 ];
 
 const engine = (over: Partial<AssistEngine> = {}) => ({
-  operations,
+  dbOperations: operations,
   exportOperations: vi.fn(() => 0),
   clearOperations: vi.fn(),
   ...over,
@@ -58,7 +58,7 @@ describe('DatabasePanel', () => {
   });
 
   it('disables export and clear when the database is empty', () => {
-    render(<DatabasePanel engine={engine({ operations: [] })} />);
+    render(<DatabasePanel engine={engine({ dbOperations: [] })} />);
     expect((screen.getByText('Export JSON') as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByText('Clear') as HTMLButtonElement).disabled).toBe(true);
   });

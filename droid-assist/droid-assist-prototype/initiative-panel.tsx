@@ -45,7 +45,7 @@ function InitiativeSettings({ engine }: { engine: AssistEngine }) {
       </label>
       {INITIATIVE_CATEGORIES.map((c) => (
         <label key={c} className={styles.setting}>
-          <input type="checkbox" checked={settings.autoApply[c]} onChange={(e) => setSettings({ ...settings, autoApply: { ...settings.autoApply, [c]: e.target.checked } })} /> Auto-apply {CATEGORY_NAME[c]}
+          <input type="checkbox" checked={settings.initiativeAutoApply[c]} onChange={(e) => setSettings({ ...settings, initiativeAutoApply: { ...settings.initiativeAutoApply, [c]: e.target.checked } })} /> Auto-apply {CATEGORY_NAME[c]}
         </label>
       ))}
     </div>
@@ -60,7 +60,7 @@ export function InitiativePanel({ engine }: { engine: AssistEngine }) {
       <h3>AI initiative <small>{engine.armed ? 'armed — auto-applied input is real, inside the budget' : 'disarmed — input runs as a dry run'}</small></h3>
       <InitiativeSettings engine={engine} />
       <div className={styles.group}>
-        <button type="button" onClick={() => void engine.scanNow()}>Scan now</button>
+        <button type="button" onClick={() => void engine.initiativeScanNow()}>Scan now</button>
       </div>
       <h4>Proposals <small>{proposals.filter((p) => p.status === 'pending').length} pending</small></h4>
       <ul className={styles.log}>{proposals.map((p) => <InitiativeItem key={p.id} engine={engine} p={p} />)}</ul>

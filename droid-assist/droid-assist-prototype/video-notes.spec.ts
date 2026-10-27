@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addNote, notableMoment, timestamp, toKnowledge } from './video-notes.js';
-import { startSession } from './video-notes.js';
+import { addNote, notableMoment, timestamp, toKnowledge, startSession } from './video-notes.js';
 import type { Frame } from './types.js';
 
 const frame = (fill: number): Frame => {

@@ -34,7 +34,7 @@ function OperationItem({ r }: { r: OperationRecord }) {
 
 /** The operation database: search and filter every recorded operation, export the matches as JSON, clear. */
 export function DatabasePanel({ engine }: { engine: AssistEngine }) {
-  const { operations } = engine;
+  const { dbOperations: operations } = engine;
   const [filters, setFilters] = useState<Record<string, string>>({});
   const set = (key: string) => (e: { target: { value: string } }) => setFilters((f) => ({ ...f, [key]: e.target.value }));
   const query = compact({

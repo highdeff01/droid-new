@@ -14,10 +14,8 @@ function engineWith(triggers: Trigger[]) {
     elementMap: [{ id: 'e1', name: 'Play button', box: { x: 0.1, y: 0.1, w: 0.1, h: 0.1 }, mappedAt: 1 }],
     cards: [{ id: 'c1', name: 'Calc flow', description: '', savedAt: 1, steps: [] }],
     addTrigger: vi.fn(), deleteTrigger: vi.fn(), invoke: vi.fn(async () => ({ ok: true, result: '' })),
-  } as unknown as AssistEngine & { addTrigger: ReturnType<typeof vi.fn>; invoke: ReturnType<typeof vi.fn>; deleteTrigger: ReturnType<typeof vi.fn> };
     operations: [{ id: 'o1', name: 'Open youtube', goal: 'go to chrome and open youtube', steps: [], screenshots: [], source: 'ai', savedAt: 1, runs: 0, successes: 0 }],
-    addTrigger: vi.fn(), toggleTrigger: vi.fn(), deleteTrigger: vi.fn(), fireTrigger: vi.fn(async () => {}),
-  } as unknown as AssistEngine & { addTrigger: ReturnType<typeof vi.fn>; toggleTrigger: ReturnType<typeof vi.fn>; fireTrigger: ReturnType<typeof vi.fn>; deleteTrigger: ReturnType<typeof vi.fn> };
+  } as unknown as AssistEngine & { addTrigger: ReturnType<typeof vi.fn>; invoke: ReturnType<typeof vi.fn>; deleteTrigger: ReturnType<typeof vi.fn> };
 }
 
 describe('TriggersPanel', () => {

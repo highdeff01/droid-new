@@ -11,8 +11,7 @@ import { memoryFor, type MemoryEntry, type MemoryOrigin } from './enhanced-memor
 export type Agreement = 'consistent' | 'conflicting';
 
 /** Which kind of knowledge an entry comes from. */
-export type CrossSource = 'mapped' | 'learned' | 'habit' | 'avoid' | 'failure';
-export type CrossSource = 'mapped' | 'learned' | 'habit' | 'avoid' | 'position' | 'memory';
+export type CrossSource = 'mapped' | 'learned' | 'habit' | 'avoid' | 'failure' | 'position' | 'memory';
 
 /** One cross-reference entry: what is known, and whether it agrees with the plan. */
 export interface CrossCheck {
@@ -99,7 +98,6 @@ function failureChecks(target: string, _p: Point, k: Knowledge): CrossCheck[] {
   return k.failures.filter((f) => f.targets.some((t) => sameTarget(t, target))).map((f): CrossCheck => ({ source: 'failure', status: 'conflicting', text: `Failed before: ${failureLine(f)}` }));
 }
 
-const CHECKS = [mappedChecks, learnedChecks, habitChecks, avoidChecks, failureChecks];
 /** The dossier's preferred, best and (for an element that moves) last-known positions against the plan. */
 function positionChecks(target: string, p: Point, k: Knowledge): CrossCheck[] {
   const d = findDossier(k.dossiers, target);
@@ -123,7 +121,7 @@ function memoryChecks(target: string, _p: Point, k: Knowledge): CrossCheck[] {
     .map((m): CrossCheck => ({ source: 'memory', status: status(m.status === 'important'), text: m.text }));
 }
 
-const CHECKS = [mappedChecks, learnedChecks, habitChecks, avoidChecks, positionChecks, memoryChecks];
+const CHECKS = [mappedChecks, learnedChecks, habitChecks, avoidChecks, failureChecks, positionChecks, memoryChecks];
 
 /** Every piece of known knowledge about `target` and whether it agrees with the planned point `p`. */
 export const crossReference = (target: string, p: Point, k: Knowledge): CrossCheck[] => CHECKS.flatMap((check) => check(target, p, k));

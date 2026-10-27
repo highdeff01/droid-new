@@ -103,8 +103,7 @@ function drawHighlight(ctx: CanvasRenderingContext2D, x: number, y: number, labe
  * step markers (recorded vs drift-corrected), AI annotations and the AI cursor.
  */
 export function Stage({ engine }: { engine: AssistEngine }) {
-  const { source, demoCanvasRef, frames, captureLost, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex, ruler, highlight, mapMode, elementMap, mapDraft, snipMode } = engine;
-  const { source, demoCanvasRef, frames, captureLost, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex, ruler, highlight, mapMode, elementMap, mapDraft, mirror } = engine;
+  const { source, demoCanvasRef, frames, captureLost, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex, ruler, highlight, mapMode, elementMap, mapDraft, snipMode, mirror } = engine;
   const galleryFrame = ruler.on && ruler.frameId !== null ? ruler.frame : null;
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);

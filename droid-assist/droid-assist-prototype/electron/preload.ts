@@ -39,6 +39,7 @@ const api: NativeCaptureApi & Required<NativeSystemApi> = {
   },
   grabDisplay(id) {
     return ipcRenderer.invoke(CAPTURE_CHANNELS.grabDisplay, id);
+  },
   systemInfo() {
     return ipcRenderer.invoke(SYSTEM_CHANNELS.info);
   },

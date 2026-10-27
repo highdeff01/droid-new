@@ -133,7 +133,7 @@ export function useInitiative(d: InitiativeDeps) {
     aborted: d.aborted(),
     stageOn: d.stageOn(CATEGORY_STAGE[category]),
     stageOffText: stageOff(CATEGORY_STAGE[category]),
-    autoApply: d.settings().autoApply[category],
+    autoApply: d.settings().initiativeAutoApply[category],
     armed: d.armed(),
     budgetLeft: budgetLeft(),
     needsInput,

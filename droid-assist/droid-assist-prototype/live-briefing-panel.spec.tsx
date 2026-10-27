@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import type { AssistEngine } from './use-assist.js';
 import type { ActionRecord, Frame, LogEntry } from './types.js';
 import type { ThinkingEntry } from './thinking-timeline.js';
-import type { GoalRecord } from './goal-tracer.js';
+import type { GoalRecord } from './goal-objectives.js';
 import type { UserNote } from './knowledge-store.js';
 import { LiveBriefingPanel } from './live-briefing-panel.js';
 
@@ -19,7 +19,7 @@ const log: LogEntry[] = [
 const timeline: ThinkingEntry[] = [{ id: 't1', time: 2000, step: 'Open menu', kind: 'thought', text: 'Click File', thinking: null, project: 'Export report' }];
 
 const engine = (over: Partial<AssistEngine> = {}) => ({
-  goals: [goal('Export report', 'active', 5), goal('Send mail', 'pending', 6), goal('Print it', 'pending', 7)],
+  objectives: [goal('Export report', 'active', 5), goal('Send mail', 'pending', 6), goal('Print it', 'pending', 7)],
   history: [act('older', 1, { via: 'demo' }), act('newest', 9, { ok: false }), act('middle', 5, { dispatched: true })],
   preferred: [{ frame: frame(42), by: 'Main AI', reason: 'big change', time: 1 }],
   log, timeline,
@@ -83,7 +83,7 @@ describe('LiveBriefingPanel', () => {
   });
 
   it('shows empty states', () => {
-    render(<LiveBriefingPanel engine={engine({ goals: [], history: [], preferred: [], log: [], timeline: [] })} />);
+    render(<LiveBriefingPanel engine={engine({ objectives: [], history: [], preferred: [], log: [], timeline: [] })} />);
     expect(screen.getByText(/No objective yet/)).toBeTruthy();
     expect(screen.getByText('No actions performed yet.')).toBeTruthy();
     expect(screen.getByText('No notes match.')).toBeTruthy();

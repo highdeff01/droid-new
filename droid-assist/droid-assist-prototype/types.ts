@@ -356,7 +356,7 @@ export interface AssistSettings {
   /** AI initiative: cycles per input kind the heavy element tester runs. */
   stressCycles: number;
   /** AI initiative: per category, apply without asking (still inside arm, budget and loop control). */
-  autoApply: AutoApplyMap;
+  initiativeAutoApply: AutoApplyMap;
   /** Relaxation mode: slower cadence, no background agent tests, dimmed info notifications, break reminders. */
   relaxMode: boolean;
   /** Minutes between "take a break" reminders while relaxation mode is on. */

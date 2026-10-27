@@ -1,11 +1,9 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, dialog, ipcMain, screen, session, type WebContents } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, screen, session, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { CAPTURE_CHANNELS } from './capture-api.js';
 import { SYSTEM_CHANNELS } from './system-api.js';
 import { nativeSystemInfo, scanFolder } from './system-scan.js';
-import { app, BrowserWindow, ipcMain, session, type IpcMainInvokeEvent, type WebContents } from 'electron';
-import { CAPTURE_CHANNELS } from './capture-api.js';
 import { WINDOW_CHANNELS, type WindowState } from './window-api.js';
 import { startCaptureLoop, type CaptureLoop } from './capture-loop.js';
 import { grabDisplay, grabScreen, listDisplays } from './screen-grab.js';
@@ -65,6 +63,8 @@ function registerSystemIpc() {
     const r = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
     return r.canceled ? null : r.filePaths[0] ?? null;
   });
+}
+
 /** One main-app bridge listener per renderer. */
 const listeners = new Map<number, MainBridgeListener>();
 
@@ -91,6 +91,8 @@ function registerMainBridgeIpc() {
   });
   ipcMain.handle(MAIN_BRIDGE_CHANNELS.send, (event, text: string) => listeners.get(event.sender.id)?.send(text) ?? false);
   ipcMain.on(MAIN_BRIDGE_CHANNELS.stop, (event) => stopListener(event.sender));
+}
+
 /** The placement of the window `contents` belongs to. */
 function windowState(win: BrowserWindow): WindowState {
   return { visible: win.isVisible() && !win.isMinimized(), minimized: win.isMinimized(), focused: win.isFocused(), alwaysOnTop: win.isAlwaysOnTop(), bounds: win.getBounds() };

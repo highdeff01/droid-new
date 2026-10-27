@@ -1,10 +1,9 @@
-import type { StepAction, WorkflowStep } from './types.js';
+import type { StepAction, WorkflowStep, Frame } from './types.js';
 import { POINTER_ACTIONS } from './types.js';
 import { AiError, SAMPLE_VIEW, parseJsonReply, toUnit } from './ai.js';
 import type { AskFn, ViewSize } from './ai.js';
 import type { Thought } from './assist-ai.js';
 import type { ChangeAssessment } from './screen-change.js';
-import type { Frame } from './types.js';
 
 /** What the executor is about to do and why — recorded before any step is dispatched. */
 export interface Proposal extends Thought {

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
-import { currentObjective, nextGoals, runningProjects, type GoalRecord } from './goal-tracer.js';
+import { currentObjective, nextGoals, runningProjects, type GoalRecord } from './goal-objectives.js';
 import { ALL_PROJECTS } from './knowledge-store.js';
 import { NOTE_SECTIONS, filterNotes, noteValues, notesStream, outcomeOf, recentActions, type NoteFilter, type NoteSection, type StreamNote } from './live-briefing.js';
 import styles from './droid-assist.module.css';
@@ -27,8 +27,8 @@ const GOAL_TONE: Record<GoalRecord['state'], string> = { pending: 'info', active
 /** Current objective with its traced state, and the queued next goals. */
 function ObjectiveSection({ engine }: { engine: AssistEngine }) {
   const [draft, setDraft] = useState('');
-  const current = currentObjective(engine.goals);
-  const next = nextGoals(engine.goals);
+  const current = currentObjective(engine.objectives);
+  const next = nextGoals(engine.objectives);
   return (
     <div aria-label="Objective">
       <h4>Current objective</h4>
@@ -141,7 +141,7 @@ function NotesSection({ engine, notify }: { engine: AssistEngine; notify: (text:
 function UserNotesSection({ engine }: { engine: AssistEngine }) {
   const [text, setText] = useState('');
   const [project, setProject] = useState(ALL_PROJECTS);
-  const projects = runningProjects(engine.goals);
+  const projects = runningProjects(engine.objectives);
   return (
     <div aria-label="User notes">
       <h4>Your notes <small>{engine.userNotes.length}</small></h4>
