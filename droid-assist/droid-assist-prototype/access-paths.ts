@@ -233,15 +233,17 @@ export function pathOutcome(profile: AccessProfile, ok: boolean, failedHop?: num
 
 /**
  * Learns access paths from a finished run: every done click on a named target gets the path of
- * done clicks that led to it (in run order) as its profile.
+ * done clicks that led to it (in run order) as its profile. Targets in `counted` (already counted
+ * by their saved path during the run) are not counted again.
  */
-export function learnPaths(profiles: AccessProfile[], steps: WorkflowStep[], context: string, now = Date.now()): AccessProfile[] {
+export function learnPaths(profiles: AccessProfile[], steps: WorkflowStep[], context: string, now = Date.now(), counted: readonly string[] = []): AccessProfile[] {
+  const skip = new Set(counted.map(norm));
   let hops: PathHop[] = [];
   let next = profiles;
   for (const s of steps) {
     if (s.status !== 'done' || !isHopAction(s.action)) continue;
     hops = [...hops, { label: s.target ?? s.name, action: s.action, x: s.correctedX ?? s.x, y: s.correctedY ?? s.y }];
-    if (s.target?.trim()) next = rememberPath(next, { target: s.target, context, hops }, now);
+    if (s.target?.trim() && !skip.has(norm(s.target))) next = rememberPath(next, { target: s.target, context, hops }, now);
   }
   return next;
 }

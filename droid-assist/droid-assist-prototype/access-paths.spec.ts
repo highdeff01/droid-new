@@ -340,6 +340,13 @@ describe('applyReach', () => {
 });
 
 describe('learnPaths', () => {
+  it('does not count again a target whose saved path was already counted during the run', () => {
+    const start = rememberPath([], { target: 'Play', context: 'Game', hops: [{ label: 'Play', action: 'click', x: 0.5, y: 0.5 }] }, 1);
+    const steps: WorkflowStep[] = [{ id: 's1', name: 'Click Play', target: 'Play', action: 'click', x: 0.5, y: 0.5, status: 'done' }];
+    const learned = learnPaths(start, steps, 'Game', 2, ['play']);
+    expect(learned[0].versions[0]).toMatchObject({ uses: 1, successes: 1 });
+    expect(learnPaths(start, steps, 'Game', 2)[0].versions[0]).toMatchObject({ uses: 2, successes: 2 });
+  });
   it('builds the last target\'s profile from the prior done clicks in order, using corrected points when present', () => {
     const steps: WorkflowStep[] = [
       { id: '1', name: 'Games', action: 'click', x: GAMES_HOP.x, y: GAMES_HOP.y, status: 'done', target: 'Games' },

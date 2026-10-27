@@ -241,6 +241,8 @@ export function useAssist() {
   /** Per-target, per-app access paths (versioned), tried before fresh grounding. */
   const [accessPaths, setAccessPaths] = useState<AccessProfile[]>(loadAccessPaths);
   const accessPathsRef = useRef<AccessProfile[]>(accessPaths);
+  /** Targets whose saved path was already counted during the current run (not re-counted when the run is learned). */
+  const pathCountedRef = useRef(new Set<string>());
   const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
@@ -743,7 +745,8 @@ export function useAssist() {
     const verdict = runVerdict(runSteps, opts);
     const runGoal = goalRef.current.trim();
     if (verdict === 'success' && stageOn('supervisor')) autoSaveFlow(runGoal, runSteps);
-    if (verdict === 'success' && stageOn('coords')) commitAccessPaths(learnPaths(accessPathsRef.current, runSteps, habitContext()));
+    if (verdict === 'success' && stageOn('coords')) commitAccessPaths(learnPaths(accessPathsRef.current, runSteps, habitContext(), Date.now(), [...pathCountedRef.current]));
+    pathCountedRef.current.clear();
     recordRun(runGoal, runSteps, opts);
     if (verdict === 'ignored' || !stageOn('supervisor')) return;
     if (verdict === 'failed') {
@@ -1131,6 +1134,7 @@ export function useAssist() {
     const reach = await reachTarget(step, profile, { runHop: (s) => performStep(s, actor, budget, dryRun), fallback: fresh, reached, log: (m, tone) => addLog(actor, m, tone) });
     if (!profile || dryRun || reach.via === 'fresh' || reach.out.halt) return reach.out;
     countPath(profile, reach);
+    pathCountedRef.current.add(profile.target);
     return reach.out;
   };
 
