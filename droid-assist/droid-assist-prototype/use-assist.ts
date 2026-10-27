@@ -53,6 +53,8 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
+import { toStep } from './project.js';
+import { useProjects } from './use-projects.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -862,6 +864,49 @@ export function useAssist() {
     supervisor: (e) => `Noted "${e.name}" for link/route tests`,
   };
 
+  /** Why no project may take a turn now: a guardrail (abort, disarmed, executor kill-switch) or its loop-control stage; null = go on. */
+  const projectHalt = (): string | null => {
+    if (abortedRef.current) return 'ABORTED is active — clear the abort first';
+    if (!armedRef.current) return 'Real input is disarmed';
+    if (!stageOn('executor')) return stageOff('executor');
+    if (!stageOn('projects')) return stageOff('projects');
+    return aiOnline() ? null : 'AI offline';
+  };
+
+  /** The live frame the project's AI calls look at. */
+  const projectFrame = () => framesRef.current[0] ?? null;
+
+  const projectEngine = useProjects({
+    log: (message, tone) => addLog('Projects', message, tone),
+    halt: projectHalt,
+    busy: () => triggerBusyRef.current || executorBusy(),
+    plan: async ({ goal: projectGoal, context, why, steps: planned }) => {
+      const ask = askFor('planner');
+      const plan = why
+        ? await planRemaining(ask, projectGoal, projectFrame(), planned.map(toStep), [why, ...context].join('\n'), patternsRef.current)
+        : await planFromGoal(projectGoal, cardsRef.current, projectFrame(), ask, context, patternsRef.current);
+      return plan.steps;
+    },
+    run: (p, dryRun) => {
+      stepsRef.current = p.steps.map(toStep);
+      setSteps(stepsRef.current);
+      return runReplay(dryRun, { label: `Project "${p.name}"`, goal: p.goal });
+    },
+    check: (p) => verifyGoal(askFor('projects'), projectFrame(), p.goal, stepsRef.current),
+    research: async (p, question) => {
+      const frame = projectFrame();
+      if (!frame) throw new Error('no live screen to research on');
+      return (await describeScreen(askFor('projects'), frame, question, p.goal)).answer;
+    },
+    learn: ({ habit, pattern }) => {
+      commitHabits(recordOutcome(habitsRef.current, habit));
+      addPatterns([pattern]);
+    },
+    maxRetries: () => settingsRef.current.stepRetries,
+  });
+  const projectInjectRef = useRef(projectEngine.injectRunning);
+  projectInjectRef.current = projectEngine.injectRunning;
+
   /**
    * Forwards a discovered element from one agent into the inboxes of the others (all of them by
    * default) for forward testing and predefining. Each recipient that is on handles it at once;
@@ -877,6 +922,7 @@ export function useAssist() {
     busRef.current = updated;
     setBus(updated);
     addLog('Agent bus', `${BUS_AGENTS[from]} forwarded "${element.name}" at ${at(element.x, element.y)} to ${queued.length} agent(s)`, 'info');
+    projectInjectRef.current('agent', BUS_AGENTS[from], `Found "${element.name}" at ${at(element.x, element.y)}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addLog]);
 
@@ -2958,6 +3004,8 @@ export function useAssist() {
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
     dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
     reverse, reverseLast, reversing, briefings,
+    /** The per-project lifecycle engine and its approval queue. */
+    projects: projectEngine,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
   };
 }

@@ -5,6 +5,7 @@ import { Hud } from './hud.js';
 import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
 import { AgentBusPanel, SubagentReportPanel } from './bus-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
+import { ProjectsPanel } from './projects-panel.js';
 import { StatsPanel } from './stats-panel.js';
 import styles from './droid-assist.module.css';
 
@@ -38,6 +39,7 @@ function AssistScreen() {
             <StatsPanel engine={engine} />
             <WatcherPanel engine={engine} />
             <TriggersPanel engine={engine} />
+            <ProjectsPanel engine={engine} />
           </div>
         </div>
         <div className={styles.bottom}>
