@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard } from './types.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadDossiers, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveDossiers, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { HABIT_STALE_MS } from './habits.js';
 import { DEFAULT_STAGES } from './loop-control.js';
@@ -8,6 +8,7 @@ import type { WatchNote, WatchProposal, WatchTest } from './watcher.js';
 import { DEFAULT_SETTINGS } from './use-assist.js';
 import { DEFAULT_GRID_OPACITY } from './grid-overlay.js';
 import { RUN_SUMMARY_LIMIT, type RunSummary } from './run-stats.js';
+import type { PositionDossier } from './position-dossier.js';
 
 const DEFAULTS: AssistSettings = { ...DEFAULT_SETTINGS, aiUrl: 'https://ai.example/api/chat', autoContinue: false };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
@@ -379,5 +380,38 @@ describe('run summaries', () => {
     expect(loadRunSummaries()).toEqual([summary(1)]);
     localStorage.setItem('droid-assist.runs', '{nope');
     expect(loadRunSummaries()).toEqual([]);
+  });
+});
+
+describe('loadDossiers', () => {
+  beforeEach(() => localStorage.clear());
+
+  const dossier = (n: number, lastSeen = n): PositionDossier => ({
+    id: `pos_${n}`, name: `Element ${n}`, visits: [{ x: 0.1, y: 0.2, since: n }], spots: [], tests: [],
+    timesSeen: 1, lastSeen, moves: { user: 0, ai: 0 },
+  });
+
+  it('round-trips saveDossiers/loadDossiers keeping a valid dossier', () => {
+    saveDossiers([dossier(1)]);
+    expect(localStorage.getItem('droid-assist.dossiers')).not.toBeNull();
+    expect(loadDossiers()).toEqual([dossier(1)]);
+  });
+
+  it('drops an invalid entry (missing visits, out-of-range x)', () => {
+    localStorage.setItem('droid-assist.dossiers', JSON.stringify([
+      dossier(1),
+      { ...dossier(2), visits: [] },
+      { ...dossier(3), visits: [{ x: 2, y: 0.2, since: 3 }] },
+      null,
+    ]));
+    expect(loadDossiers()).toEqual([dossier(1)]);
+  });
+
+  it('keeps only the 100 dossiers with the newest lastSeen when saving 120', () => {
+    saveDossiers(Array.from({ length: 120 }, (_, i) => dossier(i, i)));
+    const loaded = loadDossiers();
+    expect(loaded).toHaveLength(100);
+    expect(loaded[0]).toEqual(dossier(119, 119));
+    expect(loaded.map((d) => d.lastSeen)).not.toContain(19);
   });
 });

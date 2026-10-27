@@ -15,6 +15,7 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
+import { DOSSIER_LIMIT, pruneDossiers, type PositionDossier } from './position-dossier.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -23,7 +24,7 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', dossiers: 'droid-assist.dossiers' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -341,6 +342,28 @@ export function loadRunSummaries(): RunSummary[] {
 export function saveRunSummaries(summaries: RunSummary[]) {
   let kept = summaries.slice(0, RUN_SUMMARY_LIMIT);
   while (!writeJson(KEYS.runs, kept) && kept.length) kept = kept.slice(0, Math.floor(kept.length / 2));
+}
+
+const isPoint = (v: unknown) => isObject(v) && isUnit(v.x) && isUnit(v.y);
+const isVisit = (v: unknown) => isPoint(v) && isNum((v as Json).since) && optNum((v as Json).until);
+const isSpot = (v: unknown) => isPoint(v) && isNum((v as Json).attempts) && isNum((v as Json).successes);
+const isPositionTest = (v: unknown) => isObject(v) && isPoint(v.planned) && isPoint(v.actual) && isNum(v.time);
+const isMoves = (v: unknown) => isObject(v) && isNum(v.user) && isNum(v.ai);
+const optPoint = (v: unknown) => v === undefined || isPoint(v);
+
+function isDossier(v: unknown): v is PositionDossier {
+  return isObject(v) && isStr(v.id) && isStr(v.name) && Array.isArray(v.visits) && v.visits.length > 0 && v.visits.every(isVisit)
+    && Array.isArray(v.spots) && v.spots.every(isSpot) && Array.isArray(v.tests) && v.tests.every(isPositionTest)
+    && isNum(v.timesSeen) && isNum(v.lastSeen) && isMoves(v.moves) && optPoint(v.move) && optPoint(v.preferred);
+}
+
+/** The stored position dossiers (at most DOSSIER_LIMIT); invalid entries are dropped. */
+export const loadDossiers = (): PositionDossier[] => listOf(readJson(KEYS.dossiers), isDossier, DOSSIER_LIMIT);
+
+/** Persists the newest-seen DOSSIER_LIMIT dossiers; while they do not fit, the least recently seen half is pruned. */
+export function saveDossiers(dossiers: PositionDossier[]) {
+  let kept = pruneDossiers(dossiers);
+  while (!writeJson(KEYS.dossiers, kept) && kept.length) kept = kept.slice(0, Math.floor(kept.length / 2));
 }
 
 /** Persists the Screen watcher state, capped per list. */

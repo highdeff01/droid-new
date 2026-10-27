@@ -2,14 +2,19 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Habit, LearnedPattern } from './types.js';
 import { BACKUP_FORMAT, BACKUP_STORES, BACKUP_VERSION, BackupError, exportBackup, parseBackup, replaceLosses, restoreBackup, summarizeBackup } from './backup.js';
 import { confirmAndRestore } from './backup-panel.js';
-import { loadHabits, loadPatterns, loadSettings, loadWatcher, saveHabits, savePatterns, saveSettings, saveWatcher } from './storage.js';
+import { loadDossiers, loadHabits, loadPatterns, loadSettings, loadWatcher, saveDossiers, saveHabits, savePatterns, saveSettings, saveWatcher } from './storage.js';
 import { DEFAULT_SETTINGS } from './use-assist.js';
 import type { WatchNote } from './watcher.js';
+import type { PositionDossier } from './position-dossier.js';
 
 const NOW = Date.UTC(2026, 9, 27);
 const habit = (id: string, lastUsed: number, target = id): Habit => ({ id, target, context: 'ctx', attempts: 4, successes: 4, lastUsed, lessons: [], pinned: true });
 const pattern = (id: string, time: number): LearnedPattern => ({ id, kind: 'avoid', pattern: `p ${id}`, context: 'c', time });
 const note = (id: string, time: number): WatchNote => ({ id, time, kind: 'element', text: `note ${id}` });
+const dossier = (id: string, lastSeen: number): PositionDossier => ({
+  id, name: `Element ${id}`, visits: [{ x: 0.1, y: 0.2, since: lastSeen }], spots: [], tests: [],
+  timesSeen: 1, lastSeen, moves: { user: 0, ai: 0 },
+});
 
 /** Serialises a backup the way the Export button does and reads it back. */
 const roundTrip = () => parseBackup(JSON.stringify(exportBackup(localStorage, NOW)));
@@ -23,7 +28,7 @@ describe('export', () => {
     expect(backup.format).toBe(BACKUP_FORMAT);
     expect(backup.version).toBe(BACKUP_VERSION);
     expect(backup.exportedAt).toBe('2026-10-27T00:00:00.000Z');
-    expect(Object.keys(backup.stores).sort()).toEqual(['cards', 'elementMap', 'familiar', 'habits', 'history', 'log', 'outbox', 'patterns', 'settings', 'watcher']);
+    expect(Object.keys(backup.stores).sort()).toEqual(['cards', 'dossiers', 'elementMap', 'familiar', 'habits', 'history', 'log', 'outbox', 'patterns', 'settings', 'watcher']);
   });
 
   it('round-trips through a wiped browser: every store loads back unchanged', () => {
@@ -137,5 +142,18 @@ describe('restore', () => {
     };
     expect(() => restoreBackup(file({ settings: { a: 2 }, habits: [] }), 'replace', full)).toThrow(/Restore failed writing Habits/);
     expect([...data]).toEqual([['droid-assist.settings', '{"a":1}']]);
+  });
+});
+
+describe('dossiers', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('includes a stored dossiers list in an exported backup and restores it', () => {
+    saveDossiers([dossier('d1', 5)]);
+    const backup = roundTrip();
+    expect(summarizeBackup(backup)).toContainEqual({ store: 'dossiers', label: 'Position dossiers', count: 1 });
+    localStorage.clear();
+    restoreBackup(backup, 'replace');
+    expect(loadDossiers()).toEqual([dossier('d1', 5)]);
   });
 });
