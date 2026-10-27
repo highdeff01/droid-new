@@ -390,7 +390,10 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         <small>Size of the screenshot the model sees; replies are scaled back to the 480x270 sample space.</small>
       </label>
       <ModelPicker url={settings.aiUrl} model={settings.aiModel} onSelect={(aiModel) => setSettings({ ...settings, aiModel })} />
-      <AiStatusBadge status={engine.aiStatus} />
+      <span className={styles.row}>
+        <button type="button" onClick={() => void engine.connectAi()} disabled={engine.aiStatus.state === 'checking' || !settings.aiUrl} aria-label="Connect AI">Connect</button>
+        <AiStatusBadge status={engine.aiStatus} />
+      </span>
       <ErrorForwardingSettings engine={engine} />
       <BackupSettings />
     </section>
