@@ -13,6 +13,7 @@ import { AI_VIEWS, type AiView } from './ai.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
+import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -21,7 +22,7 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', runs: 'droid-assist.runs' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -320,6 +321,23 @@ export function loadWatcher(): WatcherState {
   const stored = readJson(KEYS.watcher);
   if (!isObject(stored)) return EMPTY_WATCHER;
   return { notes: listOf(stored.notes, isNote, NOTE_LIMIT), proposals: listOf(stored.proposals, isProposal, PROPOSAL_LIMIT), tests: listOf(stored.tests, isTest, TEST_LIMIT) };
+}
+
+function isRunSummary(v: unknown): v is RunSummary {
+  return isObject(v) && isStr(v.id) && isNum(v.time) && typeof v.session === 'string' && typeof v.goal === 'string'
+    && isNum(v.attempted) && isNum(v.succeeded) && isNum(v.durationMs) && RUN_OUTCOMES.includes(v.outcome as RunOutcome)
+    && (v.flowId === undefined || typeof v.flowId === 'string');
+}
+
+/** The stored run summaries (newest first, at most RUN_SUMMARY_LIMIT); invalid entries are dropped. */
+export function loadRunSummaries(): RunSummary[] {
+  return listOf(readJson(KEYS.runs), isRunSummary, RUN_SUMMARY_LIMIT);
+}
+
+/** Persists the newest RUN_SUMMARY_LIMIT summaries; while they do not fit, the oldest half is pruned. */
+export function saveRunSummaries(summaries: RunSummary[]) {
+  let kept = summaries.slice(0, RUN_SUMMARY_LIMIT);
+  while (!writeJson(KEYS.runs, kept) && kept.length) kept = kept.slice(0, Math.floor(kept.length / 2));
 }
 
 /** Persists the Screen watcher state, capped per list. */

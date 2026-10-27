@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard } from './types.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, loadWatcher, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { HABIT_STALE_MS } from './habits.js';
 import { DEFAULT_STAGES } from './loop-control.js';
 import type { WatchNote, WatchProposal, WatchTest } from './watcher.js';
 import { DEFAULT_SETTINGS } from './use-assist.js';
 import { DEFAULT_GRID_OPACITY } from './grid-overlay.js';
+import { RUN_SUMMARY_LIMIT, type RunSummary } from './run-stats.js';
 
 const DEFAULTS: AssistSettings = { ...DEFAULT_SETTINGS, aiUrl: 'https://ai.example/api/chat', autoContinue: false };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
@@ -327,5 +328,45 @@ describe('loadWatcher', () => {
   it('gives empty lists for corrupt JSON', () => {
     localStorage.setItem('droid-assist.watcher', '{oops');
     expect(loadWatcher()).toEqual({ notes: [], proposals: [], tests: [] });
+  });
+});
+
+describe('run summaries', () => {
+  beforeEach(() => localStorage.clear());
+
+  const summary = (n: number): RunSummary => ({ id: `run_${n}`, time: n, session: 's', goal: `goal ${n}`, attempted: 3, succeeded: 2, durationMs: 1500, outcome: 'failed' });
+
+  it('round-trips summaries, newest first, keeping the flow id', () => {
+    const runs = [{ ...summary(2), flowId: 'card_1' }, summary(1)];
+    saveRunSummaries(runs);
+    expect(loadRunSummaries()).toEqual(runs);
+  });
+
+  it('keeps only the newest RUN_SUMMARY_LIMIT summaries', () => {
+    saveRunSummaries(Array.from({ length: RUN_SUMMARY_LIMIT + 10 }, (_, i) => summary(RUN_SUMMARY_LIMIT + 10 - i)));
+    const loaded = loadRunSummaries();
+    expect(loaded).toHaveLength(RUN_SUMMARY_LIMIT);
+    expect(loaded[0]).toEqual(summary(RUN_SUMMARY_LIMIT + 10));
+  });
+
+  it('prunes the oldest summaries until the write fits in storage', () => {
+    const real = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === 'droid-assist.runs' && v.length > 600) throw new DOMException('full', 'QuotaExceededError');
+      real.call(this, k, v);
+    });
+    saveRunSummaries(Array.from({ length: 8 }, (_, i) => summary(8 - i)));
+    spy.mockRestore();
+    const loaded = loadRunSummaries();
+    expect(loaded.length).toBeGreaterThan(0);
+    expect(loaded.length).toBeLessThan(8);
+    expect(loaded[0]).toEqual(summary(8));
+  });
+
+  it('drops invalid summaries and tolerates corrupt data', () => {
+    localStorage.setItem('droid-assist.runs', JSON.stringify([null, summary(1), { ...summary(2), outcome: 'great' }, { ...summary(3), attempted: '3' }]));
+    expect(loadRunSummaries()).toEqual([summary(1)]);
+    localStorage.setItem('droid-assist.runs', '{nope');
+    expect(loadRunSummaries()).toEqual([]);
   });
 });
