@@ -408,7 +408,8 @@ export function useAssist() {
   const plannedGoalRef = useRef('');
   /** Background variations: superseded goals keep running, inside every guardrail, while the main executor is idle. */
   const variations = useVariations({
-    main: () => ({ goal: goalRef.current, steps: stepsRef.current }),
+    // The main project is the goal its steps were planned or loaded for; the typed goal only while nothing is planned.
+    main: () => ({ goal: plannedGoalRef.current || goalRef.current, steps: stepsRef.current }),
     setMain: (nextGoal, nextSteps) => {
       goalRef.current = nextGoal;
       setGoal(nextGoal);
@@ -424,6 +425,14 @@ export function useAssist() {
     mergeRecords: kb.reattributeVariation,
     forgetRecords: kb.forgetVariation,
   });
+  /**
+   * Before the main steps are replaced for `nextGoal`: when it is another goal than the one the
+   * current steps belong to, those steps keep running as a background variation.
+   */
+  const steerPrevious = (nextGoal: string) => {
+    if (plannedGoalRef.current.toLowerCase() !== nextGoal.trim().toLowerCase()) variations.supersede(plannedGoalRef.current, stepsRef.current, nextGoal);
+    plannedGoalRef.current = nextGoal.trim();
+  };
 
   supervisorRef.current = supervisor;
   timelineRef.current = timeline;
@@ -2368,8 +2377,7 @@ export function useAssist() {
 
   /** Applies a plan's steps as the current workflow and logs them (with the arrangement, when the goal asked for one). */
   const applyPlan = (text: string, planned: WorkflowStep[], why: string, arrangement = '') => {
-    if (plannedGoalRef.current !== text.trim()) variations.supersede(plannedGoalRef.current, stepsRef.current, text);
-    plannedGoalRef.current = text.trim();
+    steerPrevious(text);
     stepsRef.current = planned;
     setSteps(planned);
     markPlan();
@@ -2887,6 +2895,7 @@ export function useAssist() {
   };
 
   const loadCard = (card: SavedCard) => {
+    steerPrevious(card.name);
     expectRef.current = [];
     stepsRef.current = card.steps.map((s) => ({ ...s, status: 'pending' as const }));
     setSteps(stepsRef.current);

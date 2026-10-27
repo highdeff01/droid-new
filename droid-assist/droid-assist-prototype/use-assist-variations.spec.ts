@@ -77,6 +77,43 @@ describe('useAssist background variations', () => {
     expect(r.current.steps.map((s) => s.status)).toEqual(['pending']);
   });
 
+  it('steers steps replaced by a loaded flow into a variation that keeps their own goal', async () => {
+    const r = await mount();
+    await plan(r, 'add two and two');
+    act(() => r.current.loadCard(r.current.cards.find((c) => c.id === 'c2')!));
+    expect(r.current.variations.variations.map((v) => [v.goal, v.steps.map((s) => s.text)])).toEqual([['add two and two', ['2+2', '3+3']]]);
+    await plan(r, 'multiply nine by nine');
+    expect(r.current.variations.variations).toHaveLength(1);
+    act(() => r.current.loadCard(r.current.cards.find((c) => c.id === 'c1')!));
+    expect(r.current.variations.variations.map((v) => [v.goal.toLowerCase(), v.steps.map((s) => s.text)])).toContainEqual(['multiply nine by nine', ['9*9']]);
+    expect(r.current.steps.map((s) => s.text)).toEqual(['2+2', '3+3']);
+  });
+
+  it('a new variation started after loading a flow keeps the loaded flow\'s goal with its steps', async () => {
+    const r = await mount();
+    await plan(r, 'add two and two');
+    act(() => r.current.loadCard(r.current.cards.find((c) => c.id === 'c2')!));
+    act(() => r.current.variations.startVariation());
+    const pairs = r.current.variations.variations.map((v) => [v.goal.toLowerCase(), v.steps.map((s) => s.text)]);
+    expect(pairs).toContainEqual(['multiply nine by nine', ['9*9']]);
+    expect(pairs).toContainEqual(['add two and two', ['2+2', '3+3']]);
+    expect(r.current.steps).toEqual([]);
+  });
+
+  it('switching focus moves the variation\'s portfolio records to the main operation', async () => {
+    const r = await mount();
+    await plan(r, 'add two and two');
+    await plan(r, 'multiply nine by nine');
+    const [v] = r.current.variations.variations;
+    act(() => r.current.variations.switchTo(v.id));
+    expect(r.current.steps.map((s) => s.text)).toEqual(['2+2', '3+3']);
+    const own = r.current.knowledge.portfolios.filter((e) => e.actor === variationActor(v.id));
+    expect(own.length).toBeGreaterThan(0);
+    expect(own.every((e) => e.source.operation === 'add two and two' && e.source.opId === null)).toBe(true);
+    const [other] = r.current.variations.variations;
+    expect(other.goal).toBe('multiply nine by nine');
+  });
+
   it('starts a new variation from the current project and merges it back', async () => {
     const r = await mount();
     await plan(r, 'add two and two');

@@ -89,12 +89,14 @@ export function useVariations(deps: VariationDeps) {
     depsRef.current.setMain('', []);
   };
 
-  /** Focuses `id`: it becomes the main project and the current main keeps running in the background. */
+  /** Focuses `id`: it becomes the main project (its records join the main operation) and the current main keeps running in the background. */
   const switchTo = (id: string) => {
     const v = find(id);
     if (!v) return;
     const { goal, steps } = depsRef.current.main();
+    budgetsRef.current.delete(id);
     change((list) => removeVariation(list, id));
+    depsRef.current.mergeRecords(id, { operation: v.goal, opId: null });
     if (goal.trim() && steps.length) toBackground(goal, steps, `focus switched to "${v.goal}"`);
     depsRef.current.setMain(v.goal, v.steps);
     depsRef.current.log(`Focus switched to variation "${v.goal}"`, 'ok');
