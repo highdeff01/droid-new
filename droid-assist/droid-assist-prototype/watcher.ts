@@ -10,17 +10,35 @@ export const NOTE_LIMIT = 100;
 export const PROPOSAL_LIMIT = 50;
 export const TEST_LIMIT = 50;
 
-/** What a note records: a notable UI element, a state change, something unusual, an opportunity. */
-export type NoteKind = 'element' | 'change' | 'unusual' | 'opportunity';
-export const NOTE_KINDS: readonly NoteKind[] = ['element', 'change', 'unusual', 'opportunity'];
+/**
+ * What a note records: a notable UI element, a state change, something unusual, an opportunity —
+ * or, from the agents during operations, a wait/wake, a decision, or an error.
+ */
+export type NoteKind = 'element' | 'change' | 'unusual' | 'opportunity' | 'wake' | 'decision' | 'error';
+export const NOTE_KINDS: readonly NoteKind[] = ['element', 'change', 'unusual', 'opportunity', 'wake', 'decision', 'error'];
 
-/** One short, timestamped observation of the screen. */
+/** One short, timestamped observation of the screen or of an operation. */
 export interface WatchNote {
   id: string;
   time: number;
   kind: NoteKind;
   text: string;
+  /** The agent that took it (Screen watcher, Wake, Backup watcher, …). */
+  source?: string;
+  /** The operation (goal) it was taken during. */
+  op?: string;
 }
+
+/** What notes are recalled by: any of kind, operation and agent; an absent field matches all. */
+export interface NoteQuery {
+  kind?: NoteKind;
+  op?: string;
+  source?: string;
+}
+
+/** The notes matching every given field of `q`, newest first as stored. */
+export const recallNotes = (notes: WatchNote[], q: NoteQuery): WatchNote[] =>
+  notes.filter((n) => (q.kind === undefined || n.kind === q.kind) && (q.op === undefined || n.op === q.op) && (q.source === undefined || n.source === q.source));
 
 /**
  * What a proposal changes: add a popup to the close list (a learned "add" pattern), save a

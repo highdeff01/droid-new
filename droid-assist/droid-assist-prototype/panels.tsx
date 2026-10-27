@@ -19,7 +19,9 @@ import type { ElementSource, ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
 import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js';
 import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
-import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
+import { proposalStep, recallNotes, type NoteKind, type WatchProposal } from './watcher.js';
+import { WAKE_MS_MAX, WAKE_MS_MIN } from './wake.js';
+import { contextText } from './context-workflow.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
 import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, type AiView } from './ai.js';
 import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-history.js';
@@ -28,7 +30,7 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { BackupSettings } from './backup-panel.js';
 import styles from './droid-assist.module.css';
 
-const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity' };
+const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity', wake: 'Wake', decision: 'Decision', error: 'Error' };
 const clock = (t: number) => new Date(t).toLocaleTimeString();
 
 /** One proposal with Accept / Dismiss (pending) and Test (when it has an on-screen target). */
@@ -68,6 +70,37 @@ export function WatcherPanel({ engine }: { engine: AssistEngine }) {
       <ul className={styles.log}>
         {notes.map((n) => <li key={n.id}><small>{clock(n.time)}</small> <b>{NOTE_LABEL[n.kind]}</b> {n.text}</li>)}
       </ul>
+    </section>
+  );
+}
+
+/** Wake and continue: the running wait, parallel context workflows, and this operation's notes grouped by kind. */
+export function WakePanel({ engine }: { engine: AssistEngine }) {
+  const { wait, contexts, endContext } = engine.wake;
+  const op = engine.goal.trim();
+  const opNotes = op ? recallNotes(engine.watcher.notes, { op }) : [];
+  const errors = recallNotes(engine.watcher.notes, { kind: 'error' });
+  return (
+    <section className={styles.panel} aria-label="Wake and continue">
+      <h3>Wake and continue <small>{engine.settings.stages.wake ? `wakes after ${(engine.settings.wakeMs / 1000).toFixed(0)} s` : 'off — enable Wake and continue in Loop control'}</small></h3>
+      {wait ? (
+        <p>Waiting before <b>{wait.step}</b> on: {wait.waitingOn} <small>· since {clock(wait.since)} · wakes in {Math.round(wait.delay / 1000)} s</small></p>
+      ) : (
+        <p className={styles.muted}>Not waiting.</p>
+      )}
+      <h4>Parallel workflows <small>{contexts.filter((c) => c.running).length} running</small></h4>
+      <ul className={styles.log}>
+        {contexts.map((c) => (
+          <li key={c.id} data-tone={c.running ? 'ok' : 'info'}>
+            <small>{clock(c.time)} · {c.by}</small> {contextText(c)}
+            {c.running && <button type="button" onClick={() => endContext(c.id, 'user')}>Stop</button>}
+          </li>
+        ))}
+      </ul>
+      <h4>This operation <small>{opNotes.length} note(s)</small></h4>
+      <ul className={styles.log}>{opNotes.map((n) => <li key={n.id}><small>{clock(n.time)} · {n.source ?? 'Screen watcher'}</small> <b>{NOTE_LABEL[n.kind]}</b> {n.text}</li>)}</ul>
+      <h4>Errors <small>{errors.length}</small></h4>
+      <ul className={styles.log}>{errors.map((n) => <li key={n.id} data-tone="error"><small>{clock(n.time)} · {n.source ?? ''}{n.op ? ` · ${n.op}` : ''}</small> {n.text}</li>)}</ul>
     </section>
   );
 }
@@ -327,6 +360,10 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       </label>
       <label className={styles.setting}>Screen watcher: observe every <b>{(settings.watchMs / 1000).toFixed(1)} s</b>
         <input type="range" min={WATCH_MS_MIN} max={WATCH_MS_MAX} step={500} value={settings.watchMs} onChange={(e) => setSettings({ ...settings, watchMs: +e.target.value })} />
+      </label>
+      <label className={styles.setting}>Wake timer: wake the AI after waiting <b>{(settings.wakeMs / 1000).toFixed(0)} s</b>
+        <small>The AI may ask for a longer wait when it estimates one; the backup watcher can wake it earlier.</small>
+        <input type="range" min={WAKE_MS_MIN} max={WAKE_MS_MAX} step={5000} value={settings.wakeMs} onChange={(e) => setSettings({ ...settings, wakeMs: +e.target.value })} aria-label="Wake timer" />
       </label>
       <label className={styles.setting}>Screen-change threshold <b>{settings.changeCells} cells</b>
         <input type="range" min={2} max={40} value={settings.changeCells} onChange={(e) => setSettings({ ...settings, changeCells: +e.target.value })} aria-label="Screen-change threshold" />

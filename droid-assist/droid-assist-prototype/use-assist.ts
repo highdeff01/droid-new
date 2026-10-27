@@ -29,7 +29,10 @@ import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './rec
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
 import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
 import { appendSummary, runSummary, type RunSummary } from './run-stats.js';
-import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, reorderSteps, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
+import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, recallNotes, reorderSteps, type NoteKind, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
+import { DEFAULT_WAKE_MS } from './wake.js';
+import type { DecisionHandlers, WakeDecision } from './wake-decision.js';
+import { useWake } from './use-wake.js';
 import { forgetElement, listElements, rememberElement, type ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
 import { POINTER_LIMIT, detectDwell, dwellObservation, findFamiliar, learnCoordinate, learnedSeed, learnedTargets, type CoordObservation } from './coords.js';
@@ -117,7 +120,7 @@ const at = (x: number, y: number) => `(${(x * 100).toFixed(1)}%, ${(y * 100).toF
 /** Timeline text of a popup decision. */
 const popupSummary = (d: PopupDecision) => (d.close ? `Close the popup at ${at(d.x, d.y)} — ${d.reason}` : `Leave it — ${d.reason}`);
 /** The executor's verdict on a step before dispatch: run it as proposed, wait, or fail honestly. */
-type Justified = { kind: 'go'; step: WorkflowStep; proposal: Proposal } | { kind: 'wait'; reason: string } | { kind: 'fail'; reason: string };
+type Justified = { kind: 'go'; step: WorkflowStep; proposal: Proposal } | { kind: 'wait'; reason: string; waitMs?: number } | { kind: 'fail'; reason: string };
 /** Describes the pending step for the screen-change responder. */
 const describeNext = (s: WorkflowStep | undefined) => (s ? `"${s.name}" — ${s.action} "${s.target ?? s.name}" at ${at(s.correctedX ?? s.x, s.correctedY ?? s.y)}` : null);
 /**
@@ -154,6 +157,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   monitorMode: 'app',
   displayId: null,
   watchMs: 5000,
+  wakeMs: DEFAULT_WAKE_MS,
   autoAct: false,
   aiHelp: true,
   showTrail: true,
@@ -463,9 +467,17 @@ export function useAssist() {
     };
   }, []);
 
+  /** An operation note taken by an agent, tagged with its source and the current goal (deduplicated, persisted). */
+  const takeNote = useCallback((kind: NoteKind, text: string, source: string) => {
+    watcherRef.current = { ...watcherRef.current, notes: mergeNotes(watcherRef.current.notes, [{ kind, text, source, ...(goalRef.current.trim() ? { op: goalRef.current.trim() } : {}) }]).notes };
+    setWatcher(watcherRef.current);
+  }, []);
+
+  /** Every log line; an error line is also kept as an 'error' note so errors stay recallable. */
   const addLog = useCallback((from: string, message: string, tone: LogEntry['tone'] = 'info', shots?: string[]) => {
     setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}) }, ...l].slice(0, LOG_LIMIT));
-  }, []);
+    if (tone === 'error') takeNote('error', message, from);
+  }, [takeNote]);
 
   /** Every trim or reset of the AI conversation history is logged and shown. */
   historyChangeRef.current = (change) => {
@@ -1184,6 +1196,31 @@ export function useAssist() {
     return framesRef.current[0] ?? null;
   };
 
+  /** Recent log lines and this operation's notes, newest first; with `since`, only those after it. */
+  const recentInfo = (since = 0) => [
+    ...logRef.current.filter((l) => l.time > since).slice(0, 8).map((l) => `[${l.source}] ${l.message}`),
+    ...recallNotes(watcherRef.current.notes, { op: goalRef.current.trim() }).filter((n) => n.time > since).slice(0, 5).map((n) => `[note: ${n.kind}] ${n.text}`),
+  ];
+
+  /** Wake and continue: the backup-watched wait, the wake decision and parallel context workflows. */
+  const wake = useWake({
+    settings: () => settingsRef.current,
+    frames: () => framesRef.current,
+    info: recentInfo,
+    errorSince: (since) => logRef.current.find((l) => l.tone === 'error' && l.time > since),
+    capture: liveFrame,
+    askFor,
+    stageOn,
+    thought,
+    addLog,
+    takeNote,
+    handlers: () => wakeHandlers,
+    runMove: (step) => performStep(step, 'Context workflow', autoBudgetRef.current, !armedRef.current),
+    goal,
+    aborted,
+    isAborted: () => abortedRef.current,
+  });
+
   /**
    * The agent test of a proposal: a dry-run move to the proposed point, verified against the
    * live frame by drift/template matching (template = the frame the AI saw). With the bridge it
@@ -1731,7 +1768,7 @@ export function useAssist() {
     }
     const p = await proposeNow(actor, step);
     if (p.ready) return { kind: 'go', step: adopt(step, p, false), proposal: p };
-    return canWait ? { kind: 'wait', reason: p.why } : repropose(actor, step, `the first proposal was not ready: ${p.why}`);
+    return canWait ? { kind: 'wait', reason: p.why, waitMs: p.waitMs } : repropose(actor, step, `the first proposal was not ready: ${p.why}`);
   };
 
   /** What the briefing cross-references the plan against. */
@@ -1879,6 +1916,7 @@ export function useAssist() {
     }
     if (j.kind === 'wait') {
       setSync({ level: 'yellow', detail: `AI is waiting on "${next.name}": ${j.reason}` });
+      wake.arm(next.name, j.reason, j.waitMs);
       return;
     }
     if (j.kind === 'fail') failUnjustified(idx, 'Auto-Actor', j.reason);
@@ -1906,7 +1944,7 @@ export function useAssist() {
   /** Auto Act: with the AI online, the model handles popups and runs the next pending step. Disarmed = dry run. */
   const autoAct = async (frame: Frame) => {
     const { autoAct: on } = settingsRef.current;
-    if (!on || abortedRef.current || autoBusyRef.current || watchBusyRef.current || replayingRef.current || recordingRef.current || supervisorMovingRef.current || subRunningRef.current || !stageOn('screenResponder')) return;
+    if (!on || abortedRef.current || autoBusyRef.current || watchBusyRef.current || replayingRef.current || recordingRef.current || supervisorMovingRef.current || subRunningRef.current || wake.waiting() || !stageOn('screenResponder')) return;
     if (!aiOnline() || Date.now() - lastStepAt.current < 1500) return;
     autoBusyRef.current = true;
     try {
@@ -2483,6 +2521,37 @@ export function useAssist() {
     }
   };
 
+  /** The step a wake decision concerns: the first pending one. */
+  const pendingName = () => stepsRef.current.find((s) => s.status === 'pending')?.name ?? 'the current operation';
+
+  /** Re-plans the remaining steps for a wake decision, with its reason as the goal check. */
+  const replanAfterWake = (reason: string) => planNext(runGoalOf(), stepsRef.current, { complete: false, progress: false, reason, thinking: null }, (autoLoopRef.current?.iteration ?? 0) + 1);
+
+  /** What each wake decision does; nothing runs before the AI has decided. */
+  const wakeHandlers: DecisionHandlers<Promise<void>> = {
+    apply: async () => {
+      const frame = framesRef.current[0];
+      if (frame) await autoAct(frame);
+    },
+    reroute: (d: WakeDecision) => replanAfterWake(`reroute after waking — ${d.reason}`),
+    stop: async () => {
+      setSettings((s) => ({ ...s, autoAct: false }));
+      addLog('Wake', 'Auto Act stopped by the AI after waking', 'warn');
+    },
+    alternate: (d) => replanAfterWake(`use an alternate method: ${d.method} — ${d.reason}`),
+    wait: async (d) => {
+      wake.arm(pendingName(), d.reason, d.waitMs);
+    },
+    new: async (d) => {
+      goalRef.current = d.goal!;
+      setGoal(d.goal!);
+      await autoPlan(d.goal!);
+    },
+    parallel: async (d) => {
+      wake.startParallel(d.parallel!, 'AI after waking');
+    },
+  };
+
   /** AI help: the model answers a question about the live screen and points out what it means. */
   const askScreen = async (question = 'What on this screen needs my attention, and what should I do next?') => {
     const f = framesRef.current[0];
@@ -2946,7 +3015,7 @@ export function useAssist() {
     ruler, continuing, habits, deleteHabit, pinHabit, runs,
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
-    watcher, acceptProposal, dismissProposal, testProposal,
+    watcher, acceptProposal, dismissProposal, testProposal, wake,
     triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
     aiHistory, trimAiHistory, resetAiSession,

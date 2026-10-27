@@ -15,6 +15,7 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
+import { WAKE_MS_MAX, WAKE_MS_MIN } from './wake.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -34,11 +35,12 @@ const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'wakeMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
   watchMs: [WATCH_MS_MIN, WATCH_MS_MAX],
+  wakeMs: [WAKE_MS_MIN, WAKE_MS_MAX],
   changeCells: [2, 40],
   maxIterations: [1, 20],
   stepRetries: [STEP_RETRIES_MIN, STEP_RETRIES_MAX],
@@ -303,7 +305,8 @@ const isStr = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
 const optNum = (v: unknown) => v === undefined || isNum(v);
 
 function isNote(v: unknown): v is WatchNote {
-  return isObject(v) && isStr(v.id) && isNum(v.time) && NOTE_KINDS.includes(v.kind as NoteKind) && isStr(v.text);
+  return isObject(v) && isStr(v.id) && isNum(v.time) && NOTE_KINDS.includes(v.kind as NoteKind) && isStr(v.text)
+    && (v.source === undefined || typeof v.source === 'string') && (v.op === undefined || typeof v.op === 'string');
 }
 
 function isProposal(v: unknown): v is WatchProposal {

@@ -245,6 +245,8 @@ export interface AssistSettings {
   displayId: string | null;
   /** How often the Screen watcher observes the live frame, in ms. */
   watchMs: number;
+  /** Wake timer: how long a wait lasts before the AI is woken to continue (the AI may ask for longer), in ms. */
+  wakeMs: number;
   autoAct: boolean;
   aiHelp: boolean;
   showTrail: boolean;

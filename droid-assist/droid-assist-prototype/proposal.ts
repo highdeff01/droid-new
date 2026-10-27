@@ -21,6 +21,8 @@ export interface Proposal extends Thought {
   why: string;
   /** Whether the model made the proposal or it was built locally while the AI is offline. */
   source: 'ai' | 'local';
+  /** Not ready: how long the model estimates it must wait, in ms, when it gave one. */
+  waitMs?: number;
 }
 
 /** What a proposal is justified against. */
@@ -65,6 +67,7 @@ function proposePrompt(step: WorkflowStep, ctx: ProposalContext): string {
     ...(ctx.patterns.length ? ['Learned habits/patterns:', ...ctx.patterns] : []),
     ...(ctx.redo ? [`This is a RE-PROPOSAL: ${ctx.redo}. Find where the target is now, or set ready=false if the step can no longer be justified.`] : []),
     'Set ready=true only if this step serves the goal on the current screen, with x,y the target\'s current center; "why" says in one or two sentences how the step serves the goal.',
+    'When ready=false because something is still loading or happening, "why" says what you are waiting on and you may add "waitMs": your estimate of how long it takes, in ms.',
   ];
   return lines.join('\n');
 }
@@ -80,7 +83,8 @@ export async function proposeStep(ask: AskFn, frame: Frame | null, step: Workflo
   const x = pointer && r.x !== undefined ? toUnit(r.x, view.w) : p.x;
   const y = pointer && r.y !== undefined ? toUnit(r.y, view.h) : p.y;
   const what = whatText(step.action, targetOf(step), x, y, step.text);
-  return { ready: r.ready === true, action: step.action, target: targetOf(step), x, y, what, why: withChange(ctx.change, what, why), source: 'ai', thinking };
+  const waitMs = r.ready !== true && typeof r.waitMs === 'number' && Number.isFinite(r.waitMs) && r.waitMs > 0 ? { waitMs: r.waitMs } : {};
+  return { ready: r.ready === true, action: step.action, target: targetOf(step), x, y, what, why: withChange(ctx.change, what, why), source: 'ai', thinking, ...waitMs };
 }
 
 /** A proposal built without the model (AI offline): the planned what, with `why` stating the basis. */
