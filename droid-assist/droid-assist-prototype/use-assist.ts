@@ -45,6 +45,8 @@ import { SUPERVISOR_INTERVAL_MS, SUPERVISOR_TICK_MS, applyFixes, executorBusy as
 import { BUS_AGENTS, elementLine, forward, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
 import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
+import { useApprovals } from './use-approvals.js';
+import { DEFAULT_OPERATION_POLICY, decisionLesson, editedStep, type ApprovalItem, type OperationPolicy } from './approvals.js';
 import { buildElementMap } from './element-map.js';
 import type { Calibration } from './calibration.js';
 import { remapStep, useMeasure } from './use-measure.js';
@@ -189,6 +191,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   errorUrl: '',
   errorForwarding: false,
   errorToken: '',
+  operationPolicy: DEFAULT_OPERATION_POLICY,
 };
 
 /** A background agent the user can toggle; each also has an inbox on the inter-agent bus. */
@@ -516,6 +519,8 @@ export function useAssist() {
   /** Error forwarding: reports carry the recent log and the current frame. */
   const errorForwarding = useErrorForwarding(settings, addLog, () => ({ log: logRef.current, frame: framesRef.current[0] ?? null }));
   const captureError = errorForwarding.capture;
+  /** The approval system: the dispatch gate, the point filter, the queue and its run-check. */
+  const approvals = useApprovals(settings, () => patternsRef.current, addLog);
 
   const annotationsRef = useRef(annotations);
   annotationsRef.current = annotations;
@@ -1066,6 +1071,8 @@ export function useAssist() {
     if (abortedRef.current) return refused(step, 'Aborted — real input not sent');
     if (!stageOn('executor')) return refused(step, `${stageOff('executor')} — not executed`);
     if (step.action === 'measure') return measureStep(step, actor);
+    const held = dryRun ? null : approvals.gate(step, actor, { goal: goalRef.current, planned: stepsRef.current.some((s) => s.id === step.id) });
+    if (held) return refused(step, held);
     const out = await performInput(step, actor, budget, dryRun);
     ruler.noteGrounding(out);
     if (out.ok) markOutcome(step, out);
@@ -2843,7 +2850,10 @@ export function useAssist() {
     const proposals = mergeProposals(watcherRef.current.proposals, obs.proposals, time);
     updateWatcher((w) => ({ ...w, notes: notes.notes, proposals: proposals.proposals }));
     if (notes.added.length) addLog('Screen watcher', `${notes.added.length} new note(s): ${notes.added.map((n) => n.text).join('; ')}`, 'info');
-    proposals.added.forEach((p) => addLog('Screen watcher', `Proposal: ${p.text}`, 'info'));
+    proposals.added.forEach((p) => {
+      addLog('Screen watcher', `Proposal: ${p.text}`, 'info');
+      if (approvals.route({ text: p.text, requestedBy: 'Screen watcher', proposalId: p.id }, goalRef.current) === 'auto') acceptProposal(p.id);
+    });
   };
 
   /** One watcher round: observe the live frame, record notes/proposals, then background-test one untested proposal. */
@@ -2919,6 +2929,64 @@ export function useAssist() {
     kb.noteSignal('correction', `dismissed proposal: ${p.text}`);
     addLog('Screen watcher', `Dismissed "${p.text}"`, 'info');
   };
+
+  /** A decision feeds the learned-methods memory (avoid on reject, add on approve/edit). */
+  const learnDecision = (item: ApprovalItem) => {
+    const lesson = decisionLesson(item);
+    addPatterns([newPattern(lesson.kind, lesson.pattern, lesson.context)]);
+    addLog('Patterns', `Approval decision — learned: ${lesson.kind} ${lesson.pattern}`, lesson.kind === 'avoid' ? 'warn' : 'ok');
+  };
+
+  /**
+   * Runs an approved operation through the one dispatch path, so abort, arm and budget still
+   * apply; it resolves only when the operation really executed, otherwise the reason is noted.
+   */
+  const runApproved = async (item: ApprovalItem, step: WorkflowStep, status: 'approved' | 'edited', edit?: string) => {
+    if (executorBusy()) {
+      approvals.note(item.id, 'Busy running a step — approve again when it finishes');
+      return;
+    }
+    approvals.release(step.id);
+    const out = await performStep(step, `Approvals (${item.requestedBy})`, createBudget(settingsRef.current.actionBudget), false);
+    approvals.release(step.id, false);
+    if (!out.executed) {
+      approvals.note(item.id, `Approved but not executed — ${out.message}`);
+      addLog('Approvals', `"${item.summary}" approved but not executed — ${out.message}`, 'warn');
+      return;
+    }
+    const decided = approvals.decide(item.id, status, edit);
+    if (decided) learnDecision(decided);
+  };
+
+  /** Approves (elevates) a pending item, or approves it with the user's edited text. */
+  const approveWith = async (id: string, status: 'approved' | 'edited', edit?: string) => {
+    const item = approvals.current(id);
+    if (!item || item.status !== 'pending') return;
+    if (item.step) {
+      await runApproved(item, edit === undefined ? item.step : editedStep(item.step, edit), status, edit);
+      return;
+    }
+    if (item.proposalId && edit !== undefined) updateWatcher((w) => ({ ...w, proposals: patchProposal(w.proposals, item.proposalId!, { text: edit }) }));
+    if (item.proposalId) acceptProposal(item.proposalId);
+    const decided = approvals.decide(id, status, edit);
+    if (decided) learnDecision(decided);
+  };
+
+  const approveItem = (id: string) => approveWith(id, 'approved');
+  const editItem = (id: string, text: string) => (text.trim() ? approveWith(id, 'edited', text.trim()) : Promise.resolve());
+
+  const rejectItem = (id: string) => {
+    const item = approvals.decide(id, 'rejected');
+    if (!item) return;
+    if (item.proposalId) dismissProposal(item.proposalId);
+    learnDecision(item);
+  };
+
+  /** The tree's run-check: re-evaluates every pending item against the current goal, plan, history and proposals. */
+  const runApprovalCheck = () => approvals.check({ now: Date.now(), goal: goalRef.current, steps: stepsRef.current, history, proposals: watcherRef.current.proposals });
+
+  /** Updates the user's operation conditions. */
+  const setOperationPolicy = (change: Partial<OperationPolicy>) => setSettings((s) => ({ ...s, operationPolicy: { ...s.operationPolicy, ...change } }));
 
   /** The Test button: a background test of one proposal, refused while the executor or watcher is busy. */
   const testProposal = async (id: string) => {
@@ -3225,6 +3293,7 @@ export function useAssist() {
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     watcher, acceptProposal, dismissProposal, testProposal,
+    approvals: approvals.items, approvalTree: approvals.tree, approveItem, editItem, rejectItem, runApprovalCheck, setOperationPolicy,
     triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
     aiHistory, trimAiHistory, resetAiSession,
