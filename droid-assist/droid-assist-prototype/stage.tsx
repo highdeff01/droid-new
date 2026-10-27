@@ -217,9 +217,14 @@ export function Stage({ engine }: { engine: AssistEngine }) {
         tabIndex={0}
         aria-label="Screen stage"
         onKeyDown={(e) => {
-          if (!recording) return;
+          if (!recording && source !== 'demo') return;
           e.preventDefault();
           engine.onStageKey(e);
+        }}
+        onDoubleClick={(e) => {
+          if (mapMode) return;
+          const p = norm(e);
+          engine.onStageDoubleClick(p.x, p.y);
         }}
         onWheel={(e) => {
           const p = norm(e);

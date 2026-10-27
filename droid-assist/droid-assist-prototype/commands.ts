@@ -8,6 +8,7 @@ const COMMANDS = {
   test: 'Usage: /test links Files, Notes · /test route Cart > Checkout > Pay · /test <what to verify>',
   measure: 'Usage: /measure <a> to <b> [to <c>…], e.g. /measure files icon to game icon, /measure files icon to left edge, /measure 100,200 to 400,200',
   arrange: 'Usage: /arrange <how to move or reorder elements>, e.g. /arrange move the Files icon below Game',
+  scenario: 'Usage: /scenario <dragon|wedding> — resets the test world and plans that persona goal',
   do: 'Usage: /do <capability id> {json params} · /do <request for the main AI>, e.g. /do script.run {"name":"login"}',
 } as const;
 
@@ -26,6 +27,7 @@ export function parseCommand(input: string): AssistCommand | null {
   if (!text.startsWith('/')) return null;
   const match = /^\/([a-z]+)(?:\s+(.*))?$/.exec(text);
   const name = match?.[1] ?? '';
+  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal> or /scenario <dragon|wedding>` };
   if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal> or /do <capability>` };
   const target = (match[2] ?? '').trim();
   return target ? { kind: name, target } : { kind: 'error', message: COMMANDS[name] };

@@ -4,6 +4,9 @@
  * It gives the drift, sync and error-detection features something real to measure.
  */
 
+import { drawTestWorld, drawWorldToggle } from './test-world-draw.js';
+import type { World } from './test-world.js';
+
 /** Ticks per ad cycle in the demo desktop. */
 export const AD_CYCLE = 24;
 
@@ -103,8 +106,15 @@ export function demoAd(t: number) {
   return { visible: phase >= 15 && phase < 21, x: 0.42, y: 0.3, w: 0.4, h: 0.4, closeX: 0.8, closeY: 0.335 };
 }
 
-/** Draws the demo desktop for tick `t` onto a canvas context of size w×h. */
-export function drawDemoDesktop(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, adDismissed = false, file: DemoFile = initialDemoFile(), icons: DemoIcon[] = initialDemoIcons()) {
+/**
+ * Draws the demo desktop for tick `t` onto a canvas context of size w×h; with a `world` it draws
+ * the test world scene instead. Both scenes carry the taskbar button that switches between them.
+ */
+export function drawDemoDesktop(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, adDismissed = false, file: DemoFile = initialDemoFile(), icons: DemoIcon[] = initialDemoIcons(), world: World | null = null) {
+  if (world) {
+    drawTestWorld(ctx, w, h, t, world);
+    return;
+  }
   const bg = ctx.createLinearGradient(0, 0, w, h);
   bg.addColorStop(0, '#1e293b');
   bg.addColorStop(1, '#0f172a');
@@ -146,6 +156,7 @@ export function drawDemoDesktop(ctx: CanvasRenderingContext2D, w: number, h: num
   ctx.fillStyle = '#94a3b8';
   ctx.font = `${Math.round(h * 0.03)}px monospace`;
   ctx.fillText(`12:${String(Math.floor(t / 2) % 60).padStart(2, '0')}`, w * 0.92, h * 0.975);
+  drawWorldToggle(ctx, w, h, false);
 
   drawDraggable(ctx, w, h, file);
 

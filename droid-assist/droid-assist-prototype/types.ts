@@ -1,5 +1,6 @@
 import type { StageMap } from './loop-control.js';
 import type { AiView } from './ai.js';
+import type { OperationPolicy } from './approvals.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
@@ -294,4 +295,6 @@ export interface AssistSettings {
   errorForwarding: boolean;
   /** Optional bearer token for the error endpoint; never written to the activity log. */
   errorToken: string;
+  /** User-set conditions for AI operation: allowed hours, allowed operation classes, project scope. */
+  operationPolicy: OperationPolicy;
 }
