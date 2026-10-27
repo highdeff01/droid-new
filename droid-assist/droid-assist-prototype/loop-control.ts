@@ -45,6 +45,7 @@ export const STAGES = [
   { id: 'selfTest', group: 'agent', name: 'Self-test', description: 'AI tests its mapped elements and familiar targets, and the heavy element tester stress-tests one', verifies: false },
   { id: 'workarounds', group: 'agent', name: 'Workarounds', description: 'After a failed step the AI proposes workflow edits: new, removed or reordered steps and alternate targets', verifies: false },
   { id: 'workflowCreation', group: 'agent', name: 'Workflow creation', description: 'AI turns successful sequences into new workflow packs, verified by an agent before proposing', verifies: false },
+  { id: 'goalTracer', group: 'agent', name: 'Goal tracer', description: 'Traces the active goal live: step outcomes, verdicts and agent reports; flags off-path, stalls and completion', verifies: false },
 ] as const satisfies ReadonlyArray<Omit<Stage, 'id'> & { id: string }>;
 
 /** The id of a stage or agent. */

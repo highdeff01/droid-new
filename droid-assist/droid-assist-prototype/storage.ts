@@ -35,10 +35,15 @@ import { SECTION_EVENT_LIMIT, SECTION_LIMIT, type ScreenSection, type SectionEve
 import { WAKE_MS_MAX, WAKE_MS_MIN } from './wake.js';
 import { EMPTY_INITIATIVE, INITIATIVE_CATEGORIES, INITIATIVE_LOG_LIMIT, INITIATIVE_PROPOSAL_LIMIT, INITIATIVE_STATUSES, SCAN_SEC_MAX, SCAN_SEC_MIN, SELF_TEST_MODES, STRESS_CYCLES_MAX, STRESS_CYCLES_MIN, STRESS_LIMIT } from './initiative.js';
 import type { AutoApplyMap, InitiativeCategory, InitiativeEntry, InitiativeProposal, InitiativeState, InitiativeStatus, SelfTestMode, StressReport } from './initiative.js';
+import { GOAL_LIMIT, GOAL_SOURCES, GOAL_STATUSES, OBSTACLE_CAUSES, STEP_STATES, type GoalRecord, type GoalSource, type GoalStatus, type Obstacle, type ObstacleCause, type StepState, type StepTrace, type TracedCheck } from './goal-tracer.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
 export const WATCH_MS_MAX = 30000;
+
+/** Valid range of the Goal tracer's stall threshold (setbacks in a row; matches its Settings slider). */
+export const GOAL_STALL_MIN = 1;
+export const GOAL_STALL_MAX = 10;
 
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
@@ -50,6 +55,7 @@ const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', l
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', dossiers: 'droid-assist.dossiers' } as const;
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', sections: 'droid-assist.sections' } as const;
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', initiative: 'droid-assist.initiative' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', goals: 'droid-assist.goals' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -66,6 +72,7 @@ const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | '
   crewSize: [CREW_SIZE_MIN, CREW_SIZE_MAX],
 const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'wakeMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
 const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'scanSec' | 'stressCycles', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'goalStall', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
@@ -82,6 +89,7 @@ const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | '
   aiTimeoutMs: [AI_TIMEOUT_MS_MIN, AI_TIMEOUT_MS_MAX],
   scanSec: [SCAN_SEC_MIN, SCAN_SEC_MAX],
   stressCycles: [STRESS_CYCLES_MIN, STRESS_CYCLES_MAX],
+  goalStall: [GOAL_STALL_MIN, GOAL_STALL_MAX],
 };
 
 /** A step as persisted: its screenshot without the pixel buffer. */
@@ -511,6 +519,45 @@ export const loadDossiers = (): PositionDossier[] => listOf(readJson(KEYS.dossie
 export function saveDossiers(dossiers: PositionDossier[]) {
   let kept = pruneDossiers(dossiers);
   while (!writeJson(KEYS.dossiers, kept) && kept.length) kept = kept.slice(0, Math.floor(kept.length / 2));
+function isStepTrace(v: unknown): v is StepTrace {
+  return isObject(v) && typeof v.name === 'string' && STEP_STATES.includes(v.state as StepState) && isNum(v.at)
+    && optNum(v.doneAt) && optNum(v.verifiedAt) && optNum(v.failedAt);
+}
+
+function isObstacle(v: unknown): v is Obstacle {
+  return isObject(v) && isNum(v.time) && OBSTACLE_CAUSES.includes(v.cause as ObstacleCause) && typeof v.text === 'string';
+}
+
+function isTracedCheck(v: unknown): v is TracedCheck {
+  return isObject(v) && isNum(v.time) && typeof v.complete === 'boolean' && typeof v.progress === 'boolean' && typeof v.reason === 'string';
+}
+
+const isStrList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+
+/** Every plan step id has a valid trace, and every trace belongs to a plan step. */
+function hasStepTraces(stepIds: string[], steps: unknown): boolean {
+  if (!isObject(steps)) return false;
+  return stepIds.every((id) => isStepTrace(steps[id])) && Object.keys(steps).every((id) => stepIds.includes(id));
+}
+
+function isGoalRecord(v: unknown): v is GoalRecord {
+  return isObject(v) && isStr(v.id) && isStr(v.goal) && GOAL_SOURCES.includes(v.source as GoalSource) && isNum(v.createdAt) && isNum(v.updatedAt)
+    && GOAL_STATUSES.includes(v.status as GoalStatus) && isStrList(v.stepIds) && hasStepTraces(v.stepIds, v.steps)
+    && Array.isArray(v.obstacles) && v.obstacles.every(isObstacle) && isNum(v.retries) && v.retries >= 0
+    && (v.workflowId === null || typeof v.workflowId === 'string') && isStrList(v.runIds)
+    && isNum(v.progress) && v.progress >= 0 && v.progress <= 100 && isNum(v.stalls) && isNum(v.checkedProgress)
+    && (v.lastCheck === null || isTracedCheck(v.lastCheck));
+}
+
+/** The stored goal records (newest first, at most GOAL_LIMIT); invalid entries are dropped. */
+export function loadGoals(): GoalRecord[] {
+  return listOf(readJson(KEYS.goals), isGoalRecord, GOAL_LIMIT);
+}
+
+/** Persists the newest GOAL_LIMIT goal records; while they do not fit, the oldest half is pruned. */
+export function saveGoals(goals: GoalRecord[]) {
+  let kept = goals.slice(0, GOAL_LIMIT);
+  while (!writeJson(KEYS.goals, kept) && kept.length) kept = kept.slice(0, Math.floor(kept.length / 2));
 }
 
 /** Persists the Screen watcher state, capped per list. */

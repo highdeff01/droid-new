@@ -3,6 +3,7 @@ import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, 
 import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveOperationMemory, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadAccessPaths, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveAccessPaths, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadDossiers, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveDossiers, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadGoals, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveGoals, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { HABIT_STALE_MS } from './habits.js';
 import { DEFAULT_STAGES } from './loop-control.js';
@@ -13,6 +14,7 @@ import { RUN_SUMMARY_LIMIT, type RunSummary } from './run-stats.js';
 import { EMPTY_MEMORY, addFailure, addNote, newFailure } from './operation-memory.js';
 import { ACCESS_PATH_LIMIT, type AccessProfile } from './access-paths.js';
 import type { PositionDossier } from './position-dossier.js';
+import { GOAL_LIMIT, createGoal, trace, type TraceContext } from './goal-tracer.js';
 
 const DEFAULTS: AssistSettings = { ...DEFAULT_SETTINGS, aiUrl: 'https://ai.example/api/chat', autoContinue: false };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
@@ -66,6 +68,18 @@ describe('settings', () => {
     for (const bad of [0, -5, 100000, '8000']) {
       localStorage.setItem('droid-assist.settings', JSON.stringify({ watchMs: bad }));
       expect(loadSettings(DEFAULTS).watchMs).toBe(DEFAULTS.watchMs);
+    }
+  });
+
+  it('keeps a stored goalStall within 1..10 and falls back to the default (2) otherwise', () => {
+    expect(DEFAULT_SETTINGS.goalStall).toBe(2);
+    for (const ok of [1, 10]) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ goalStall: ok }));
+      expect(loadSettings(DEFAULTS).goalStall).toBe(ok);
+    }
+    for (const bad of [0, 11, '3']) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ goalStall: bad }));
+      expect(loadSettings(DEFAULTS).goalStall).toBe(DEFAULTS.goalStall);
     }
   });
 
@@ -468,5 +482,57 @@ describe('loadDossiers', () => {
     expect(loaded).toHaveLength(100);
     expect(loaded[0]).toEqual(dossier(119, 119));
     expect(loaded.map((d) => d.lastSeen)).not.toContain(19);
+describe('goals', () => {
+  beforeEach(() => localStorage.clear());
+
+  const ctx: TraceContext = { now: 1000, stallLimit: 2 };
+  const twoStepGoal = (n: number) => {
+    let g = createGoal({ goal: `Finish task ${n}`, source: 'user', steps: [{ id: 's1', name: 'Step 1' }, { id: 's2', name: 'Step 2' }] }, n);
+    g = trace(g, { kind: 'step', stepId: 's1', name: 'Step 1', ok: true, executed: true, detail: '' }, ctx).record;
+    g = trace(g, { kind: 'deviation', cause: 'popup', text: 'ad popup appeared' }, ctx).record;
+    g = trace(g, { kind: 'run', runId: `run_${n}`, outcome: 'success', flowId: 'card_1' }, ctx).record;
+    return g;
+  };
+
+  it('round-trips goals under their own key, newest first', () => {
+    const goals = [twoStepGoal(2), twoStepGoal(1)];
+    saveGoals(goals);
+    expect(localStorage.getItem('droid-assist.goals')).not.toBeNull();
+    expect(loadGoals()).toEqual(goals);
+  });
+
+  it('keeps only the newest GOAL_LIMIT goals', () => {
+    saveGoals(Array.from({ length: GOAL_LIMIT + 5 }, (_, i) => createGoal({ goal: `g${i}`, source: 'user', steps: [] }, i)));
+    expect(loadGoals()).toHaveLength(GOAL_LIMIT);
+  });
+
+  it('prunes the oldest goal records until the write fits in storage', () => {
+    const real = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === 'droid-assist.goals' && v.length > 1200) throw new DOMException('full', 'QuotaExceededError');
+      real.call(this, k, v);
+    });
+    const goals = Array.from({ length: 8 }, (_, i) => createGoal({ goal: `g${8 - i}`, source: 'user', steps: [] }, 8 - i));
+    saveGoals(goals);
+    spy.mockRestore();
+    const loaded = loadGoals();
+    expect(loaded.length).toBeGreaterThan(0);
+    expect(loaded.length).toBeLessThan(8);
+    expect(loaded[0]).toEqual(goals[0]);
+  });
+
+  it('drops invalid records and tolerates corrupt data', () => {
+    const valid = createGoal({ goal: 'Base', source: 'user', steps: [{ id: 's1', name: 'Step 1' }] }, 500);
+    localStorage.setItem('droid-assist.goals', JSON.stringify([
+      valid,
+      null,
+      { ...valid, status: 'great' },
+      { ...valid, source: 'bogus' },
+      { ...valid, steps: {} },
+      { ...valid, progress: 150 },
+    ]));
+    expect(loadGoals()).toEqual([valid]);
+    localStorage.setItem('droid-assist.goals', '{nope');
+    expect(loadGoals()).toEqual([]);
   });
 });

@@ -29,6 +29,8 @@ export interface Objectives {
   why: string;
   /** Whether the what/why came from the model or was built locally (AI offline). */
   source: Proposal['source'];
+  /** The Goal tracer's live progress on the goal, when it is tracing one. */
+  progress?: string;
 }
 
 /** Where the expected screen for a step comes from and the point its target is matched at. */
@@ -95,6 +97,8 @@ export interface BriefingInput {
   knowledge: Knowledge;
   thresholds: DriftThresholds;
   online: boolean;
+  /** The traced goal progress line; omitted or null when no goal is traced. */
+  goalProgress?: string | null;
 }
 
 /** Most briefings kept (newest first, in memory). */
@@ -170,7 +174,7 @@ export function buildBriefing(input: BriefingInput): Briefing {
     time: Date.now(),
     stepId: step.id,
     stepName: step.name,
-    objectives: objectivesOf(input.goal, input.steps, step, proposal),
+    objectives: { ...objectivesOf(input.goal, input.steps, step, proposal), ...(input.goalProgress ? { progress: input.goalProgress } : {}) },
     comparison: compareFrames(input.live, referenceFor(input.steps, step), input.thresholds),
     crossRef: crossReference(targetOf(step), { x: proposal.x, y: proposal.y }, input.knowledge),
     aiNote: input.online ? null : AI_DOWN_NOTE,
