@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ActionRecord, Annotation, AssistSettings, FamiliarElement, Frame, Habit, InputAction, LearnedPattern, LogEntry, SavedCard, ScreenSource, StepAction, SyncLevel, TrailPoint, WorkflowStep } from './types.js';
 import { POINTER_ACTIONS } from './types.js';
 import { MATCHED, SAMPLE_H, SAMPLE_W, SEARCH_RADIUS, STABLE, boundingBox, boxDistance, correctDrift, diffCells, frameDistance, largestCluster, matchTemplate, syncLevelFor, type DriftThresholds } from './drift.js';
@@ -26,7 +26,7 @@ import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, fullJpeg, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, dispatchState, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
 import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './recorder.js';
-import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
+import { LOG_LIMIT, loadCards, loadDossiers, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveDossiers, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
 import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
 import { appendSummary, runSummary, type RunSummary } from './run-stats.js';
 import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, reorderSteps, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
@@ -53,6 +53,9 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
+import { findDossier, recordObservation as recordSighting, recordOutcome as recordPositionOutcome, recordTest, setMove, setPreferred, type Mover, type PositionDossier } from './position-dossier.js';
+import { compensate, seedPoint } from './position-compensation.js';
+import { buildMemory, memoryLines } from './enhanced-memory.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -234,6 +237,8 @@ export function useAssist() {
   const [habits, setHabits] = useState<Habit[]>(() => loadHabits());
   /** One summary per finished run (newest first), for the Stats panel. */
   const [runs, setRuns] = useState<RunSummary[]>(loadRunSummaries);
+  /** Per-element position dossiers (positions, dwell, moves, best/preferred, planned vs actual), persisted. */
+  const [dossiers, setDossiers] = useState<PositionDossier[]>(loadDossiers);
   /** The Screen watcher's notes, proposals and test results (persisted). */
   const [watcher, setWatcher] = useState<WatcherState>(loadWatcher);
   const [triggers, setTriggers] = useState<Trigger[]>(loadTriggers);
@@ -337,6 +342,9 @@ export function useAssist() {
   const statusChangesRef = useRef(0);
   const habitsRef = useRef<Habit[]>(habits);
   const familiarRef = useRef<FamiliarElement[]>(familiar);
+  const dossiersRef = useRef<PositionDossier[]>(dossiers);
+  /** Ids of the steps whose systematic position offset was already applied (once per step). */
+  const offsetStepsRef = useRef(new Set<string>());
   /** Live cursor positions over the stage, for the coordinate learner's dwell detection. */
   const pointerRef = useRef<TrailPoint[]>([]);
   /** Start time of the last dwell the coordinate learner handled, so each rest is observed once. */
@@ -414,6 +422,10 @@ export function useAssist() {
   cardsRef.current = cards;
   patternsRef.current = patterns;
   habitsRef.current = habits;
+  /** Every store cross-referenced into one queryable memory view (Memory panel, briefing, AI context). */
+  const memory = useMemo(() => buildMemory({ cards, habits, patterns, runs, tests: watcher.tests, dossiers }), [cards, habits, patterns, runs, watcher.tests, dossiers]);
+  const memoryRef = useRef(memory);
+  memoryRef.current = memory;
   familiarRef.current = familiar;
   targetRef.current = target;
 
@@ -428,6 +440,7 @@ export function useAssist() {
   useEffect(() => saveFamiliar(familiar), [familiar]);
   useEffect(() => saveHabits(habits), [habits]);
   useEffect(() => saveRunSummaries(runs), [runs]);
+  useEffect(() => saveDossiers(dossiers), [dossiers]);
   useEffect(() => saveWatcher(watcher), [watcher]);
   useEffect(() => saveTriggers(triggers), [triggers]);
   useEffect(() => {
@@ -539,7 +552,8 @@ export function useAssist() {
    */
   const askAi = useCallback(async (req: AskRequest, stage: StageId): Promise<AiReply> => {
     if (!settingsRef.current.stages[stage]) throw new AiCancelled(stageOff(stage));
-    const context = req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
+    const recent = req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
+    const context = [...memoryLines(memoryRef.current, currentOperation()), ...recent];
     const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage), req.signal);
     setAiCalls((n) => n + 1);
     try {
@@ -800,8 +814,15 @@ export function useAssist() {
     addLog('Loop control', toggleMessage(id, on), on ? 'ok' : 'warn');
   };
 
-  /** Coordinate learner: records one observation in the familiar memory and logs a target that moved. */
-  const learnCoords = (obs: CoordObservation) => {
+  /** Replaces the position dossiers. */
+  const commitDossiers = (next: PositionDossier[]) => {
+    dossiersRef.current = next;
+    setDossiers(next);
+  };
+
+  /** Coordinate learner: records one observation in the familiar memory and the target's dossier, and logs a target that moved. */
+  const learnCoords = (obs: CoordObservation, by: Mover = 'user') => {
+    commitDossiers(recordSighting(dossiersRef.current, { name: obs.name, x: obs.x, y: obs.y, time: obs.time, by }));
     const { list, moved } = learnCoordinate(familiarRef.current, obs);
     familiarRef.current = list;
     setFamiliar((latest) => learnCoordinate(latest, obs).list);
@@ -811,8 +832,9 @@ export function useAssist() {
   /** The learned position of the step's target on `live` (learner on, anchor matched), or null. */
   const learnedPoint = (live: Frame, step: WorkflowStep) => {
     if (!stageOn('coords')) return null;
-    const el = findFamiliar(familiarRef.current, step.target ?? step.name);
-    return el ? learnedSeed(el, live.data) : null;
+    const name = step.target ?? step.name;
+    const el = findFamiliar(familiarRef.current, name);
+    return el ? learnedSeed(el, live.data, seedPoint(findDossier(dossiersRef.current, name)) ?? el) : null;
   };
 
   /** The executor is running (Auto Act, replay, a running step, or an AI command): the learner pauses. */
@@ -831,9 +853,27 @@ export function useAssist() {
 
   /** Outcome learning: an executed pointer action teaches its target's coordinates, on the frame it was aimed on. */
   const learnFromOutcome = (step: WorkflowStep, out: Performed, frame: Frame | null) => {
-    if (!stageOn('coords') || !out.executed || !out.ok || !POINTER_ACTIONS.has(step.action)) return;
-    learnCoords({ name: step.target ?? step.name, x: out.target.x, y: out.target.y, frame, time: Date.now() });
+    if (!stageOn('coords') || !out.executed || !POINTER_ACTIONS.has(step.action)) return;
+    const name = step.target ?? step.name;
+    commitDossiers(recordPositionOutcome(dossiersRef.current, name, out.target, out.ok, Date.now()));
+    if (out.ok) learnCoords({ name, x: out.target.x, y: out.target.y, frame, time: Date.now() });
   };
+
+  /** A verified drag moved its element: the AI moved it to `to`. */
+  const learnAiMove = (name: string, to: { x: number; y: number }) => {
+    if (stageOn('coords')) commitDossiers(recordSighting(dossiersRef.current, { name, ...to, time: Date.now(), by: 'ai' }));
+  };
+
+  /** Where a drag step is supposed to move its element, recorded in the element's dossier. */
+  const planMove = (step: WorkflowStep) => {
+    if (stageOn('coords') && step.endX !== undefined && step.endY !== undefined) commitDossiers(setMove(dossiersRef.current, step.target ?? step.name, { x: step.endX, y: step.endY }));
+  };
+
+  /** The user sets (or with null clears) the preferred position of a tracked element. */
+  const preferPosition = (name: string, p: { x: number; y: number } | null) => commitDossiers(setPreferred(dossiersRef.current, name, p && { ...p, by: 'user' }));
+
+  /** The operation the AI's memory is gathered for: the run goal, else the running step's target. */
+  const currentOperation = () => goalRef.current || (stepsRef.current.find((s) => s.status === 'running')?.target ?? '');
 
   const agentOn = useCallback((id: Agent['id']) => agents.find((a) => a.id === id)?.on ?? false, [agents]);
   const agentsRef = useRef(agentOn);
@@ -1029,7 +1069,7 @@ export function useAssist() {
    * step goes to the bridge whatever the screen source; the demo simulates only dry runs or when
    * no bridge is configured. A bridge failure fails the step loudly, never a simulated success.
    */
-  const performInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
+  const dispatchInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
     if (sourceRef.current === 'demo' && (dryRun || !bridgeUrl)) {
       const out = await performOnDemo(step, dryRun);
@@ -1065,6 +1105,35 @@ export function useAssist() {
     });
     if (out.executed) recordAction(step, out, actor, 'bridge', size.w, size.h);
     noteBridge(step, out, actor);
+    return out;
+  };
+
+  /**
+   * The step with its target's dossier factored in: the preferred/predicted/best position (unless a
+   * recorded template locates it), a wait to catch an in-motion element, and a systematic offset once per step.
+   */
+  const compensateStep = async (step: WorkflowStep, actor: string): Promise<WorkflowStep> => {
+    if (!stageOn('coords') || !POINTER_ACTIONS.has(step.action)) return step;
+    const c = compensate(findDossier(dossiersRef.current, step.target ?? step.name), step, { x: step.x, y: step.y }, offsetStepsRef.current, Date.now());
+    if (c.offset) offsetStepsRef.current.add(step.id);
+    if (!c.notes.length) return step;
+    addLog(actor, `"${step.name}": position dossier — ${c.notes.join('; ')}`, 'info');
+    if (c.waitMs) await sleep(c.waitMs);
+    const moved = !step.refFrame && (c.point.x !== step.x || c.point.y !== step.y);
+    return moved ? { ...step, x: c.point.x, y: c.point.y, correctedX: undefined, correctedY: undefined } : step;
+  };
+
+  /** Records where an executed pointer step was planned against where it actually landed. */
+  const noteLanding = (step: WorkflowStep, out: Performed) => {
+    if (!stageOn('coords') || !out.executed || !out.ok || !POINTER_ACTIONS.has(step.action)) return;
+    commitDossiers(recordTest(dossiersRef.current, step.target ?? step.name, { x: step.x, y: step.y }, out.target, Date.now()));
+  };
+
+  /** A real-input step with its target's position dossier factored in before and its landing recorded after. */
+  const performInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
+    const planned = await compensateStep(step, actor);
+    const out = await dispatchInput(planned, actor, budget, dryRun);
+    noteLanding(planned, out);
     return out;
   };
 
@@ -1356,6 +1425,7 @@ export function useAssist() {
    */
   const performDrag = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null): Promise<Performed & { verdict?: StepVerdict | null }> => {
     let current = step;
+    planMove(step);
     for (let attempt = 1; ; attempt++) {
       const since = Date.now();
       const out = await perform(current, actor, budget, dryRun, proposal, attempt === 1);
@@ -1364,6 +1434,7 @@ export function useAssist() {
       const check = checkDrag(current, moved, out, since);
       if (check.moved) {
         void rememberAt(moved.name, check.at ?? moved.to, out.shot);
+        learnAiMove(moved.name, check.at ?? moved.to);
         return { ...out, moved };
       }
       if (out.replanned) return missed(out, moved, `${check.detail} (already re-planned once by the retry ladder)`);
@@ -1735,7 +1806,7 @@ export function useAssist() {
   };
 
   /** What the briefing cross-references the plan against. */
-  const knowledge = (): Knowledge => ({ map: elementMapRef.current, familiar: familiarRef.current, habits: habitsRef.current, patterns: patternsRef.current, context: habitContext() });
+  const knowledge = (): Knowledge => ({ map: elementMapRef.current, familiar: familiarRef.current, habits: habitsRef.current, patterns: patternsRef.current, dossiers: dossiersRef.current, memory: memoryRef.current, context: habitContext() });
 
   /** A fresh briefing of `step` with `proposal` on the live frame. */
   const buildBriefingFor = (step: WorkflowStep, proposal: Proposal) => buildBriefing({
@@ -2943,7 +3014,7 @@ export function useAssist() {
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
     armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
-    ruler, continuing, habits, deleteHabit, pinHabit, runs,
+    ruler, continuing, habits, deleteHabit, pinHabit, runs, dossiers, preferPosition, memory,
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     watcher, acceptProposal, dismissProposal, testProposal,

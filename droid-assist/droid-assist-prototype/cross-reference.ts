@@ -3,12 +3,14 @@ import { mappedAt, type MappedElement } from './element-map-studio.js';
 import { findFamiliar } from './coords.js';
 import { habitKey, isReliable, successRate } from './habits.js';
 import { similarity } from './planner.js';
+import { bestPosition, classifyMotion, currentPosition, findDossier, type PositionDossier } from './position-dossier.js';
+import { memoryFor, type MemoryEntry, type MemoryOrigin } from './enhanced-memory.js';
 
 /** Whether a piece of known knowledge agrees with the planned coordinates. */
 export type Agreement = 'consistent' | 'conflicting';
 
 /** Which kind of knowledge an entry comes from. */
-export type CrossSource = 'mapped' | 'learned' | 'habit' | 'avoid';
+export type CrossSource = 'mapped' | 'learned' | 'habit' | 'avoid' | 'position' | 'memory';
 
 /** One cross-reference entry: what is known, and whether it agrees with the plan. */
 export interface CrossCheck {
@@ -23,6 +25,10 @@ export interface Knowledge {
   familiar: FamiliarElement[];
   habits: Habit[];
   patterns: LearnedPattern[];
+  /** Position dossiers of tracked elements. */
+  dossiers: PositionDossier[];
+  /** The cross-referenced memory view. */
+  memory: MemoryEntry[];
   /** The app/window the habits of this moment belong to. */
   context: string;
 }
@@ -38,9 +44,9 @@ const related = (a: string, b: string) => similarity(a, b) > 0 || similarity(b, 
 const status = (ok: boolean): Agreement => (ok ? 'consistent' : 'conflicting');
 
 /** A remembered point compared with the plan: consistent within AGREE_DISTANCE. */
-function distanceCheck(label: string, known: Point, p: Point): CrossCheck {
+function distanceCheck(label: string, known: Point, p: Point, source: CrossSource = 'learned'): CrossCheck {
   const d = Math.hypot(known.x - p.x, known.y - p.y);
-  return { source: 'learned', status: status(d <= AGREE_DISTANCE), text: `${label} at ${at(known)} is ${pct(d)} from the plan` };
+  return { source, status: status(d <= AGREE_DISTANCE), text: `${label} at ${at(known)} is ${pct(d)} from the plan` };
 }
 
 /** The mapped element covering the planned point, and a mapped element named like the target that does not. */
@@ -83,13 +89,36 @@ function avoidChecks(target: string, _p: Point, k: Knowledge): CrossCheck[] {
   return [...learned, ...lessons].map((text): CrossCheck => ({ source: 'avoid', status: 'conflicting', text }));
 }
 
-const CHECKS = [mappedChecks, learnedChecks, habitChecks, avoidChecks];
+/** The dossier's preferred, best and (for an element that moves) last-known positions against the plan. */
+function positionChecks(target: string, p: Point, k: Knowledge): CrossCheck[] {
+  const d = findDossier(k.dossiers, target);
+  if (!d) return [];
+  const best = bestPosition(d);
+  const motion = classifyMotion(d);
+  const known: Array<[string, Point | null | undefined]> = [
+    [`Preferred position of "${d.name}" (set by ${d.preferred?.by})`, d.preferred],
+    [`Best position of "${d.name}" (${best?.successes}/${best?.attempts} succeeded)`, best],
+    [`Last-known position of "${d.name}" (${motion})`, motion === 'static' ? null : currentPosition(d)],
+  ];
+  return known.filter((e): e is [string, Point] => !!e[1]).map(([label, at]) => distanceCheck(label, at, p, 'position'));
+}
+
+/** Memory origins another check already reports (patterns, habits, dossiers). */
+const COVERED: ReadonlySet<MemoryOrigin> = new Set<MemoryOrigin>(['pattern', 'habit', 'dossier']);
+
+/** Proven (consistent) and blacklisted (conflicting) memory for this target: agent tests, saved paths and goal runs. */
+function memoryChecks(target: string, _p: Point, k: Knowledge): CrossCheck[] {
+  return memoryFor(k.memory, target).filter((m) => m.status !== 'recent' && !COVERED.has(m.from))
+    .map((m): CrossCheck => ({ source: 'memory', status: status(m.status === 'important'), text: m.text }));
+}
+
+const CHECKS = [mappedChecks, learnedChecks, habitChecks, avoidChecks, positionChecks, memoryChecks];
 
 /** Every piece of known knowledge about `target` and whether it agrees with the planned point `p`. */
 export const crossReference = (target: string, p: Point, k: Knowledge): CrossCheck[] => CHECKS.flatMap((check) => check(target, p, k));
 
 /** Kinds whose agreement depends on where the plan points (a new point can resolve them). */
-export const POINT_SOURCES: ReadonlySet<CrossSource> = new Set<CrossSource>(['mapped', 'learned']);
+export const POINT_SOURCES: ReadonlySet<CrossSource> = new Set<CrossSource>(['mapped', 'learned', 'position']);
 
 /** The entries that disagree with the plan. */
 export const conflictsOf = (list: CrossCheck[]) => list.filter((c) => c.status === 'conflicting');
