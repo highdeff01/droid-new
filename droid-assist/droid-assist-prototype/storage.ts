@@ -15,6 +15,7 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
+import { ACCESS_PATH_LIMIT, isAccessProfile, type AccessProfile } from './access-paths.js';
 import { APPROVAL_LIMIT, isApprovalItem, sanitizePolicy, type ApprovalItem } from './approvals.js';
 import { PORTFOLIO_LIMIT, isPortfolioEntry, type PortfolioEntry } from './portfolio.js';
 import { PROFILE_LIMIT, isProfileEvent, type ProfileEvent } from './user-profile.js';
@@ -362,6 +363,12 @@ export function saveTriggers(triggers: Trigger[]) {
   writeJson(KEYS.triggers, triggers.slice(0, TRIGGER_LIMIT));
 }
 
+/** The stored access-path profiles; invalid entries are dropped. */
+export const loadAccessPaths = (): AccessProfile[] => listOf(readJson(KEYS.accessPaths), isAccessProfile, ACCESS_PATH_LIMIT);
+
+/** Persists the access-path profiles, capped at ACCESS_PATH_LIMIT. */
+export function saveAccessPaths(profiles: AccessProfile[]) {
+  writeJson(KEYS.accessPaths, profiles.slice(0, ACCESS_PATH_LIMIT));
 /** The stored approval queue (newest first); invalid entries are dropped. */
 export const loadApprovals = (): ApprovalItem[] => listOf(readJson(KEYS.approvals), isApprovalItem, APPROVAL_LIMIT);
 
