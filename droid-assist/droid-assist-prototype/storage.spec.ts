@@ -72,6 +72,17 @@ describe('settings', () => {
     expect(loadSettings(DEFAULTS)).toEqual(DEFAULTS);
   });
 
+  it('keeps an in-range AI timeout and falls back to the default on an out-of-range or non-numeric one', () => {
+    for (const ok of [10_000, 45_000, 300_000]) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ aiTimeoutMs: ok }));
+      expect(loadSettings(DEFAULTS).aiTimeoutMs).toBe(ok);
+    }
+    for (const bad of [0, 9_999, 300_001, '60000', null]) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ aiTimeoutMs: bad }));
+      expect(loadSettings(DEFAULTS).aiTimeoutMs).toBe(DEFAULTS.aiTimeoutMs);
+    }
+  });
+
   it('round-trips loop-control stages and sanitizes a stored stage map', () => {
     saveSettings({ ...DEFAULTS, stages: { ...DEFAULT_STAGES, popup: false, verdict: false } });
     expect(loadSettings(DEFAULTS).stages).toEqual({ ...DEFAULT_STAGES, popup: false, verdict: false });

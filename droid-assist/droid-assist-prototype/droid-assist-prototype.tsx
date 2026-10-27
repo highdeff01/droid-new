@@ -2,7 +2,7 @@ import { Routes, Route } from 'react-router-dom';
 import { useAssist } from './use-assist.js';
 import { Stage } from './stage.js';
 import { Hud } from './hud.js';
-import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
+import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
 import { AgentBusPanel, SubagentReportPanel } from './bus-panels.js';
 import { StatsPanel } from './stats-panel.js';
 import styles from './droid-assist.module.css';
@@ -41,6 +41,7 @@ function AssistScreen() {
         <div className={styles.bottom}>
           <ComparisonGallery engine={engine} />
           <AiHelpPanel engine={engine} />
+          <AiHistoryPanel engine={engine} />
           <QwenThinkingPanel engine={engine} />
           <SupervisorPanel engine={engine} />
           <AgentsPanel engine={engine} />

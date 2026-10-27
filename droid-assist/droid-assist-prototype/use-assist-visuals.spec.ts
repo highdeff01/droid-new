@@ -137,7 +137,7 @@ describe('Auto Act continuation', () => {
 
   async function autoActing(settings: Record<string, unknown> = {}) {
     const hooks: { onFrame?: (f: NativeFrame) => void } = {};
-    const api: NativeCaptureApi = { startCapture: vi.fn(async (_ms, onFrame) => { hooks.onFrame = onFrame; }), setCaptureInterval: vi.fn(), stopCapture: vi.fn() };
+    const api: NativeCaptureApi = { startCapture: vi.fn(async (_ms, onFrame) => { hooks.onFrame = onFrame; }), setCaptureInterval: vi.fn(), stopCapture: vi.fn(), listDisplays: vi.fn(async () => []), selectDisplay: vi.fn() };
     window.droidNative = api;
     localStorage.setItem('droid-assist.settings', JSON.stringify({ stages: { screenWatcher: false, supervisor: false }, ...settings }));
     vi.useFakeTimers({ toFake: ['Date'] });

@@ -5,6 +5,8 @@ import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import { AiStatusBadge, InsecureBridgeWarning } from './hud.js';
 import { ModelPicker } from './model-picker.js';
+import { DisplayPicker } from './display-picker.js';
+import { BridgeWizard } from './bridge-wizard.js';
 import type { FamiliarElement, Habit, LogEntry } from './types.js';
 import { isReliable, successRate } from './habits.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
@@ -18,8 +20,10 @@ import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
 import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
 import { AI_VIEWS, type AiView } from './ai.js';
+import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-history.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
+import { BackupSettings } from './backup-panel.js';
 import styles from './droid-assist.module.css';
 
 const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity' };
@@ -303,6 +307,12 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
   return (
     <section className={styles.panel}>
       <h3>Settings</h3>
+      {window.droidNative && (
+        <div className={styles.setting}>Capture display
+          <small>Native capture screenshots this display; input is sent to it. Falls back to the primary when it is unplugged.</small>
+          <DisplayPicker engine={engine} />
+        </div>
+      )}
       <label className={styles.setting}>Gallery frames <b>{settings.gallerySize}</b>
         <input type="range" min={4} max={30} value={settings.gallerySize} onChange={(e) => setSettings({ ...settings, gallerySize: +e.target.value })} />
       </label>
@@ -330,6 +340,10 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         <small>Further calls wait in a shared queue: executor/grounding first, planner/verdict next, background agents last.</small>
         <input type="range" min={AI_MAX_IN_FLIGHT_MIN} max={AI_MAX_IN_FLIGHT_MAX} value={settings.aiMaxInFlight} onChange={(e) => setSettings({ ...settings, aiMaxInFlight: +e.target.value })} aria-label="Max AI calls in flight" />
       </label>
+      <label className={styles.setting}>AI request timeout <b>{settings.aiTimeoutMs / 1000} s</b>
+        <small>A model call with no reply by then fails; queued calls start their clock when they leave the queue. Stop still cancels at once.</small>
+        <input type="range" min={AI_TIMEOUT_MS_MIN} max={AI_TIMEOUT_MS_MAX} step={5000} value={settings.aiTimeoutMs} onChange={(e) => setSettings({ ...settings, aiTimeoutMs: +e.target.value })} aria-label="AI request timeout" />
+      </label>
       <label className={styles.setting}>Emergency-stop hotkey <b>{settings.abortHotkey}</b>
         <input
           readOnly
@@ -354,6 +368,12 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         {bridge && <small>{bridge}</small>}
       </label>
       <InsecureBridgeWarning bridgeUrl={settings.bridgeUrl} />
+      <BridgeWizard
+        bridgeUrl={settings.bridgeUrl}
+        token={settings.bridgeToken}
+        onFill={(bridgeUrl, bridgeToken) => setSettings({ ...settings, bridgeUrl, bridgeToken })}
+        onConnect={(url, token) => engine.connectBridge({ url, token })}
+      />
       <label className={styles.setting}>Bridge auth token
         <input type="password" value={settings.bridgeToken} onChange={(e) => setSettings({ ...settings, bridgeToken: e.target.value })} aria-label="Bridge auth token" autoComplete="off" />
         <small>Must match DROID_BRIDGE_TOKEN on the bridge; sent as a Bearer token on every bridge call and never written to the activity log.</small>
@@ -370,6 +390,7 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <ModelPicker url={settings.aiUrl} model={settings.aiModel} onSelect={(aiModel) => setSettings({ ...settings, aiModel })} />
       <AiStatusBadge status={engine.aiStatus} />
       <ErrorForwardingSettings engine={engine} />
+      <BackupSettings />
     </section>
   );
 }
@@ -450,6 +471,32 @@ export function AiHelpPanel({ engine }: { engine: AssistEngine }) {
       </form>
       {aiStatus.state === 'offline' && <p className={styles.muted} role="alert">{aiStatus.detail}. AI plan, Auto act and AI help are unavailable.</p>}
       {aiAnswer && <p>{aiAnswer}</p>}
+    </section>
+  );
+}
+
+/** The AI session's conversation history: roles, sizes, times, a token estimate, trim-to-N and reset. */
+export function AiHistoryPanel({ engine }: { engine: AssistEngine }) {
+  const { aiHistory } = engine;
+  const [keep, setKeep] = useState(STALE_KEEP);
+  const stats = historyStats(aiHistory);
+  return (
+    <section className={styles.panel}>
+      <h3>AI conversation <small>{stats.messages}/{HISTORY_MAX} message(s) · {stats.chars} chars · ~{stats.tokens} tokens</small></h3>
+      <div className={styles.row}>
+        <label>
+          Keep last <input type="number" min={0} max={HISTORY_MAX} value={keep} onChange={(e) => setKeep(Number(e.target.value))} aria-label="Messages to keep" />
+        </label>
+        <button type="button" onClick={() => engine.trimAiHistory(keep)} disabled={aiHistory.length <= keep}>Trim</button>
+        <button type="button" onClick={engine.resetAiSession}>Reset session</button>
+      </div>
+      <ul className={styles.log}>
+        {aiHistory.map((m, i) => (
+          <li key={i} data-tone={m.role === 'assistant' ? 'ok' : 'info'}>
+            <time>{m.time ? new Date(m.time).toLocaleTimeString() : '—'}</time> <b>{m.role}</b> {m.content.length} chars · ~{estimateTokens(m.content)} tokens
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
