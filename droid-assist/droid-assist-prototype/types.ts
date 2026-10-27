@@ -80,6 +80,8 @@ export interface ActionRecord {
   via: 'bridge' | 'demo';
   ok: boolean;
   message: string;
+  /** The bridge accepted the input but the step's effect was not confirmed on screen. */
+  dispatched?: boolean;
 }
 
 /** A lesson learned from a run: something to avoid or to add when planning similar goals. */
@@ -214,6 +216,8 @@ export interface LogEntry {
   tone: 'info' | 'ok' | 'warn' | 'error';
   /** Screenshot evidence (data URLs), e.g. a moved element before and after; never persisted. */
   shots?: string[];
+  /** Project (trimmed goal text) the entry was logged under; absent when no goal was set. */
+  project?: string;
 }
 
 /** A saved, named workflow card for later comparison and selection. */

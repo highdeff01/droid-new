@@ -7,6 +7,7 @@ import { AgentBusPanel, SubagentReportPanel } from './bus-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
 import { ApprovalsPanel } from './approvals-panel.js';
 import { StatsPanel } from './stats-panel.js';
+import { LiveBriefingPanel } from './live-briefing-panel.js';
 import { CapabilitiesPanel } from './capabilities-panel.js';
 import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
 import styles from './droid-assist.module.css';
@@ -28,6 +29,7 @@ function AssistScreen() {
       </header>
       <main className={styles.main}>
         <Hud engine={engine} />
+        <LiveBriefingPanel engine={engine} />
         <div className={styles.work}>
           <Stage engine={engine} />
           <div className={styles.side}>
