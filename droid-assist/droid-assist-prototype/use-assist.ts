@@ -33,6 +33,12 @@ import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, loadRouteProfiles, loadFixMethods, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher, saveRouteProfiles, saveFixMethods } from './storage.js';
 import { LOG_LIMIT, loadCards, loadDossiers, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveDossiers, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSections, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSections, saveSettings, saveTriggers, saveWatcher } from './storage.js';
+import { SCROLL_MERGE_MS, continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './recorder.js';
+import { mirrorMode, mirrorStep, type MirrorEvent } from './mirror-input.js';
+import { addEntry as addPortfolioEntry, createPersona, upsertPersona, type Persona, type PortfolioKind } from './persona.js';
+import { logSightings, monitorChanges, perspective, planLanes, type ElementReport, type Lane, type Perspective, type Sighting } from './element-relevance.js';
+import { askPlayTurn, type PlayTurn } from './play-turn.js';
+import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadPersonas, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, savePersonas, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
 import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
 import { appendSummary, runSummary, type RunSummary } from './run-stats.js';
 import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, recallNotes, reorderSteps, type NoteKind, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
@@ -505,6 +511,17 @@ export function useAssist() {
   const armedRef = useRef(armed);
   const abortedRef = useRef(aborted);
   const autoBudgetRef = useRef<ActionBudget>(createBudget(settings.actionBudget));
+  /** Mirror input: the preview is interactive (user gestures dispatch as input) while on. */
+  const [mirrorOn, setMirrorOn] = useState(false);
+  const mirrorOnRef = useRef(false);
+  /** One action budget per mirror session, fresh each time mirror input is switched on. */
+  const mirrorBudgetRef = useRef<ActionBudget>(createBudget(settings.actionBudget));
+  /** The last mirrored wheel gesture, so a burst of wheel events dispatches one scroll. */
+  const mirrorScrollRef = useRef<{ dir: 'up' | 'down'; at: number } | null>(null);
+  /** Stage modes that take precedence over mirror input, current as of the last render. */
+  const stageModeRef = useRef({ ruler: false, map: false });
+  /** Bridge reachability as of the last render, so mirror input dispatches only when its badge says LIVE. */
+  const mirrorBridgeRef = useRef(false);
   /** Trims and resets of the AI history land here (wired to the log once addLog exists). */
   const historyChangeRef = useRef<HistoryChangeFn>(() => undefined);
   const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage, renderView, (c) => historyChangeRef.current(c)));
@@ -1260,6 +1277,10 @@ export function useAssist() {
     addLog('Safety', `ABORTED (${reason}) — Auto Act, replay, auto-continue, monitor automation and in-flight AI calls halted`, 'error');
     notify({ source: 'Safety', category: 'abort', severity: 'critical', title: `Automation aborted (${reason})` });
   }, [addLog, cancelAi, notify]);
+    mirrorOnRef.current = false;
+    setMirrorOn(false);
+    addLog('Safety', `ABORTED (${reason}) — Auto Act, replay, auto-continue, mirror input, AI play, monitor automation and in-flight AI calls halted`, 'error');
+  }, [addLog, cancelAi]);
 
   const clearAbort = () => {
     abortedRef.current = false;
@@ -2438,6 +2459,158 @@ export function useAssist() {
     addLog(actor, `"${profile.target}" path v${currentPath(profile).version}: ${ok ? 'reached' : `failed at hop ${(run.failedHop ?? 0) + 1}`} — ${run.last?.message ?? 'no hop ran'}`, ok ? 'ok' : 'error');
     if (dryRun || run.last?.halt) return;
     countPath(profile, { via: 'path', out: run.last!, failedHop: run.failedHop });
+   * Mirror input: one gesture on the preview (by the user or the AI) as real input through
+   * performStep — armed it dispatches to the PC through the bridge, disarmed it is a labeled dry run;
+   * abort, the executor stage and the budget refuse it. Never a simulated success.
+   */
+  const mirrorInput = async (ev: MirrorEvent, actor = 'Mirror', budget = mirrorBudgetRef.current): Promise<Performed> => {
+    const step = mirrorStep(ev, uid('mirror'));
+    // Same condition as the mirror badge: LIVE only when armed with a connected bridge, otherwise a labeled dry run.
+    const dryRun = !armedRef.current || !mirrorBridgeRef.current;
+    const out = await performStep(step, actor, budget, dryRun);
+    const message = dryRun && !out.message.includes(DRY_RUN) ? `${out.message} — ${DRY_RUN}` : out.message;
+    addLog(actor, `${dryRun ? 'DRY RUN · ' : ''}${step.name}: ${message}`, out.ok ? (dryRun ? 'info' : 'ok') : 'error');
+    return out;
+  };
+  /** The current mirrorInput, for the stable stage callbacks. */
+  const mirrorRef = useRef(mirrorInput);
+  mirrorRef.current = mirrorInput;
+
+  /** Switches the preview between passive and interactive; each switch-on is a new session with a fresh budget. Refused while aborted. */
+  const toggleMirror = () => {
+    const next = !mirrorOnRef.current;
+    if (next && abortedRef.current) {
+      addLog('Mirror', 'Aborted — clear the abort before turning mirror input on', 'warn');
+      return;
+    }
+    mirrorOnRef.current = next;
+    setMirrorOn(next);
+    if (next) mirrorBudgetRef.current = createBudget(settingsRef.current.actionBudget);
+    const how = armedRef.current ? 'clicks, drags, scrolls and keys on the preview go to the PC' : `real input disarmed, every input is a ${DRY_RUN}`;
+    addLog('Mirror', next ? `Mirror input ON — ${how}` : 'Mirror input OFF — passive preview', next ? 'warn' : 'ok');
+  };
+
+  /** A wheel event on the interactive mirror: one scroll per same-direction burst (refs only, so stable across renders). */
+  const mirrorScroll = (x: number, y: number, deltaY: number) => {
+    const now = Date.now();
+    const dir = deltaY < 0 ? 'up' : 'down';
+    const last = mirrorScrollRef.current;
+    mirrorScrollRef.current = { dir, at: now };
+    if (last && last.dir === dir && now - last.at < SCROLL_MERGE_MS) return;
+    void mirrorRef.current({ kind: 'scroll', x, y, deltaY });
+  };
+
+  const [personas, setPersonas] = useState<Persona[]>(loadPersonas);
+  const personasRef = useRef(personas);
+  const [personaId, setPersonaId] = useState<string | null>(null);
+  const personaIdRef = useRef<string | null>(null);
+  /** The element-relevance log, the current perspective and its parallel lanes. */
+  const [sightings, setSightings] = useState<Sighting[]>([]);
+  const [playView, setPlayView] = useState<Perspective>(() => perspective([], 0));
+  const [lanes, setLanes] = useState<Lane[]>([]);
+  const [playing, setPlaying] = useState(false);
+  const playRef = useRef({ turn: 0, sightings: [] as Sighting[], view: perspective([], 0), lanes: [] as Lane[], budget: createBudget(settings.actionBudget) });
+
+  /** Replaces the personas in state and storage. */
+  const commitPersonas = (next: Persona[]) => {
+    personasRef.current = next;
+    setPersonas(next);
+    savePersonas(next);
+  };
+
+  /** Plays as persona `id` (null for none): a fresh play session with an empty element log and a fresh budget. */
+  const selectPersona = (id: string | null) => {
+    personaIdRef.current = id;
+    setPersonaId(id);
+    playRef.current = { turn: 0, sightings: [], view: perspective([], 0), lanes: [], budget: createBudget(settingsRef.current.actionBudget) };
+    setSightings([]);
+    setPlayView(playRef.current.view);
+    setLanes([]);
+  };
+
+  /** Creates and selects a persona; a blank name is refused in the log. */
+  const addPersona = (name: string, character: string) => {
+    const p = createPersona(uid('persona'), name, character);
+    if (!p) {
+      addLog('Persona', 'A persona needs a name', 'warn');
+      return;
+    }
+    commitPersonas(upsertPersona(personasRef.current, p));
+    selectPersona(p.id);
+    addLog('Persona', `Created persona "${p.name}"`, 'ok');
+  };
+
+  const deletePersona = (id: string) => {
+    commitPersonas(personasRef.current.filter((p) => p.id !== id));
+    if (personaIdRef.current === id) selectPersona(null);
+  };
+
+  /** Adds one portfolio entry to persona `id` and persists it. */
+  const notePortfolio = (id: string, kind: PortfolioKind, text: string) => {
+    const p = personasRef.current.find((x) => x.id === id);
+    if (p) commitPersonas(upsertPersona(personasRef.current, addPortfolioEntry(p, kind, text)));
+  };
+
+  /** Cross-references a turn's element reports into the log, perspective and lanes; the side agents report changes. */
+  const crossReference = (reports: ElementReport[]) => {
+    const s = playRef.current;
+    const turn = s.turn + 1;
+    const next = logSightings(s.sightings, reports, turn);
+    const view = perspective(next, turn);
+    const changes = monitorChanges(s.lanes, next, turn);
+    playRef.current = { ...s, turn, sightings: next, view, lanes: planLanes(view) };
+    setSightings(next);
+    setPlayView(view);
+    setLanes(playRef.current.lanes);
+    addLog('Perspective', `Turn ${turn}: ${view.summary}`);
+    changes.forEach((c) => addLog('Side agent', c.detail, 'warn'));
+    return view;
+  };
+
+  /**
+   * One AI play turn as the selected persona: the model sees the latest captured frame (recaptured
+   * after the previous act lane), logs the important elements with position and relevance, and takes
+   * one action through the mirror. The outcome goes to the persona's portfolio. Null when refused.
+   */
+  const playTurn = async (): Promise<Performed | null> => {
+    const persona = personasRef.current.find((p) => p.id === personaIdRef.current);
+    if (!persona) {
+      addLog('AI play', 'Select or create a persona before AI play', 'warn');
+      return null;
+    }
+    if (abortedRef.current) {
+      addLog('AI play', 'Aborted — AI play not started', 'error');
+      return null;
+    }
+    let reply: PlayTurn;
+    try {
+      reply = await askPlayTurn(askFor('executor'), persona, playRef.current.view, goalRef.current, framesRef.current[0] ?? null);
+    } catch (error) {
+      reportParseFailure(`Play turn as ${persona.name}`, error);
+      addLog('AI play', aiFailure('AI unavailable — no play turn', error), 'error');
+      return null;
+    }
+    const view = crossReference(reply.elements);
+    note({ step: `Play turn ${view.turn} · ${persona.name}`, kind: 'thought', text: view.summary, thinking: reply.thinking });
+    const out = reply.action ? await mirrorInput(reply.action, `AI play · ${persona.name}`, playRef.current.budget) : null;
+    const did = reply.did || (reply.action ? mirrorStep(reply.action, 'x').name : 'Waited');
+    notePortfolio(persona.id, 'did', out ? `${did} — ${out.ok ? '' : 'FAILED: '}${out.message}` : did);
+    notePortfolio(persona.id, 'learned', reply.learned);
+    if (!out || out.ok) notePortfolio(persona.id, 'achieved', reply.achieved);
+    return out ?? { ok: true, executed: false, message: 'Waited', target: { x: 0.5, y: 0.5 } };
+  };
+
+  /** Plays up to `turns` turns; stops at abort, a refused or halted turn. */
+  const playTurns = async (turns: number) => {
+    setPlaying(true);
+    try {
+      for (let i = 0; i < turns && !abortedRef.current; i++) {
+        const out = await playTurn();
+        if (!out || out.halt) break;
+      }
+    } finally {
+      setPlaying(false);
+    }
   };
 
   const elements = listElements(steps, annotations, familiar);
@@ -3153,6 +3326,10 @@ export function useAssist() {
     setSteps(stepsRef.current);
     packCaptureRef.current({ ...recorded, refFrame: recorded.refFrame ?? framesRef.current[0] });
   }, []);
+  /** Whether stage gestures go to the mirror: mirror on and no ruler or element-map mode (recording is checked first by each handler). */
+  stageModeRef.current = { ruler: ruler.on, map: mapMode };
+  mirrorBridgeRef.current = bridgeOnline;
+  const mirroring = () => mirrorOnRef.current && !stageModeRef.current.ruler && !stageModeRef.current.map;
 
   /** Stage pointer input: trail while recording. */
   const onStageMove = useCallback((x: number, y: number) => {
@@ -3194,15 +3371,33 @@ export function useAssist() {
       if (sourceRef.current === 'demo' && worldOnRef.current) addLog('You', demoTextKey(e.key).message);
       return;
     }
+    if (mirroring()) {
+      void mirrorRef.current({ kind: 'click', x, y });
+      return;
+    }
+    if (sourceRef.current === 'demo' && !hover) addLog('You', demoClick(x, y));
+  };
+
+  /** Key press on the focused stage: recorded as a key step while recording, dispatched while mirror input is on. The abort hotkey is never either. */
+  const onStageKey = useCallback((e: HotkeyEvent) => {
+    if (matchesHotkey(e, settingsRef.current.abortHotkey)) return;
     const combo = keyCombo(e);
     if (!combo) return;
-    appendRecorded(keyStep(uid('step'), combo));
-    addLog('Recorder', `Captured key ${combo}`, 'info');
+    if (recordingRef.current) {
+      appendRecorded(keyStep(uid('step'), combo));
+      addLog('Recorder', `Captured key ${combo}`, 'info');
+      return;
+    }
+    if (mirroring()) void mirrorRef.current({ kind: 'key', combo });
   }, [addLog, appendRecorded]);
 
-  /** Recorded mouse wheel at (x, y): one scroll step per gesture (same-direction wheel events in a burst merge). */
+  /** Mouse wheel at (x, y): one scroll step (recorded or mirrored) per gesture (same-direction wheel events in a burst merge). */
   const onStageScroll = useCallback((x: number, y: number, deltaY: number) => {
-    if (!recordingRef.current || deltaY === 0) return;
+    if (deltaY === 0) return;
+    if (!recordingRef.current) {
+      if (mirroring()) mirrorScroll(x, y, deltaY);
+      return;
+    }
     const now = Date.now();
     const last = stepsRef.current[stepsRef.current.length - 1];
     if (continuesScroll(last, deltaY, now - lastInputRef.current)) {
@@ -3227,12 +3422,21 @@ export function useAssist() {
       addLog('Recorder', `Captured drag from (${pct(from.x)}, ${pct(from.y)}) to (${pct(to.x)}, ${pct(to.y)}) with screenshot`, 'info');
       return;
     }
+    if (mirroring()) {
+      void mirrorRef.current({ kind: 'drag', x: from.x, y: from.y, endX: to.x, endY: to.y });
+      return;
+    }
     if (sourceRef.current === 'demo') addLog('You', applyDemoDrag(from, to).message);
   }, [addLog, applyDemoDrag, appendRecorded]);
 
-  /** Live-write while recording: typed text becomes a "type" step. */
+  /** Live-write: typed text becomes a "type" step while recording, and is typed on the PC while mirror input is on. */
   const onStageType = useCallback((text: string) => {
-    if (!recordingRef.current || !text) return;
+    if (!text) return;
+    if (mirroring() && !recordingRef.current) {
+      void mirrorRef.current({ kind: 'type', text });
+      return;
+    }
+    if (!recordingRef.current) return;
     appendRecorded({ id: uid('step'), name: `Type "${text}"`, action: 'type', x: 0.5, y: 0.5, text, status: 'pending' });
     addLog('Recorder', `Captured typing: "${text}"`);
   }, [addLog, appendRecorded]);
@@ -5230,6 +5434,8 @@ export function useAssist() {
 
   /** Every remembered operation with its notes, failures, blacklist and successes, for the panel. */
   const operations = operationGroups({ patterns, habits, memory }, runs);
+  /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
+  const dispatch = dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted });
   /** Relaxation mode: the settings it replaced, restored when it is switched off; null while off. */
   const relaxedRef = useRef<Pick<AssistSettings, 'captureMs' | 'watchMs' | 'monitorMode' | 'autoAct'> | null>(null);
 
@@ -5429,6 +5635,11 @@ export function useAssist() {
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
     dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
     reverse, reverseLast, reversing, briefings, chain, runChain,
+    dispatch,
+    /** What the preview does with input right now: passive, LIVE to the PC, or a labeled dry run. */
+    mirror: mirrorMode(mirrorOn, dispatch),
+    mirrorOn, toggleMirror, mirrorInput,
+    personas, personaId, selectPersona, addPersona, deletePersona, playTurn, playTurns, playing, sightings, playView, lanes,
     reverse, reverseLast, reversing, briefings,
     /** The per-project lifecycle engine and its approval queue. */
     projects: projectEngine,

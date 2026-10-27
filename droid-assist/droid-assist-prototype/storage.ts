@@ -23,6 +23,7 @@ import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } fro
 import { EMPTY_MEMORY, FAILURE_LIMIT, OPERATION_NOTE_LIMIT, isFailureRecord, isOperationNote, type OperationMemory } from './operation-memory.js';
 import { ACCESS_PATH_LIMIT, isAccessProfile, type AccessProfile } from './access-paths.js';
 import { APPROVAL_LIMIT, isApprovalItem, sanitizePolicy, type ApprovalItem } from './approvals.js';
+import { PERSONA_LIMIT, PORTFOLIO_KINDS, PORTFOLIO_LIMIT, type Persona, type PortfolioEntry, type PortfolioKind } from './persona.js';
 import { PORTFOLIO_LIMIT, isPortfolioEntry, type PortfolioEntry } from './portfolio.js';
 import { PROFILE_LIMIT, isProfileEvent, type ProfileEvent } from './user-profile.js';
 import { SECTION_LIMIT, isKnowledgeSection, type KnowledgeSection } from './knowledge-sections.js';
@@ -630,6 +631,25 @@ function fixStep(v: unknown): WorkflowStep {
 /** Persists the fix methods, capped at FIX_METHOD_LIMIT. */
 export function saveFixMethods(methods: FixMethod[]) {
   writeJson(KEYS.fixMethods, methods.slice(0, FIX_METHOD_LIMIT));
+function isPortfolioEntry(v: unknown): v is PortfolioEntry {
+  return isObject(v) && PORTFOLIO_KINDS.includes(v.kind as PortfolioKind) && isStr(v.text) && isNum(v.time);
+}
+
+/** A valid stored persona (invalid portfolio entries dropped), or null. */
+function parsePersona(v: unknown): Persona | null {
+  if (!isObject(v) || !isStr(v.id) || !isStr(v.name) || typeof v.character !== 'string' || !isNum(v.createdAt)) return null;
+  return { id: v.id, name: v.name, character: v.character, createdAt: v.createdAt, entries: listOf(v.entries, isPortfolioEntry, PORTFOLIO_LIMIT) };
+}
+
+/** The stored persona portfolios (at most PERSONA_LIMIT); invalid personas are dropped. */
+export function loadPersonas(): Persona[] {
+  const stored = readJson(KEYS.personas);
+  return Array.isArray(stored) ? stored.map(parsePersona).filter((p): p is Persona => p !== null).slice(0, PERSONA_LIMIT) : [];
+}
+
+/** Persists the persona portfolios, capped at PERSONA_LIMIT. */
+export function savePersonas(personas: Persona[]) {
+  writeJson(KEYS.personas, personas.slice(0, PERSONA_LIMIT));
 }
 
 /** Persists the triggers, capped at TRIGGER_LIMIT. */

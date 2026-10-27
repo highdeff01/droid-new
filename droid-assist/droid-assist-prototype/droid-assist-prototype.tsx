@@ -19,6 +19,8 @@ import { StatsPanel } from './stats-panel.js';
 import { OperationMemoryPanel } from './memory-panel.js';
 import { LiveBriefingPanel } from './live-briefing-panel.js';
 import { ArtifactsPanel } from './capabilities-panel.js';
+import { PersonaPanel } from './persona-panel.js';
+import { CapabilitiesPanel } from './capabilities-panel.js';
 import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
 import { VariationsPanel } from './variations-panel.js';
 import { InventoryPanel, RetestPanel, RoutesPanel } from './screen-ai-panels.js';
@@ -57,6 +59,7 @@ function AssistScreen() {
           <div className={styles.side}>
             <WorkflowPanel engine={engine} />
             <VariationsPanel engine={engine} />
+            <PersonaPanel engine={engine} />
             <RulerPanel engine={engine} />
             <ElementsPanel engine={engine} />
             <ElementMapPanel engine={engine} />

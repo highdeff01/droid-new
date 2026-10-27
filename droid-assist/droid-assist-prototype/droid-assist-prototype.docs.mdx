@@ -59,6 +59,21 @@ The **Resolution center** panel (`ResolutionPanel`, driven by `use-resolution.ts
   - reconnect (the bridge, retried with exponential backoff)
 - Every real-input step goes through the real-input guarantee: a recorded proposal, abort, arm, the executor stage and the action budget. Maintenance is admin-class and only queues until it is approved in the panel.
 - Every resolution and recovery result is logged under `Resolution center` and saved as a learned pattern and a habit outcome.
+## Mirror input
+
+The **Mirror input** checkbox under the screen preview switches the preview between passive (off: the stage only records, measures or acts on the demo as before) and interactive. While it is on, clicks, double-clicks, drags, mouse-wheel scrolls, key presses and text typed in the box under the preview are dispatched to the PC: clicking the Files icon in the mirror clicks it on the real screen.
+
+- Every mirrored input goes through the same real-input path as replays (`performStep`): armed with a connected bridge it is sent through the bridge; disarmed it is a dry run and its log line starts with `DRY RUN ·` and ends with `dry run — not dispatched`. Nothing is ever reported as a simulated success.
+- Each switch-on starts a session with a fresh action budget (`actionBudget`). Recording, the ruler and element-map mode take precedence over mirror input.
+- The kill switch (abort hotkey or button) turns mirror input off at once and stops AI play; mirror input cannot be switched on again until the abort is cleared.
+
+## Persona portfolios and AI play
+
+The **Personas** panel keeps one portfolio per character (persisted in `localStorage` under `droid-assist.personas`). Each AI play turn asks the model, as the selected persona, what it sees and for one action (click, double-click, drag, scroll, key or type), which runs through the mirror path above. The turn's outcome is added to the portfolio as `did`, plus any `learned` and `achieved` notes; the panel shows the level (1 + achievements + one per three lessons) and the newest entries. A turn without a selected persona is refused.
+
+## Element relevance and perspective
+
+Every play turn logs the important elements the model reported with their position and relevance (0..1, clamped; merged by case-insensitive name). The log is cross-referenced into a perspective: the most relevant element is the focus (what to do next), other elements at or above 0.5 are candidates, and those below 0.5 are peripheral. The perspective is planned as parallel lanes: the act lane acts on the focus and recaptures the screen, and one side-agent monitor lane per peripheral element reports, on the next turn, whether it moved, vanished or changed relevance.
 
 ## Error forwarding
 

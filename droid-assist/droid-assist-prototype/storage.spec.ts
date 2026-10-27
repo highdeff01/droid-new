@@ -9,6 +9,8 @@ import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadDossiers, loadElementMap, load
 import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadGoals, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveGoals, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { LOG_LIMIT, PATTERN_LIMIT, SYSTEM_FOLDER_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadNotifications, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, saveNotifications, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { DEFAULT_AUTO_ACT, NOTIFICATION_LIMIT, type AssistNotification } from './notifications.js';
+import type { Persona } from './persona.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadPersonas, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, savePersonas, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { HABIT_STALE_MS } from './habits.js';
 import { DEFAULT_STAGES } from './loop-control.js';
@@ -722,5 +724,36 @@ describe('loadSettingsExecutionMode', () => {
     const loaded = loadSettings(DEFAULTS);
     expect(loaded.executionMode).toBe('watching');
     expect(loaded.monitorMode).toBe('background');
+describe('loadPersonas', () => {
+  beforeEach(() => localStorage.clear());
+
+  const persona = (n: number): Persona => ({
+    id: `p${n}`, name: `Persona ${n}`, character: `Character ${n}`, createdAt: n,
+    entries: [{ kind: 'did', text: `did ${n}`, time: n }],
+  });
+
+  it('round-trips saved personas', () => {
+    savePersonas([persona(1), persona(2)]);
+    expect(loadPersonas()).toEqual([persona(1), persona(2)]);
+  });
+
+  it('stores personas under their own key', () => {
+    savePersonas([persona(1)]);
+    expect(localStorage.getItem('droid-assist.personas')).not.toBeNull();
+  });
+
+  it('returns [] for corrupt JSON', () => {
+    localStorage.setItem('droid-assist.personas', '{oops');
+    expect(loadPersonas()).toEqual([]);
+  });
+
+  it('drops invalid personas and invalid entries of a valid persona', () => {
+    localStorage.setItem('droid-assist.personas', JSON.stringify([
+      { ...persona(1), name: '   ' },
+      { ...persona(2), createdAt: undefined },
+      { ...persona(3), entries: [{ kind: 'bogus', text: 'x', time: 1 }, { kind: 'did', text: '   ', time: 2 }, { kind: 'learned', text: 'ok', time: 3 }] },
+      null,
+    ]));
+    expect(loadPersonas()).toEqual([{ ...persona(3), entries: [{ kind: 'learned', text: 'ok', time: 3 }] }]);
   });
 });
