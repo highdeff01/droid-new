@@ -2282,8 +2282,10 @@ export function useAssist() {
     let verdict: StepVerdict | null | undefined;
     for (const step of plan.steps) {
       if (stopped()) return { ...base, status: 'aborted', message: `Stopped before "${step.name}" — nothing more sent` };
-      const proposal = recordLocal(label, step, `link/route test "${task.goal}", so "${step.name}" is run to verify it`);
-      const out = await execute(step, label, budget, dryRun, proposal);
+      const local = recordLocal(label, step, `link/route test "${task.goal}", so "${step.name}" is run to verify it`);
+      const briefed = await brief(label, { kind: 'go', step, proposal: local });
+      if (briefed.kind !== 'go') return { ...base, status: 'fail', message: `${step.name}: not justified by the pre-action briefing` };
+      const out = await execute(briefed.step, label, budget, dryRun, briefed.proposal);
       if (out.shot) base.shots.push(out.shot);
       verdict = out.verdict;
       if (verdict?.thinking) base.thinking.push(verdict.thinking);
