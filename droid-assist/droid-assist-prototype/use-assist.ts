@@ -53,6 +53,7 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
+import { usePacks } from './use-packs.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -329,6 +330,8 @@ export function useAssist() {
   const recordingRef = useRef(false);
   /** Time of the last recorded input (or of recording start), for each recorded step's measured human pause. */
   const lastInputRef = useRef(0);
+  /** Hands each recorded step to the workflow pack being recorded (set once the packs hook exists). */
+  const packCaptureRef = useRef<(step: WorkflowStep) => void>(() => undefined);
   const cardsRef = useRef<SavedCard[]>([]);
   const patternsRef = useRef<LearnedPattern[]>(patterns);
   /** Re-plan loop guard for autoPlan, the plan in flight, and step status changes made by execution. */
@@ -2011,9 +2014,11 @@ export function useAssist() {
    */
   const appendRecorded = useCallback((step: WorkflowStep) => {
     const now = Date.now();
-    stepsRef.current = [...stepsRef.current, { ...step, delayMs: stepDelay(now, lastInputRef.current) }];
+    const recorded = { ...step, delayMs: stepDelay(now, lastInputRef.current) };
+    stepsRef.current = [...stepsRef.current, recorded];
     lastInputRef.current = now;
     setSteps(stepsRef.current);
+    packCaptureRef.current(recorded);
   }, []);
 
   /** Stage pointer input: trail while recording. */
@@ -2938,6 +2943,39 @@ export function useAssist() {
     return () => clearInterval(id);
   }, [anyTriggerOn]);
 
+  /** Turns recording on or off through the Record button's path (a no-op when already in that state). */
+  const setRecordingOn = (on: boolean) => {
+    if (on !== recordingRef.current) toggleRecording();
+  };
+
+  const packs = usePacks({
+    addLog,
+    goalInput: () => goalRef.current,
+    ask: () => askFor('planner'),
+    frame: () => framesRef.current[0] ?? null,
+    plan: async (planGoal, context) => (await thought(`Perform similar: ${planGoal}`, () => planFromGoal(planGoal, [], framesRef.current[0] ?? null, askFor('planner'), [...context, ...knownRef.current.map(elementLine)], patternsRef.current), planSummary)).steps,
+    runStep: async (step, actor, budget, dryRun) => {
+      const briefed = await brief(actor, { kind: 'go', step, proposal: recordLocal(actor, step, `workflow pack "${step.name}" is run on the live screen`) });
+      if (briefed.kind !== 'go') return { ok: false, message: `not justified by the pre-action briefing — ${briefed.reason}`, target: { x: step.x, y: step.y } };
+      const out = await execute(briefed.step, actor, budget, dryRun, briefed.proposal);
+      return { ok: out.ok, message: out.message, target: out.target };
+    },
+    replay: (packSteps, label, packGoal) => {
+      stepsRef.current = packSteps;
+      setSteps(packSteps);
+      return runReplay(false, { label, goal: packGoal });
+    },
+    setRecording: setRecordingOn,
+    armed: () => armedRef.current,
+    busy: () => executorBusy() || abortedRef.current || subRunningRef.current || triggerBusyRef.current,
+    stopped: () => abortRef.current || abortedRef.current,
+    resetStop: () => {
+      abortRef.current = false;
+    },
+    budget: () => settingsRef.current.actionBudget,
+  }, recording);
+  packCaptureRef.current = packs.capture;
+
   return {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
@@ -2947,7 +2985,7 @@ export function useAssist() {
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     watcher, acceptProposal, dismissProposal, testProposal,
-    triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger,
+    triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger, packs,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
     aiHistory, trimAiHistory, resetAiSession,
     /** The AI is planning, reflecting, deciding or verifying right now. */

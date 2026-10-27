@@ -119,7 +119,7 @@ describe('background tests', () => {
   it('makes one task per pack with steps, slicing the budget, and keeps the newest results', () => {
     const a = packOf('A', ['a1'], 'open a');
     const tasks = packTestTasks([a, packOf('Empty', []), packOf('B', ['b1'])], 5);
-    expect(tasks.map((t) => [t.id, t.goal, t.budget])).toEqual([[a.id, 'Open a', 3], [expect.any(String), 'B', 2]]);
+    expect(tasks.map((t) => [t.id, t.goal, t.budget])).toEqual([[a.id, 'Open a', 3], [expect.any(String), expect.stringContaining('click "b1"'), 2]]);
     let p = a;
     for (let i = 0; i < PACK_TEST_LIMIT + 2; i++) p = appendTestResult(p, { id: `t${i}`, time: i, status: 'pass', message: '', dry: true });
     expect(p.tests).toHaveLength(PACK_TEST_LIMIT);

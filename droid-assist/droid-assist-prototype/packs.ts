@@ -178,7 +178,7 @@ export function similarReport(plan: WorkflowStep[], runs: StepRun[], dryRun: boo
 export function packTestTasks(packs: WorkflowPack[], totalBudget: number): SubagentTask[] {
   const testable = packs.filter((p) => p.steps.length);
   const budgets = sliceBudget(totalBudget, testable.length);
-  return testable.map((p, i) => ({ id: p.id, index: i, kind: 'route', label: p.name, goal: p.goal || p.name, target: p.name, budget: budgets[i] }));
+  return testable.map((p, i) => ({ id: p.id, index: i, kind: 'route', label: p.name, goal: p.goal || similarGoal(p.steps), target: p.name, budget: budgets[i] }));
 }
 
 /** A subagent result as a pack test entry. */
