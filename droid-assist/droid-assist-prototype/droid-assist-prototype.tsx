@@ -10,6 +10,7 @@ import { AgentBusPanel, SubagentReportPanel } from './bus-panels.js';
 import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
 import { AgentBusPanel, CrewPanel, SubagentReportPanel } from './bus-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
+import { ProjectsPanel } from './projects-panel.js';
 import { AccessPathsPanel } from './access-paths-panel.js';
 import { ApprovalsPanel } from './approvals-panel.js';
 import { StatsPanel } from './stats-panel.js';
@@ -72,6 +73,7 @@ function AssistScreen() {
             <WakePanel engine={engine} />
             <InitiativePanel engine={engine} />
             <TriggersPanel engine={engine} />
+            <ProjectsPanel engine={engine} />
             <ApprovalsPanel engine={engine} />
             <ArtifactsPanel engine={engine} />
           </div>

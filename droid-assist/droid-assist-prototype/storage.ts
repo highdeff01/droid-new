@@ -17,6 +17,8 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { CREW_SIZE_MAX, CREW_SIZE_MIN } from './crew.js';
+import { PROJECT_LIMIT, isProject, pruneProjects, type Project } from './project.js';
+import { APPROVAL_LIMIT, EMPTY_APPROVALS, LEARNED_LIMIT, isApprovalRequest, isLearnedMethod, type ApprovalState } from './approval-queue.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
 import { EMPTY_MEMORY, FAILURE_LIMIT, OPERATION_NOTE_LIMIT, isFailureRecord, isOperationNote, type OperationMemory } from './operation-memory.js';
 import { ACCESS_PATH_LIMIT, isAccessProfile, type AccessProfile } from './access-paths.js';
@@ -640,6 +642,25 @@ export function loadOperationMemory(): OperationMemory {
 export function saveOperationMemory(memory: OperationMemory) {
   const kept = { failures: memory.failures.slice(0, FAILURE_LIMIT), notes: memory.notes.slice(0, OPERATION_NOTE_LIMIT) };
   if (!writeJson(KEYS.memory, kept)) writeJson(KEYS.memory, { ...kept, failures: kept.failures.map((f) => ({ ...f, shots: [] })) });
+/** The stored projects, pruned to PROJECT_LIMIT (unfinished first); invalid entries are dropped. */
+export const loadProjects = (): Project[] => pruneProjects(listOf(readJson(KEYS.projects), isProject, Infinity));
+
+/** Persists the pruned projects; while they do not fit, the lowest-ranked half is pruned. */
+export function saveProjects(projects: Project[]) {
+  let kept = pruneProjects(projects, PROJECT_LIMIT);
+  while (!writeJson(KEYS.projects, kept) && kept.length) kept = kept.slice(0, Math.floor(kept.length / 2));
+}
+
+/** The stored approval queue and learned methods; invalid entries are dropped. */
+export function loadApprovals(): ApprovalState {
+  const stored = readJson(KEYS.approvals);
+  if (!isObject(stored)) return EMPTY_APPROVALS;
+  return { queue: listOf(stored.queue, isApprovalRequest, APPROVAL_LIMIT), learned: listOf(stored.learned, isLearnedMethod, LEARNED_LIMIT) };
+}
+
+/** Persists the approval queue and learned methods, capped per list. */
+export function saveApprovals(state: ApprovalState) {
+  writeJson(KEYS.approvals, { queue: state.queue.slice(0, APPROVAL_LIMIT), learned: state.learned.slice(0, LEARNED_LIMIT) });
 /** The stored access-path profiles; invalid entries are dropped. */
 export const loadAccessPaths = (): AccessProfile[] => listOf(readJson(KEYS.accessPaths), isAccessProfile, ACCESS_PATH_LIMIT);
 

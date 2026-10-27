@@ -73,6 +73,8 @@ import type { Knowledge } from './cross-reference.js';
 import { useKnowledge } from './use-knowledge.js';
 import { useVariations } from './use-variations.js';
 import { FAILURE_CONTEXT_LIMIT, RECENT_LINES, addFailure, addNote, failureFromRun, failureLine, forget, memoryBlock, newFailure, objectiveText, operationGroups, similarFailures, type FailureRecord, type OperationMemory } from './operation-memory.js';
+import { toStep } from './project.js';
+import { useProjects } from './use-projects.js';
 import { findWorldElement, initialWorld, onWorldToggle, worldClick, worldContext, worldDoubleClick, worldDrag, worldKey, worldTick, worldType, type World, type WorldResult } from './test-world.js';
 import { findScenario, progressLines, scenarioComplete } from './test-world-scenarios.js';
 import { MAX_DISCOVERY, OBJECTIVE_TONE, chainReport, discoverTarget, isChainGoal, locateTarget, objectiveLine, planChain, type ChainObjective, type ChainPlan, type ChainRun, type DiscoveryMove } from './chain.js';
@@ -1346,6 +1348,49 @@ export function useAssist() {
     sidetest: (e) => `Noted "${e.name}" for side tests`,
   };
 
+  /** Why no project may take a turn now: a guardrail (abort, disarmed, executor kill-switch) or its loop-control stage; null = go on. */
+  const projectHalt = (): string | null => {
+    if (abortedRef.current) return 'ABORTED is active — clear the abort first';
+    if (!armedRef.current) return 'Real input is disarmed';
+    if (!stageOn('executor')) return stageOff('executor');
+    if (!stageOn('projects')) return stageOff('projects');
+    return aiOnline() ? null : 'AI offline';
+  };
+
+  /** The live frame the project's AI calls look at. */
+  const projectFrame = () => framesRef.current[0] ?? null;
+
+  const projectEngine = useProjects({
+    log: (message, tone) => addLog('Projects', message, tone),
+    halt: projectHalt,
+    busy: () => triggerBusyRef.current || executorBusy(),
+    plan: async ({ goal: projectGoal, context, why, steps: planned }) => {
+      const ask = askFor('planner');
+      const plan = why
+        ? await planRemaining(ask, projectGoal, projectFrame(), planned.map(toStep), [why, ...context].join('\n'), patternsRef.current)
+        : await planFromGoal(projectGoal, cardsRef.current, projectFrame(), ask, context, patternsRef.current);
+      return plan.steps;
+    },
+    run: (p, dryRun) => {
+      stepsRef.current = p.steps.map(toStep);
+      setSteps(stepsRef.current);
+      return runReplay(dryRun, { label: `Project "${p.name}"`, goal: p.goal });
+    },
+    check: (p) => verifyGoal(askFor('projects'), projectFrame(), p.goal, stepsRef.current),
+    research: async (p, question) => {
+      const frame = projectFrame();
+      if (!frame) throw new Error('no live screen to research on');
+      return (await describeScreen(askFor('projects'), frame, question, p.goal)).answer;
+    },
+    learn: ({ habit, pattern }) => {
+      commitHabits(recordOutcome(habitsRef.current, habit));
+      addPatterns([pattern]);
+    },
+    maxRetries: () => settingsRef.current.stepRetries,
+  });
+  const projectInjectRef = useRef(projectEngine.injectRunning);
+  projectInjectRef.current = projectEngine.injectRunning;
+
   /**
    * Forwards a discovered element from one agent into the inboxes of the others (all of them by
    * default) for forward testing and predefining. Each recipient that is on handles it at once;
@@ -1364,6 +1409,7 @@ export function useAssist() {
     if (shot) preferFrame(shot, BUS_AGENTS[from], `found "${element.name}"`);
     crewApiRef.current?.observeElement(element);
     addLog('Agent bus', `${BUS_AGENTS[from]} forwarded "${element.name}" at ${at(element.x, element.y)} to ${queued.length} agent(s)`, 'info');
+    projectInjectRef.current('agent', BUS_AGENTS[from], `Found "${element.name}" at ${at(element.x, element.y)}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addLog, preferFrame]);
 
@@ -3159,8 +3205,11 @@ export function useAssist() {
     }
     if (!abortRef.current) await confirmGoal(runGoal, ran, dryRun);
     await learnFromRun(ran, { dryRun, stopped: abortRef.current });
+    // ■ Stop or a spent action budget both end the run as stopped (callers hold, never retry, a stopped run).
+    const stopped = abortRef.current || (!dryRun && budget.used >= budget.limit && ok < ran.length);
+    await learnFromRun(ran, { dryRun, stopped });
     await superviseRun();
-    return { ok, total: ran.length, dryRun, stopped: abortRef.current };
+    return { ok, total: ran.length, dryRun, stopped };
   };
 
   /** One pass over the current steps in order, checking abortRef between steps. */
@@ -5046,6 +5095,8 @@ export function useAssist() {
     dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
     reverse, reverseLast, reversing, briefings, chain, runChain,
     reverse, reverseLast, reversing, briefings,
+    /** The per-project lifecycle engine and its approval queue. */
+    projects: projectEngine,
     goals, queueNextGoal, removeGoal, userNotes, addNote, preferred, preferFrame,
     /** The capability registry and its artifacts; `invokeCapability` is the one permission-checked path for the main AI, the user and agents. */
     artifactCapabilities: caps.registry, invokeCapability: caps.invoke, presentations: caps.presentations, scripts: caps.scripts, artifactKnowledge: caps.knowledge,

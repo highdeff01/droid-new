@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard } from './types.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveOperationMemory, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadApprovals, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadProjects, loadRunSummaries, loadSettings, loadWatcher, saveApprovals, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveProjects, saveSettings, saveWatcher } from './storage.js';
+import { PROJECT_LIMIT, createProject, type PlannedStep, type Project } from './project.js';
+import { EMPTY_APPROVALS, decide, enqueue } from './approval-queue.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadAccessPaths, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveAccessPaths, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadDossiers, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveDossiers, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadGoals, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveGoals, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
@@ -426,6 +429,61 @@ describe('run summaries', () => {
     expect(loadRunSummaries()).toEqual([summary(1)]);
     localStorage.setItem('droid-assist.runs', '{nope');
     expect(loadRunSummaries()).toEqual([]);
+  });
+});
+
+describe('projects', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('round-trips saved projects', () => {
+    const projects = [createProject('Script', 'Write a script', 2), createProject('Deck', 'Build a slide deck', 1)];
+    saveProjects(projects);
+    expect(loadProjects()).toEqual(projects);
+  });
+
+  it('drops invalid entries and corrupt JSON returns []', () => {
+    const valid = createProject('Deck', 'Build a slide deck', 1);
+    localStorage.setItem('droid-assist.projects', JSON.stringify([valid, null, { id: 'bad' }, { ...valid, state: 'bogus' }]));
+    expect(loadProjects()).toEqual([valid]);
+    localStorage.setItem('droid-assist.projects', '{nope');
+    expect(loadProjects()).toEqual([]);
+  });
+
+  it('saveProjects prunes beyond PROJECT_LIMIT keeping unfinished first', () => {
+    const finished: Project = { ...createProject('Done', 'goal', 1), state: 'complete', completion: { done: true, reason: 'ok', time: 1 }, updatedAt: 1000 };
+    const unfinished = Array.from({ length: PROJECT_LIMIT + 5 }, (_, i) => createProject(`P${i}`, 'goal', i + 2));
+    saveProjects([finished, ...unfinished]);
+    const loaded = loadProjects();
+    expect(loaded).toHaveLength(PROJECT_LIMIT);
+    expect(loaded.every((p) => p.state !== 'complete')).toBe(true);
+  });
+});
+
+describe('approvals', () => {
+  beforeEach(() => localStorage.clear());
+  const step = (n: number): PlannedStep => ({ id: `s${n}`, name: `Step ${n}`, action: 'click', x: 0.1, y: 0.2 });
+
+  it('round-trips queue and learned methods', () => {
+    const { state: queued } = enqueue(EMPTY_APPROVALS, 'proj_1', [step(1)], 5);
+    const decided = decide(queued, queued.queue[0].id, { kind: 'approve' }, 'notepad', 10);
+    expect(decided).not.toBeNull();
+    saveApprovals(decided!.state);
+    expect(loadApprovals()).toEqual(decided!.state);
+  });
+
+  it('returns EMPTY_APPROVALS when missing or corrupt', () => {
+    expect(loadApprovals()).toEqual(EMPTY_APPROVALS);
+    localStorage.setItem('droid-assist.approvals', '{nope');
+    expect(loadApprovals()).toEqual(EMPTY_APPROVALS);
+    localStorage.setItem('droid-assist.approvals', '[1,2]');
+    expect(loadApprovals()).toEqual(EMPTY_APPROVALS);
+  });
+
+  it('drops invalid requests', () => {
+    const { state: queued } = enqueue(EMPTY_APPROVALS, 'proj_1', [step(1), step(2)], 5);
+    const [valid, invalid] = queued.queue;
+    localStorage.setItem('droid-assist.approvals', JSON.stringify({ queue: [valid, null, { ...invalid, step: { id: 'bad' } }], learned: [] }));
+    expect(loadApprovals()).toEqual({ queue: [valid], learned: [] });
   });
 });
 
