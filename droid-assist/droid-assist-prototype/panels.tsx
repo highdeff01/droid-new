@@ -21,7 +21,7 @@ import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js
 import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
 import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
-import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, type AiView } from './ai.js';
+import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS } from './ai.js';
 import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-history.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
@@ -86,7 +86,7 @@ export function RulerPanel({ engine }: { engine: AssistEngine }) {
         <button type="button" onClick={ruler.saveRuler} disabled={!m?.segments.length}>Keep measurement</button>
         {ruler.frameId !== null && <button type="button" onClick={() => ruler.measureFrame(null)}>Back to live</button>}
         <button type="button" onClick={ruler.setBaseline}>Set baseline</button>
-        <button type="button" onClick={() => ruler.recalibrateNow('manual')} disabled={!ruler.baseline}>⟲ Recalibrate</button>
+        <button type="button" onClick={() => void engine.invoke('ruler.recalibrate')} disabled={!ruler.baseline}>⟲ Recalibrate</button>
       </div>
       {m && m.segments.length > 0 ? (
         <ul aria-label="Ruler segments">
@@ -119,7 +119,7 @@ export function ComparisonGallery({ engine }: { engine: AssistEngine }) {
         {frames.map((f, i) => {
           const d = frames[i + 1] ? frameDistance(frames[i + 1].data, f.data) : 0;
           return (
-            <figure key={f.id} className={d > 0.04 ? styles.changed : ''}>
+            <figure key={f.id} id={`frame-${f.id}`} className={d > 0.04 ? styles.changed : ''}>
               <img src={f.url} alt={`Frame ${f.id}`} />
               <figcaption>#{f.id} · Δ {d.toFixed(3)} <button type="button" onClick={() => engine.ruler.measureFrame(f.id)} aria-label={`Measure frame ${f.id}`} title="Measure this frame with the ruler">📏</button></figcaption>
             </figure>
@@ -131,7 +131,7 @@ export function ComparisonGallery({ engine }: { engine: AssistEngine }) {
           <h4>AI-selected screenshots <small>most informative state changes from the last run</small></h4>
           <div className={styles.gallery}>
             {pinned.map((f) => (
-              <figure key={f.id} className={styles.pinned}>
+              <figure key={f.id} id={`pinned-frame-${f.id}`} className={styles.pinned}>
                 <img src={f.url} alt={`Selected frame ${f.id}`} />
                 <figcaption>#{f.id}</figcaption>
               </figure>
@@ -155,7 +155,7 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
           <li key={s.id} data-status={s.status}>
             {s.shot ? <img src={s.shot.url} alt={`After step ${i + 1}`} title="Desktop screenshot after this step ran" /> : s.refFrame ? <img src={s.refFrame.url} alt="" /> : <span className={styles.noThumb}>{s.action}</span>}
             <div>
-              <input value={s.name} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} aria-label={`Step ${i + 1} name`} />
+              <input value={s.name} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} onFocus={(e) => { e.currentTarget.dataset.was = e.currentTarget.value; }} onBlur={(e) => { const name = e.currentTarget.value.trim(); if (name !== (e.currentTarget.dataset.was ?? '').trim()) engine.knowledge.noteSignal('correction', `renamed step to "${name}"`); }} aria-label={`Step ${i + 1} name`} />
               <small>
                 {s.action}{s.target ? ` "${s.target}"` : ''}{(s.action === 'key' || s.action === 'scroll') && s.text ? ` ${s.text}` : ''} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}%{s.endX !== undefined && s.endY !== undefined ? ` → ${s.endTarget ? `"${s.endTarget}" ` : ''}${(s.endX * 100).toFixed(0)}%,${(s.endY * 100).toFixed(0)}%` : ''} · {s.status}
                 {s.delayMs !== undefined && ` · after ${s.delayMs}ms`}
@@ -169,7 +169,7 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
                 </span>
               )}
             </div>
-            <button type="button" aria-label="Remove step" onClick={() => setSteps(steps.filter((_, j) => j !== i))}>✕</button>
+            <button type="button" aria-label="Remove step" onClick={() => engine.removeStep(i)}>✕</button>
           </li>
         ))}
       </ol>
@@ -177,7 +177,7 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
         <div className={styles.card}>
           <input value={draftCard.name} onChange={(e) => setDraftCard({ ...draftCard, name: e.target.value })} aria-label="Workflow name" />
           <textarea value={draftCard.description} onChange={(e) => setDraftCard({ ...draftCard, description: e.target.value })} aria-label="Workflow description" />
-          <button type="button" className={styles.primary} onClick={engine.saveCard}>💾 Save</button>
+          <button type="button" className={styles.primary} onClick={() => void engine.invoke('workflow.save')}>💾 Save</button>
         </div>
       )}
     </section>
@@ -192,7 +192,7 @@ export function LibraryPanel({ engine }: { engine: AssistEngine }) {
       {!engine.cards.length && <p className={styles.muted}>Saved cards appear here. The planner reuses similar ones automatically.</p>}
       <div className={styles.cards}>
         {engine.cards.map((c) => (
-          <button type="button" key={c.id} className={styles.savedCard} onClick={() => engine.loadCard(c)}>
+          <button type="button" key={c.id} className={styles.savedCard} onClick={() => void engine.invoke('workflow.load', { name: c.id })}>
             <strong>{c.name}</strong>
             <span>{c.description}</span>
             <small>{c.steps.length} steps · {new Date(c.savedAt).toLocaleTimeString()}</small>
@@ -250,6 +250,30 @@ export function PatternsPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
+/**
+ * Capabilities: every registered feature (the single dispatch surface for buttons, the AI, agents
+ * and the main app) and the invocation log — requester, parameters and result.
+ */
+export function CapabilitiesPanel({ engine }: { engine: AssistEngine }) {
+  const { capabilities, invocations } = engine;
+  return (
+    <section className={styles.panel} aria-label="Capabilities">
+      <h3>Capabilities <small>{capabilities.length} registered · {invocations.length} invocation(s)</small></h3>
+      <ul className={styles.log} aria-label="Capability invocations">
+        {invocations.map((r, i) => (
+          <li key={`${r.time}-${i}`} data-tone={r.ok ? 'ok' : 'error'}>
+            <small>{clock(r.time)}</small> <b>{r.requester}</b> → {r.id} <small>{JSON.stringify(r.params)}</small>: {r.result}
+          </li>
+        ))}
+      </ul>
+      <details>
+        <summary>Registered capabilities</summary>
+        <ul>{capabilities.map((c) => <li key={c.id}><b>{c.id}</b> <small>{c.description}</small></li>)}</ul>
+      </details>
+    </section>
+  );
+}
+
 const STAGE_GROUPS: Array<{ group: StageGroup; title: string }> = [
   { group: 'pipeline', title: 'Pipeline' },
   { group: 'agent', title: 'Agents' },
@@ -260,7 +284,7 @@ const STAGE_GROUPS: Array<{ group: StageGroup; title: string }> = [
  * stage is off. Guardrails (arm, emergency stop, budget, abort) are not listed — they always apply.
  */
 export function LoopControlPanel({ engine }: { engine: AssistEngine }) {
-  const { settings, toggleStage } = engine;
+  const { settings } = engine;
   const unverified = unverifiedStages(settings.stages);
   return (
     <section className={styles.panel}>
@@ -273,7 +297,7 @@ export function LoopControlPanel({ engine }: { engine: AssistEngine }) {
           <h4>{title}</h4>
           {STAGES.filter((s) => s.group === group).map((s) => (
             <label key={s.id} className={styles.agent}>
-              <input type="checkbox" checked={settings.stages[s.id]} onChange={(e) => toggleStage(s.id, e.target.checked)} />
+              <input type="checkbox" checked={settings.stages[s.id]} onChange={(e) => void engine.invoke(`stage.${s.id}`, { on: e.target.checked })} />
               <span><strong>{s.name}</strong><small>{s.description}</small></span>
             </label>
           ))}
@@ -288,13 +312,13 @@ export function LoopControlPanel({ engine }: { engine: AssistEngine }) {
  * (see the Agent bus panel), so a discovered element can be forwarded between them.
  */
 export function AgentsPanel({ engine }: { engine: AssistEngine }) {
-  const { agents, setAgents } = engine;
+  const { agents } = engine;
   return (
     <section className={styles.panel}>
       <h3>Agents</h3>
       {agents.map((a) => (
         <label key={a.id} className={styles.agent}>
-          <input type="checkbox" checked={a.on} onChange={(e) => setAgents(agents.map((x) => (x.id === a.id ? { ...x, on: e.target.checked } : x)))} />
+          <input type="checkbox" checked={a.on} onChange={(e) => void engine.invoke(`agent.${a.id}`, { on: e.target.checked })} />
           <span><strong>{a.name}</strong><small>{a.description}</small></span>
         </label>
       ))}
@@ -323,20 +347,20 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       </label>
       <label className={styles.setting}>App monitor: capture every <b>{settings.captureMs} ms</b>
         <small>Background monitor is fixed at 1000 ms, advanced at 250 ms. Active: {engine.intervalMs} ms</small>
-        <input type="range" min={250} max={2000} step={50} value={settings.captureMs} onChange={(e) => setSettings({ ...settings, captureMs: +e.target.value })} />
+        <input type="range" min={250} max={2000} step={50} value={settings.captureMs} onChange={(e) => void engine.invoke('setting.captureMs', { value: +e.target.value })} />
       </label>
       <label className={styles.setting}>Screen watcher: observe every <b>{(settings.watchMs / 1000).toFixed(1)} s</b>
-        <input type="range" min={WATCH_MS_MIN} max={WATCH_MS_MAX} step={500} value={settings.watchMs} onChange={(e) => setSettings({ ...settings, watchMs: +e.target.value })} />
+        <input type="range" min={WATCH_MS_MIN} max={WATCH_MS_MAX} step={500} value={settings.watchMs} onChange={(e) => void engine.invoke('setting.watchMs', { value: +e.target.value })} />
       </label>
       <label className={styles.setting}>Screen-change threshold <b>{settings.changeCells} cells</b>
         <input type="range" min={2} max={40} value={settings.changeCells} onChange={(e) => setSettings({ ...settings, changeCells: +e.target.value })} aria-label="Screen-change threshold" />
       </label>
       <label className={styles.setting}>Retries per failed step <b>{settings.stepRetries}</b>
         <small>Each retry re-verifies and re-corrects the target and spends budget; then the planner re-plans the step once.</small>
-        <input type="range" min={STEP_RETRIES_MIN} max={STEP_RETRIES_MAX} value={settings.stepRetries} onChange={(e) => setSettings({ ...settings, stepRetries: +e.target.value })} aria-label="Retries per failed step" />
+        <input type="range" min={STEP_RETRIES_MIN} max={STEP_RETRIES_MAX} value={settings.stepRetries} onChange={(e) => void engine.invoke('setting.stepRetries', { value: +e.target.value })} aria-label="Retries per failed step" />
       </label>
       <label className={styles.setting}>Max real input actions per run <b>{settings.actionBudget}</b>
-        <input type="number" min={1} value={settings.actionBudget} onChange={(e) => setSettings({ ...settings, actionBudget: sanitizeBudget(e.target.valueAsNumber) })} />
+        <input type="number" min={1} value={settings.actionBudget} onChange={(e) => void engine.invoke('guard.budget', { limit: sanitizeBudget(e.target.valueAsNumber) })} />
       </label>
       <label className={styles.setting}>Max AI calls in flight <b>{settings.aiMaxInFlight}</b>
         <small>Further calls wait in a shared queue: executor/grounding first, planner/verdict next, background agents last.</small>
@@ -384,15 +408,18 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         <input value={settings.aiUrl} onChange={(e) => setSettings({ ...settings, aiUrl: e.target.value })} aria-label="AI endpoint URL" />
       </label>
       <label className={styles.setting}>AI view resolution
-        <select value={settings.aiView} onChange={(e) => setSettings({ ...settings, aiView: e.target.value as AiView })} aria-label="AI view resolution">
-          {(Object.keys(AI_VIEWS) as AiView[]).map((v) => <option key={v} value={v}>{v}</option>)}
+        <select value={settings.aiView} onChange={(e) => void engine.invoke('setting.aiView', { value: e.target.value })} aria-label="AI view resolution">
+          {Object.keys(AI_VIEWS).map((v) => <option key={v} value={v}>{v}</option>)}
         </select>
         <small>Size of the screenshot the model sees; replies are scaled back to the 480x270 sample space.</small>
       </label>
       <ModelPicker url={settings.aiUrl} model={settings.aiModel} onSelect={(aiModel) => setSettings({ ...settings, aiModel })} />
-      <AiStatusBadge status={engine.aiStatus} />
+      <span className={styles.row}>
+        <button type="button" onClick={() => void engine.connectAi()} disabled={engine.aiStatus.state === 'checking' || !settings.aiUrl} aria-label="Connect AI">Connect</button>
+        <AiStatusBadge status={engine.aiStatus} />
+      </span>
       <ErrorForwardingSettings engine={engine} />
-      <BackupSettings />
+      <BackupSettings onExport={() => void engine.invoke('backup.export')} />
     </section>
   );
 }
@@ -510,8 +537,8 @@ export function ActionHistoryPanel({ engine }: { engine: AssistEngine }) {
     <section className={styles.panel}>
       <h3>Action history <small>{history.length} action(s)</small></h3>
       <div className={styles.row}>
-        <button type="button" onClick={() => engine.exportHistory('json')} disabled={!history.length}>Export JSON</button>
-        <button type="button" onClick={() => engine.exportHistory('csv')} disabled={!history.length}>Export CSV</button>
+        <button type="button" onClick={() => void engine.invoke('history.export', { format: 'json' })} disabled={!history.length}>Export JSON</button>
+        <button type="button" onClick={() => void engine.invoke('history.export', { format: 'csv' })} disabled={!history.length}>Export CSV</button>
         <button type="button" onClick={engine.resetHistory} disabled={!history.length}>Clear</button>
       </div>
       <ul className={styles.log}>
@@ -534,7 +561,7 @@ function ElementItem({ engine, el }: { engine: AssistEngine; el: ScreenElement }
       {el.patch && <img src={el.patch} alt={`${el.name} patch`} width={32} height={32} />}
       <b>{el.name}</b> <small>{SOURCE_LABEL[el.source]}</small> · {gridRef(el)} = ({(el.x * 100).toFixed(1)}%, {(el.y * 100).toFixed(1)}%)
       {el.lastSeen !== undefined && <small> · seen {new Date(el.lastSeen).toLocaleTimeString()}</small>}
-      <button type="button" onClick={() => void engine.testClick(el)} title={engine.armed ? 'Clicks this point on the PC (real input, budgeted)' : 'Highlights this point only (disarmed dry run)'}>
+      <button type="button" onClick={() => void engine.invoke('test.element', { name: el.name, x: el.x, y: el.y })} title={engine.armed ? 'Clicks this point on the PC (real input, budgeted)' : 'Highlights this point only (disarmed dry run)'}>
         Test click
       </button>
       {el.source === 'familiar' && <button type="button" aria-label={`Forget ${el.name}`} onClick={() => engine.forgetFamiliar(el.id)}>✕</button>}
@@ -563,7 +590,7 @@ export function ElementMapPanel({ engine }: { engine: AssistEngine }) {
   return (
     <section className={styles.panel} aria-label="Element map">
       <h3>Element map <small>{elementMap.length} mapped · own {MAP_ROWS}x{MAP_COLS} grid</small></h3>
-      <button type="button" aria-pressed={mapMode} onClick={engine.toggleMapMode}>{mapMode ? 'Done mapping' : 'Map elements'}</button>
+      <button type="button" aria-pressed={mapMode} onClick={() => void engine.invoke('map.toggle')}>{mapMode ? 'Done mapping' : 'Map elements'}</button>
       {mapMode && !mapDraft && <p className={styles.muted}>Click-drag on the live screen to draw an element's boundary.</p>}
       {mapDraft && (
         <form
@@ -596,7 +623,7 @@ function LearnedItem({ engine, el }: { engine: AssistEngine; el: FamiliarElement
     <li data-tone="info">
       <b>{el.name}</b> · {gridRef(el)} = ({(el.x * 100).toFixed(1)}%, {(el.y * 100).toFixed(1)}%)
       <small> · seen {el.timesSeen ?? 0}× · updated {new Date(el.lastSeen).toLocaleTimeString()}{el.frameId !== undefined ? ` on frame #${el.frameId}` : ''}</small>
-      <button type="button" onClick={() => void engine.testClick({ ...el, source: 'familiar' })} title={engine.armed ? 'Clicks this point on the PC (real input, budgeted)' : 'Highlights this point only (disarmed dry run)'}>
+      <button type="button" onClick={() => void engine.invoke('test.element', { name: el.name, x: el.x, y: el.y })} title={engine.armed ? 'Clicks this point on the PC (real input, budgeted)' : 'Highlights this point only (disarmed dry run)'}>
         Test click
       </button>
     </li>
@@ -632,7 +659,7 @@ function entryTone(e: ThinkingEntry): LogEntry['tone'] {
 /** One timeline entry: what the model answered and the thinking it returned — or plainly that there was none. */
 function ThinkingItem({ entry }: { entry: ThinkingEntry }) {
   return (
-    <li data-tone={entryTone(entry)}>
+    <li id={`think-${entry.id}`} data-tone={entryTone(entry)}>
       <time>{new Date(entry.time).toLocaleTimeString()}</time> <b>{entry.step}</b> · {KIND_LABEL[entry.kind]}
       {entry.error ? (
         <p role="alert">AI call failed — {entry.error}</p>
@@ -749,7 +776,7 @@ export function SupervisorPanel({ engine }: { engine: AssistEngine }) {
   return (
     <section className={styles.panel} aria-label="Supervisor review">
       <h3>Supervisor review <small>{supervisor.status}</small></h3>
-      <button type="button" onClick={() => void engine.superviseRun()} disabled={!on || supervisor.status === 'reviewing'}>Review now</button>
+      <button type="button" onClick={() => void engine.invoke('supervisor.review')} disabled={!on || supervisor.status === 'reviewing'}>Review now</button>
       {supervisor.status === 'offline' || supervisor.status === 'error' ? <p role="alert">{supervisor.detail}</p> : !review && <p className={styles.muted}>{supervisor.detail}</p>}
       {review && (
         <>
@@ -772,7 +799,7 @@ export function LogPanel({ engine }: { engine: AssistEngine }) {
       <h3>Activity log</h3>
       <ul className={styles.log}>
         {engine.log.map((l) => (
-          <li key={l.id} data-tone={l.tone}>
+          <li key={l.id} id={`log-${l.id}`} data-tone={l.tone}>
             <time>{new Date(l.time).toLocaleTimeString()}</time> <b>{l.source}</b> {l.message}
             {l.shots && (
               <span>
