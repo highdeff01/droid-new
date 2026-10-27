@@ -1,4 +1,5 @@
 import type { Frame } from './types.js';
+import { HISTORY_MAX, STALE_KEEP, STALE_PARSE_LIMIT, trimHistory, type HistoryChange, type HistoryEntry, type TrimReason } from './ai-history.js';
 
 /** The primary Ollama-compatible chat endpoint and its default model. */
 export const DEFAULT_AI_URL = 'https://quantumclaw.net/ollama/api/chat';
@@ -10,7 +11,14 @@ export interface AiConfig {
   model: string;
   /** Size each screenshot is rendered at for the model; absent means SAMPLE_VIEW. */
   view?: ViewSize;
+  /** Per-request timeout in ms; absent means DEFAULT_AI_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
+
+/** Default per-request AI timeout, and the Settings range it is validated against. */
+export const DEFAULT_AI_TIMEOUT_MS = 90_000;
+export const AI_TIMEOUT_MS_MIN = 10_000;
+export const AI_TIMEOUT_MS_MAX = 300_000;
 
 /** Live reachability of the model endpoint. */
 export interface AiStatus {
@@ -34,7 +42,6 @@ export class AiError extends Error {
 export const VIEW_W = 480;
 export const VIEW_H = 270;
 const HISTORY_KEY = 'droid-assist.ai-history';
-const HISTORY_MAX = 20;
 
 /** Pixel size of an image sent to the model. */
 export interface ViewSize {
@@ -162,7 +169,7 @@ async function fetchReply(cfg: AiConfig, messages: ChatMessage[], json: boolean,
  * @param json ask the server for a JSON-formatted reply
  * @param cancel aborts the request (alongside the per-request timeout)
  */
-export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = 90_000, cancel?: AbortSignal): Promise<AiReply> {
+export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = DEFAULT_AI_TIMEOUT_MS, cancel?: AbortSignal): Promise<AiReply> {
   const first = await post(cfg, messages, json, timeoutMs, cancel);
   if (first.content) return first;
   if (!first.thinking) throw new AiError('AI endpoint returned no message content and no thinking');
@@ -296,10 +303,10 @@ export type RenderFn = (frame: Frame, view: ViewSize) => Promise<string>;
 /** Minimal storage the session persists history to (sessionStorage in the browser). */
 export type HistoryStore = Pick<Storage, 'getItem' | 'setItem'>;
 
-function loadHistory(store: HistoryStore | null): ChatMessage[] {
+function loadHistory(store: HistoryStore | null): HistoryEntry[] {
   try {
     const parsed = JSON.parse(store?.getItem(HISTORY_KEY) ?? '[]') as unknown;
-    return Array.isArray(parsed) ? (parsed as ChatMessage[]) : [];
+    return Array.isArray(parsed) ? (parsed as HistoryEntry[]) : [];
   } catch {
     return [];
   }
@@ -319,15 +326,28 @@ export async function screenshots(frames: Frame[], view: ViewSize | undefined, r
   }
 }
 
+/** Called with every trim or reset of a session's history. */
+export type HistoryChangeFn = (change: HistoryChange) => void;
+
 /**
  * A per-session conversation: every ask sends system + history + the new user turn
  * (with the frame rendered at cfg.view by `render`), and on success appends the text of both turns
- * (content only, no thinking) to the persisted history. The reply carries the view its screenshots
- * were sent at. `cancel()` aborts every request in flight (they reject with AiError).
+ * (content only, no thinking) with their time to the persisted history, trimmed to HISTORY_MAX.
+ * The reply carries the view its screenshots were sent at. `cancel()` aborts every request in
+ * flight (they reject with AiError); `trim(n)` keeps the newest n messages; `reset()` cancels and
+ * clears everything; `noteParse(ok)` feeds the stale-context guard, which trims to STALE_KEEP after
+ * STALE_PARSE_LIMIT unparseable replies in a row. Every trim and reset is reported to `onChange`.
  */
-export function createAiSession(store: HistoryStore | null, render?: RenderFn) {
+export function createAiSession(store: HistoryStore | null, render?: RenderFn, onChange?: HistoryChangeFn) {
   let history = loadHistory(store);
   let controller = new AbortController();
+  let parseFailures = 0;
+  const shrink = (keep: number, reason: TrimReason) => {
+    const before = history.length;
+    history = trimHistory(history, keep);
+    store?.setItem(HISTORY_KEY, JSON.stringify(history));
+    onChange?.({ reason, before, after: history.length });
+  };
   const ask = async (cfg: AiConfig, req: AskRequest): Promise<AiReply> => {
     const signal = linkSignals(controller.signal, req.signal);
     const context = req.context?.length ? `\n\nRecent activity (newest first):\n${req.context.join('\n')}` : '';
@@ -336,14 +356,29 @@ export function createAiSession(store: HistoryStore | null, render?: RenderFn) {
     const images = [...shots.urls, ...(req.crops ?? []).map((c) => c.url)].map(toBase64);
     const user: ChatMessage = { role: 'user', content, ...(images.length ? { images } : {}) };
     const system = systemText(req.system, shots.view);
-    const reply = await chat(cfg, [{ role: 'system', content: system }, ...history, user], req.json, undefined, signal);
-    history = [...history, { role: 'user' as const, content }, { role: 'assistant' as const, content: reply.content }].slice(-HISTORY_MAX);
-    store?.setItem(HISTORY_KEY, JSON.stringify(history));
+    const turns = history.map(({ role, content: text }) => ({ role, content: text }));
+    const reply = await chat(cfg, [{ role: 'system', content: system }, ...turns, user], req.json, undefined, signal);
+    const time = Date.now();
+    history = [...history, { role: 'user' as const, content, time }, { role: 'assistant' as const, content: reply.content, time }];
+    if (history.length > HISTORY_MAX) shrink(HISTORY_MAX, 'cap');
+    else store?.setItem(HISTORY_KEY, JSON.stringify(history));
     return { ...reply, view: shots.view };
   };
   const cancel = () => {
     controller.abort();
     controller = new AbortController();
   };
-  return { ask, cancel, history: () => history };
+  const trim = (keep: number) => shrink(keep, 'manual');
+  const reset = () => {
+    cancel();
+    parseFailures = 0;
+    shrink(0, 'reset');
+  };
+  const noteParse = (ok: boolean) => {
+    parseFailures = ok ? 0 : parseFailures + 1;
+    if (parseFailures < STALE_PARSE_LIMIT) return;
+    parseFailures = 0;
+    shrink(STALE_KEEP, 'stale');
+  };
+  return { ask, cancel, trim, reset, noteParse, history: () => history };
 }
