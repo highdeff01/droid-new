@@ -512,20 +512,33 @@ export function useAssist() {
 
   const ruler = useMeasure({ frames, framesRef, elementMap: measureMap, addLog, rescale: rescaleStored });
 
+  const aiCheckSeqRef = useRef(0);
+  /** Pings `url`+`model` with the health check and shows the result; a result overtaken by a newer check is dropped. */
+  const checkAi = useCallback(async (url: string, model: string): Promise<AiStatus> => {
+    const seq = ++aiCheckSeqRef.current;
+    setAiStatus({ state: 'checking', detail: `Connecting to ${url}…` });
+    const status = await pingAi({ url, model });
+    if (seq !== aiCheckSeqRef.current) return status;
+    setAiStatus(status);
+    addLog('AI', status.detail, status.state === 'online' ? 'ok' : 'error');
+    if (status.state !== 'online') captureError({ kind: 'ai', message: status.detail });
+    return status;
+  }, [addLog, captureError]);
+
   // AI endpoint health: at startup and whenever the endpoint or model changes.
   useEffect(() => {
-    let live = true;
-    setAiStatus({ state: 'checking', detail: `Connecting to ${settings.aiUrl}…` });
-    void pingAi({ url: settings.aiUrl, model: settings.aiModel }).then((status) => {
-      if (!live) return;
-      setAiStatus(status);
-      addLog('AI', status.detail, status.state === 'online' ? 'ok' : 'error');
-      if (status.state !== 'online') captureError({ kind: 'ai', message: status.detail });
-    });
+    void checkAi(settings.aiUrl, settings.aiModel);
     return () => {
-      live = false;
+      aiCheckSeqRef.current++;
     };
-  }, [settings.aiUrl, settings.aiModel, addLog, captureError]);
+  }, [settings.aiUrl, settings.aiModel, checkAi]);
+
+  /** One-click Connect: saves the settings as they stand and pings their endpoint+model. */
+  const connectAi = useCallback(() => {
+    const s = settingsRef.current;
+    saveSettings(s);
+    return checkAi(s.aiUrl, s.aiModel);
+  }, [checkAi]);
 
   /** Whether a loop-control stage is checked; read live so a toggle applies mid-run. */
   const stageOn = (id: StageId) => settingsRef.current.stages[id];
@@ -3106,7 +3119,7 @@ export function useAssist() {
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
-    shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
+    shareScreen, connectBridge, connectAi, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
     bridgeOnline, verifyRealInput,
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
     dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),

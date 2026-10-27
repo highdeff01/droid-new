@@ -1,6 +1,6 @@
 import type { AssistEngine } from './use-assist.js';
 import type { MonitorMode, ScreenSource, SyncLevel } from './types.js';
-import type { AiStatus } from './ai.js';
+import type { AiConfig, AiStatus } from './ai.js';
 import { MONITOR_MODES } from './capture.js';
 import { insecureBridgeUrl } from './bridge.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
@@ -12,13 +12,17 @@ const SOURCE_LABEL: Record<ScreenSource, string> = { none: 'None', demo: 'Demo d
 const AI_LEVEL: Record<AiStatus['state'], SyncLevel> = { online: 'green', checking: 'yellow', offline: 'red' };
 const AI_LABEL: Record<AiStatus['state'], string> = { online: 'AI connected', checking: 'AI connecting…', offline: 'AI unavailable' };
 
-/** Live state of the AI endpoint: connected, connecting, or the reason it is unavailable. */
-export function AiStatusBadge({ status }: { status: AiStatus }) {
+/** The endpoint+model summary line, e.g. "qwen3.5:2b @ https://quantumclaw.net/ollama/api/chat". */
+export const aiSummary = ({ url, model }: AiConfig) => `${model} @ ${url}`;
+
+/** Live state of the AI endpoint: connected, connecting, or the reason it is unavailable; with `config`, the active endpoint+model too. */
+export function AiStatusBadge({ status, config }: { status: AiStatus; config?: AiConfig }) {
   return (
     <div className={styles.sync} data-level={AI_LEVEL[status.state]} title={status.detail} aria-live="polite">
       <span className={styles.syncDot} />
       <strong>{AI_LABEL[status.state]}</strong>
       <span className={styles.syncDetail}>{status.detail}</span>
+      {config && <small className={styles.syncDetail} data-testid="ai-summary">{aiSummary(config)}</small>}
     </div>
   );
 }
@@ -186,7 +190,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
       <div className={styles.hud2}>
         <SafetyControls engine={engine} />
         <ReverseControl engine={engine} />
-        <AiStatusBadge status={aiStatus} />
+        <AiStatusBadge status={aiStatus} config={{ url: settings.aiUrl, model: settings.aiModel }} />
         <SyncStatus level={engine.sync.level} detail={engine.sync.detail} />
         <label><input type="checkbox" checked={settings.autoAct} onChange={(e) => void engine.invoke('autoact.set', { on: e.target.checked })} disabled={aiOff} /> Auto act{aiOff && ' (AI unavailable)'}</label>
         <label><input type="checkbox" checked={settings.aiHelp} onChange={(e) => setSettings({ ...settings, aiHelp: e.target.checked })} disabled={aiOff} /> AI help{aiOff && ' (AI unavailable)'}</label>
