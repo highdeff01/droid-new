@@ -34,6 +34,8 @@ export interface ProposalContext {
   patterns: string[];
   /** Set on a re-proposal: why the first proposal no longer holds (drift red, plan stale, not ready). */
   redo?: string;
+  /** Prior operations, elements and errors from the operation database relevant to the goal and step. */
+  related?: string[];
 }
 
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
@@ -65,6 +67,7 @@ function proposePrompt(step: WorkflowStep, ctx: ProposalContext): string {
     `Next step: "${step.name}" — ${whatText(step.action, targetOf(step), p.x, p.y, step.text)} (planned target)`,
     ctx.change ? `The screen changed since the plan: ${ctx.change.summary} (${ctx.change.stale ? 'judged to make the plan stale' : 'judged not to affect the plan'}${ctx.change.effect ? `: ${ctx.change.effect}` : ''}).` : 'The screen has not materially changed since the plan.',
     ...(ctx.patterns.length ? ['Learned habits/patterns:', ...ctx.patterns] : []),
+    ...(ctx.related?.length ? ['Prior operations on this (from the operation database):', ...ctx.related] : []),
     ...(ctx.redo ? [`This is a RE-PROPOSAL: ${ctx.redo}. Find where the target is now, or set ready=false if the step can no longer be justified.`] : []),
     'Set ready=true only if this step serves the goal on the current screen, with x,y the target\'s current center; "why" says in one or two sentences how the step serves the goal.',
     'When ready=false because something is still loading or happening, "why" says what you are waiting on and you may add "waitMs": your estimate of how long it takes, in ms.',

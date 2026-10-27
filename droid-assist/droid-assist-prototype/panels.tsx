@@ -58,6 +58,12 @@ function ProposalItem({ engine, p }: { engine: AssistEngine; p: WatchProposal })
       {proposalStep(p) && (
         <button type="button" onClick={() => void engine.testProposal(p.id)} title={engine.armed ? 'Real click (armed, budgeted)' : 'Dry run — nothing is sent'}>Test</button>
       )}
+      {p.related?.length ? (
+        <details>
+          <summary>{p.related.length} related prior operation(s)</summary>
+          <ul>{p.related.map((line) => <li key={line}>{line}</li>)}</ul>
+        </details>
+      ) : null}
     </li>
   );
 }
