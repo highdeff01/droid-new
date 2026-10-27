@@ -138,13 +138,15 @@ export function createOpsWorkers(deps: OpsDeps) {
     const failed = held.current;
     if (!failed || failed.ok !== false) return fail('no applied action failed its recheck — nothing to reapply');
     const { step, before, out: first } = failed;
+    const tried = [first.target];
     for (let attempt = failed.attempts + 1; ; attempt++) {
-      const why = deps.halted();
+      const why = deps.halted() ?? (deps.stageOn('opsReapply') ? null : 'reapply stage unchecked');
       if (why) return fail(`"${step.name}": ${why} — reapply stopped`);
       const live = await frameNow();
       const correction = before && live ? deps.correct(before, live, first.target) : null;
-      const d = decideReapply(attempt, deps.retries(), correction, first.target);
+      const d = decideReapply(attempt, deps.retries(), correction, tried);
       if (d.kind === 'escalate') return escalate(step, d.why);
+      tried.push(d.at);
       const applied = await applyOnce({ ...step, x: d.at.x, y: d.at.y, correctedX: undefined, correctedY: undefined }, attempt);
       if (!applied.out.ok) return fail(`"${step.name}" reapply ${attempt}: ${applied.out.message}`, applied.out.target);
       const r = await recheck();
@@ -176,7 +178,7 @@ export function createOpsWorkers(deps: OpsDeps) {
     if (!steps.length) return ok('nothing to apply — the task needs no input');
     const done: OpsWorkResult[] = [];
     for (const step of steps) {
-      const why = deps.halted();
+      const why = deps.halted() ?? (deps.stageOn('opsApply') ? null : 'apply stage unchecked');
       if (why) return fail(`${why} — "${step.name}" not applied`);
       const r = await applyStep(step);
       if (!r.ok) return r;

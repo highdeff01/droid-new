@@ -234,15 +234,17 @@ export function recheckVerdict(before: ImageData, after: ImageData, step: Pick<W
 export type ReapplyDecision = { kind: 'retry'; at: { x: number; y: number }; why: string } | { kind: 'escalate'; why: string };
 
 /**
- * Reapply attempt `attempt` (1-based) with `limit` allowed: past the limit, or with the target not
- * found on the live frame, it escalates; otherwise it retries at the drift-corrected point (the
- * planned point when there is no reference frame to correct against).
+ * Reapply attempt `attempt` (1-based) with `limit` allowed: past the limit, with no reference frame
+ * to correct against, with the target not found on the live frame, or when the corrected point is
+ * one already `tried` (no new correction), it escalates; otherwise it retries at the corrected point.
  */
-export function decideReapply(attempt: number, limit: number, correction: Pick<DriftCorrection, 'level' | 'x' | 'y' | 'driftPx'> | null, planned: { x: number; y: number }): ReapplyDecision {
+export function decideReapply(attempt: number, limit: number, correction: Pick<DriftCorrection, 'level' | 'x' | 'y' | 'driftPx'> | null, tried: Array<{ x: number; y: number }>): ReapplyDecision {
   if (attempt > limit) return { kind: 'escalate', why: `reapply limit (${limit}) reached` };
-  if (!correction) return { kind: 'retry', at: planned, why: 'no reference frame — retrying at the planned point' };
+  if (!correction) return { kind: 'escalate', why: 'no reference frame to correct against' };
   if (correction.level === 'red') return { kind: 'escalate', why: 'target not found on the live frame' };
-  return { kind: 'retry', at: { x: correction.x, y: correction.y }, why: `target ${correction.level === 'green' ? 'in place' : `moved ${correction.driftPx}px`} — retrying at the corrected point` };
+  const same = (p: { x: number; y: number }) => Math.abs(p.x - correction.x) < 1e-3 && Math.abs(p.y - correction.y) < 1e-3;
+  if (tried.some(same)) return { kind: 'escalate', why: 'no new correction — the corrected point already failed recheck' };
+  return { kind: 'retry', at: { x: correction.x, y: correction.y }, why: `target moved ${correction.driftPx}px — retrying at the corrected point` };
 }
 
 // ── Loop-control agent ────────────────────────────────────────────────────

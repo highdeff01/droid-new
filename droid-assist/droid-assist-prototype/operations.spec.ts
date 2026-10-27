@@ -164,28 +164,27 @@ describe('decideReapply', () => {
   const planned = { x: 0.4, y: 0.6 };
 
   it('escalates once the attempt exceeds the limit, regardless of correction', () => {
-    expect(decideReapply(3, 2, null, planned)).toEqual({ kind: 'escalate', why: 'reapply limit (2) reached' });
+    expect(decideReapply(3, 2, null, [planned])).toEqual({ kind: 'escalate', why: 'reapply limit (2) reached' });
   });
 
-  it('retries at the planned point when there is no reference frame to correct against', () => {
-    expect(decideReapply(1, 2, null, planned)).toEqual({ kind: 'retry', at: planned, why: 'no reference frame — retrying at the planned point' });
+  it('escalates when there is no reference frame to correct against', () => {
+    expect(decideReapply(1, 2, null, [planned])).toEqual({ kind: 'escalate', why: 'no reference frame to correct against' });
   });
 
   it('escalates when the target was not found on the live frame', () => {
-    const d = decideReapply(1, 2, { level: 'red', x: 0.1, y: 0.1, driftPx: 0 }, planned);
+    const d = decideReapply(1, 2, { level: 'red', x: 0.1, y: 0.1, driftPx: 0 }, [planned]);
     expect(d).toEqual({ kind: 'escalate', why: 'target not found on the live frame' });
   });
 
-  it('retries at the corrected point when the target is in place (green)', () => {
-    const d = decideReapply(1, 2, { level: 'green', x: 0.41, y: 0.61, driftPx: 0 }, planned);
-    expect(d.kind).toBe('retry');
-    expect(d).toMatchObject({ at: { x: 0.41, y: 0.61 } });
-    expect((d as { why: string }).why).toContain('in place');
+  it('escalates when the corrected point already failed recheck (no new correction)', () => {
+    const d = decideReapply(1, 2, { level: 'green', x: 0.4, y: 0.6, driftPx: 0 }, [planned]);
+    expect(d.kind).toBe('escalate');
+    expect(decideReapply(2, 3, { level: 'yellow', x: 0.45, y: 0.6, driftPx: 9 }, [planned, { x: 0.45, y: 0.6 }]).kind).toBe('escalate');
   });
 
   it('retries at the corrected point when the target moved (yellow)', () => {
-    const d = decideReapply(1, 2, { level: 'yellow', x: 0.5, y: 0.5, driftPx: 12 }, planned);
-    expect(d.kind).toBe('retry');
+    const d = decideReapply(1, 2, { level: 'yellow', x: 0.5, y: 0.5, driftPx: 12 }, [planned]);
+    expect(d).toMatchObject({ kind: 'retry', at: { x: 0.5, y: 0.5 } });
     expect((d as { why: string }).why).toContain('moved 12px');
   });
 });
