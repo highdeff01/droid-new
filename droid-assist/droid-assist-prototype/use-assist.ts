@@ -19,10 +19,10 @@ import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './t
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd } from './bridge.js';
 import { dragEndError, runStep, type Grounding, type StepOutcome } from './run-step.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
-import { boxedFrames, patchAt, zoomBox, zoomFrame } from './grounding.js';
+import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
 import { parseCommand } from './commands.js';
 import { createPlanGuard } from './plan-guard.js';
-import { createScreenCapture, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
+import { createScreenCapture, fullJpeg, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
 import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './recorder.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveSettings, saveWatcher } from './storage.js';
@@ -158,6 +158,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   actionBudget: DEFAULT_ACTION_BUDGET,
   aiUrl: DEFAULT_AI_URL,
   aiModel: DEFAULT_AI_MODEL,
+  aiView: DEFAULT_AI_VIEW,
   autoContinue: true,
   maxIterations: DEFAULT_MAX_ITERATIONS,
   stepRetries: DEFAULT_STEP_RETRIES,
@@ -485,15 +486,13 @@ export function useAssist() {
    */
   const askAi = useCallback(async (req: AskRequest, stage: StageId): Promise<AiReply> => {
     if (!settingsRef.current.stages[stage]) throw new AiCancelled(stageOff(stage));
-    const { aiUrl, aiModel, aiView } = settingsRef.current;
     const context = req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
     const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage), req.signal);
     setAiCalls((n) => n + 1);
     try {
-      const reply = await aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView] }, { ...req, context, signal });
       const reply = await aiQueueRef.current.run(stage, () => {
-        const { aiUrl, aiModel } = settingsRef.current;
-        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel }, { ...req, context, signal });
+        const { aiUrl, aiModel, aiView } = settingsRef.current;
+        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView] }, { ...req, context, signal });
       }, signal);
       const { aiModel } = settingsRef.current;
       if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${aiModel}` });

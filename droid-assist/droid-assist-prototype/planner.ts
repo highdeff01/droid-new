@@ -270,8 +270,6 @@ async function askOneStep(ask: AskFn, frame: Frame | null, step: WorkflowStep, r
   const steps = parseJsonReply(reply.content).steps;
   if (!Array.isArray(steps) || !steps.length) return null;
   const next = toStep(steps[0], frame, reply.view ?? SAMPLE_VIEW);
-  if (next.action !== 'drag') throw new AiError(`AI re-planned the drag as "${next.action}"`);
-  const next = toStep(steps[0], frame);
   return { step: { ...next, id: step.id, name: step.name }, thinking: reply.thinking };
 }
 

@@ -3,6 +3,7 @@ import type { MonitorMode, ScreenSource, SyncLevel } from './types.js';
 import type { AiStatus } from './ai.js';
 import { MONITOR_MODES } from './capture.js';
 import { insecureBridgeUrl } from './bridge.js';
+import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import styles from './droid-assist.module.css';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };

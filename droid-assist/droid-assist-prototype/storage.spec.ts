@@ -8,7 +8,7 @@ import type { WatchNote, WatchProposal, WatchTest } from './watcher.js';
 import { DEFAULT_SETTINGS } from './use-assist.js';
 import { DEFAULT_GRID_OPACITY } from './grid-overlay.js';
 
-const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, changeCells: 6, monitorMode: 'app', watchMs: 5000, autoAct: false, aiHelp: true, showTrail: true, showGrid: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b', autoContinue: false, maxIterations: 5, stepRetries: 2, stages: DEFAULT_STAGES, errorUrl: '', errorForwarding: false, errorToken: '' };
+const DEFAULTS: AssistSettings = { ...DEFAULT_SETTINGS, aiUrl: 'https://ai.example/api/chat', autoContinue: false };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
 
 describe('settings', () => {
@@ -61,6 +61,14 @@ describe('settings', () => {
       localStorage.setItem('droid-assist.settings', JSON.stringify({ watchMs: bad }));
       expect(loadSettings(DEFAULTS).watchMs).toBe(DEFAULTS.watchMs);
     }
+  });
+
+  it('keeps in-range drift, grid-opacity and AI concurrency settings and falls back on out-of-range ones', () => {
+    const inRange = { driftStable: 0.2, driftMatched: 0.4, driftRadius: 32, gridOpacity: 0.3, aiMaxInFlight: 8 };
+    localStorage.setItem('droid-assist.settings', JSON.stringify(inRange));
+    expect(loadSettings(DEFAULTS)).toMatchObject(inRange);
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ driftStable: 0.5, driftMatched: 0.01, driftRadius: 100, gridOpacity: 1, aiMaxInFlight: 9 }));
+    expect(loadSettings(DEFAULTS)).toEqual(DEFAULTS);
   });
 
   it('round-trips loop-control stages and sanitizes a stored stage map', () => {
