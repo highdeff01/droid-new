@@ -84,6 +84,16 @@ describe('classifyStep', () => {
   it('clicking Send or composing a message is the email class', () => {
     expect(classifyStep(step({ name: 'Click Send' }))).toBe('email');
     expect(classifyStep(step({ name: 'compose message and hit Send' }))).toBe('email');
+    expect(classifyStep(step({ name: 'Submit message to boss@x.com' }))).toBe('email');
+  });
+
+  it('PowerShell cmdlets that change the system are admin_cmd', () => {
+    expect(classifyStep(step({ target: 'Run dialog', text: 'Remove-Item -Recurse -Force C:\\Windows' }))).toBe('admin_cmd');
+    expect(classifyStep(step({ name: 'Stop-Service wuauserv' }))).toBe('admin_cmd');
+  });
+
+  it('a bare Windows folder path is system_file', () => {
+    expect(classifyStep(step({ name: 'Open C:\\Windows in Explorer' }))).toBe('system_file');
   });
 
   it('needsApproval is true for every class except input', () => {
