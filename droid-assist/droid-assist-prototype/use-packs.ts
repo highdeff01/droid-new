@@ -6,7 +6,7 @@ import { runSubagents, type SubagentOutcome, type SubagentResult, type SubagentT
 import type { RunOutcome } from './triggers.js';
 import { loadPacks, savePacks } from './storage.js';
 import {
-  PACK_MOVE_LIMIT, addMove, appendTestResult, combinePacks, crossRunSelection, generateGoal, isFull, moveStep, newPack, packTestResult, packTestTasks,
+  PACK_MOVE_LIMIT, addMove, appendTestResult, combinePacks, crossRunSelection, generateGoal, isFull, moveStep, newPack, packTestResult, packTestTasks, runnable,
   similarGoal, similarReport, stepLine, withGoal, type PackSelection, type SimilarReport, type StepRun, type WorkflowPack,
 } from './packs.js';
 
@@ -231,7 +231,7 @@ export function usePacks(deps: PackDeps, recording: boolean) {
     const budget = createBudget(task.budget);
     for (const [i, step] of steps.entries()) {
       if (d.stopped()) return outcome('aborted', `Stopped before step ${i + 1} "${step.name}" — nothing more sent`);
-      const out = await d.runStep({ ...step, status: 'pending' }, 'Pack tester', budget, dryRun);
+      const out = await d.runStep(runnable(step), 'Pack tester', budget, dryRun);
       if (!out.ok) return outcome('fail', `Step ${i + 1} "${step.name}": ${out.message}`);
     }
     return outcome('pass', `${steps.length} step(s) ${dryRun ? 'verified on the live screen (dry run)' : 'executed'}`);

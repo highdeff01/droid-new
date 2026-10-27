@@ -62,6 +62,9 @@ describe('combining and cross-run', () => {
   });
 
   it('cross-runs a selection of whole flows and single steps in pack order, each step once', () => {
+    const frame = { id: 2 } as unknown as WorkflowStep['refFrame'];
+    const shot = crossRunSelection([packOf('S', []), { ...a, steps: [step('k', 'key', { refFrame: frame }), step('c', 'click', { refFrame: frame })] }], { packIds: [a.id], stepIds: [] });
+    expect(shot.map((s) => s.refFrame)).toEqual([undefined, frame]);
     const run = crossRunSelection([a, b], { packIds: [a.id], stepIds: ['b3', 'a2', 'b1'] });
     expect(run.map((s) => s.id)).toEqual(['a1', 'a2', 'b1', 'b3']);
     expect(run.every((s) => s.status === 'pending')).toBe(true);

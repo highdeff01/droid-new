@@ -2018,7 +2018,7 @@ export function useAssist() {
     stepsRef.current = [...stepsRef.current, recorded];
     lastInputRef.current = now;
     setSteps(stepsRef.current);
-    packCaptureRef.current(recorded);
+    packCaptureRef.current({ ...recorded, refFrame: recorded.refFrame ?? framesRef.current[0] });
   }, []);
 
   /** Stage pointer input: trail while recording. */

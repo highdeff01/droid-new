@@ -1,4 +1,5 @@
 import type { Frame, StepAction, WorkflowStep } from './types.js';
+import { POINTER_ACTIONS } from './types.js';
 import { AiError, parseJsonReply, type AskFn } from './ai.js';
 import { uid } from './planner.js';
 import { sliceBudget, type SubagentResult, type SubagentStatus, type SubagentTask } from './subagents.js';
@@ -68,6 +69,11 @@ export interface StepRun {
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
 const fresh = (s: WorkflowStep): WorkflowStep => ({ ...s, status: 'pending' });
+/**
+ * A pack step as it runs: pending, and a type/key step drops the screenshot it was recorded with
+ * (kept as evidence only) so it is not drift-matched at a point it never aimed at.
+ */
+export const runnable = (s: WorkflowStep): WorkflowStep => (POINTER_ACTIONS.has(s.action) ? fresh(s) : { ...fresh(s), refFrame: undefined });
 
 /**
  * The goal stated in the user's input: trimmed, without a "goal:" label or a lead-in such as
@@ -135,7 +141,7 @@ export function crossRunSelection(packs: WorkflowPack[], sel: PackSelection): Wo
   return packs
     .flatMap((p) => (sel.packIds.includes(p.id) ? p.steps : p.steps.filter((s) => sel.stepIds.includes(s.id))))
     .filter((s) => !seen.has(s.id) && !!seen.add(s.id))
-    .map(fresh);
+    .map(runnable);
 }
 
 /** One step as a line: action, target, typed text and where it was recorded. */
