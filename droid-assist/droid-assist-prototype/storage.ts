@@ -14,6 +14,8 @@ import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
+import { PROJECT_LIMIT, isProject, pruneProjects, type Project } from './project.js';
+import { APPROVAL_LIMIT, EMPTY_APPROVALS, LEARNED_LIMIT, isApprovalRequest, isLearnedMethod, type ApprovalState } from './approval-queue.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
@@ -23,7 +25,7 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', projects: 'droid-assist.projects', approvals: 'droid-assist.approvals' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -354,4 +356,25 @@ export const loadTriggers = (): Trigger[] => listOf(readJson(KEYS.triggers), isT
 /** Persists the triggers, capped at TRIGGER_LIMIT. */
 export function saveTriggers(triggers: Trigger[]) {
   writeJson(KEYS.triggers, triggers.slice(0, TRIGGER_LIMIT));
+}
+
+/** The stored projects, pruned to PROJECT_LIMIT (unfinished first); invalid entries are dropped. */
+export const loadProjects = (): Project[] => pruneProjects(listOf(readJson(KEYS.projects), isProject, Infinity));
+
+/** Persists the pruned projects; while they do not fit, the lowest-ranked half is pruned. */
+export function saveProjects(projects: Project[]) {
+  let kept = pruneProjects(projects, PROJECT_LIMIT);
+  while (!writeJson(KEYS.projects, kept) && kept.length) kept = kept.slice(0, Math.floor(kept.length / 2));
+}
+
+/** The stored approval queue and learned methods; invalid entries are dropped. */
+export function loadApprovals(): ApprovalState {
+  const stored = readJson(KEYS.approvals);
+  if (!isObject(stored)) return EMPTY_APPROVALS;
+  return { queue: listOf(stored.queue, isApprovalRequest, APPROVAL_LIMIT), learned: listOf(stored.learned, isLearnedMethod, LEARNED_LIMIT) };
+}
+
+/** Persists the approval queue and learned methods, capped per list. */
+export function saveApprovals(state: ApprovalState) {
+  writeJson(KEYS.approvals, { queue: state.queue.slice(0, APPROVAL_LIMIT), learned: state.learned.slice(0, LEARNED_LIMIT) });
 }

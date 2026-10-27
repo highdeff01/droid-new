@@ -26,6 +26,7 @@ export const STAGES = [
   { id: 'verdict', group: 'pipeline', name: 'Verdict', description: 'AI gives the final success verdict and lessons for each step', verifies: true },
   { id: 'autoContinue', group: 'pipeline', name: 'Auto-continue', description: 'After a replay, verify the goal and keep re-planning until done', verifies: false },
   { id: 'screenResponder', group: 'pipeline', name: 'Screen-change responder', description: 'Auto Act reacts to each new frame and runs the next step', verifies: false },
+  { id: 'projects', group: 'pipeline', name: 'Project lifecycle', description: 'Runs each project turn by turn (plan → approve → test → retry/correct → act → follow-up) until its goal is verified complete', verifies: false },
   { id: 'popup', group: 'agent', name: 'Popup watcher', description: 'Flags ads & intrusive popups, auto-closes when Auto act is on', verifies: false },
   { id: 'drift', group: 'agent', name: 'Drift monitor', description: 'Cross-checks every frame against the active step', verifies: true },
   { id: 'progress', group: 'agent', name: 'Progress tracker', description: 'Counts verified steps toward the goal', verifies: false },
