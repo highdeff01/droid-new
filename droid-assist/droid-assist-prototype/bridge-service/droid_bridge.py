@@ -5,6 +5,12 @@ Every endpoint requires the shared secret from DROID_BRIDGE_TOKEN as
 Only CORS preflights (OPTIONS) are answered without it, since browsers never send
 credentials on a preflight, and they perform nothing.
 
+Also carries an in-memory mailbox between the assist app and the main Droid app:
+the assist app posts its status snapshot and polls for capability requests the main
+app queued; the main app reads the status and queues requests, then reads results.
+See POST/GET /api/assist/status, POST/GET /api/assist/requests,
+GET /api/assist/requests/<id> and POST /api/assist/requests/<id>/result.
+
 Run:  DROID_BRIDGE_TOKEN=<secret> python3 droid_bridge.py   (DROID_BRIDGE_HOST / DROID_BRIDGE_PORT optional)
 """
 
@@ -27,6 +33,8 @@ CORS = {
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
 }
 RUN_PATH = re.compile(r"^/api/replay/([\w-]+)$")
+ASSIST_REQUEST_PATH = re.compile(r"^/api/assist/requests/([\w-]+)$")
+ASSIST_RESULT_PATH = re.compile(r"^/api/assist/requests/([\w-]+)/result$")
 
 
 def authorized(header, token):
@@ -87,6 +95,8 @@ class Bridge:
         self.perform_step = perform_step
         self.take_capture = take_capture
         self.runs = {}
+        self.assist_status = None
+        self.requests = {}
         self.lock = threading.Lock()
 
     def start(self, steps):
@@ -110,6 +120,47 @@ class Bridge:
         with self.lock:
             run = self.runs.get(run_id)
             return dict(run) if run else None
+
+    def set_status(self, status):
+        """Stores the assist app's latest status snapshot."""
+        with self.lock:
+            self.assist_status = dict(status)
+
+    def status(self):
+        """The assist app's latest status snapshot, or None when it has not reported one."""
+        with self.lock:
+            return dict(self.assist_status) if self.assist_status is not None else None
+
+    def add_request(self, cap_id, params):
+        """Queues a capability request from the main app as pending; returns a copy."""
+        req = {"requestId": uuid.uuid4().hex, "id": cap_id, "params": params, "status": "pending", "time": time.time()}
+        with self.lock:
+            self.requests[req["requestId"]] = req
+        return dict(req)
+
+    def claim_pending(self):
+        """Every pending request, in creation order, marked running so each is delivered once."""
+        with self.lock:
+            pending = sorted((r for r in self.requests.values() if r["status"] == "pending"), key=lambda r: r["time"])
+            for r in pending:
+                r["status"] = "running"
+            return [dict(r) for r in pending]
+
+    def finish(self, request_id, ok, result):
+        """Records a request's outcome as done/failed with its result; returns a copy or None when unknown."""
+        with self.lock:
+            req = self.requests.get(request_id)
+            if not req:
+                return None
+            req["status"] = "done" if ok else "failed"
+            req["result"] = str(result)
+            return dict(req)
+
+    def request(self, request_id):
+        """One request by id, as a copy, or None when unknown."""
+        with self.lock:
+            req = self.requests.get(request_id)
+            return dict(req) if req else None
 
 
 def make_handler(bridge):
@@ -142,30 +193,94 @@ def make_handler(bridge):
                 self.send_header(name, value)
             self.end_headers()
 
+        def _get_run(self, match):
+            run = bridge.run(match.group(1))
+            if run:
+                return self._send(200, {"success": True, "run": run})
+            self._send(404, {"success": False, "error": "not found"})
+
+        def _get_assist_status(self, _match):
+            status = bridge.status()
+            if status is not None:
+                return self._send(200, {"success": True, "status": status})
+            self._send(404, {"success": False, "error": "assist app has not reported status yet"})
+
+        def _get_assist_requests(self, _match):
+            self._send(200, {"success": True, "requests": bridge.claim_pending()})
+
+        def _get_assist_request(self, match):
+            req = bridge.request(match.group(1))
+            if req:
+                return self._send(200, {"success": True, "request": req})
+            self._send(404, {"success": False, "error": "not found"})
+
         def do_GET(self):
             if not self._authorized():
                 return
             if self.path == "/api/health":
                 return self._send(200, {"success": True, "status": "ok"})
-            match = RUN_PATH.match(self.path)
-            run = bridge.run(match.group(1)) if match else None
-            if run:
-                return self._send(200, {"success": True, "run": run})
+            if self.path == "/api/assist/status":
+                return self._get_assist_status(None)
+            if self.path == "/api/assist/requests":
+                return self._get_assist_requests(None)
+            for pattern, handler in ((RUN_PATH, self._get_run), (ASSIST_REQUEST_PATH, self._get_assist_request)):
+                match = pattern.match(self.path)
+                if match:
+                    return handler(match)
+            self._send(404, {"success": False, "error": "not found"})
+
+        def _post_replay(self, _match):
+            steps = self._json().get("steps") or []
+            if not isinstance(steps, list) or not steps:
+                return self._send(400, {"success": False, "error": "steps required"})
+            self._send(202, {"success": True, "run": bridge.start(steps)})
+
+        def _post_replay_capture(self, _match):
+            try:
+                self._send(200, {"success": True, "frame": bridge.take_capture()})
+            except Exception as error:
+                self._send(503, {"success": False, "error": f"capture failed: {error}"})
+
+        def _post_assist_status(self, _match):
+            body = self._json()
+            if not isinstance(body, dict):
+                return self._send(400, {"success": False, "error": "status object required"})
+            bridge.set_status(body)
+            self._send(200, {"success": True})
+
+        def _post_assist_requests(self, _match):
+            body = self._json()
+            cap_id = body.get("id") if isinstance(body, dict) else None
+            params = body.get("params", {}) if isinstance(body, dict) else {}
+            if not isinstance(cap_id, str) or not cap_id:
+                return self._send(400, {"success": False, "error": "capability id required"})
+            if not isinstance(params, dict):
+                return self._send(400, {"success": False, "error": "capability id required"})
+            self._send(202, {"success": True, "request": bridge.add_request(cap_id, params)})
+
+        def _post_assist_result(self, match):
+            body = self._json()
+            ok = bool(body.get("ok")) if isinstance(body, dict) else False
+            result = body.get("result", "") if isinstance(body, dict) else ""
+            req = bridge.finish(match.group(1), ok, result)
+            if req:
+                return self._send(200, {"success": True, "request": req})
             self._send(404, {"success": False, "error": "not found"})
 
         def do_POST(self):
             if not self._authorized():
                 return
             if self.path == "/api/replay":
-                steps = self._json().get("steps") or []
-                if not isinstance(steps, list) or not steps:
-                    return self._send(400, {"success": False, "error": "steps required"})
-                return self._send(202, {"success": True, "run": bridge.start(steps)})
+                return self._post_replay(None)
             if self.path == "/api/replay/capture":
-                try:
-                    return self._send(200, {"success": True, "frame": bridge.take_capture()})
-                except Exception as error:
-                    return self._send(503, {"success": False, "error": f"capture failed: {error}"})
+                return self._post_replay_capture(None)
+            if self.path == "/api/assist/status":
+                return self._post_assist_status(None)
+            if self.path == "/api/assist/requests":
+                return self._post_assist_requests(None)
+            match = ASSIST_RESULT_PATH.match(self.path)
+            if match:
+                return self._post_assist_result(match)
             self._send(404, {"success": False, "error": "not found"})
 
         def log_message(self, fmt, *args):  # never echo request headers (the token)

@@ -21,6 +21,8 @@ export interface ThinkingEntry {
   thinking: string | null;
   /** Why the call produced nothing (endpoint unreachable, unusable reply). */
   error?: string;
+  /** Project (trimmed goal text) the call was made for; absent when no goal was set. */
+  project?: string;
 }
 
 /** The newest entries kept on the timeline. */

@@ -1259,7 +1259,7 @@ describe('useAssist Screen watcher', () => {
     await act(() => vi.advanceTimersByTimeAsync(10));
     await act(() => result.current.shareScreen());
     act(() => hooks.onFrame!(frame()));
-    let asking: Promise<void> = Promise.resolve();
+    let asking: Promise<unknown> = Promise.resolve();
     act(() => {
       asking = result.current.askScreen('Where is search?');
     });
