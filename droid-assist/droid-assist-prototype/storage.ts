@@ -16,6 +16,10 @@ import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
 import { ACCESS_PATH_LIMIT, isAccessProfile, type AccessProfile } from './access-paths.js';
+import { APPROVAL_LIMIT, isApprovalItem, sanitizePolicy, type ApprovalItem } from './approvals.js';
+import { PORTFOLIO_LIMIT, isPortfolioEntry, type PortfolioEntry } from './portfolio.js';
+import { PROFILE_LIMIT, isProfileEvent, type ProfileEvent } from './user-profile.js';
+import { SECTION_LIMIT, isKnowledgeSection, type KnowledgeSection } from './knowledge-sections.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -24,18 +28,19 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', accessPaths: 'droid-assist.access-paths' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', portfolios: 'droid-assist.portfolios', profile: 'droid-assist.user-profile', sections: 'droid-assist.knowledge-sections' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
 const PATTERN_KINDS: ReadonlyArray<LearnedPattern['kind']> = ['avoid', 'add'];
 
 const ACTIONS: readonly StepAction[] = STEP_ACTIONS;
-const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
+/** Every monitor mode. */
+export const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
+export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
@@ -104,6 +109,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   if (stored.displayId === null || (typeof stored.displayId === 'string' && stored.displayId)) out.displayId = stored.displayId;
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
   out.stages = sanitizeStages(stored.stages ?? defaults.stages);
+  out.operationPolicy = sanitizePolicy(stored.operationPolicy, defaults.operationPolicy);
   return out;
 }
 
@@ -363,4 +369,32 @@ export const loadAccessPaths = (): AccessProfile[] => listOf(readJson(KEYS.acces
 /** Persists the access-path profiles, capped at ACCESS_PATH_LIMIT. */
 export function saveAccessPaths(profiles: AccessProfile[]) {
   writeJson(KEYS.accessPaths, profiles.slice(0, ACCESS_PATH_LIMIT));
+/** The stored approval queue (newest first); invalid entries are dropped. */
+export const loadApprovals = (): ApprovalItem[] => listOf(readJson(KEYS.approvals), isApprovalItem, APPROVAL_LIMIT);
+
+/** Persists the approval queue, capped at APPROVAL_LIMIT. */
+export function saveApprovals(items: ApprovalItem[]) {
+  writeJson(KEYS.approvals, items.slice(0, APPROVAL_LIMIT));
+/** Every actor's stored portfolio entries; invalid entries are dropped. */
+export const loadPortfolios = (): PortfolioEntry[] => listOf(readJson(KEYS.portfolios), isPortfolioEntry, PORTFOLIO_LIMIT);
+
+/** Persists the portfolio entries, capped at PORTFOLIO_LIMIT. */
+export function savePortfolios(entries: PortfolioEntry[]) {
+  writeJson(KEYS.portfolios, entries.slice(0, PORTFOLIO_LIMIT));
+}
+
+/** The stored user-profile events; invalid entries are dropped. */
+export const loadProfile = (): ProfileEvent[] => listOf(readJson(KEYS.profile), isProfileEvent, PROFILE_LIMIT);
+
+/** Persists the user-profile events, capped at PROFILE_LIMIT. */
+export function saveProfile(events: ProfileEvent[]) {
+  writeJson(KEYS.profile, events.slice(0, PROFILE_LIMIT));
+}
+
+/** The stored knowledge sections; invalid sections are dropped. */
+export const loadSections = (): KnowledgeSection[] => listOf(readJson(KEYS.sections), isKnowledgeSection, SECTION_LIMIT);
+
+/** Persists the knowledge sections, capped at SECTION_LIMIT. */
+export function saveSections(sections: KnowledgeSection[]) {
+  writeJson(KEYS.sections, sections.slice(0, SECTION_LIMIT));
 }
