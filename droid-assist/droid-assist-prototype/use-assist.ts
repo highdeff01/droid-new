@@ -965,7 +965,10 @@ export function useAssist() {
       bridgeUrl,
       bridgeToken,
       capture: async () => {
-        const f = await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current);
+        // Native multi-monitor capture: verify on the chosen display's own frames, which carry
+        // its desktop origin so input lands on that display; otherwise the bridge's screenshot.
+        const native = sourceRef.current === 'screen' && captureRef.current?.kind === 'native' ? framesRef.current[0] : undefined;
+        const f = native ?? await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current);
         size = { w: f.srcW, h: f.srcH };
         return f;
       },
