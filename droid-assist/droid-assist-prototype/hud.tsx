@@ -5,12 +5,27 @@ import { MONITOR_MODES } from './capture.js';
 import { insecureBridgeUrl } from './bridge.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { DisplayPicker } from './display-picker.js';
+import type { MainBridgeState, MainBridgeStatus } from './main-bridge.js';
 import styles from './droid-assist.module.css';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
-const SOURCE_LABEL: Record<ScreenSource, string> = { none: 'None', demo: 'Demo desktop', screen: 'Screen capture', bridge: 'Desktop bridge' };
+const SOURCE_LABEL: Record<ScreenSource, string> = { none: 'None', demo: 'Demo desktop', screen: 'Screen capture', bridge: 'Desktop bridge', 'main-app': 'Main app preview' };
 const AI_LEVEL: Record<AiStatus['state'], SyncLevel> = { online: 'green', checking: 'yellow', offline: 'red' };
 const AI_LABEL: Record<AiStatus['state'], string> = { online: 'AI connected', checking: 'AI connecting…', offline: 'AI unavailable' };
+const MAIN_LEVEL: Record<MainBridgeStatus, SyncLevel> = { off: 'idle', waiting: 'yellow', connecting: 'yellow', connected: 'green', error: 'red' };
+const MAIN_LABEL: Record<MainBridgeStatus, string> = { off: 'Main app bridge off', waiting: 'Waiting for main app', connecting: 'Connecting to main app…', connected: 'Connected', error: 'Error' };
+
+/** Live state of the main Droid app bridge: waiting, connected (with the peer) or the last error in plain words. */
+export function MainBridgeBadge({ state }: { state: MainBridgeState }) {
+  const detail = state.status === 'error' ? state.lastError ?? '' : state.peer ?? '';
+  return (
+    <div className={styles.sync} data-level={MAIN_LEVEL[state.status]} title={detail} aria-live="polite" aria-label="Main app bridge status">
+      <span className={styles.syncDot} />
+      <strong>Main app: {MAIN_LABEL[state.status]}</strong>
+      {detail && <span className={styles.syncDetail}>{detail}</span>}
+    </div>
+  );
+}
 
 /** Live state of the AI endpoint: connected, connecting, or the reason it is unavailable. */
 export function AiStatusBadge({ status }: { status: AiStatus }) {
@@ -154,6 +169,9 @@ export function Hud({ engine }: { engine: AssistEngine }) {
               <button type="button" onClick={engine.useDemo}>Use demo desktop</button>
             </>
           )}
+          {engine.mainBridge.status === 'connected' && source !== 'main-app' && (
+            <button type="button" onClick={engine.selectMainApp} title="The AI sees and acts on the main Droid app's preview">📱 Use main app preview</button>
+          )}
           <button type="button" className={recording ? styles.danger : ''} onClick={engine.toggleRecording} disabled={replaying}>
             {recording ? '■ Stop recording' : '● Record'}
           </button>
@@ -187,6 +205,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
         <SafetyControls engine={engine} />
         <ReverseControl engine={engine} />
         <AiStatusBadge status={aiStatus} />
+        <MainBridgeBadge state={engine.mainBridge} />
         <SyncStatus level={engine.sync.level} detail={engine.sync.detail} />
         <label><input type="checkbox" checked={settings.autoAct} onChange={(e) => setSettings({ ...settings, autoAct: e.target.checked })} disabled={aiOff} /> Auto act{aiOff && ' (AI unavailable)'}</label>
         <label><input type="checkbox" checked={settings.aiHelp} onChange={(e) => setSettings({ ...settings, aiHelp: e.target.checked })} disabled={aiOff} /> AI help{aiOff && ' (AI unavailable)'}</label>

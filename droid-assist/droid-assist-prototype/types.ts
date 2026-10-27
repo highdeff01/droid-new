@@ -1,8 +1,8 @@
 import type { StageMap } from './loop-control.js';
 import type { AiView } from './ai.js';
 
-/** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
-export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
+/** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, the PC via the bridge, or the main Droid app's preview. */
+export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge' | 'main-app';
 
 /** A captured screen frame: a display image plus a downsampled pixel buffer for drift math. */
 export interface Frame {
@@ -20,8 +20,8 @@ export interface Frame {
   /** Physical position of the captured display's top-left on the virtual desktop (multi-monitor); absent = 0,0. Input lands at origin + normalized × src size. */
   originX?: number;
   originY?: number;
-  /** Where the frame came from: the demo canvas, a shared screen, or a real desktop screenshot from the bridge. */
-  source: 'demo' | 'screen' | 'desktop';
+  /** Where the frame came from: the demo canvas, a shared screen, a real desktop screenshot from the bridge, or the main Droid app's preview. */
+  source: 'demo' | 'screen' | 'desktop' | 'main-app';
 }
 
 /** One point of the mouse trail, normalized to 0..1 of the screen. */
@@ -258,6 +258,22 @@ export interface AssistSettings {
   bridgeUrl: string;
   /** Shared secret the bridge requires on every call (Authorization: Bearer); masked in the UI, never logged. */
   bridgeToken: string;
+  /** Main app bridge: start automatically and connect the main Droid app. */
+  mainBridgeEnabled: boolean;
+  /** Main app bridge: wait for the main app to connect (listen) or dial out to `mainBridgeUrl` (dial). */
+  mainBridgeMode: 'listen' | 'dial';
+  /** Main app bridge: interface the listener binds (listen mode). */
+  mainBridgeHost: string;
+  /** Main app bridge: port the listener binds (listen mode). */
+  mainBridgePort: number;
+  /** Main app bridge: base URL of the main app (dial mode). */
+  mainBridgeUrl: string;
+  /** Main app bridge: optional shared secret, same Bearer pattern as `bridgeToken`; never logged. */
+  mainBridgeToken: string;
+  /** Main app bridge: first reconnect delay, doubled per failure. */
+  mainBridgeBackoffMinMs: number;
+  /** Main app bridge: longest reconnect delay. */
+  mainBridgeBackoffMaxMs: number;
   /** Emergency-stop key combo, e.g. "Shift+Escape". */
   abortHotkey: string;
   /** Max real (bridge-dispatched) input actions per Auto Act / replay run. */

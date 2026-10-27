@@ -1031,7 +1031,7 @@ describe('useAssist agent forwarding and subagent link tests', () => {
   it('forwards an element from any agent into every other inbox', () => {
     const { result } = renderHook(() => useAssist());
     act(() => result.current.forwardElement('drift', { name: 'Search box', x: 0.5, y: 0.1 }));
-    expect(new Set(result.current.bus.map((m) => m.to)).size).toBe(7);
+    expect(new Set(result.current.bus.map((m) => m.to)).size).toBe(8);
     expect(result.current.bus.every((m) => m.status === 'handled')).toBe(true);
     expect(result.current.knownElements[0].name).toBe('Search box');
     expect(result.current.patterns[0]).toMatchObject({ kind: 'add' });

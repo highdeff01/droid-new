@@ -1,7 +1,7 @@
 import { uid } from './planner.js';
 
-/** Every participant of the inter-agent bus: the background agents plus the habit system. */
-export type BusAgentId = 'popup' | 'drift' | 'progress' | 'goal' | 'screen' | 'coords' | 'supervisor' | 'habits';
+/** Every participant of the inter-agent bus: the background agents, the habit system and the main Droid app. */
+export type BusAgentId = 'popup' | 'drift' | 'progress' | 'goal' | 'screen' | 'coords' | 'supervisor' | 'habits' | 'mainApp';
 
 /** Display name of each bus participant. */
 export const BUS_AGENTS: Readonly<Record<BusAgentId, string>> = {
@@ -13,6 +13,7 @@ export const BUS_AGENTS: Readonly<Record<BusAgentId, string>> = {
   coords: 'Coordinate learner',
   supervisor: 'Supervisor',
   habits: 'Habit system',
+  mainApp: 'Main app',
 };
 
 /** Every bus participant, in panel order. */

@@ -20,6 +20,12 @@ import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } fro
 export const WATCH_MS_MIN = 2000;
 export const WATCH_MS_MAX = 30000;
 
+/** Valid ranges of the main app bridge's port and reconnect backoff (match their Settings inputs). */
+export const MAIN_BRIDGE_PORT_MIN = 1;
+export const MAIN_BRIDGE_PORT_MAX = 65535;
+export const MAIN_BRIDGE_BACKOFF_MIN_MS = 250;
+export const MAIN_BRIDGE_BACKOFF_MAX_MS = 120000;
+
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
@@ -34,7 +40,7 @@ const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
@@ -48,7 +54,12 @@ const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | '
   gridOpacity: GRID_OPACITY_RANGE,
   aiMaxInFlight: [AI_MAX_IN_FLIGHT_MIN, AI_MAX_IN_FLIGHT_MAX],
   aiTimeoutMs: [AI_TIMEOUT_MS_MIN, AI_TIMEOUT_MS_MAX],
+  mainBridgePort: [MAIN_BRIDGE_PORT_MIN, MAIN_BRIDGE_PORT_MAX],
+  mainBridgeBackoffMinMs: [MAIN_BRIDGE_BACKOFF_MIN_MS, 10000],
+  mainBridgeBackoffMaxMs: [1000, MAIN_BRIDGE_BACKOFF_MAX_MS],
 };
+
+const BRIDGE_MODES: ReadonlyArray<AssistSettings['mainBridgeMode']> = ['listen', 'dial'];
 
 /** A step as persisted: its screenshot without the pixel buffer. */
 type StoredStep = Omit<WorkflowStep, 'refFrame'> & { refFrame?: StoredFrame };
@@ -87,19 +98,21 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     const v = stored[key];
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'mainBridgeEnabled'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
-  for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken'] as const) {
+  for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken', 'mainBridgeUrl', 'mainBridgeToken'] as const) {
     const v = stored[key];
     if (typeof v === 'string') out[key] = v;
   }
-  for (const key of ['abortHotkey', 'aiUrl', 'aiModel'] as const) {
+  for (const key of ['abortHotkey', 'aiUrl', 'aiModel', 'mainBridgeHost'] as const) {
     const v = stored[key];
     if (typeof v === 'string' && v.trim()) out[key] = v;
   }
   if (typeof stored.aiView === 'string' && Object.hasOwn(AI_VIEWS, stored.aiView)) out.aiView = stored.aiView as AiView;
   if (typeof stored.monitorMode === 'string' && MODES.includes(stored.monitorMode as MonitorMode)) out.monitorMode = stored.monitorMode as MonitorMode;
+  if (BRIDGE_MODES.includes(stored.mainBridgeMode as AssistSettings['mainBridgeMode'])) out.mainBridgeMode = stored.mainBridgeMode as AssistSettings['mainBridgeMode'];
+  if (out.mainBridgeBackoffMaxMs < out.mainBridgeBackoffMinMs) out.mainBridgeBackoffMaxMs = defaults.mainBridgeBackoffMaxMs;
   if (stored.displayId === null || (typeof stored.displayId === 'string' && stored.displayId)) out.displayId = stored.displayId;
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
   out.stages = sanitizeStages(stored.stages ?? defaults.stages);
