@@ -259,6 +259,18 @@ describe('createAiSession', () => {
     expect(JSON.stringify(createAiSession(store).history())).not.toContain('secret reasoning');
   });
 
+  it('sends the operation memory with every turn but keeps it out of the history', async () => {
+    const fn = stubFetch(reply('one'), reply('two'));
+    const session = createAiSession(null);
+    const memory = ['OPERATION MEMORY (applies to this whole operation):', 'BLACKLISTED — never repeat:', '- [learned avoid] double click the row'];
+    await session.ask(cfg, { system: 's', prompt: 'plan', context: [], memory });
+    await session.ask(cfg, { system: 's', prompt: 'next', memory });
+    const sent = bodyOf(fn, 1).messages as Array<{ role: string; content: string }>;
+    expect(sent.at(-1)!.content).toContain('BLACKLISTED — never repeat:\n- [learned avoid] double click the row');
+    expect(sent[1].content).toBe('plan');
+    expect(session.history().map((h) => h.content).join('\n')).not.toContain('BLACKLISTED');
+  });
+
   it('does not record a failed turn', async () => {
     stubFetch(new TypeError('down'));
     const session = createAiSession(null);

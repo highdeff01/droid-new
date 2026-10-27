@@ -26,7 +26,7 @@ import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, fullJpeg, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, dispatchState, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
 import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './recorder.js';
-import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
+import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, saveOperationMemory, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
 import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
 import { appendSummary, runSummary, type RunSummary } from './run-stats.js';
 import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, reorderSteps, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
@@ -55,6 +55,7 @@ import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
 import { CREW_AGENTS, createScreenLock, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
 import { runLiveDrag, type DragIntervention, type LiveDragResult, type SwarmAgent } from './drag-swarm.js';
+import { FAILURE_CONTEXT_LIMIT, RECENT_LINES, addFailure, addNote, failureFromRun, failureLine, forget, memoryBlock, newFailure, objectiveText, operationGroups, similarFailures, type FailureRecord, type OperationMemory } from './operation-memory.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -240,6 +241,8 @@ export function useAssist() {
   /** The Screen watcher's notes, proposals and test results (persisted). */
   const [watcher, setWatcher] = useState<WatcherState>(loadWatcher);
   const [triggers, setTriggers] = useState<Trigger[]>(loadTriggers);
+  /** Per-operation memory: failure reminders with screenshots, and the user's notes (persisted). */
+  const [memory, setMemory] = useState<OperationMemory>(loadOperationMemory);
   const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
@@ -389,6 +392,9 @@ export function useAssist() {
   const identifyBusyRef = useRef(false);
   const watcherRef = useRef(watcher);
   const triggersRef = useRef(triggers);
+  const memoryRef = useRef(memory);
+  /** The slice goal of the subagent running now; null otherwise (AI turns then belong to the goal). */
+  const operationRef = useRef<string | null>(null);
   /** A triggered run is in flight; no other trigger fires until it finishes. */
   const triggerBusyRef = useRef(false);
   /** The frame id element triggers last evaluated, and each watched element's state on it. */
@@ -446,6 +452,7 @@ export function useAssist() {
   useEffect(() => saveRunSummaries(runs), [runs]);
   useEffect(() => saveWatcher(watcher), [watcher]);
   useEffect(() => saveTriggers(triggers), [triggers]);
+  useEffect(() => saveOperationMemory(memory), [memory]);
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
   }, [cards]);
@@ -482,6 +489,33 @@ export function useAssist() {
   const addLog = useCallback((from: string, message: string, tone: LogEntry['tone'] = 'info', shots?: string[]) => {
     setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}) }, ...l].slice(0, LOG_LIMIT));
   }, []);
+
+  /** The operation an AI turn belongs to: a subagent's slice while one runs, else the goal. */
+  const operationNow = () => operationRef.current ?? goalRef.current;
+
+  /**
+   * The operation memory sent with every AI turn: goal, current objective, notes, blacklist, similar
+   * failures and recent activity (left out when the turn's context already is the recent log).
+   */
+  const operationMemoryBlock = (contextIsLog: boolean) => {
+    const running = stepsRef.current.find((s) => s.status === 'running');
+    const recent = contextIsLog ? [] : logRef.current.slice(0, RECENT_LINES).map((l) => `[${l.source}] ${l.message}`);
+    const targets = stepsRef.current.map((s) => s.target ?? s.name);
+    return memoryBlock({ operation: operationNow(), objective: running ? objectiveText(running) : null, recent, targets }, { patterns: patternsRef.current, habits: habitsRef.current, memory: memoryRef.current });
+  };
+
+  /** Saves a failed operation as a reminder (with its screenshots) and logs it. */
+  const rememberFailure = useCallback((failure: FailureRecord) => {
+    memoryRef.current = addFailure(memoryRef.current, failure);
+    setMemory(memoryRef.current);
+    addLog('Memory', `Saved failure reminder for "${failure.operation}": ${failure.what}`, 'warn', failure.shots);
+  }, [addLog]);
+
+  /** Trigger: surfaces the failures of operations like `operation` as it starts; the AI gets them with every turn. */
+  const remindFailures = (operation: string, actor: string) => {
+    similarFailures(operation, memoryRef.current.failures).slice(0, FAILURE_CONTEXT_LIMIT)
+      .forEach((f) => addLog('Memory', `${actor} — a similar operation failed before, adjusting: ${failureLine(f)}`, 'warn', f.shots));
+  };
 
   /** Every trim or reset of the AI conversation history is logged and shown. */
   historyChangeRef.current = (change) => {
@@ -556,12 +590,13 @@ export function useAssist() {
   const askAi = useCallback(async (req: AskRequest, stage: StageId): Promise<AiReply> => {
     if (!settingsRef.current.stages[stage]) throw new AiCancelled(stageOff(stage));
     const context = req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
+    const memory = operationMemoryBlock(req.context === undefined);
     const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage), req.signal);
     setAiCalls((n) => n + 1);
     try {
       const reply = await aiQueueRef.current.run(stage, (timeoutMs) => {
         const { aiUrl, aiModel, aiView } = settingsRef.current;
-        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs }, { ...req, context, signal });
+        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs }, { ...req, context, memory, signal });
       }, signal);
       setAiHistory(aiSessionRef.current.history());
       const { aiModel } = settingsRef.current;
@@ -742,6 +777,7 @@ export function useAssist() {
       const lesson = failurePattern(runGoal, runSteps);
       addPatterns([lesson]);
       addLog('Patterns', `Run failed — not saved as a flow. Learned: avoid ${lesson.pattern}`, 'warn');
+      rememberFailure(failureFromRun(runGoal, 'Replay', runSteps, framesRef.current[0] ?? null));
     }
     try {
       const learned = await learnPatterns(askFor('supervisor'), runGoal, runSteps, verdict);
@@ -750,7 +786,7 @@ export function useAssist() {
     } catch (error) {
       addLog('Patterns', `AI unavailable — no patterns learned from this run: ${errorText(error)}`, 'warn');
     }
-  }, [addLog, addPatterns, askFor, autoSaveFlow, recordRun]);
+  }, [addLog, addPatterns, askFor, autoSaveFlow, recordRun, rememberFailure]);
 
   const triggerAbort = useCallback((reason: string) => {
     abortRef.current = true;
@@ -1816,7 +1852,7 @@ export function useAssist() {
   };
 
   /** What the briefing cross-references the plan against. */
-  const knowledge = (): Knowledge => ({ map: elementMapRef.current, familiar: familiarRef.current, habits: habitsRef.current, patterns: patternsRef.current, context: habitContext() });
+  const knowledge = (): Knowledge => ({ map: elementMapRef.current, familiar: familiarRef.current, habits: habitsRef.current, patterns: patternsRef.current, failures: memoryRef.current.failures, context: habitContext() });
 
   /** A fresh briefing of `step` with `proposal` on the live frame. */
   const buildBriefingFor = (step: WorkflowStep, proposal: Proposal) => buildBriefing({
@@ -2271,6 +2307,7 @@ export function useAssist() {
     }
     const dryRun = selfTest || !armedRef.current;
     if (dryRun && !selfTest) addLog('Safety', `Real input disarmed — ${label} runs as a ${DRY_RUN}`, 'warn');
+    remindFailures(runGoal, label);
     const budget = createBudget(settingsRef.current.actionBudget);
     abortRef.current = false;
     runStartRef.current = Date.now();
@@ -2523,6 +2560,7 @@ export function useAssist() {
     }
     const applied = relevantHabits(text, habitContext(), habitsRef.current);
     if (applied.length) addLog('Habits', `Applying ${applied.length} habit(s) to planning: ${applied.map(habitLine).join(' | ')}`, 'info');
+    remindFailures(text, 'Planner');
     let planned = false;
     planningRef.current = true;
     await withAi(async () => {
@@ -2588,12 +2626,32 @@ export function useAssist() {
   };
 
   /**
-   * One subagent: its slice goes through the same pipeline as every run — plan from the slice's
-   * goal on the live frame, grounded execution under its own budget slice and the guardrails,
-   * reflect and verdict. It passes only when every step ran ok and every verdict says success.
+   * One subagent assigned a slice: it first receives the failure reminders of similar operations,
+   * its AI turns carry the slice's operation memory, and a failed slice is saved as a reminder.
    */
   const runSubagent = async (task: SubagentTask, dryRun: boolean): Promise<SubagentOutcome> => {
     const label = `Subagent ${task.index + 1}`;
+    const record = (what: string, shots: Frame[]) => rememberFailure(newFailure({ operation: task.goal, actor: label, what, steps: [], targets: [task.target], shots: shots.map((f) => f.url) }));
+    remindFailures(task.goal, label);
+    operationRef.current = task.goal;
+    try {
+      const out = await subagentPipeline(task, dryRun, label);
+      if (out.status === 'fail') record(out.message, out.shots);
+      return out;
+    } catch (error) {
+      record(`Subagent failed: ${errorText(error)}`, framesRef.current.slice(0, 1));
+      throw error;
+    } finally {
+      operationRef.current = null;
+    }
+  };
+
+  /**
+   * One subagent's pipeline: its slice goes through the same pipeline as every run — plan from the slice's
+   * goal on the live frame, grounded execution under its own budget slice and the guardrails,
+   * reflect and verdict. It passes only when every step ran ok and every verdict says success.
+   */
+  const subagentPipeline = async (task: SubagentTask, dryRun: boolean, label: string): Promise<SubagentOutcome> => {
     const base = { dry: dryRun, shots: [] as Frame[], thinking: [] as string[] };
     const stopped = () => abortRef.current || abortedRef.current;
     const plan = await thought(`${label}: ${task.label}`, () => planFromGoal(task.goal, [], framesRef.current[0] ?? null, askFor('planner'), knownRef.current.map(elementLine), patternsRef.current), planSummary);
@@ -3117,6 +3175,21 @@ export function useAssist() {
     return () => clearInterval(id);
   }, [anyTriggerOn]);
 
+  /** Keeps a note for an operation; it rides with every AI turn of that kind of operation. */
+  const addOperationNote = (operation: string, text: string) => {
+    memoryRef.current = addNote(memoryRef.current, operation, text);
+    setMemory(memoryRef.current);
+  };
+
+  /** Forgets one failure reminder or note. */
+  const forgetMemory = (id: string) => {
+    memoryRef.current = forget(memoryRef.current, id);
+    setMemory(memoryRef.current);
+  };
+
+  /** Every remembered operation with its notes, failures, blacklist and successes, for the panel. */
+  const operations = operationGroups({ patterns, habits, memory }, runs);
+
   return {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
@@ -3130,6 +3203,7 @@ export function useAssist() {
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
     crew, crewRunning, runCrewGoal, stopPlan, swarm, liveDragging, interveneDrag,
     aiHistory, trimAiHistory, resetAiSession,
+    memory, operations, addOperationNote, forgetMemory,
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,

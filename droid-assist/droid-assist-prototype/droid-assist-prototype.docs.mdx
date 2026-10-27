@@ -25,6 +25,13 @@ bit run droid-assist-prototype
 - Typing a goal that resembles a saved flow (synonyms, plurals and verb forms are folded, e.g. "launch the calculator" ≈ "Open calculator app") reuses it without calling the model, and the log says `Reused saved workflow "<name>"`.
 - After each real run the AI adds lessons (`avoid` / `add`) to the **Learned patterns** panel (`PatternsPanel`). A failed run is never saved as a flow; its failure is recorded as an `avoid` pattern. Patterns persist in `localStorage` and can be deleted with ✕, and the ones relevant to a new goal are sent as planning context.
 
+## Operation memory
+
+- Every AI turn carries an `OPERATION MEMORY` block for the current operation (the goal, or a subagent's slice goal): the goal, the current objective (the step running now), the operation's notes, the **BLACKLISTED** methods it must never repeat (avoid patterns for this kind of operation, habit avoid-lessons for its targets, and failed steps of similar failed operations), similar operations that failed before, and the recent activity. The block is resent each turn and is not stored in the AI session history.
+- A failed run, replay or subagent is saved as a failure reminder: what failed, the failed steps and targets, and the screenshots taken when it failed (dropped first when storage is full). It is logged under `Memory`.
+- Starting a similar operation (a plan, replay, trigger fire or subagent assignment) logs a `Memory` reminder of the similar failures with their screenshots, so the AI and agents adjust before acting. The pre-action briefing cross-references them as `failure` entries on the same target.
+- The **Operation memory** panel (`OperationMemoryPanel`) groups everything per operation: notes (add and forget), failures with screenshots (forget), the blacklist and successful runs.
+
 ## Error forwarding
 
 Errors can be forwarded to any error-fix app with an HTTP API. Set this up under **Agents → Error forwarding**:
