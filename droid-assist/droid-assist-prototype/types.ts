@@ -4,6 +4,7 @@ import type { OperationPolicy } from './approvals.js';
 import type { TrainMode } from './element-training.js';
 import type { SideTestMode } from './side-test.js';
 import type { AutoApplyMap, SelfTestMode } from './initiative.js';
+import type { AutoActMap } from './notifications.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
@@ -318,4 +319,14 @@ export interface AssistSettings {
   stressCycles: number;
   /** AI initiative: per category, apply without asking (still inside arm, budget and loop control). */
   autoApply: AutoApplyMap;
+  /** Relaxation mode: slower cadence, no background agent tests, dimmed info notifications, break reminders. */
+  relaxMode: boolean;
+  /** Minutes between "take a break" reminders while relaxation mode is on. */
+  breakMinutes: number;
+  /** Seconds between automatic System panel refreshes. */
+  systemRefreshSec: number;
+  /** Auto-act on notifications, per category; every category defaults off. */
+  notifyAutoAct: AutoActMap;
+  /** Folders (native paths) the System panel reports file specs for. */
+  systemFolders: string[];
 }

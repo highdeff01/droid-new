@@ -41,6 +41,7 @@ import { FixScriptReview } from './screen-ai-panels.js';
 import { sectionMemoryLines } from './sections.js';
 import { replicaLine } from './replicate.js';
 import { SIDE_TEST_MODES, feedbackLine, type SideTestMode } from './side-test.js';
+import { RecoverySettings, RelaxSettings } from './relax-recovery-settings.js';
 import styles from './droid-assist.module.css';
 
 const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity', wake: 'Wake', decision: 'Decision', error: 'Error' };
@@ -486,6 +487,9 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       </span>
       <ErrorForwardingSettings engine={engine} />
       <BackupSettings onExport={() => void engine.invoke('backup.export')} />
+      <RelaxSettings engine={engine} />
+      <BackupSettings />
+      <RecoverySettings engine={engine} />
     </section>
   );
 }

@@ -4,6 +4,8 @@ import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, load
 import { LOG_LIMIT, PATTERN_LIMIT, loadAccessPaths, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveAccessPaths, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadDossiers, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveDossiers, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadGoals, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveGoals, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
+import { LOG_LIMIT, PATTERN_LIMIT, SYSTEM_FOLDER_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadNotifications, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, saveNotifications, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
+import { DEFAULT_AUTO_ACT, NOTIFICATION_LIMIT, type AssistNotification } from './notifications.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { HABIT_STALE_MS } from './habits.js';
 import { DEFAULT_STAGES } from './loop-control.js';
@@ -534,5 +536,90 @@ describe('goals', () => {
     expect(loadGoals()).toEqual([valid]);
     localStorage.setItem('droid-assist.goals', '{nope');
     expect(loadGoals()).toEqual([]);
+describe('settings: system & relax', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('DEFAULT_SETTINGS has the system & relax defaults', () => {
+    expect(DEFAULT_SETTINGS).toMatchObject({ relaxMode: false, breakMinutes: 45, systemRefreshSec: 30, notifyAutoAct: DEFAULT_AUTO_ACT, systemFolders: [] });
+  });
+
+  it('round-trips relaxMode, breakMinutes, systemRefreshSec, notifyAutoAct and systemFolders', () => {
+    const custom = { ...DEFAULTS, relaxMode: true, breakMinutes: 20, systemRefreshSec: 60, notifyAutoAct: { ...DEFAULT_AUTO_ACT, suggestion: true }, systemFolders: ['/home/u/docs'] };
+    saveSettings(custom);
+    expect(loadSettings(DEFAULTS)).toEqual(custom);
+  });
+
+  it('keeps breakMinutes only within 5..120', () => {
+    for (const bad of [2, 500, 'x']) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ breakMinutes: bad }));
+      expect(loadSettings(DEFAULTS).breakMinutes).toBe(DEFAULTS.breakMinutes);
+    }
+  });
+
+  it('keeps systemRefreshSec only within 5..600', () => {
+    for (const bad of [1, 1000]) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ systemRefreshSec: bad }));
+      expect(loadSettings(DEFAULTS).systemRefreshSec).toBe(DEFAULTS.systemRefreshSec);
+    }
+  });
+
+  it('falls back to the default relaxMode on a non-boolean value', () => {
+    localStorage.setItem('droid-assist.settings', '{"relaxMode":"yes"}');
+    expect(loadSettings(DEFAULTS).relaxMode).toBe(DEFAULTS.relaxMode);
+  });
+
+  it('sanitizes a stored notifyAutoAct map, keeping every category and dropping unknown keys', () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ notifyAutoAct: { suggestion: 'true', ai: true, bogus: true } }));
+    const loaded = loadSettings(DEFAULTS).notifyAutoAct;
+    expect(loaded).toEqual({ ...DEFAULT_AUTO_ACT, ai: true });
+    expect(loaded).not.toHaveProperty('bogus');
+  });
+
+  it('defaults notifyAutoAct when missing from stored settings', () => {
+    localStorage.setItem('droid-assist.settings', '{"bridgeUrl":"x"}');
+    expect(loadSettings(DEFAULTS).notifyAutoAct).toEqual(DEFAULT_AUTO_ACT);
+  });
+
+  it('filters non-strings, blanks and duplicates from systemFolders and caps at SYSTEM_FOLDER_LIMIT', () => {
+    const many = Array.from({ length: SYSTEM_FOLDER_LIMIT + 5 }, (_, i) => `/f${i}`);
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ systemFolders: [...many, '/f0', '  ', 42, null] }));
+    const loaded = loadSettings(DEFAULTS).systemFolders;
+    expect(loaded).toHaveLength(SYSTEM_FOLDER_LIMIT);
+    expect(loaded).toEqual(many.slice(0, SYSTEM_FOLDER_LIMIT));
+  });
+
+  it('keeps the default systemFolders when the stored value is not an array', () => {
+    localStorage.setItem('droid-assist.settings', '{"systemFolders":"nope"}');
+    expect(loadSettings(DEFAULTS).systemFolders).toEqual(DEFAULTS.systemFolders);
+  });
+});
+
+describe('notifications', () => {
+  beforeEach(() => localStorage.clear());
+  const notif = (overrides: Partial<AssistNotification> = {}): AssistNotification => ({
+    id: 'n1', time: 1000, source: 'AI', category: 'ai', severity: 'warning', title: 'AI status changed', read: false,
+    ...overrides,
+  });
+
+  it('round-trips a valid notification under its own key', () => {
+    saveNotifications([notif()]);
+    expect(localStorage.getItem('droid-assist.notifications')).not.toBeNull();
+    expect(loadNotifications()).toEqual([notif()]);
+  });
+
+  it('drops invalid entries', () => {
+    localStorage.setItem('droid-assist.notifications', JSON.stringify([notif(), { ...notif(), id: 'n2', category: 'bogus' }, null]));
+    expect(loadNotifications()).toEqual([notif()]);
+  });
+
+  it('keeps only the newest NOTIFICATION_LIMIT entries', () => {
+    const list = Array.from({ length: NOTIFICATION_LIMIT + 10 }, (_, i) => notif({ id: `n${i}`, time: i }));
+    saveNotifications(list);
+    expect(loadNotifications()).toHaveLength(NOTIFICATION_LIMIT);
+  });
+
+  it('returns [] for corrupt JSON', () => {
+    localStorage.setItem('droid-assist.notifications', '{bad');
+    expect(loadNotifications()).toEqual([]);
   });
 });

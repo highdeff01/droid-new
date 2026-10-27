@@ -108,9 +108,18 @@ import { useInitiative } from './use-initiative.js';
 import { testTargets } from './self-test.js';
 import { DEFAULT_GOAL_STALL, type GoalSource } from './goal-tracer.js';
 import { useGoalTracer } from './use-goal-tracer.js';
+import { DEFAULT_AUTO_ACT, actionStep, actionText, diskSuggestion, habitSuggestions, suggestWithAi, type AssistNotification } from './notifications.js';
+import { DEFAULT_BREAK_MINUTES, backgroundTestsAllowed, breakPeriodMs, breakText, relaxInterval, relaxStep } from './relax.js';
+import { DEFAULT_SYSTEM_REFRESH_SEC, diskLow, formatBytes, recentOperations } from './system-info.js';
+import { recoverStorage, recoveryFile, recoveryFileName, recoveryText, restoreLastGood, snapshotLastGood, type RecoveryReport } from './recovery.js';
+import { pruneCorruptFrames } from './frame-store.js';
+import { useNotifications } from './use-notifications.js';
+import { useSystemInfo } from './use-system-info.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
+/** How often background suggestions (habits, disk, AI) are made. */
+const SUGGEST_TICK_MS = 10 * 60_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 /** Log text of a failed model call: a user cancel says so, anything else is the endpoint failure after `what`. */
@@ -269,6 +278,11 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   selfTestMode: 'background',
   stressCycles: DEFAULT_STRESS_CYCLES,
   autoApply: DEFAULT_AUTO_APPLY,
+  relaxMode: false,
+  breakMinutes: DEFAULT_BREAK_MINUTES,
+  systemRefreshSec: DEFAULT_SYSTEM_REFRESH_SEC,
+  notifyAutoAct: DEFAULT_AUTO_ACT,
+  systemFolders: [],
 };
 
 /** A background agent the user can toggle; each also has an inbox on the inter-agent bus. */
@@ -285,6 +299,8 @@ export interface Agent {
  * slash commands, action history and saved workflows.
  */
 export function useAssist() {
+  /** Startup recovery runs before any store is loaded, so every loader reads repaired data. */
+  const [recovery, setRecovery] = useState<RecoveryReport>(() => recoverStorage());
   const [settings, setSettings] = useState<AssistSettings>(() => loadSettings(DEFAULT_SETTINGS));
   const [source, setSource] = useState<ScreenSource>('demo');
   /** The app the assistant is attached to via /use. */
@@ -630,7 +646,7 @@ export function useAssist() {
   targetRef.current = target;
   scopeRef.current = scope;
 
-  const intervalMs = monitorInterval(settings.monitorMode, settings.captureMs);
+  const intervalMs = relaxInterval(monitorInterval(settings.monitorMode, settings.captureMs), settings.relaxMode);
 
   // Persistence: settings, log and cards.
   useEffect(() => saveSettings(settings), [settings]);
@@ -726,6 +742,45 @@ export function useAssist() {
       .forEach((f) => addLog('Memory', `${actor} — a similar operation failed before, adjusting: ${failureLine(f)}`, 'warn', f.shots));
   };
 
+  /** What runs for every new notification: auto-act (assigned below, once the executor exists). */
+  const onNotifiedRef = useRef<(n: AssistNotification) => void>(() => undefined);
+  const notifier = useNotifications((n) => onNotifiedRef.current(n));
+  const { notify } = notifier;
+
+  // Startup recovery: corrupted payloads go to a recovery file; a clean scan becomes the last good export.
+  useEffect(() => {
+    if (recovery.corrupt.length) {
+      try {
+        downloadText(recoveryFileName(recovery.time), JSON.stringify(recoveryFile(recovery), null, 2), 'application/json');
+      } catch (error) {
+        addLog('Recovery', `Recovery file could not be saved: ${errorText(error)}`, 'error');
+      }
+      addLog('Recovery', recoveryText(recovery), 'warn');
+      notify({ source: 'Recovery', category: 'errors', severity: 'critical', title: `Corrupted data recovered: ${recovery.corrupt.map((c) => c.label).join(', ')}` });
+    } else {
+      snapshotLastGood();
+    }
+    void pruneCorruptFrames().then((n) => {
+      if (!n) return;
+      setRecovery((r) => ({ ...r, prunedFrames: n }));
+      addLog('Recovery', `${n} corrupt screenshot record(s) removed`, 'warn');
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Settings Restore: replaces every store with the last good export (the caller reloads the app). */
+  const restoreLastGoodExport = useCallback((): { ok: boolean; message: string } => {
+    try {
+      const restored = restoreLastGood();
+      const r = restored ? { ok: true, message: `Restored the last good export from ${restored.exportedAt}` } : { ok: false, message: 'No last good export to restore from — export a backup first' };
+      addLog('Recovery', r.message, r.ok ? 'ok' : 'warn');
+      return r;
+    } catch (error) {
+      addLog('Recovery', `Restore failed: ${errorText(error)}`, 'error');
+      return { ok: false, message: `Restore failed: ${errorText(error)}` };
+    }
+  }, [addLog]);
+
   /** Every trim or reset of the AI conversation history is logged and shown. */
   historyChangeRef.current = (change) => {
     setAiHistory(aiSessionRef.current.history());
@@ -743,7 +798,8 @@ export function useAssist() {
   }, []);
 
   /** Error forwarding: reports carry the recent log and the current frame. */
-  const errorForwarding = useErrorForwarding(settings, addLog, () => ({ log: logRef.current, frame: framesRef.current[0] ?? null }));
+  const errorForwarding = useErrorForwarding(settings, addLog, () => ({ log: logRef.current, frame: framesRef.current[0] ?? null }), (what, ok) =>
+    notify({ source: 'Error forwarding', category: 'errors', severity: ok ? 'info' : 'warning', title: `${what} ${ok ? 'delivered' : 'not delivered'}` }));
   const captureError = errorForwarding.capture;
   /** The approval system: the dispatch gate, the point filter, the queue and its run-check. */
   const approvals = useApprovals(settings, () => patternsRef.current, addLog);
@@ -814,6 +870,16 @@ export function useAssist() {
   const removeGoal = useCallback((id: string) => setGoals((g) => dropGoal(g, id)), []);
   /** Marks a frame as a preferred key frame on behalf of `by`. */
   const preferFrame = useCallback((frame: Frame, by: string, reason: string) => setPreferred((p) => markPreferred(p, frame, by, reason)), []);
+
+  // AI status changes are notifications: going offline, and coming back online after being offline.
+  const aiWasRef = useRef<AiStatus['state']>('checking');
+  useEffect(() => {
+    const was = aiWasRef.current;
+    if (aiStatus.state === 'checking' || aiStatus.state === was) return;
+    aiWasRef.current = aiStatus.state;
+    if (aiStatus.state === 'offline') notify({ source: 'AI', category: 'ai', severity: 'warning', title: `AI went offline — ${aiStatus.detail}` });
+    else if (was === 'offline') notify({ source: 'AI', category: 'ai', severity: 'info', title: `AI back online — ${aiStatus.detail}` });
+  }, [aiStatus, notify]);
 
   /** Whether a loop-control stage is checked; read live so a toggle applies mid-run. */
   const stageOn = (id: StageId) => settingsRef.current.stages[id];
@@ -1082,6 +1148,9 @@ export function useAssist() {
     setRuns((r) => appendSummary(r, summary));
     tracer.emit({ kind: 'run', runId: summary.id, outcome: summary.outcome, flowId: flowRef.current });
   }, [tracer]);
+    if (summary.outcome === 'success') notify({ source: 'Goals', category: 'goal', severity: 'info', title: `Goal completed: ${runGoal || '(no goal)'}` });
+    if (summary.outcome === 'failed') notify({ source: 'Goals', category: 'goal', severity: 'warning', title: `Goal failed: ${runGoal || '(no goal)'}` });
+  }, [notify]);
 
   /**
    * Run memory: a successful real run is saved as a flow; a failed one records its failure
@@ -1121,7 +1190,8 @@ export function useAssist() {
     setAborted(true);
     setSettings((s) => ({ ...s, autoAct: false }));
     addLog('Safety', `ABORTED (${reason}) — Auto Act, replay, auto-continue, monitor automation and in-flight AI calls halted`, 'error');
-  }, [addLog, cancelAi]);
+    notify({ source: 'Safety', category: 'abort', severity: 'critical', title: `Automation aborted (${reason})` });
+  }, [addLog, cancelAi, notify]);
 
   const clearAbort = () => {
     abortedRef.current = false;
@@ -1161,8 +1231,9 @@ export function useAssist() {
     if (!armedRef.current) return 'Real input disarmed — not sent';
     if (spendAction(budget)) return null;
     addLog('Safety', `Action budget reached: ${budget.limit} real input action(s) this run — stopping`, 'error');
+    notify({ source: 'Safety', category: 'budget', severity: 'warning', title: `Action budget of ${budget.limit} reached — run stopped` });
     return `Action budget of ${budget.limit} exceeded — not sent`;
-  }, [addLog]);
+  }, [addLog, notify]);
 
   /**
    * Loop control: checks or unchecks one stage. Unchecking cancels that stage's in-flight model
@@ -1537,7 +1608,7 @@ export function useAssist() {
     const gate = dryRun ? null : gateRealInput(budget);
     if (gate) return refused(step, gate);
     let size = { w: 1920, h: 1080 };
-    const out = await runStep(step, {
+    const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), {
       bridgeUrl,
       bridgeToken,
       capture: async () => {
@@ -3761,6 +3832,8 @@ export function useAssist() {
           if (r.status === 'pass' && r.point) forwardElement('supervisor', { name: r.target, x: r.point.x, y: r.point.y });
         });
         addLog('Supervisor', `Link/route test "${req.goal}": ${summaryText(results)}`, results.every((r) => r.status === 'pass') ? 'ok' : 'warn');
+        const flagged = results.filter((r) => r.status === 'fail' || r.status === 'aborted');
+        if (flagged.length) notify({ source: 'Supervisor', category: 'agents', severity: 'warning', title: `Link/route test "${req.goal}": ${flagged.length} of ${results.length} failed or aborted` });
       });
     } catch (error) {
       addLog('Supervisor', `AI unavailable — no subagents run: ${errorText(error)}`, 'error');
@@ -3884,6 +3957,7 @@ export function useAssist() {
     if (!health.ok) {
       addLog('Bridge', health.message, 'error');
       captureError({ kind: 'bridge', message: health.message });
+      notify({ source: 'Bridge', category: 'bridge', severity: 'warning', title: `Desktop bridge connection failed — ${health.message}` });
       return false;
     }
     attachSource('bridge');
@@ -3933,6 +4007,16 @@ export function useAssist() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.bridgeUrl, settings.bridgeToken, addLog]);
 
+  // Bridge connect/disconnect notifications: every change of reachability after the first answer.
+  const bridgeWasRef = useRef(false);
+  useEffect(() => {
+    if (bridgeOnline === bridgeWasRef.current) return;
+    bridgeWasRef.current = bridgeOnline;
+    notify(bridgeOnline
+      ? { source: 'Bridge', category: 'bridge', severity: 'info', title: 'Desktop bridge connected' }
+      : { source: 'Bridge', category: 'bridge', severity: 'warning', title: 'Desktop bridge disconnected' });
+  }, [bridgeOnline, notify]);
+
   /** "/use <target>": launch/focus the app on the PC via the bridge, or attach to its window via screen share. */
   const attachTarget = async (name: string) => {
     if (settingsRef.current.bridgeUrl && (await connectBridge())) {
@@ -3946,6 +4030,111 @@ export function useAssist() {
     addLog('/use', `No desktop bridge online — pick the "${name}" window to attach to (acting on it needs the bridge)`, 'info');
     if (await shareScreen()) setTarget(name);
   };
+
+  /** Why a notification's action may not run now (abort, executor unchecked, executor busy); null when it may. */
+  const actionBlocked = (): string | null => {
+    if (abortedRef.current) return 'ABORTED is active';
+    if (!stageOn('executor')) return stageOff('executor');
+    return executorBusy() ? 'the executor is busy with another run' : null;
+  };
+
+  /**
+   * Runs a notification's proposed action through the shared pipeline: logged, recorded as a
+   * proposal, briefed (when the Briefing stage is on), then performed as real input inside every
+   * guardrail — a dry run unless armed, a fresh action budget, the abort latch and loop control.
+   */
+  const runNotificationAction = async (n: AssistNotification, how: 'Auto-act' | 'Manual'): Promise<void> => {
+    if (!n.action) return;
+    const actor = 'Notifications';
+    const blocked = actionBlocked();
+    if (blocked) {
+      addLog(actor, `${how} skipped for "${n.title}" — ${blocked}`, 'warn');
+      notifier.patch(n.id, { acted: 'skipped' });
+      return;
+    }
+    const dryRun = !armedRef.current;
+    addLog(actor, `${how}: ${actionText(n.action)} for "${n.title}"${dryRun ? ' (real input disarmed: dry run)' : ''}`, 'warn');
+    const step = actionStep(n.action);
+    const proposal = recordLocal(actor, step, `the notification "${n.title}" proposes it${how === 'Auto-act' ? ` and auto-act is on for ${n.category}` : ' and you asked to run it'}`);
+    const go = await brief(actor, { kind: 'go', step, proposal });
+    if (go.kind !== 'go') return;
+    const out = await perform(go.step, actor, createBudget(settingsRef.current.actionBudget), dryRun, go.proposal);
+    addLog(actor, `${how} ${out.ok ? 'done' : 'FAILED'}: ${out.message}`, out.ok ? 'ok' : 'error');
+    notifier.patch(n.id, { acted: !out.ok ? 'failed' : dryRun ? 'dry-run' : 'done', read: true });
+  };
+
+  // Auto-act: a new notification with a proposed action runs it when its category is switched on (default off).
+  onNotifiedRef.current = (n) => {
+    if (n.action && settingsRef.current.notifyAutoAct[n.category]) void runNotificationAction(n, 'Auto-act');
+  };
+
+  /** The notification center's "Run" button. */
+  const actOnNotification = async (id: string) => {
+    const n = notifier.find(id);
+    if (n?.action) await runNotificationAction(n, 'Manual');
+  };
+
+  // Relaxation mode: a gentle break reminder every breakMinutes while it is on.
+  useEffect(() => {
+    if (!settings.relaxMode) return undefined;
+    const minutes = settings.breakMinutes;
+    const id = setInterval(() => notify({ source: 'Relaxation', category: 'relax', severity: 'info', title: breakText(minutes) }), breakPeriodMs(minutes));
+    return () => clearInterval(id);
+  }, [settings.relaxMode, settings.breakMinutes, notify]);
+
+  /** System info and user-chosen folder specs for the System panel. */
+  const system = useSystemInfo({
+    refreshSec: settings.systemRefreshSec,
+    folders: settings.systemFolders,
+    setFolders: (systemFolders) => setSettings((s) => ({ ...s, systemFolders })),
+    native: typeof window === 'undefined' ? undefined : window.droidNative,
+  });
+  const systemInfoRef = useRef(system.info);
+  systemInfoRef.current = system.info;
+  const runsRef = useRef(runs);
+  runsRef.current = runs;
+  /** Suggestion titles already raised by the background tick this session. */
+  const suggestedRef = useRef(new Set<string>());
+
+  /** The suggestion context the model sees: recent operations and the computer's state. */
+  const suggestionContext = (): string[] => {
+    const info = systemInfoRef.current;
+    const ops = recentOperations(runsRef.current).map((r) => `- ${new Date(r.time).toString()}: "${r.goal}" ${r.outcome}`);
+    const disk = info?.disk ? [`Disk: ${formatBytes(info.disk.freeBytes)} free of ${formatBytes(info.disk.totalBytes)}`] : [];
+    return ['Recent operations:', ...(ops.length ? ops : ['- none']), ...(info ? [`Computer: ${info.os}, ${info.cpu.cores} cores`] : []), ...disk];
+  };
+
+  /**
+   * Suggestions: habits from the run summaries, "disk almost full" and the model's own proposals.
+   * The background tick (`once`) raises each title at most once per session; Refresh always asks.
+   */
+  const refreshSuggestions = useCallback(async (once = false) => {
+    const raise = (drafts: ReturnType<typeof habitSuggestions>) => drafts.forEach((d) => {
+      if (once && suggestedRef.current.has(d.title)) return;
+      suggestedRef.current.add(d.title);
+      notify(d);
+    });
+    const info = systemInfoRef.current;
+    raise([...habitSuggestions(runsRef.current), ...(diskLow(info) && info?.disk ? [diskSuggestion(info.disk.freeBytes, info.disk.totalBytes)] : [])]);
+    if (!aiOnline() || !stageOn('supervisor')) return;
+    try {
+      raise(await suggestWithAi(askFor('supervisor'), suggestionContext()));
+    } catch (error) {
+      addLog('Suggestions', aiFailure('AI unavailable — no suggestions this round', error), 'warn');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notify, askFor, addLog]);
+  const refreshSuggestionsRef = useRef(refreshSuggestions);
+  refreshSuggestionsRef.current = refreshSuggestions;
+
+  // Background suggestions: once the first system read lands, then every SUGGEST_TICK_MS.
+  const systemReady = system.info !== null;
+  useEffect(() => {
+    if (!systemReady) return undefined;
+    void refreshSuggestionsRef.current(true);
+    const id = setInterval(() => void refreshSuggestionsRef.current(true), SUGGEST_TICK_MS);
+    return () => clearInterval(id);
+  }, [systemReady]);
 
   /** "/measure A to B [to C…]": measured on the live frame, drawn, kept and logged; an unknown element is a loud error. */
   const measureCommand = async (query: string) => {
@@ -4297,6 +4486,8 @@ export function useAssist() {
       addLog('Screen watcher', `Proposal: ${p.text}`, 'info');
       if (approvals.route({ text: p.text, requestedBy: 'Screen watcher', proposalId: p.id }, goalRef.current) === 'auto') acceptProposal(p.id);
     });
+    notes.added.filter((n) => n.kind === 'unusual').forEach((n) => notify({ source: 'Screen watcher', category: 'agents', severity: 'warning', title: `Unusual on screen: ${n.text}` }));
+    proposals.added.forEach((p) => addLog('Screen watcher', `Proposal: ${p.text}`, 'info'));
   };
 
   /** One watcher round: observe the live frame, record notes/proposals, then background-test one untested proposal. */
@@ -4308,7 +4499,8 @@ export function useAssist() {
     try {
       recordObservation(await thought('Screen watcher', () => observeScreen(askFor('screenWatcher'), frame, watcherRef.current.notes, stepsRef.current, goalRef.current), observationSummary));
       const untested = watcherRef.current.proposals.find((p) => p.status === 'pending' && !p.tested && proposalStep(p));
-      if (untested && !executorBusy() && !abortedRef.current) await runWatchTest(untested);
+      if (untested && !backgroundTestsAllowed(settingsRef.current.relaxMode)) addLog('Screen watcher', 'Relaxation mode — background test paused', 'info');
+      else if (untested && !executorBusy() && !abortedRef.current) await runWatchTest(untested);
     } catch (error) {
       addLog('Screen watcher', `AI unavailable — no notes this round: ${errorText(error)}`, 'warn');
     } finally {
@@ -4323,9 +4515,9 @@ export function useAssist() {
   useEffect(() => {
     if (!watcherOn) return undefined;
     watchBudgetRef.current = createBudget(settingsRef.current.actionBudget);
-    const id = setInterval(() => void watchTickRef.current(), settings.watchMs);
+    const id = setInterval(() => void watchTickRef.current(), relaxInterval(settings.watchMs, settings.relaxMode));
     return () => clearInterval(id);
-  }, [watcherOn, settings.watchMs]);
+  }, [watcherOn, settings.watchMs, settings.relaxMode]);
 
   /** Applies an accepted proposal through the existing mechanisms; null when it does not apply now. */
   const applyProposal: Record<ProposalKind, (p: WatchProposal) => string | null> = {
@@ -4862,6 +5054,9 @@ export function useAssist() {
     inventory, routes, routeProfiles, plotRoute, runRoute, fixMethods, pendingFix, runFixScript, dismissFix, retest, retestFlow,
     crew,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
+    notifications: notifier.notifications, markRead: notifier.markRead, markAllRead: notifier.markAllRead, clearNotifications: notifier.clearNotifications,
+    actOnNotification, refreshSuggestions: () => refreshSuggestions(false),
+    system, recovery, restoreLastGood: restoreLastGoodExport,
   };
 }
 

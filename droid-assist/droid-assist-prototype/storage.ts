@@ -36,6 +36,12 @@ import { WAKE_MS_MAX, WAKE_MS_MIN } from './wake.js';
 import { EMPTY_INITIATIVE, INITIATIVE_CATEGORIES, INITIATIVE_LOG_LIMIT, INITIATIVE_PROPOSAL_LIMIT, INITIATIVE_STATUSES, SCAN_SEC_MAX, SCAN_SEC_MIN, SELF_TEST_MODES, STRESS_CYCLES_MAX, STRESS_CYCLES_MIN, STRESS_LIMIT } from './initiative.js';
 import type { AutoApplyMap, InitiativeCategory, InitiativeEntry, InitiativeProposal, InitiativeState, InitiativeStatus, SelfTestMode, StressReport } from './initiative.js';
 import { GOAL_LIMIT, GOAL_SOURCES, GOAL_STATUSES, OBSTACLE_CAUSES, STEP_STATES, type GoalRecord, type GoalSource, type GoalStatus, type Obstacle, type ObstacleCause, type StepState, type StepTrace, type TracedCheck } from './goal-tracer.js';
+import { NOTIFICATION_LIMIT, isNotification, sanitizeAutoAct, type AssistNotification } from './notifications.js';
+import { BREAK_MINUTES_RANGE } from './relax.js';
+import { SYSTEM_REFRESH_SEC_RANGE } from './system-info.js';
+
+/** Most folders the System panel reports on. */
+export const SYSTEM_FOLDER_LIMIT = 10;
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -56,6 +62,7 @@ const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', l
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', sections: 'droid-assist.sections' } as const;
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', initiative: 'droid-assist.initiative' } as const;
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', goals: 'droid-assist.goals' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', notifications: 'droid-assist.notifications' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -73,6 +80,7 @@ const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | '
 const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'wakeMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
 const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'scanSec' | 'stressCycles', [number, number]> = {
 const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'goalStall', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'breakMinutes' | 'systemRefreshSec', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
@@ -90,6 +98,8 @@ const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | '
   scanSec: [SCAN_SEC_MIN, SCAN_SEC_MAX],
   stressCycles: [STRESS_CYCLES_MIN, STRESS_CYCLES_MAX],
   goalStall: [GOAL_STALL_MIN, GOAL_STALL_MAX],
+  breakMinutes: BREAK_MINUTES_RANGE,
+  systemRefreshSec: SYSTEM_REFRESH_SEC_RANGE,
 };
 
 /** A step as persisted: its screenshot without the pixel buffer. */
@@ -132,6 +142,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'autoScan'] as const) {
   out.crewSize = Math.round(out.crewSize);
   for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'relaxMode'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
   for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken'] as const) {
@@ -160,6 +171,8 @@ function sanitizeAutoApply(raw: unknown, defaults: AutoApplyMap): AutoApplyMap {
   const out = { ...defaults };
   if (!isObject(raw)) return out;
   for (const c of INITIATIVE_CATEGORIES) if (typeof raw[c] === 'boolean') out[c] = raw[c] as boolean;
+  out.notifyAutoAct = sanitizeAutoAct(stored.notifyAutoAct ?? defaults.notifyAutoAct);
+  if (Array.isArray(stored.systemFolders)) out.systemFolders = [...new Set(stored.systemFolders.filter(isStr).map((p) => p.trim()))].slice(0, SYSTEM_FOLDER_LIMIT);
   return out;
 }
 
@@ -733,4 +746,10 @@ export function loadInitiative(): InitiativeState {
 /** Persists the AI initiative state, capped per list. */
 export function saveInitiative(state: InitiativeState) {
   writeJson(KEYS.initiative, { proposals: state.proposals.slice(0, INITIATIVE_PROPOSAL_LIMIT), log: state.log.slice(0, INITIATIVE_LOG_LIMIT), stress: state.stress.slice(0, STRESS_LIMIT) });
+/** The stored notifications (newest first, at most NOTIFICATION_LIMIT); invalid entries are dropped. */
+export const loadNotifications = (): AssistNotification[] => listOf(readJson(KEYS.notifications), isNotification, NOTIFICATION_LIMIT);
+
+/** Persists the newest NOTIFICATION_LIMIT notifications. */
+export function saveNotifications(list: AssistNotification[]) {
+  writeJson(KEYS.notifications, list.slice(0, NOTIFICATION_LIMIT));
 }
