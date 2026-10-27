@@ -24,6 +24,7 @@ describe('export', () => {
     expect(backup.version).toBe(BACKUP_VERSION);
     expect(backup.exportedAt).toBe('2026-10-27T00:00:00.000Z');
     expect(Object.keys(backup.stores).sort()).toEqual(['accessPaths', 'cards', 'elementMap', 'familiar', 'habits', 'history', 'log', 'outbox', 'patterns', 'portfolios', 'profile', 'sections', 'settings', 'variations', 'watcher']);
+    expect(Object.keys(backup.stores).sort()).toEqual(['cards', 'elementMap', 'familiar', 'habits', 'history', 'log', 'outbox', 'packs', 'patterns', 'settings', 'watcher']);
   });
 
   it('round-trips through a wiped browser: every store loads back unchanged', () => {

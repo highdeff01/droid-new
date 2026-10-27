@@ -25,6 +25,7 @@ export const BACKUP_STORES = {
   profile: { key: 'droid-assist.user-profile', label: 'User-habit profile', shape: 'list' },
   sections: { key: 'droid-assist.knowledge-sections', label: 'Knowledge sections', shape: 'list' },
   variations: { key: 'droid-assist.variations', label: 'Background variations', shape: 'list' },
+  packs: { key: 'droid-assist.packs', label: 'Workflow packs', shape: 'list' },
 } as const satisfies Record<string, { key: string; label: string; shape: StoreShape }>;
 
 export type StoreName = keyof typeof BACKUP_STORES;

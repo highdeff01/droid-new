@@ -5,6 +5,7 @@ import { classifyGesture, type StagePoint } from './gesture.js';
 import { drawGrid } from './grid-overlay.js';
 import { MAP_COLS, MAP_ROWS, dragBox } from './element-map-studio.js';
 import { countHere, ghostPositions } from './element-tracking.js';
+import { PacksPanel } from './packs-panel.js';
 import styles from './droid-assist.module.css';
 
 const RULER = '#f97316';
@@ -297,6 +298,7 @@ export function Stage({ engine }: { engine: AssistEngine }) {
           <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Live write: type text to record a typing step, press Enter" aria-label="Live write text" />
         </form>
       )}
+      <PacksPanel engine={engine} />
     </div>
   );
 }
