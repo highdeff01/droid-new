@@ -53,7 +53,11 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
-import { useCapabilities } from './use-capabilities.js';
+import { useCapabilities, type CapabilityDeps } from './use-capabilities.js';
+import { usePresentations } from './use-presentations.js';
+import { askResearch } from './presentation-caps.js';
+import type { Got } from './presentation-sources.js';
+import { drawWorldScreen, worldImageAt } from './presentation-project.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -926,12 +930,26 @@ export function useAssist() {
     return { message: r.message, grabbed: r.moved ? 'Report' : null };
   }, []);
 
+  /** Decoded images of the presentation embedded in the demo world, by data URL. */
+  const worldImagesRef = useRef(new Map<string, HTMLImageElement>());
+  /** The demo desktop at the current tick, with the embedded presentation on its in-world screen. */
+  const drawDemo = (ctx: CanvasRenderingContext2D) => {
+    drawDemoDesktop(ctx, DEMO_W, DEMO_H, tickRef.current, adDismissed(), demoFileRef.current, demoIconsRef.current);
+    const embed = studio.currentEmbed();
+    if (!embed) return;
+    const url = embed.images[worldImageAt(embed, tickRef.current)];
+    const cache = worldImagesRef.current;
+    if (!cache.has(url)) cache.set(url, Object.assign(new Image(), { src: url }));
+    const img = cache.get(url)!;
+    drawWorldScreen(ctx, DEMO_W, DEMO_H, embed.title, img.complete && img.naturalWidth ? img : null);
+  };
+
   /** A fresh frame of the demo desktop as it is right now; null when there is no canvas to draw on. */
   const demoSnapshot = (): Frame | null => {
     const c = demoCanvasRef.current;
     const ctx = c?.getContext('2d');
     if (!c || !ctx) return null;
-    drawDemoDesktop(ctx, DEMO_W, DEMO_H, tickRef.current, adDismissed(), demoFileRef.current, demoIconsRef.current);
+    drawDemo(ctx);
     return toFrame(c, DEMO_W, DEMO_H, ++frameId.current, 'demo');
   };
 
@@ -1958,9 +1976,11 @@ export function useAssist() {
     const id = setInterval(() => {
       tickRef.current += 1;
       const c = demoCanvasRef.current;
-      if (c) drawDemoDesktop(c.getContext('2d')!, DEMO_W, DEMO_H, tickRef.current, adDismissed(), demoFileRef.current, demoIconsRef.current);
+      if (c) drawDemo(c.getContext('2d')!);
     }, 400);
     return () => clearInterval(id);
+    // drawDemo reads only refs, so the first render's closure stays current.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source]);
 
   // Demo monitor at the mode's interval.
@@ -2637,7 +2657,7 @@ export function useAssist() {
   };
 
   /** The capability registry: presentations, scripts, simulations, video notes and computer control on the real-input path. */
-  const caps = useCapabilities({
+  const capDeps: CapabilityDeps = {
     runBriefed: async (actor, step, budget, dryRun) => {
       const briefed = await brief(actor, { kind: 'go', step, proposal: recordLocal(actor, step, `capability request${goalRef.current ? ` toward "${goalRef.current}"` : ''}, so "${step.name}" is run`) });
       if (briefed.kind !== 'go') return { ok: false, executed: false, message: `"${step.name}" not justified by the pre-action briefing` };
@@ -2655,7 +2675,31 @@ export function useAssist() {
     stageOn,
     toggleStage,
     sleep,
+  };
+  /** A bridge screenshot as a source Got: read-only, never input. */
+  const bridgeShot = async (): Promise<Got<Frame>> => {
+    const { bridgeUrl, bridgeToken } = settingsRef.current;
+    if (!bridgeUrl) return { ok: false, reason: 'no desktop / main-app bridge configured' };
+    return { ok: true, value: await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current) };
+  };
+  /** The presentation studio: slideshows, movies, projects, approvals, rich notifications and the in-world embed. */
+  const studio = usePresentations({
+    ...capDeps,
+    frames: () => framesRef.current,
+    sources: {
+      app: bridgeShot,
+      web: (topic) => askResearch(capDeps.ask('planner'))(topic),
+      pc: async () => {
+        const live = framesRef.current[0];
+        return live && live.source !== 'demo' ? { ok: true, value: live } : bridgeShot();
+      },
+      demo: async () => {
+        const shot = demoSnapshot();
+        return shot ? { ok: true, value: shot } : { ok: false, reason: 'the demo desktop is not on screen' };
+      },
+    },
   });
+  const caps = useCapabilities(capDeps, studio.capabilities);
 
   /** Each slash command's runner. */
   const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'do', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, do: caps.doCommand };
@@ -2982,6 +3026,8 @@ export function useAssist() {
     reverse, reverseLast, reversing, briefings,
     /** The capability registry and its artifacts; `invokeCapability` is the one permission-checked path for the main AI, the user and agents. */
     capabilities: caps.registry, invokeCapability: caps.invoke, presentations: caps.presentations, scripts: caps.scripts, knowledge: caps.knowledge,
+    /** The presentation studio: slideshows, movies, projects, composition approvals, rich notifications and the in-world embed. */
+    studio,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
   };
 }

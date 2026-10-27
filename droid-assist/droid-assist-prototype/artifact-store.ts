@@ -1,17 +1,30 @@
 import type { Presentation } from './presentation.js';
 import type { SavedScript } from './script-op.js';
 import type { KnowledgeEntry } from './video-notes.js';
+import type { Slideshow } from './slideshow.js';
+import type { Movie } from './movie.js';
+import type { PresentationProject } from './presentation-project.js';
 
 /** Most entries kept in each artifact store. */
 export const ARTIFACT_LIMIT = 50;
 
-const KEYS = { presentations: 'droid-assist.presentations', scripts: 'droid-assist.scripts', knowledge: 'droid-assist.knowledge' } as const;
+const KEYS = {
+  presentations: 'droid-assist.presentations',
+  scripts: 'droid-assist.scripts',
+  knowledge: 'droid-assist.knowledge',
+  slideshows: 'droid-assist.slideshows',
+  movies: 'droid-assist.movies',
+  projects: 'droid-assist.projects',
+} as const;
 
 /** Every artifact store and the shape of its entries. */
 export interface Artifacts {
   presentations: Presentation[];
   scripts: SavedScript[];
   knowledge: KnowledgeEntry[];
+  slideshows: Slideshow[];
+  movies: Movie[];
+  projects: PresentationProject[];
 }
 
 /** The name of one artifact store. */

@@ -108,12 +108,14 @@ describe('movieFrameAt', () => {
 function mockCtx() {
   const alphaLog: number[] = [];
   let alpha = 1;
+  const drawImage = vi.fn();
+  const fillText = vi.fn();
   const ctx = {
     fillStyle: '',
     font: '',
-    drawImage: vi.fn(),
+    drawImage,
     fillRect: vi.fn(),
-    fillText: vi.fn(),
+    fillText,
     get globalAlpha() {
       return alpha;
     },
@@ -122,7 +124,7 @@ function mockCtx() {
       alphaLog.push(v);
     },
   } as unknown as CanvasRenderingContext2D;
-  return { ctx, alphaLog };
+  return { ctx, alphaLog, drawImage, fillText };
 }
 
 const images = [{}, {}] as unknown as CanvasImageSource[];
@@ -131,26 +133,26 @@ const frameFading: MovieFrame = { shot: 0, next: 1, alpha: 0.5, caption: null, z
 
 describe('paintMovieFrame', () => {
   it('draws once when there is no fade', () => {
-    const { ctx } = mockCtx();
+    const { ctx, drawImage } = mockCtx();
     paintMovieFrame(ctx, 100, 100, images, frameNoFade);
-    expect(ctx.drawImage).toHaveBeenCalledTimes(1);
+    expect(drawImage).toHaveBeenCalledTimes(1);
   });
 
   it('draws twice during a fade, setting globalAlpha to the fade alpha', () => {
-    const { ctx, alphaLog } = mockCtx();
+    const { ctx, alphaLog, drawImage } = mockCtx();
     paintMovieFrame(ctx, 100, 100, images, frameFading);
-    expect(ctx.drawImage).toHaveBeenCalledTimes(2);
+    expect(drawImage).toHaveBeenCalledTimes(2);
     expect(alphaLog).toContain(0.5);
   });
 
   it('calls fillText with the caption only when there is one', () => {
-    const { ctx: ctxNoCaption } = mockCtx();
+    const { ctx: ctxNoCaption, fillText: noCaption } = mockCtx();
     paintMovieFrame(ctxNoCaption, 100, 100, images, frameNoFade);
-    expect(ctxNoCaption.fillText).not.toHaveBeenCalled();
+    expect(noCaption).not.toHaveBeenCalled();
 
-    const { ctx: ctxWithCaption } = mockCtx();
+    const { ctx: ctxWithCaption, fillText: withCaption } = mockCtx();
     paintMovieFrame(ctxWithCaption, 100, 100, images, { ...frameNoFade, caption: 'Caption' });
-    expect(ctxWithCaption.fillText).toHaveBeenCalledWith('Caption', expect.any(Number), expect.any(Number));
+    expect(withCaption).toHaveBeenCalledWith('Caption', expect.any(Number), expect.any(Number));
   });
 });
 

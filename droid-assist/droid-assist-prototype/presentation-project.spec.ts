@@ -70,21 +70,19 @@ describe('worldImageAt', () => {
   });
 });
 
-const mockCtx = () =>
-  ({
-    fillStyle: '',
-    font: '',
-    fillRect: vi.fn(),
-    drawImage: vi.fn(),
-    fillText: vi.fn(),
-  }) as unknown as CanvasRenderingContext2D;
+const mockCtx = () => {
+  const drawImage = vi.fn();
+  const fillText = vi.fn();
+  const ctx = { fillStyle: '', font: '', fillRect: vi.fn(), drawImage, fillText } as unknown as CanvasRenderingContext2D;
+  return { ctx, drawImage, fillText };
+};
 
 describe('drawWorldScreen', () => {
   it('draws the image at WORLD_SCREEN fractions of w,h when given', () => {
-    const ctx = mockCtx();
+    const { ctx, drawImage } = mockCtx();
     const image = {} as CanvasImageSource;
     drawWorldScreen(ctx, 1000, 500, 'My Deck', image);
-    expect(ctx.drawImage).toHaveBeenCalledWith(
+    expect(drawImage).toHaveBeenCalledWith(
       image,
       WORLD_SCREEN.x * 1000,
       WORLD_SCREEN.y * 500,
@@ -94,14 +92,14 @@ describe('drawWorldScreen', () => {
   });
 
   it('does not draw an image when null', () => {
-    const ctx = mockCtx();
+    const { ctx, drawImage } = mockCtx();
     drawWorldScreen(ctx, 1000, 500, 'My Deck', null);
-    expect(ctx.drawImage).not.toHaveBeenCalled();
+    expect(drawImage).not.toHaveBeenCalled();
   });
 
   it('fills the title text', () => {
-    const ctx = mockCtx();
+    const { ctx, fillText } = mockCtx();
     drawWorldScreen(ctx, 1000, 500, 'My Deck', null);
-    expect(ctx.fillText).toHaveBeenCalledWith('My Deck', expect.any(Number), expect.any(Number));
+    expect(fillText).toHaveBeenCalledWith('My Deck', expect.any(Number), expect.any(Number));
   });
 });
