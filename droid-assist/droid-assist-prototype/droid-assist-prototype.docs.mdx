@@ -19,6 +19,17 @@ To run the app locally, run the following:
 bit run droid-assist-prototype 
 ```
 
+## Workflow packs
+
+The **Workflow Packs** section (`PacksPanel`) sits directly below the screen preview.
+
+- **+ New pack** creates a pack. **● Record** records up to 5 moves into it — click, navigate (Alt+click, a cursor move), type (live write), key, scroll and drag — each with its coordinates and the screenshot it was recorded on. Recording stops by itself at the 5th move.
+- Each pack has a **goal bar** above it: the goal typed with the pack (or the main goal input), cleaned of lead-ins such as `goal:` or `I want to`. With no input, the AI writes a goal from the recorded steps when recording stops; any goal can be edited.
+- **Combine selected packs** makes a new combined workflow of copies of their steps (not capped). A step's **Move to…** moves it to another pack (refused when that pack already holds 5 moves). **▶ Run** runs one pack; **▶ Cross-run selection** runs just the ticked steps and whole packs, in pack order, each once.
+- **✨ Perform similar action** gives the ticked steps to the planner as an example; it plans afresh on the live screen (never a saved template) and runs each step through the grounded pipeline. It reports `Complete — …`, or a red `Incomplete at step N/M "<name>" — <action> "<target>" at (x%, y%): <reason>`.
+- **Background tests** (on by default) run every 60 s while the executor is idle: one subagent per pack through the existing subagent runner, dry run unless real input is armed. The last 10 results show under each pack and are logged as `Pack tester`. **Test now** runs a round at once.
+- Packs persist in `localStorage` (`droid-assist.packs`) and are part of the backup export.
+
 ## Flow and pattern memory
 
 - A replay or Auto Act run that executes every step as real input (not a dry run) is saved automatically as a workflow card, logged as `Flow saved: "<name>"`. Steps keep their drift-corrected coordinates and screenshots. A near-duplicate card for the same flow is replaced, not added again.

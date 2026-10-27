@@ -93,6 +93,12 @@
 .log li[data-tone='warn'] b { color: #eab308; }
 .log li[data-tone='error'] b { color: #ef4444; }
 .log li[data-tone='info'] b { color: var(--accent); }
+.pack { display: grid; gap: 8px; margin-top: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #020617; }
+.goalBar { display: grid; gap: 4px; font-size: 12px; font-weight: 700; color: var(--pink); }
+.goalBar input { width: 100%; box-sizing: border-box; font-weight: 400; }
+.row:has(> button) { flex-wrap: wrap; align-items: center; }
+.incomplete { margin: 8px 0 0; padding: 8px 12px; border-radius: 8px; font-weight: 700; color: #fff; background: rgba(185, 28, 28, .95); border: 2px solid #ef4444; }
+.complete { margin: 8px 0 0; padding: 8px 12px; border-radius: 8px; font-weight: 700; color: #22c55e; border: 1px solid #22c55e; }
 .bottom { display: grid; gap: 16px; grid-template-columns: 1fr; }
 @media (min-width: 768px) {
   .bottom { grid-template-columns: 1fr 1fr; }
