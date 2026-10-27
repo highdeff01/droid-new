@@ -8,7 +8,7 @@ import {
   buildCrew, checkPath, command, locate, makeNotice, observe, offPositionText, pushNotice, reportBack, routeIntercept, resumeCrew,
   type CrewAgent, type CrewNotice, type CrewRole, type Intercept, type InterceptProposal, type NoticeKind,
 } from './crew.js';
-import { backtrackSteps, detectTestRequest, groundSuggestion, runCrewTest, safetyVote, testReport, type CrewTestResult, type PassResult, type TestRequest } from './crew-ops.js';
+import { BACKTRACK_CHECKS, backtrackSteps, detectTestRequest, groundSuggestion, runCrewTest, safetyVote, testReport, type CrewTestResult, type PassResult, type TestRequest } from './crew-ops.js';
 
 /** What the crew needs from the engine. */
 export interface CrewDeps {
@@ -23,6 +23,8 @@ export interface CrewDeps {
   hasFrames: () => boolean;
   knowledge: () => Knowledge;
   stopRun: () => void;
+  /** Sends a test result back through the agent bus to whoever requested it. */
+  sendResult: (requester: string, target: ForwardedElement, report: string) => void;
 }
 
 /** The last intercept and what the crew proposed for it. */
@@ -177,6 +179,7 @@ export function useCrew(deps: CrewDeps) {
         const grounding = groundSuggestion(target.name, adjusted, depsRef.current.knowledge());
         const report = `${testReport(req, result)} · history: ${grounding.text}${result.passed ? '' : ' · follow-up: main AI re-plans this step'}`;
         notify(agent.id, 'test', report, result.passed ? 'ok' : 'warn');
+        depsRef.current.sendResult(req.from, { name: target.name, x: adjusted.x, y: adjusted.y }, report);
         if (crewRef.current.some((a) => a.id === req.from)) setCrew(crewRef.current.map((a) => (a.id === req.from ? { ...a, report } : a)));
         return report;
       });
@@ -211,7 +214,7 @@ export function useCrew(deps: CrewDeps) {
       const voters = crewRef.current.filter((a) => a.role === 'sentinel');
       let done = 0;
       for (const step of plan) {
-        const vote = safetyVote(step, d.history, voters);
+        const vote = safetyVote(step, d.history, voters, BACKTRACK_CHECKS);
         if (!vote.ok) {
           notify(agent.id, 'safety', `Backtrack halted at ${step.name}: ${vote.votes.filter((v) => !v.ok).map((v) => v.reason).join('; ')}`, 'warn');
           break;

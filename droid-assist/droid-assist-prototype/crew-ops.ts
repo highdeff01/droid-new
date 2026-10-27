@@ -80,15 +80,21 @@ function repeatsReversal(step: WorkflowStep, history: readonly ActionRecord[]): 
 }
 
 /** The independent coordinate checks, each run by a different agent. */
-const SAFETY_CHECKS: readonly SafetyCheck[] = [
+export const SAFETY_CHECKS: readonly SafetyCheck[] = [
   { name: 'undo-combo', test: (s) => (s.action === 'key' && UNDO_COMBOS.test((s.text ?? '').trim().toLowerCase()) ? `"${s.text}" is an undo/redo combo` : null) },
   { name: 'reversal-repeat', test: (s, h) => (repeatsReversal(s, h) ? 'it repeats the reversal of the last action' : null) },
   { name: 'in-bounds', test: (s) => (inUnit(s.x) && inUnit(s.y) && inUnit(s.endX) && inUnit(s.endY) ? null : 'its coordinates are off screen') },
 ];
 
+/**
+ * The checks for a backtrack step: a backtrack is the deliberate move back along the path, so it
+ * may retrace the newest pointer move's reversal; undo/redo combos and off-screen points still veto it.
+ */
+export const BACKTRACK_CHECKS: readonly SafetyCheck[] = SAFETY_CHECKS.filter((c) => c.name !== 'reversal-repeat');
+
 /** Multi-agent check of a risky step: each check goes to the next agent in `voters` (round robin). */
-export function safetyVote(step: WorkflowStep, history: readonly ActionRecord[], voters: readonly CrewAgent[]): SafetyDecision {
-  const votes = SAFETY_CHECKS.map((c, i): SafetyVote => {
+export function safetyVote(step: WorkflowStep, history: readonly ActionRecord[], voters: readonly CrewAgent[], checks: readonly SafetyCheck[] = SAFETY_CHECKS): SafetyDecision {
+  const votes = checks.map((c, i): SafetyVote => {
     const reason = c.test(step, history);
     return { agentId: voters.length ? voters[i % voters.length].id : 'crew', check: c.name, ok: !reason, reason: reason ?? 'clear' };
   });

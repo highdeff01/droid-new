@@ -44,7 +44,7 @@ import { CREW_SIZE_DEFAULT, parseIntercept } from './crew.js';
 import { useCrew } from './use-crew.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, newPattern, runVerdict, upsertCard } from './flow-memory.js';
 import { SUPERVISOR_INTERVAL_MS, SUPERVISOR_TICK_MS, applyFixes, executorBusy as supervisorExecutorBusy, habitPatterns, isConfident, reviewRun, reviewText, staleFixes, type PendingFix, type SupervisorReview, type SupervisorState } from './supervisor.js';
-import { BUS_AGENTS, elementLine, forward, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
+import { BUS_AGENTS, BUS_AGENT_IDS, elementLine, forward, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
 import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
 import { buildElementMap } from './element-map.js';
@@ -2315,6 +2315,12 @@ export function useAssist() {
     hasFrames: () => framesRef.current.length > 0,
     knowledge,
     stopRun: stop,
+    sendResult: (requester, element, report) => {
+      const to: BusAgentId = (BUS_AGENT_IDS as string[]).includes(requester) && requester !== 'supervisor' ? (requester as BusAgentId) : 'goal';
+      const { bus: next, queued } = forward(busRef.current, 'supervisor', element, [to]);
+      busRef.current = queued.reduce((b, m) => markHandled(b, m.id, `Crew test result for ${requester}: ${report}`), next);
+      setBus(busRef.current);
+    },
   });
   useEffect(() => {
     crewApiRef.current = crew;
