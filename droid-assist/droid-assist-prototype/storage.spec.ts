@@ -17,6 +17,7 @@ import { DEFAULT_SETTINGS } from './use-assist.js';
 import { DEFAULT_GRID_OPACITY } from './grid-overlay.js';
 import { RUN_SUMMARY_LIMIT, type RunSummary } from './run-stats.js';
 import { EMPTY_MEMORY, addFailure, addNote, newFailure } from './operation-memory.js';
+import { MASTER_PROMPT_MAX } from './ai.js';
 import { ACCESS_PATH_LIMIT, type AccessProfile } from './access-paths.js';
 import type { PositionDossier } from './position-dossier.js';
 import { GOAL_LIMIT, createGoal, trace, type TraceContext } from './goal-tracer.js';
@@ -105,6 +106,17 @@ describe('settings', () => {
       localStorage.setItem('droid-assist.settings', JSON.stringify({ aiTimeoutMs: bad }));
       expect(loadSettings(DEFAULTS).aiTimeoutMs).toBe(DEFAULTS.aiTimeoutMs);
     }
+  });
+
+  it('persists the Master Prompt Override and overlap mode, keeping the defaults on invalid values', () => {
+    expect(DEFAULTS.masterPrompt).toBe('');
+    expect(DEFAULTS.aiOverlap).toBe(false);
+    saveSettings({ ...DEFAULTS, masterPrompt: 'Prefer keyboard shortcuts', aiOverlap: true });
+    expect(loadSettings(DEFAULTS)).toMatchObject({ masterPrompt: 'Prefer keyboard shortcuts', aiOverlap: true });
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ masterPrompt: 42, aiOverlap: 'yes' }));
+    expect(loadSettings(DEFAULTS)).toMatchObject({ masterPrompt: '', aiOverlap: false });
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ masterPrompt: 'x'.repeat(MASTER_PROMPT_MAX + 1) }));
+    expect(loadSettings(DEFAULTS).masterPrompt).toBe('');
   });
 
   it('round-trips loop-control stages and sanitizes a stored stage map', () => {

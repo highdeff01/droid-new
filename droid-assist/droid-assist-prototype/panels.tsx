@@ -31,7 +31,7 @@ import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js
 import { GOAL_STALL_MAX, GOAL_STALL_MIN, WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
 import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
-import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS } from './ai.js';
+import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, MASTER_PROMPT_MAX, type AiView } from './ai.js';
 import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-history.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
@@ -430,6 +430,14 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>AI request timeout <b>{settings.aiTimeoutMs / 1000} s</b>
         <small>A model call with no reply by then fails; queued calls start their clock when they leave the queue. Stop still cancels at once.</small>
         <input type="range" min={AI_TIMEOUT_MS_MIN} max={AI_TIMEOUT_MS_MAX} step={5000} value={settings.aiTimeoutMs} onChange={(e) => setSettings({ ...settings, aiTimeoutMs: +e.target.value })} aria-label="AI request timeout" />
+      </label>
+      <label className={styles.setting}>
+        <span><input type="checkbox" checked={settings.aiOverlap} onChange={(e) => setSettings({ ...settings, aiOverlap: e.target.checked })} aria-label="AI overlap mode" /> AI overlap mode</span>
+        <small>Each AI ask also fires a second, freshly worded call through the same queue; the first valid answer wins and the other is cancelled.</small>
+      </label>
+      <label className={styles.setting}>Master Prompt Override
+        <small>Steers every goal, task, operation and workflow — preferred methods, tone, mood. Added to every AI prompt; leave empty for none.</small>
+        <textarea value={settings.masterPrompt} maxLength={MASTER_PROMPT_MAX} onChange={(e) => setSettings({ ...settings, masterPrompt: e.target.value.slice(0, MASTER_PROMPT_MAX) })} aria-label="Master Prompt Override" placeholder="e.g. Prefer keyboard shortcuts, be cautious, keep a calm tone" />
       </label>
       <label className={styles.setting}>Emergency-stop hotkey <b>{settings.abortHotkey}</b>
         <input

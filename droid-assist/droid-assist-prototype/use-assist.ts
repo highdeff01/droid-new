@@ -6,6 +6,8 @@ import { AD_CYCLE, demoAd, demoDrag, demoFileAt, demoPlayButton, drawDemoDesktop
 import { AI_PLAN_SOURCE, calculate, generateCard, patternLine, planFromGoal, planRemaining, relevantPatterns, relocateTarget, replanDrag, replanStep, uid } from './planner.js';
 import { checkMoved, sameElement, verifyArrangement, type Expectation, type MovedElement } from './rearrange.js';
 import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi, stripThinking } from './ai.js';
+import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi, thinkingOnlyNotice } from './ai.js';
+import { OVERLAP_PREFIX, firstValid } from './ai-overlap.js';
 import type { AiReply, AiStatus, AskFn, AskRequest, HistoryChangeFn } from './ai.js';
 import { historyChangeText } from './ai-history.js';
 import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type StageId } from './loop-control.js';
@@ -268,6 +270,8 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   aiMaxInFlight: DEFAULT_AI_MAX_IN_FLIGHT,
   aiTimeoutMs: DEFAULT_AI_TIMEOUT_MS,
   goalStall: DEFAULT_GOAL_STALL,
+  masterPrompt: '',
+  aiOverlap: false,
   stages: DEFAULT_STAGES,
   errorUrl: '',
   errorForwarding: false,
@@ -911,9 +915,18 @@ export function useAssist() {
     return { r, level: syncLevelFor(r, t) };
   };
 
+  /** One model call of `stage` through the shared queue, with the current settings (master prompt included). */
+  const queuedAsk = useCallback((req: AskRequest, stage: StageId, signal: AbortSignal): Promise<AiReply> => aiQueueRef.current.run(stage, (timeoutMs) => {
+    const { aiUrl, aiModel, aiView, masterPrompt } = settingsRef.current;
+    return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs, masterPrompt }, { ...req, signal });
+  }, signal), []);
+
   /**
    * Every model call, made on behalf of a loop-control `stage`: with session history and the recent
    * log, cancellable through aiCtrlRef (abort) and the stage's own controller (unchecking it).
+   * With overlap mode on, a second, freshly worded call races it through the same queue (so the
+   * in-flight cap holds); the first valid answer wins and the other is cancelled. A thinking-only
+   * reply is shown on the timeline and the log as the answer, with what happened and a next step.
    * An unchecked stage is refused as a cancel. A failure marks the AI offline and is rethrown; a cancel is rethrown as is.
    */
   const askAi = useCallback(async (req: AskRequest, stage: StageId): Promise<AiReply> => {
@@ -926,16 +939,28 @@ export function useAssist() {
     const recent = req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
     const context = [...memoryLines(memoryRef.current, currentOperation()), ...recent];
     const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage), req.signal);
+    const ctxReq = { ...req, context };
     setAiCalls((n) => n + 1);
     try {
       const reply = await aiQueueRef.current.run(stage, (timeoutMs) => {
         const { aiUrl, aiModel, aiView } = settingsRef.current;
         return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs }, { ...req, context, memory, signal });
       }, signal);
+      const reply = settingsRef.current.aiOverlap
+        ? await firstValid([
+          (s) => queuedAsk(ctxReq, stage, linkSignals(signal, s)),
+          (s) => queuedAsk({ ...ctxReq, prompt: `${OVERLAP_PREFIX}${req.prompt}` }, stage, linkSignals(signal, s)),
+        ])
+        : await queuedAsk(ctxReq, stage, signal);
       setAiHistory(aiSessionRef.current.history());
       if (injected.length) injectNotes(injected, project);
       const { aiModel } = settingsRef.current;
       if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${aiModel}` });
+      if (reply.thinkingOnly) {
+        const text = thinkingOnlyNotice(reply.content);
+        setTimeline((t) => addEntry(t, { step: `AI (${stage})`, kind: 'thought', text, thinking: reply.thinking }));
+        addLog('AI', text, 'warn');
+      }
       return reply;
     } catch (error) {
       if (!(error instanceof AiCancelled)) {
@@ -946,6 +971,7 @@ export function useAssist() {
     } finally {
       setAiCalls((n) => n - 1);
     }
+  }, [addLog, captureError, queuedAsk]);
   }, [captureError, injectNotes]);
 
   /** The AskFn of one loop-control stage. */

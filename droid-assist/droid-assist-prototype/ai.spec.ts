@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AiCancelled, AiError, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, RAW_REPLY_MAX, chat, createAiSession, parseJsonReply, pingAi, toUnit } from './ai.js';
+import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AiCancelled, AiError, AiParseError, CONTENT_RETRY_LADDER, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, FALLBACK_QUESTION_PREFIX, RAW_REPLY_MAX, chat, createAiSession, parseJsonReply, pingAi, thinkingOnlyNotice, toUnit, withMasterPrompt } from './ai.js';
+import type { ChatMessage } from './ai.js';
 import type { Frame } from './types.js';
 
 const cfg = { url: 'http://model.test/api/chat', model: 'test-model' };
@@ -68,15 +69,13 @@ describe('chat', () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
-  it('retries once with an answer-in-content instruction when the reply was thinking only', async () => {
+  it('retries with a rephrase instruction when the reply was thinking only', async () => {
     const fn = stubFetch(reply('   ', 200, 'Thinking Process: the user wants a...'), reply('{"a":1}', 200, 'Answering now.'));
     await expect(chat(cfg, [{ role: 'user', content: 'hi' }], true)).resolves.toEqual({ content: '{"a":1}', thinking: 'Answering now.' });
     expect(fn).toHaveBeenCalledTimes(2);
     const retried = bodyOf(fn, 1).messages;
     expect(retried[0]).toEqual({ role: 'user', content: 'hi' });
-    expect(retried[1].role).toBe('user');
-    expect(retried[1].content).toMatch(/content/);
-    expect(retried[1].content).toMatch(/JSON/);
+    expect(retried[1]).toEqual({ role: 'user', content: expect.stringMatching(/own words.*message content.*JSON/) });
   });
 
   it('keeps the first thinking when the retry carries none', async () => {
@@ -84,10 +83,48 @@ describe('chat', () => {
     await expect(chat(cfg, [])).resolves.toEqual({ content: 'ok', thinking: 'first thoughts' });
   });
 
-  it('fails naming the cause when the retry is still thinking only', async () => {
-    const fn = stubFetch(reply('', 200, 'hmm'), reply('', 200, 'still hmm'));
-    await expect(chat(cfg, [])).rejects.toThrow(/thinking.*no message content.*retry/);
-    expect(fn).toHaveBeenCalledTimes(2);
+  it('walks the ladder with three differently worded retries: rephrase, short direct answer, JSON only', async () => {
+    const fn = stubFetch(reply('', 200, 't0'), reply('', 200, 't1'), reply('', 200, 't2'), reply('done', 200, 't3'));
+    await expect(chat(cfg, [{ role: 'user', content: 'where?' }])).resolves.toEqual({ content: 'done', thinking: 't3' });
+    expect(fn).toHaveBeenCalledTimes(4);
+    const asks = [1, 2, 3].map((i) => bodyOf(fn, i).messages.at(-1).content as string);
+    expect(asks).toEqual([...CONTENT_RETRY_LADDER]);
+    expect(new Set(asks).size).toBe(3);
+    expect(asks[1]).toMatch(/short, direct answer/);
+    expect(asks[2]).toMatch(/JSON object/);
+  });
+
+  it('asks a fallback rephrased question on its own after the ladder runs out', async () => {
+    const msgs: ChatMessage[] = [{ role: 'system', content: 'sys' }, { role: 'user', content: 'old' }, { role: 'assistant', content: 'a' }, { role: 'user', content: 'Is the dialog open?', images: ['QUJD'] }];
+    const fn = stubFetch(reply('', 200, 'a'), reply('', 200, 'b'), reply('', 200, 'c'), reply('', 200, 'd'), reply('Yes, it is open.'));
+    await expect(chat(cfg, msgs)).resolves.toEqual({ content: 'Yes, it is open.', thinking: 'd' });
+    expect(fn).toHaveBeenCalledTimes(5);
+    expect(bodyOf(fn, 4).messages).toEqual([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: `${FALLBACK_QUESTION_PREFIX}Is the dialog open?`, images: ['QUJD'] },
+    ]);
+  });
+
+  it('accepts the thinking as the answer when every try is thinking only', async () => {
+    const fn = stubFetch(...['h1', 'h2', 'h3', 'h4', 'the button is top-left'].map((t) => reply('', 200, t)));
+    await expect(chat(cfg, [{ role: 'user', content: 'q' }])).resolves.toEqual({ content: 'the button is top-left', thinking: 'the button is top-left', thinkingOnly: true });
+    expect(fn).toHaveBeenCalledTimes(5);
+  });
+
+  it('accepts the latest thinking when a retry fails instead of blocking', async () => {
+    stubFetch(reply('', 200, 'early idea'), new TypeError('Failed to fetch'));
+    await expect(chat(cfg, [])).resolves.toEqual({ content: 'early idea', thinking: 'early idea', thinkingOnly: true });
+  });
+
+  it('still rejects a cancel that lands during the ladder', async () => {
+    const ctrl = new AbortController();
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(reply('', 200, 'thinking'))
+      .mockImplementationOnce((_url: string, init: RequestInit) => new Promise((_, reject) => {
+        init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        ctrl.abort();
+      })));
+    await expect(chat(cfg, [], false, 60_000, ctrl.signal)).rejects.toBeInstanceOf(AiCancelled);
   });
 
   it('rejects as cancelled when the cancel signal aborts the request', async () => {
@@ -288,5 +325,38 @@ describe('createAiSession', () => {
     await expect(pending).rejects.toThrow('AI request cancelled');
     stubFetch(reply('again'));
     await expect(session.ask(cfg, { system: 's', prompt: 'p' })).resolves.toMatchObject({ content: 'again' });
+  });
+});
+
+describe('master prompt override', () => {
+  it('leaves the system prompt alone when the directive is empty or blank', () => {
+    expect(withMasterPrompt('sys')).toBe('sys');
+    expect(withMasterPrompt('sys', '   ')).toBe('sys');
+  });
+
+  it('injects the trimmed directive into the system prompt of every session ask', async () => {
+    const fn = stubFetch(reply('{"x":1}'), reply('ok'));
+    const session = createAiSession(null);
+    await session.ask({ ...cfg, masterPrompt: '  Prefer keyboard shortcuts; calm tone.  ' }, { system: (v) => `Planner for ${v.w}x${v.h}.`, prompt: 'plan', json: true });
+    await session.ask({ ...cfg, masterPrompt: 'Be brief.' }, { system: 'Verdict judge.', prompt: 'judge' });
+    const [plannerSys, verdictSys] = [0, 1].map((i) => bodyOf(fn, i).messages[0]);
+    expect(plannerSys.role).toBe('system');
+    expect(plannerSys.content).toMatch(/^Planner for 480x270\.[\s\S]*master directive[\s\S]*\nPrefer keyboard shortcuts; calm tone\.$/);
+    expect(verdictSys.content).toMatch(/^Verdict judge\.[\s\S]*\nBe brief\.$/);
+  });
+
+  it('sends the bare system prompt when no directive is set', async () => {
+    const fn = stubFetch(reply('ok'));
+    await createAiSession(null).ask({ ...cfg, masterPrompt: '' }, { system: 'Grounding.', prompt: 'p' });
+    expect(bodyOf(fn).messages[0]).toEqual({ role: 'system', content: 'Grounding.' });
+  });
+});
+
+describe('thinkingOnlyNotice', () => {
+  it('states what happened, carries the thinking and suggests a next step', () => {
+    const text = thinkingOnlyNotice('Click the blue Save button');
+    expect(text).toMatch(/only in its thinking/);
+    expect(text).toContain('Click the blue Save button');
+    expect(text).toMatch(/self-test|queue/);
   });
 });
