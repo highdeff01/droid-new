@@ -145,6 +145,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   driftMatched: MATCHED,
   driftRadius: SEARCH_RADIUS,
   monitorMode: 'app',
+  displayId: null,
   watchMs: 5000,
   autoAct: false,
   aiHelp: true,
@@ -1804,6 +1805,11 @@ export function useAssist() {
     captureRef.current?.setInterval(intervalMs);
   }, [intervalMs]);
 
+  // The running native capture follows the chosen display live (Settings or the HUD quick-switch).
+  useEffect(() => {
+    captureRef.current?.selectDisplay(settings.displayId);
+  }, [settings.displayId]);
+
   useEffect(() => () => captureRef.current?.stop(), []);
 
   /**
@@ -2325,6 +2331,7 @@ export function useAssist() {
   /** Captures the real screen: Electron native capture, else the browser picker. Resolves whether it started. */
   const shareScreen = async (): Promise<boolean> => {
     const capture = createScreenCapture();
+    capture.selectDisplay(settingsRef.current.displayId);
     try {
       await capture.start(monitorInterval(settingsRef.current.monitorMode, settingsRef.current.captureMs), { onImage: onScreenImage, onLost: onCaptureLost });
     } catch (error) {

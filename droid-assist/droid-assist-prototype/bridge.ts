@@ -72,12 +72,15 @@ const NATIVE: Record<StepAction, (step: WorkflowStep, p: Point, end: Point | nul
 };
 
 /**
- * The native actions a step performs at its (drift-corrected) position on a srcW×srcH screen.
+ * The native actions a step performs at its (drift-corrected) position on a srcW×srcH screen
+ * whose top-left sits at `origin` on the virtual desktop (a secondary monitor's offset).
  * A recorded step's measured human pause (`delayMs`) replaces the default delay of its first action.
  */
-export function nativeActions(step: WorkflowStep, srcW: number, srcH: number): NativeAction[] {
-  const p = { x: toPx(step.correctedX ?? step.x, srcW), y: toPx(step.correctedY ?? step.y, srcH) };
-  const [first, ...rest] = NATIVE[step.action](step, p, dragEnd(step, srcW, srcH));
+export function nativeActions(step: WorkflowStep, srcW: number, srcH: number, origin: Point = { x: 0, y: 0 }): NativeAction[] {
+  const shift = (q: Point): Point => ({ x: q.x + origin.x, y: q.y + origin.y });
+  const p = shift({ x: toPx(step.correctedX ?? step.x, srcW), y: toPx(step.correctedY ?? step.y, srcH) });
+  const end = dragEnd(step, srcW, srcH);
+  const [first, ...rest] = NATIVE[step.action](step, p, end && shift(end));
   if (!first) return [];
   return typeof step.delayMs === 'number' ? [{ ...first, delayMs: step.delayMs }, ...rest] : [first, ...rest];
 }
@@ -134,10 +137,11 @@ async function waitForRun(bridgeUrl: string, token: string, id: string, pollMs: 
  * (POST /api/replay, then polls the run). Succeeds only when the PC completed it.
  * @param srcW native screen width the step's normalized coordinates map onto
  * @param token bridge auth token, sent as a bearer token on every call
+ * @param origin physical top-left of the captured display on the virtual desktop (0,0 = primary)
  */
-export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: number, srcH: number, { token = '', pollMs = 250, timeoutMs = 60000 } = {}): Promise<BridgeResult> {
+export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: number, srcH: number, { token = '', pollMs = 250, timeoutMs = 60000, origin = { x: 0, y: 0 } } = {}): Promise<BridgeResult> {
   if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };
-  const actions = nativeActions(step, srcW, srcH);
+  const actions = nativeActions(step, srcW, srcH, origin);
   if (!actions.length) return { ok: false, message: `"${step.name}" has no end point — a drag needs both a start and an end; not sent` };
   const { x, y } = actions[0];
   try {

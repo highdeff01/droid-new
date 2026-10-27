@@ -74,6 +74,13 @@
 .agent { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; min-height: 44px; }
 .agent span { display: flex; flex-direction: column; }
 .setting { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.displayPicker { display: flex; flex-wrap: wrap; gap: 8px; }
+.displayPickerCompact { display: flex; gap: 6px; }
+.displayOption { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px; background: #020617; color: var(--text); border: 1px solid #334155; border-radius: 8px; cursor: pointer; }
+.displayOption[data-active='true'] { border-color: #38bdf8; }
+.displayOption img { width: 128px; height: 72px; object-fit: cover; border-radius: 4px; }
+.displayPickerCompact .displayOption img { width: 64px; height: 36px; }
+.displayPickerCompact .displayOption small { display: none; }
 .row { display: flex; gap: 6px; }
 .row input { flex: 1; }
 .log { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; font-size: 12px; display: grid; gap: 3px; }
