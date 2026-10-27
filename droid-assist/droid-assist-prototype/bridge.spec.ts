@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BRIDGE_REQUIRED, BRIDGE_UNAUTHORIZED, captureDesktop, checkBridge, humanMoveMs, insecureBridgeUrl, nativeActions, sendToBridge } from './bridge.js';
+import { BRIDGE_REQUIRED, BRIDGE_UNAUTHORIZED, captureDesktop, checkBridge, humanMoveMs, insecureBridgeUrl, nativeActions, selfTestBridge, sendToBridge } from './bridge.js';
 import type { WorkflowStep } from './types.js';
 
 const step = (patch: Partial<WorkflowStep>): WorkflowStep => ({ id: 's1', name: 'Step', action: 'click', x: 0.5, y: 0.25, status: 'pending', ...patch });
@@ -191,5 +191,36 @@ describe('insecureBridgeUrl', () => {
 
   it('accepts localhost, loopback, https and same-origin proxy URLs', () => {
     for (const url of ['', '/bridge', 'http://localhost:3000', 'http://127.0.0.1:3000', 'http://127.4.5.6', 'http://[::1]:3000', 'http://pc.localhost', 'https://192.168.1.50:3000']) expect(insecureBridgeUrl(url)).toBe(false);
+  });
+});
+
+describe('selfTestBridge', () => {
+  it('sends one real move to the screen centre through /api/replay and reports the run id the PC confirmed', async () => {
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(json(200, { success: true, run: { id: 'run-42', status: 'running' } }))
+      .mockResolvedValueOnce(json(200, { success: true, run: { id: 'run-42', status: 'completed' } }));
+    vi.stubGlobal('fetch', fetchSpy);
+    const out = await selfTestBridge('http://pc:8080', 'tok', 2560, 1440);
+    expect(out.ok).toBe(true);
+    expect(out.message).toMatch(/Real input verified.*run run-42/);
+    expect(fetchSpy.mock.calls[0][0]).toBe('http://pc:8080/api/replay');
+    expect(fetchSpy.mock.calls[0][1].headers.Authorization).toBe('Bearer tok');
+    expect(JSON.parse(fetchSpy.mock.calls[0][1].body).steps).toEqual([expect.objectContaining({ action: 'move', x: 1280, y: 720 })]);
+  });
+
+  it('reports the bridge error when the PC fails the run', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(json(200, { success: true, run: { id: 'r', status: 'running' } }))
+      .mockResolvedValueOnce(json(200, { success: true, run: { id: 'r', status: 'failed', error: 'pyautogui FailSafeException' } })));
+    const out = await selfTestBridge('http://pc', '', 1920, 1080);
+    expect(out.ok).toBe(false);
+    expect(out.message).toMatch(/NOT verified — PC failed: pyautogui FailSafeException/);
+  });
+
+  it('fails loudly when the bridge is unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    const out = await selfTestBridge('http://pc', '', 1920, 1080);
+    expect(out.ok).toBe(false);
+    expect(out.message).toMatch(/NOT verified.*unreachable: Failed to fetch/);
   });
 });
