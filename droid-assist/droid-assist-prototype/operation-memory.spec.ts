@@ -5,6 +5,7 @@ import {
   BLACKLIST_LIMIT, EMPTY_MEMORY, FAILURE_SHOTS, addFailure, addNote, blacklistFor, failureFromRun, forget, isFailureRecord, isOperationNote,
   memoryBlock, newFailure, operationGroups, similarFailures, type MemorySources,
 } from './operation-memory.js';
+import { failurePattern } from './flow-memory.js';
 
 const shot = (n: number) => `data:image/jpeg;base64,${n}`;
 const frame = (n: number) => ({ url: shot(n) }) as Frame;
@@ -50,7 +51,7 @@ describe('blacklistFor', () => {
       habits: [habit('Send button', 'clicking the greyed Send button'), habit('Chart legend', 'dragging the legend')],
       memory: addFailure(EMPTY_MEMORY, failure('Send invoice email to the client', ['"Attach PDF" (drag)'], ['Attach area'])),
     });
-    const texts = blacklistFor('send invoice email', ['Send button'], src).map((e) => `${e.source}:${e.text}`);
+    const texts = blacklistFor('send invoice email', ['Send button'], src).map((e) => `${e.source}:${e.text}${e.on ? ` (on "${e.on}")` : ''}`);
     expect(texts).toContain('pattern:Do not double click the invoice row');
     expect(texts).toContain('habit:clicking the greyed Send button (on "Send button")');
     expect(texts).toContain('failure:"Attach PDF" (drag) failed in "Send invoice email to the client"');
@@ -64,6 +65,27 @@ describe('blacklistFor', () => {
     expect(list).toHaveLength(BLACKLIST_LIMIT);
     expect(list.filter((e) => e.text.toLowerCase() === 'bad 0')).toHaveLength(1);
     expect(blacklistFor('upload report', [], sources({ memory, habits: [habit('Upload zone', 'dropping before it highlights')] })).map((e) => e.source)).toContain('habit');
+  });
+
+  it('keeps pattern and habit avoids when similar failures alone exceed BLACKLIST_LIMIT', () => {
+    const memory = Array.from({ length: 20 }, (_, i) => failure(`send email ${i}`, [`"Step ${i}" (click)`], ['Send'])).reduce(addFailure, EMPTY_MEMORY);
+    const src = sources({ memory, patterns: [pattern('avoid', 'never use ctrl+enter', 'send email')], habits: [habit('Send', 'clicking before the address resolves')] });
+    const list = blacklistFor('send email', [], src);
+    expect(list).toHaveLength(BLACKLIST_LIMIT);
+    expect(list.map((e) => e.source)).toEqual(expect.arrayContaining(['failure', 'pattern', 'habit']));
+  });
+
+  it('dedupes the same lesson learned as a pattern and as a habit lesson', () => {
+    const src = sources({ patterns: [pattern('avoid', 'click twice', '')], habits: [habit('Send', 'Click twice')] });
+    expect(blacklistFor('send mail', ['Send'], src).filter((e) => e.text.toLowerCase() === 'click twice')).toHaveLength(1);
+  });
+
+  it("does not list a failed run twice: its automatic avoid pattern yields to the failure reminder", () => {
+    const steps = [step('Click Send', 'failed', { target: 'Send button' })];
+    const memory = addFailure(EMPTY_MEMORY, failureFromRun('send email to bob', 'Replay', steps, null, 1));
+    const list = blacklistFor('send email to bob', [], sources({ memory, patterns: [failurePattern('send email to bob', steps)] }));
+    expect(list.map((e) => e.source)).toEqual(['failure']);
+    expect(blacklistFor('send email to bob', [], sources({ patterns: [failurePattern('send email to bob', steps)] })).map((e) => e.source)).toEqual(['pattern']);
   });
 
   it('is empty for an empty operation with no targets', () => {

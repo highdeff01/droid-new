@@ -3,6 +3,7 @@ import { parseJsonReply } from './ai.js';
 import type { AskFn } from './ai.js';
 import { generateCard, similarity, uid } from './planner.js';
 import { PATTERN_LIMIT } from './storage.js';
+import { FAILURE_PATTERN_SUFFIX } from './operation-memory.js';
 
 /** How alike two flow names must be (both ways) to count as the same flow. */
 export const SAME_FLOW = 0.6;
@@ -53,7 +54,7 @@ export const newPattern = (kind: LearnedPattern['kind'], pattern: string, contex
 export function failurePattern(goal: string, steps: WorkflowStep[]): LearnedPattern {
   const failed = steps.filter((s) => s.status === 'failed' || s.status === 'pending' || s.status === 'running');
   const names = failed.map((s) => `"${s.name}" (${s.action})`).join(', ') || 'the planned steps';
-  return newPattern('avoid', `Step ${names} failed on screen — target or approach did not work`, goal);
+  return newPattern('avoid', `Step ${names} ${FAILURE_PATTERN_SUFFIX}`, goal);
 }
 
 const KINDS = new Set<LearnedPattern['kind']>(['avoid', 'add']);

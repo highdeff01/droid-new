@@ -16,6 +16,8 @@ export const RECENT_LINES = 8;
 export const FAILURE_CONTEXT_LIMIT = 5;
 /** Blacklist entries sent with one AI turn. */
 export const BLACKLIST_LIMIT = 12;
+/** How a failed run's automatic avoid pattern ends (flow-memory); its failure reminder carries the same steps. */
+export const FAILURE_PATTERN_SUFFIX = 'failed on screen — target or approach did not work';
 
 /** A failed operation saved as a reminder: what failed, on which targets, with its screenshots. */
 export interface FailureRecord {
@@ -59,6 +61,8 @@ export type BlacklistSource = 'pattern' | 'habit' | 'failure';
 export interface BlacklistEntry {
   source: BlacklistSource;
   text: string;
+  /** The target a habit lesson was learned on. */
+  on?: string;
 }
 
 /** The learned knowledge an operation's memory is drawn from. */
@@ -119,31 +123,42 @@ export const notesFor = (operation: string, notes: OperationNote[]) => (operatio
 /** The successful runs of operations like `operation`, newest first. */
 export const successesFor = (operation: string, runs: RunSummary[]) => (operation.trim() ? runs.filter((r) => r.outcome === 'success' && similarOperation(operation, r.goal)) : []);
 
-/** Avoid patterns learned for this kind of operation (or for any operation). */
-const patternEntries = (operation: string, patterns: LearnedPattern[]): BlacklistEntry[] => patterns
+/**
+ * Avoid patterns learned for this kind of operation (or for any operation). A failed run's
+ * automatic pattern is left out while its failure reminder (`hasFailures`) already lists the steps.
+ */
+const patternEntries = (operation: string, patterns: LearnedPattern[], hasFailures: boolean): BlacklistEntry[] => patterns
   .filter((p) => p.kind === 'avoid' && (!p.context.trim() || similarOperation(operation, p.context)))
+  .filter((p) => !(hasFailures && p.pattern.endsWith(FAILURE_PATTERN_SUFFIX)))
   .map((p) => ({ source: 'pattern', text: p.pattern }));
 
 /** Avoid lessons of the habits for the operation's targets, or whose target the operation names. */
 function habitEntries(operation: string, targets: string[], habits: Habit[]): BlacklistEntry[] {
   const concerns = (h: Habit) => targets.some((t) => sameTarget(t, h.target)) || similarity(h.target, operation) >= SIMILAR_OPERATION;
-  return habits.filter(concerns).flatMap((h) => h.lessons.filter((l) => l.kind === 'avoid').map((l): BlacklistEntry => ({ source: 'habit', text: `${l.text} (on "${h.target}")` })));
+  return habits.filter(concerns).flatMap((h) => h.lessons.filter((l) => l.kind === 'avoid').map((l): BlacklistEntry => ({ source: 'habit', text: l.text, on: h.target })));
 }
 
 /** The failed steps of similar operations, as invalid operations. */
 const failureEntries = (failures: FailureRecord[]): BlacklistEntry[] => failures.flatMap((f) => (f.steps.length ? f.steps : [f.what]).map((s): BlacklistEntry => ({ source: 'failure', text: `${s} failed in "${f.operation}"` })));
 
+/** The lists taken in turn, one entry from each, so no source crowds the others out. */
+function interleave<T>(lists: T[][]): T[] {
+  const out: T[] = [];
+  for (let i = 0; lists.some((l) => i < l.length); i++) lists.forEach((l) => { if (i < l.length) out.push(l[i]); });
+  return out;
+}
+
 /**
  * The blacklist of `operation`: avoid patterns for its kind, avoid lessons of the habits for its
  * targets (given, plus those its similar failures failed on) and the failed steps of similar
- * operations; one entry per text (case-insensitive), at most BLACKLIST_LIMIT.
+ * operations, taken in turn from each source; one entry per text (case-insensitive), at most BLACKLIST_LIMIT.
  */
 export function blacklistFor(operation: string, targets: string[], src: MemorySources): BlacklistEntry[] {
   if (!operation.trim() && !targets.length) return [];
   const failures = similarFailures(operation, src.memory.failures);
   const allTargets = [...targets, ...failures.flatMap((f) => f.targets)];
   const seen = new Set<string>();
-  return [...failureEntries(failures), ...patternEntries(operation, src.patterns), ...habitEntries(operation, allTargets, src.habits)].filter((e) => {
+  return interleave([failureEntries(failures), patternEntries(operation, src.patterns, failures.length > 0), habitEntries(operation, allTargets, src.habits)]).filter((e) => {
     const key = norm(e.text);
     if (seen.has(key)) return false;
     seen.add(key);
@@ -154,7 +169,7 @@ export function blacklistFor(operation: string, targets: string[], src: MemorySo
 const SOURCE_LABEL: Record<BlacklistSource, string> = { pattern: 'learned avoid', habit: 'habit avoid', failure: 'failed operation' };
 
 /** A blacklist entry as one prompt line. */
-export const blacklistLine = (e: BlacklistEntry) => `- [${SOURCE_LABEL[e.source]}] ${e.text}`;
+export const blacklistLine = (e: BlacklistEntry) => `- [${SOURCE_LABEL[e.source]}] ${e.text}${e.on ? ` (on "${e.on}")` : ''}`;
 
 /** A failure reminder as one line. */
 export const failureLine = (f: FailureRecord) => `"${f.operation}" (${f.actor}, ${new Date(f.time).toISOString()}): ${f.what}`;
