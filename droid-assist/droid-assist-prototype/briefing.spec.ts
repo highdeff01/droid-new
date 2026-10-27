@@ -53,6 +53,7 @@ const proposal = (over: Partial<Proposal> = {}): Proposal => ({
 });
 
 const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], familiar: [], habits: [], patterns: [], failures: [], context: '', ...over });
+const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], familiar: [], habits: [], patterns: [], dossiers: [], memory: [], context: '', ...over });
 
 const mkBriefing = (over: Partial<Briefing> = {}): Briefing => ({
   id: 'b1',

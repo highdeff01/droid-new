@@ -3,11 +3,15 @@ import { AGREE_DISTANCE, conflictsOf, crossReference, type CrossCheck, type Know
 import type { MappedElement } from './element-map-studio.js';
 import type { FamiliarElement, Habit, LearnedPattern } from './types.js';
 import { newFailure } from './operation-memory.js';
+import { recordObservation, recordOutcome, setPreferred, type PositionDossier } from './position-dossier.js';
+import { buildMemory } from './enhanced-memory.js';
+import type { WatchTest } from './watcher.js';
 
 const target = 'Play button';
 const point = { x: 0.5, y: 0.5 };
 
 const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], familiar: [], habits: [], patterns: [], failures: [], context: 'Media App', ...over });
+const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], familiar: [], habits: [], patterns: [], dossiers: [], memory: [], context: 'Media App', ...over });
 
 const mapped = (over: Partial<MappedElement> = {}): MappedElement => ({ id: 'e1', name: 'Play icon', box: { x: 0, y: 0, w: 0.1, h: 0.1 }, mappedAt: 0, ...over });
 
@@ -113,6 +117,47 @@ describe('crossReference — failure reminders', () => {
 
   it('ignores failures on other targets', () => {
     expect(crossReference(target, point, knowledge({ failures: [failure(['Settings gear'])] })).filter((c) => c.source === 'failure')).toEqual([]);
+describe('crossReference — position dossiers', () => {
+  const seen = (x: number, y: number, time: number): PositionDossier[] => recordObservation([], { name: 'Play button', x, y, time, by: 'user' });
+
+  it('reports nothing for a static element with no best or preferred position', () => {
+    const checks = crossReference(target, point, knowledge({ dossiers: seen(0.9, 0.9, 1) }));
+    expect(checks.filter((c) => c.source === 'position')).toEqual([]);
+  });
+
+  it('marks a preferred position far from the plan conflicting and a near best position consistent', () => {
+    let list = seen(0.5, 0.5, 1);
+    list = recordOutcome(recordOutcome(list, 'Play button', { x: 0.51, y: 0.5 }, true, 2), 'Play button', { x: 0.51, y: 0.5 }, true, 3);
+    list = setPreferred(list, 'Play button', { x: 0.2, y: 0.2, by: 'user' });
+    const checks = crossReference(target, point, knowledge({ dossiers: list })).filter((c) => c.source === 'position');
+    expect(checks.map((c) => c.status)).toEqual(['conflicting', 'consistent']);
+    expect(checks[0].text).toContain('Preferred position of "Play button" (set by user)');
+    expect(checks[1].text).toContain('Best position of "Play button" (2/2 succeeded)');
+  });
+
+  it('checks the last-known position of an element that moved', () => {
+    const list = recordObservation(seen(0.5, 0.5, 1), { name: 'Play button', x: 0.8, y: 0.8, time: 5000, by: 'ai' });
+    const [check] = crossReference(target, point, knowledge({ dossiers: list })).filter((c) => c.source === 'position');
+    expect(check).toMatchObject({ status: 'conflicting' });
+    expect(check.text).toContain('Last-known position of "Play button" (moved-by-ai)');
+  });
+});
+
+describe('crossReference — enhanced memory', () => {
+  const test = (verdict: WatchTest['verdict']): WatchTest => ({ id: verdict, time: verdict === 'failed' ? 2 : 1, proposalId: 'p', tried: `press play button (${verdict})`, happened: 'video started', verdict, dryRun: false });
+
+  it('marks a failed agent test for the target conflicting and a passed one consistent', () => {
+    const memory = buildMemory({ cards: [], habits: [], patterns: [], runs: [], dossiers: [], tests: [test('failed'), test('passed')] });
+    const checks = crossReference(target, point, knowledge({ memory })).filter((c) => c.source === 'memory');
+    expect(checks.map((c) => c.status)).toEqual(['conflicting', 'consistent']);
+  });
+
+  it('does not repeat patterns already reported by the avoid check', () => {
+    const pattern: LearnedPattern = { id: 'l', kind: 'avoid', pattern: 'play button double click', context: '', time: 1 };
+    const memory = buildMemory({ cards: [], habits: [], patterns: [pattern], runs: [], dossiers: [], tests: [] });
+    const checks = crossReference(target, point, knowledge({ patterns: [pattern], memory }));
+    expect(checks.filter((c) => c.source === 'memory')).toEqual([]);
+    expect(checks.filter((c) => c.source === 'avoid')).toHaveLength(1);
   });
 });
 
