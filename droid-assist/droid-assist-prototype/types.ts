@@ -305,6 +305,8 @@ export interface AssistSettings {
   aiModel: string;
   /** Pixel size every screenshot is rendered at for the model (the sample space stays 480x270). */
   aiView: AiView;
+  /** Ask the model to think before answering; off by default because small models can spend the whole reply thinking. */
+  aiThink: boolean;
   /** After a replay, verify the goal on the live screen and keep planning/running until it is done. */
   autoContinue: boolean;
   /** Max auto-continue rounds (verify → re-plan → run) after the first run. */

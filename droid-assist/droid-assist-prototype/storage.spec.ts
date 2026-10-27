@@ -54,6 +54,17 @@ describe('settings', () => {
     expect(loadSettings(DEFAULT_SETTINGS).autoContinue).toBe(false);
   });
 
+  it('model thinking defaults off; a saved on round-trips and non-boolean values fall back', () => {
+    expect(DEFAULT_SETTINGS.aiThink).toBe(false);
+    expect(loadSettings(DEFAULT_SETTINGS).aiThink).toBe(false);
+    saveSettings({ ...DEFAULT_SETTINGS, aiThink: true });
+    expect(loadSettings(DEFAULT_SETTINGS).aiThink).toBe(true);
+    for (const raw of ['{"aiThink":"true"}', '{"aiThink":1}', '{}']) {
+      localStorage.setItem('droid-assist.settings', raw);
+      expect(loadSettings(DEFAULT_SETTINGS).aiThink).toBe(false);
+    }
+  });
+
   it('grid labels default off with a faint grid; the grid settings round-trip and invalid values fall back', () => {
     expect(DEFAULT_SETTINGS).toMatchObject({ gridLabels: false, gridOpacity: DEFAULT_GRID_OPACITY });
     expect(DEFAULT_GRID_OPACITY).toBeLessThan(0.28);

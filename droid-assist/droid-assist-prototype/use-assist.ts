@@ -309,6 +309,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   aiUrl: DEFAULT_AI_URL,
   aiModel: DEFAULT_AI_MODEL,
   aiView: DEFAULT_AI_VIEW,
+  aiThink: false,
   autoContinue: true,
   maxIterations: DEFAULT_MAX_ITERATIONS,
   stepRetries: DEFAULT_STEP_RETRIES,
@@ -934,6 +935,14 @@ export function useAssist() {
   // AI endpoint health: at startup and whenever the endpoint or model changes.
   useEffect(() => {
     void checkAi(settings.aiUrl, settings.aiModel);
+    let live = true;
+    setAiStatus({ state: 'checking', detail: `Connecting to ${settings.aiUrl}…` });
+    void pingAi({ url: settings.aiUrl, model: settings.aiModel, think: settings.aiThink }).then((status) => {
+      if (!live) return;
+      setAiStatus(status);
+      addLog('AI', status.detail, status.state === 'online' ? 'ok' : 'error');
+      if (status.state !== 'online') captureError({ kind: 'ai', message: status.detail });
+    });
     return () => {
       aiCheckSeqRef.current++;
     };
@@ -979,6 +988,7 @@ export function useAssist() {
     if (aiStatus.state === 'offline') notify({ source: 'AI', category: 'ai', severity: 'warning', title: `AI went offline — ${aiStatus.detail}` });
     else if (was === 'offline') notify({ source: 'AI', category: 'ai', severity: 'info', title: `AI back online — ${aiStatus.detail}` });
   }, [aiStatus, notify]);
+  }, [settings.aiUrl, settings.aiModel, settings.aiThink, addLog, captureError]);
 
   /** Whether a loop-control stage is checked; read live so a toggle applies mid-run. */
   const stageOn = (id: StageId) => settingsRef.current.stages[id];
@@ -1038,6 +1048,8 @@ export function useAssist() {
       const reply = await aiQueueRef.current.run(stage, (timeoutMs) => {
         const { aiUrl, aiModel, aiView } = settingsRef.current;
         return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs }, { ...req, context, memory, signal });
+        const { aiUrl, aiModel, aiView, aiThink } = settingsRef.current;
+        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs, think: aiThink }, { ...req, context, signal });
       }, signal);
       const reply = settingsRef.current.aiOverlap
         ? await firstValid([
