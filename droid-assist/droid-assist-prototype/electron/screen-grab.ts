@@ -1,5 +1,5 @@
 import { desktopCapturer, screen } from 'electron';
-import { SAMPLE_H, SAMPLE_W, THUMB_H, THUMB_W, VIEW_H, VIEW_W, type DisplayInfo, type NativeFrame } from './capture-api.js';
+import { SAMPLE_H, SAMPLE_W, THUMB_H, THUMB_W, VIEW_H, VIEW_W, type DisplayGrab, type DisplayInfo, type NativeFrame } from './capture-api.js';
 import { bgraToRgba } from './capture-loop.js';
 import { displayLabel, physicalOrigin, physicalSize, pickDisplay, pickSource } from './display-select.js';
 
@@ -42,4 +42,20 @@ export async function grabScreen(selectedId: string | null): Promise<NativeFrame
     originX: origin.x,
     originY: origin.y,
   };
+}
+
+/**
+ * A full-resolution screenshot of display `id` (the primary when unknown or unplugged), for
+ * snipping any region of any monitor. Throws when no screen source or an empty image comes back.
+ */
+export async function grabDisplay(id: string | null): Promise<DisplayGrab> {
+  const displays = screen.getAllDisplays();
+  const display = pickDisplay(displays, screen.getPrimaryDisplay(), id);
+  const size = physicalSize(display);
+  const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: size });
+  const source = pickSource(sources, displays, display);
+  if (!source) throw new Error('No screen source available to snip');
+  if (source.thumbnail.isEmpty()) throw new Error(`Screen "${source.name}" returned an empty image`);
+  const origin = physicalOrigin(display);
+  return { url: `data:image/jpeg;base64,${source.thumbnail.toJPEG(90).toString('base64')}`, srcW: size.width, srcH: size.height, originX: origin.x, originY: origin.y };
 }

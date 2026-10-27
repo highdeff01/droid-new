@@ -4,6 +4,7 @@ import type { Measurement } from './ruler.js';
 import { classifyGesture, type StagePoint } from './gesture.js';
 import { drawGrid } from './grid-overlay.js';
 import { MAP_COLS, MAP_ROWS, dragBox } from './element-map-studio.js';
+import type { Box } from './assist-ai.js';
 import styles from './droid-assist.module.css';
 
 const RULER = '#f97316';
@@ -88,7 +89,7 @@ function drawHighlight(ctx: CanvasRenderingContext2D, x: number, y: number, labe
  * step markers (recorded vs drift-corrected), AI annotations and the AI cursor.
  */
 export function Stage({ engine }: { engine: AssistEngine }) {
-  const { source, demoCanvasRef, frames, captureLost, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex, ruler, highlight, mapMode, elementMap, mapDraft } = engine;
+  const { source, demoCanvasRef, frames, captureLost, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex, ruler, highlight, mapMode, elementMap, mapDraft, snipMode } = engine;
   const galleryFrame = ruler.on && ruler.frameId !== null ? ruler.frame : null;
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -97,6 +98,12 @@ export function Stage({ engine }: { engine: AssistEngine }) {
   const pressRef = useRef<StagePoint | null>(null);
   /** In Element-map mode: the corner where the boundary drag started. */
   const dragRef = useRef<{ x: number; y: number } | null>(null);
+  /** In Snip mode: the region being dragged. */
+  const [snipDraft, setSnipDraft] = useState<Box | null>(null);
+  /** Map and Snip modes both draw a box by dragging. */
+  const boxMode = mapMode || snipMode;
+  /** Shows the dragged box: the element-map draft, or the snip region. */
+  const draftBox = (b: Box | null) => (snipMode ? setSnipDraft(b) : engine.setMapDraft(b));
 
   useEffect(() => {
     const c = overlayRef.current;
@@ -111,6 +118,11 @@ export function Stage({ engine }: { engine: AssistEngine }) {
       drawMapGrid(ctx, w, h);
       elementMap.forEach((el) => drawMapBox(ctx, el.box, el.name, w, h));
       if (mapDraft) drawMapBox(ctx, mapDraft, 'new element', w, h, true);
+      return;
+    }
+
+    if (snipMode) {
+      if (snipDraft) drawMapBox(ctx, snipDraft, 'snip', w, h, true);
       return;
     }
 
@@ -228,14 +240,14 @@ export function Stage({ engine }: { engine: AssistEngine }) {
         onMouseDown={(e) => {
           e.currentTarget.focus();
           pressRef.current = norm(e);
-          if (!mapMode) return;
+          if (!boxMode) return;
           dragRef.current = norm(e);
-          engine.setMapDraft(null);
+          draftBox(null);
         }}
         onMouseMove={(e) => {
           const p = norm(e);
-          if (mapMode) {
-            if (dragRef.current) engine.setMapDraft(dragBox(dragRef.current, p));
+          if (boxMode) {
+            if (dragRef.current) draftBox(dragBox(dragRef.current, p));
             return;
           }
           engine.onStageMove(p.x, p.y);
@@ -243,6 +255,13 @@ export function Stage({ engine }: { engine: AssistEngine }) {
         onMouseUp={(e) => {
           const down = pressRef.current;
           pressRef.current = null;
+          if (snipMode) {
+            const box = dragRef.current && dragBox(dragRef.current, norm(e));
+            dragRef.current = null;
+            setSnipDraft(null);
+            void engine.userSnip(box);
+            return;
+          }
           if (mapMode) {
             if (dragRef.current) engine.setMapDraft(dragBox(dragRef.current, norm(e)));
             dragRef.current = null;
@@ -263,6 +282,7 @@ export function Stage({ engine }: { engine: AssistEngine }) {
         {recording && <span className={styles.recBadge}>● LIVE RECORDING</span>}
         {replaying && <span className={styles.replayBadge}>▶ REPLAYING</span>}
         {mapMode && <span className={styles.recBadge}>▦ ELEMENT MAP — drag to draw a boundary</span>}
+        {snipMode && <span className={styles.recBadge}>✂ SNIP — drag a region to save it to the gallery</span>}
       </div>
       {recording && (
         <form
