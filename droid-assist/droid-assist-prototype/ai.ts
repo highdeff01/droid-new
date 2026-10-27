@@ -11,7 +11,14 @@ export interface AiConfig {
   model: string;
   /** Size each screenshot is rendered at for the model; absent means SAMPLE_VIEW. */
   view?: ViewSize;
+  /** Per-request timeout in ms; absent means DEFAULT_AI_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
+
+/** Default per-request AI timeout, and the Settings range it is validated against. */
+export const DEFAULT_AI_TIMEOUT_MS = 90_000;
+export const AI_TIMEOUT_MS_MIN = 10_000;
+export const AI_TIMEOUT_MS_MAX = 300_000;
 
 /** Live reachability of the model endpoint. */
 export interface AiStatus {
@@ -162,7 +169,7 @@ async function fetchReply(cfg: AiConfig, messages: ChatMessage[], json: boolean,
  * @param json ask the server for a JSON-formatted reply
  * @param cancel aborts the request (alongside the per-request timeout)
  */
-export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = 90_000, cancel?: AbortSignal): Promise<AiReply> {
+export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = DEFAULT_AI_TIMEOUT_MS, cancel?: AbortSignal): Promise<AiReply> {
   const first = await post(cfg, messages, json, timeoutMs, cancel);
   if (first.content) return first;
   if (!first.thinking) throw new AiError('AI endpoint returned no message content and no thinking');

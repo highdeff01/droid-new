@@ -1,4 +1,4 @@
-import { AiCancelled } from './ai.js';
+import { AiCancelled, DEFAULT_AI_TIMEOUT_MS } from './ai.js';
 import { stageOf, type StageId } from './loop-control.js';
 
 /**
@@ -43,12 +43,14 @@ export const drainedText = (stage: StageId) => `${stageOf(stage).name} was disab
 
 /**
  * A priority queue in front of the model endpoint. `run` starts `task` once a slot is free and
- * settles with it; a call whose `signal` aborts while it waits is dropped (rejects AiCancelled,
- * `task` never runs). `drain(stage)` drops every waiting call of that stage. `onChange` fires on
- * every change of the stats.
+ * settles with it; `task` gets the per-call timeout current at that moment (`timeoutMs`, changed
+ * by `setTimeoutMs`), so time spent waiting never counts against it. A call whose `signal` aborts
+ * while it waits is dropped (rejects AiCancelled, `task` never runs). `drain(stage)` drops every
+ * waiting call of that stage. `onChange` fires on every change of the stats.
  */
-export function createAiQueue(maxInFlight: number, onChange: (stats: AiQueueStats) => void = () => undefined) {
+export function createAiQueue(maxInFlight: number, onChange: (stats: AiQueueStats) => void = () => undefined, timeoutMs = DEFAULT_AI_TIMEOUT_MS) {
   let limit = maxInFlight;
+  let timeout = timeoutMs;
   let inFlight = 0;
   let seq = 0;
   let waiting: Waiting[] = [];
@@ -80,7 +82,7 @@ export function createAiQueue(maxInFlight: number, onChange: (stats: AiQueueStat
     return dropped.length;
   };
 
-  const run = <T>(stage: StageId, task: () => Promise<T>, signal?: AbortSignal): Promise<T> => {
+  const run = <T>(stage: StageId, task: (timeoutMs: number) => Promise<T>, signal?: AbortSignal): Promise<T> => {
     if (signal?.aborted) return Promise.reject(new AiCancelled('AI request cancelled while queued'));
     return new Promise<T>((resolve, reject) => {
       const onAbort = () => remove((w) => w === entry, () => new AiCancelled('AI request cancelled while queued'));
@@ -90,7 +92,7 @@ export function createAiQueue(maxInFlight: number, onChange: (stats: AiQueueStat
         seq: seq++,
         start: () => {
           signal?.removeEventListener('abort', onAbort);
-          task().then(resolve, reject).finally(() => {
+          task(timeout).then(resolve, reject).finally(() => {
             inFlight--;
             changed();
             pump();
@@ -116,6 +118,10 @@ export function createAiQueue(maxInFlight: number, onChange: (stats: AiQueueStat
     setLimit: (n: number) => {
       limit = n;
       pump();
+    },
+    /** Changes the per-call timeout handed to calls dispatched from now on. */
+    setTimeoutMs: (ms: number) => {
+      timeout = ms;
     },
     stats,
   };
