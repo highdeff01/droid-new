@@ -34,12 +34,12 @@ export function AgentBusPanel({ engine }: { engine: AssistEngine }) {
 
 /** The latest link/route test: one row per subagent with pass/fail, screenshots and thinking. */
 export function SubagentReportPanel({ engine }: { engine: AssistEngine }) {
-  const { subReport, subRunning, stop } = engine;
+  const { subReport, subRunning } = engine;
   const counts = subReport ? tally(subReport.results) : null;
   return (
     <section className={styles.panel} aria-label="Subagent report">
       <h3>Link / route tests {counts && <small>{counts.pass} pass · {counts.fail} fail · {counts.aborted} aborted · {counts.skipped} skipped</small>}</h3>
-      {subRunning && <button type="button" onClick={stop}>Stop subagents</button>}
+      {subRunning && <button type="button" onClick={() => void engine.invoke('replay.stop')}>Stop subagents</button>}
       {!subReport && <p className={styles.muted}>Try "/test links Files, Notes" or "/test route Cart &gt; Checkout &gt; Pay".</p>}
       {subReport && <p className={styles.muted}>{subReport.goal}{subReport.finished ? '' : ' — running…'}</p>}
       <ul className={styles.log}>
