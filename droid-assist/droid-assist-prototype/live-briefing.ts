@@ -49,7 +49,7 @@ const SECTION_OF_SOURCE: Record<string, NoteSection> = {
   'Verify real input': 'execution', '/move': 'execution', History: 'execution', Triggers: 'execution',
   'Screen watcher': 'agents', Supervisor: 'agents', 'Popup watcher': 'agents', 'Drift monitor': 'agents', 'Progress tracker': 'agents', 'Element identifier': 'agents',
   'Coordinate learner': 'agents', 'Agent bus': 'agents', 'Screen-change responder': 'agents', Habits: 'agents', Screen: 'agents',
-  You: 'user', 'Dashboard': 'user',
+  You: 'user', Dashboard: 'user', Knowledge: 'user',
 };
 
 /** The section a log source belongs to. */
