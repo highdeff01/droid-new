@@ -53,6 +53,8 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
+import { findWorldElement, initialWorld, onWorldToggle, worldClick, worldContext, worldDoubleClick, worldDrag, worldKey, worldTick, worldType, type World, type WorldResult } from './test-world.js';
+import { findScenario, progressLines, scenarioComplete } from './test-world-scenarios.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -112,6 +114,11 @@ type Performed = StepOutcome & { halt?: boolean; grabbed?: string; moved?: Moved
 type AutoLoop = { goal: string; stalls: number; iteration: number };
 
 const refused = (step: WorkflowStep, message: string): Performed => ({ ok: false, executed: false, halt: true, message, target: { x: step.x, y: step.y } });
+
+/** What one simulated input did on the demo: its log message and whether it hit something. */
+type DemoOutcome = { message: string; ok: boolean };
+/** A Desktop-scene message as an outcome: a blocked target or a miss is not ok. */
+const desktopOutcome = (message: string): DemoOutcome => ({ message, ok: !/blocked|nothing/.test(message) });
 
 const at = (x: number, y: number) => `(${(x * 100).toFixed(1)}%, ${(y * 100).toFixed(1)}%)`;
 /** Timeline text of a popup decision. */
@@ -286,6 +293,9 @@ export function useAssist() {
   const demoFileRef = useRef<DemoFile>(initialDemoFile());
   /** The demo desktop's rearrangeable sidebar icons. */
   const demoIconsRef = useRef<DemoIcon[]>(initialDemoIcons());
+  /** The test world's state, and whether it (rather than the Desktop) is the shown demo scene. */
+  const worldRef = useRef<World>(initialWorld());
+  const worldOnRef = useRef(false);
   /** The arrangement the current plan asks for (from the planner's "expect"). */
   const expectRef = useRef<Expectation[]>([]);
   const dismissedCycleRef = useRef(-1);
@@ -895,7 +905,7 @@ export function useAssist() {
   }, []);
 
   /** Applies a click to the demo desktop (dismiss the ad, press Play). */
-  const demoClick = useCallback((x: number, y: number): string => {
+  const desktopClick = useCallback((x: number, y: number): string => {
     const t = tickRef.current;
     const ad = demoAd(t);
     if (ad.visible && !adDismissed()) {
@@ -913,8 +923,60 @@ export function useAssist() {
     return 'Click hit nothing interactive';
   }, []);
 
+  /** The test world while it is the shown scene; null on the Desktop scene. */
+  const activeWorld = (): World | null => (worldOnRef.current ? worldRef.current : null);
+
+  /** The shown test world as planning-context lines; none on the Desktop scene. */
+  const worldLines = () => {
+    const world = activeWorld();
+    return world ? worldContext(world) : [];
+  };
+
+  /** Applies a world event: keeps its next state and returns its message and verdict. */
+  const applyWorld = (r: WorldResult): DemoOutcome => {
+    worldRef.current = r.world;
+    return { message: r.message, ok: r.ok };
+  };
+
+  /**
+   * A click or double-click on the demo: the taskbar World/Desktop button switches scenes; in the test
+   * world it goes to the world (a double-click opens boxes, icons and the chest); on the Desktop it dismisses the ad or presses Play.
+   */
+  const demoClick = useCallback((x: number, y: number, double = false): DemoOutcome => {
+    const p = { x, y };
+    if (onWorldToggle(p)) {
+      worldOnRef.current = !worldOnRef.current;
+      return { message: worldOnRef.current ? 'Switched to the test World' : 'Switched to the Desktop', ok: true };
+    }
+    const world = activeWorld();
+    if (world) return applyWorld(double ? worldDoubleClick(world, p) : worldClick(world, p));
+    return desktopOutcome(desktopClick(x, y));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desktopClick]);
+
+  /** Typing on the demo: into the test world's focused window; the Desktop has nowhere to type. */
+  const demoType = (text: string): DemoOutcome => {
+    const world = activeWorld();
+    return world ? applyWorld(worldType(world, text)) : { message: 'type simulated on the demo desktop', ok: true };
+  };
+
+  /** A key press on the demo: to the test world's focused window; the Desktop ignores it. */
+  const demoKey = (key: string): DemoOutcome => {
+    const world = activeWorld();
+    return world ? applyWorld(worldKey(world, key)) : { message: 'key simulated on the demo desktop', ok: true };
+  };
+
+  /** A stage key press on the demo: a printable character types it, any other key is pressed. */
+  const demoTextKey = (key: string): DemoOutcome => (key.length === 1 ? demoType(key) : demoKey(key));
+
   /** Applies a drag to the demo desktop: grabbing a sidebar icon moves it; grabbing the Report file moves (or archives) it. Names what it grabbed. */
   const applyDemoDrag = useCallback((from: { x: number; y: number }, to: { x: number; y: number }): { message: string; grabbed: string | null } => {
+    const world = activeWorld();
+    if (world) {
+      const r = worldDrag(world, from, to);
+      worldRef.current = r.world;
+      return { message: r.message, grabbed: r.ok ? r.grabbed ?? null : null };
+    }
     const icon = moveIcon(demoIconsRef.current, from, to);
     if (icon.moved) {
       demoIconsRef.current = icon.icons;
@@ -923,24 +985,36 @@ export function useAssist() {
     const r = demoDrag(demoFileRef.current, from, to);
     demoFileRef.current = r.file;
     return { message: r.message, grabbed: r.moved ? 'Report' : null };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** Draws the shown demo scene (Desktop or test World) onto `ctx`. */
+  const drawDemo = (ctx: CanvasRenderingContext2D) => drawDemoDesktop(ctx, DEMO_W, DEMO_H, tickRef.current, adDismissed(), demoFileRef.current, demoIconsRef.current, activeWorld());
 
   /** A fresh frame of the demo desktop as it is right now; null when there is no canvas to draw on. */
   const demoSnapshot = (): Frame | null => {
     const c = demoCanvasRef.current;
     const ctx = c?.getContext('2d');
     if (!c || !ctx) return null;
-    drawDemoDesktop(ctx, DEMO_W, DEMO_H, tickRef.current, adDismissed(), demoFileRef.current, demoIconsRef.current);
+    drawDemo(ctx);
     return toFrame(c, DEMO_W, DEMO_H, ++frameId.current, 'demo');
   };
 
-  /** The simulated effect of a pointer step on the demo desktop at `p`. */
-  const demoEffect = (step: WorkflowStep, p: { x: number; y: number }): string => {
-    if (step.action === 'click' || step.action === 'double_click') return demoClick(p.x, p.y);
-    if (step.action === 'move') return `Moved the cursor to (${pct(p.x)}, ${pct(p.y)})`;
-    if (step.action === 'drag') return applyDemoDrag(p, { x: step.endX ?? p.x, y: step.endY ?? p.y }).message;
-    return `${step.action} simulated on the demo desktop`;
+  /** Each demo step action's simulated effect at `p`; an action without one is reported as simulated. */
+  const DEMO_EFFECTS: Partial<Record<StepAction, (step: WorkflowStep, p: { x: number; y: number }) => DemoOutcome>> = {
+    click: (_, p) => demoClick(p.x, p.y),
+    double_click: (_, p) => demoClick(p.x, p.y, true),
+    move: (_, p) => ({ message: `Moved the cursor to (${pct(p.x)}, ${pct(p.y)})`, ok: true }),
+    drag: (step, p) => {
+      const r = applyDemoDrag(p, { x: step.endX ?? p.x, y: step.endY ?? p.y });
+      return { message: r.message, ok: !!r.grabbed };
+    },
+    type: (step) => demoType(step.text ?? ''),
+    key: (step) => demoKey(step.text ?? ''),
   };
+
+  /** The simulated effect of a step on the demo desktop at `p`. */
+  const demoEffect = (step: WorkflowStep, p: { x: number; y: number }): DemoOutcome => DEMO_EFFECTS[step.action]?.(step, p) ?? { message: `${step.action} simulated on the demo desktop`, ok: true };
 
   /** A drag on the demo desktop, with the frames around it and the element it grabbed. */
   const demoDragStep = (step: WorkflowStep, p: { x: number; y: number }, live: Frame | undefined): Performed => {
@@ -972,8 +1046,7 @@ export function useAssist() {
     }
     if (dryRun) return { ok: true, executed: false, message: `verified on the demo screen — ${DRY_RUN}`, target: p, ...(step.action === 'drag' ? { end: { x: step.endX!, y: step.endY! } } : {}) };
     if (step.action === 'drag') return demoDragStep(step, p, live);
-    const message = demoEffect(step, p);
-    const ok = !/blocked|nothing/.test(message);
+    const { message, ok } = demoEffect(step, p);
     if (ok && live && POINTER_ACTIONS.has(step.action)) strengthen(live, step, p);
     return { ok, executed: ok, message, target: p };
   };
@@ -1314,9 +1387,12 @@ export function useAssist() {
    */
   const mapAt = (name: string, since = 0): { x: number; y: number } | null => {
     if (sourceRef.current === 'demo') {
-      const icon = findIcon(demoIconsRef.current, name);
+      const world = activeWorld();
+      const el = world ? findWorldElement(world, name) : null;
+      if (el) return { x: el.x, y: el.y };
+      const icon = world ? null : findIcon(demoIconsRef.current, name);
       if (icon) return { x: icon.x, y: icon.y };
-      if (/\breport\b/i.test(name)) return demoFileAt(demoFileRef.current);
+      if (!world && /\breport\b/i.test(name)) return demoFileAt(demoFileRef.current);
     }
     const el = familiarRef.current.find((f) => sameElement(f.name, name) && (f.lastSeen ?? 0) >= since);
     return el ? { x: el.x, y: el.y } : null;
@@ -1956,8 +2032,9 @@ export function useAssist() {
     if (source !== 'demo') return undefined;
     const id = setInterval(() => {
       tickRef.current += 1;
+      if (worldOnRef.current) worldRef.current = worldTick(worldRef.current);
       const c = demoCanvasRef.current;
-      if (c) drawDemoDesktop(c.getContext('2d')!, DEMO_W, DEMO_H, tickRef.current, adDismissed(), demoFileRef.current, demoIconsRef.current);
+      if (c) drawDemo(c.getContext('2d')!);
     }, 400);
     return () => clearInterval(id);
   }, [source]);
@@ -2036,12 +2113,22 @@ export function useAssist() {
       addLog('Recorder', `Captured ${hover ? 'mouse move' : 'click'} at (${pct(x)}, ${pct(y)}) with screenshot`, 'info');
       return;
     }
-    if (sourceRef.current === 'demo' && !hover) addLog('You', demoClick(x, y));
+    if (sourceRef.current === 'demo' && !hover) addLog('You', demoClick(x, y).message);
   };
 
-  /** Recorded key press (with modifiers) on the focused stage: becomes a key step. The abort hotkey is never recorded. */
+  /** Stage double-click on the demo (not while recording or measuring): opens boxes, icons and the chest in the test world. */
+  const onStageDoubleClick = (x: number, y: number) => {
+    if (ruler.on || recordingRef.current || sourceRef.current !== 'demo') return;
+    addLog('You', demoClick(x, y, true).message);
+  };
+
+  /** Recorded key press (with modifiers) on the focused stage: becomes a key step; outside recording it goes to the demo's focused window. The abort hotkey is never recorded. */
   const onStageKey = useCallback((e: HotkeyEvent) => {
-    if (!recordingRef.current || matchesHotkey(e, settingsRef.current.abortHotkey)) return;
+    if (matchesHotkey(e, settingsRef.current.abortHotkey)) return;
+    if (!recordingRef.current) {
+      if (sourceRef.current === 'demo' && worldOnRef.current) addLog('You', demoTextKey(e.key).message);
+      return;
+    }
     const combo = keyCombo(e);
     if (!combo) return;
     appendRecorded(keyStep(uid('step'), combo));
@@ -2348,7 +2435,7 @@ export function useAssist() {
     planningRef.current = true;
     await withAi(async () => {
       try {
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...worldLines(), ...applied.map(habitLine)], patternsRef.current), planSummary);
         if (planGuardRef.current.after(plan.steps) === 'duplicate') {
           addLog('Planner', `Re-plan guard: the plan for "${text.trim()}" is identical to the previous one — kept the current steps and will not ask the model again until the screen or a step changes`, 'warn');
           return;
@@ -2635,8 +2722,26 @@ export function useAssist() {
     }
   };
 
+  /** "/scenario <dragon|wedding>": resets and shows the test world, logs the checklist and plans the persona goal. */
+  const scenarioCommand = async (name: string) => {
+    const scenario = findScenario(name);
+    if (!scenario) {
+      addLog('/scenario', `Unknown scenario "${name}" — try dragon or wedding`, 'warn');
+      return;
+    }
+    if (sourceRef.current !== 'demo') {
+      addLog('/scenario', 'Scenarios run on the demo desktop — switch to the demo first', 'warn');
+      return;
+    }
+    worldRef.current = initialWorld();
+    worldOnRef.current = true;
+    addLog('/scenario', `${scenario.title}: ${progressLines(scenario, worldRef.current).join(' · ')}`, 'info');
+    await autoPlan(scenario.goal);
+    addLog('/scenario', `${scenario.title} checklist: ${progressLines(scenario, worldRef.current).join(' · ')}`, scenarioComplete(scenario, worldRef.current) ? 'ok' : 'warn');
+  };
+
   /** Each slash command's runner. */
-  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange };
+  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'scenario', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, scenario: scenarioCommand };
 
   /** Submits the assist input: /use, /move, /measure and /arrange run, anything else is planned as a goal. */
   const submitInput = async () => {
@@ -2952,7 +3057,7 @@ export function useAssist() {
     aiHistory, trimAiHistory, resetAiSession,
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
-    onStageMove, onStageClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
+    onStageMove, onStageClick, onStageDoubleClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
     bridgeOnline, verifyRealInput,
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */

@@ -72,6 +72,8 @@ type Rect = Point & { hw: number; hh: number };
 
 /** The taskbar button that switches between the Desktop and the test World (both scenes draw it). */
 export const WORLD_TOGGLE: Rect = { x: 0.06, y: 0.965, hw: 0.045, hh: 0.03 };
+/** Whether `p` is on the taskbar World/Desktop button. */
+export const onWorldToggle = (p: Point) => Math.abs(p.x - WORLD_TOGGLE.x) <= WORLD_TOGGLE.hw && Math.abs(p.y - WORLD_TOGGLE.y) <= WORLD_TOGGLE.hh;
 /** The treasure chest. */
 export const CHEST: Rect = { x: 0.86, y: 0.5, hw: 0.05, hh: 0.06 };
 /** Where an item is dropped to discard it. */
@@ -345,7 +347,7 @@ export const worldTick = (w: World): World => ({ ...w, characters: w.characters.
 
 /** Every element of the world on screen, for the element map: characters and their slots, items, boxes, chest, Trash, Bag, icons, windows. */
 export function worldElements(w: World): WorldElement[] {
-  const slots = w.characters.flatMap((c) => [{ name: c.name, ...c, ...CHARACTER_SIZE }, ...(['hand', 'head', 'eyes'] as const).map((s) => ({ name: `${c.name} ${s}`, ...slotZone(c, s) }))]);
+  const slots = w.characters.flatMap((c) => [{ ...c, ...CHARACTER_SIZE }, ...(['hand', 'head', 'eyes'] as const).map((s) => ({ name: `${c.name} ${s}`, ...slotZone(c, s) }))]);
   const items = w.items.flatMap((i) => {
     const at = itemPoint(w, i);
     return at ? [{ name: i.spec.name, x: at.x, y: at.y, ...ITEM_SIZE }] : [];
