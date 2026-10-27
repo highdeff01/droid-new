@@ -35,12 +35,12 @@ export function InsecureBridgeWarning({ bridgeUrl }: { bridgeUrl: string }) {
 
 /** Monitor HUD: mode picker, capture interval, screenshot count, source and /use target. */
 export function MonitorStatus({ engine }: { engine: AssistEngine }) {
-  const { settings, setSettings, intervalMs, shotCount, source, target, aiQueue } = engine;
+  const { settings, intervalMs, shotCount, source, target, aiQueue } = engine;
   return (
     <div className={styles.hud2} aria-label="Monitor status">
       <label>Monitor
-        <select value={settings.monitorMode} onChange={(e) => setSettings({ ...settings, monitorMode: e.target.value as MonitorMode })} aria-label="Monitor mode">
-          {(Object.keys(MONITOR_MODES) as MonitorMode[]).map((m) => <option key={m} value={m}>{MONITOR_MODES[m].label}</option>)}
+        <select value={settings.monitorMode} onChange={(e) => void engine.invoke('setting.monitorMode', { value: e.target.value })} aria-label="Monitor mode">
+          {Object.keys(MONITOR_MODES).map((m) => <option key={m} value={m}>{MONITOR_MODES[m as MonitorMode].label}</option>)}
         </select>
       </label>
       <DisplayPicker engine={engine} compact />
@@ -68,7 +68,7 @@ export function SyncStatus({ level, detail }: { level: SyncLevel; detail: string
 export function AiStopButton({ engine }: { engine: AssistEngine }) {
   if (!engine.aiWorking && !engine.continuing) return null;
   return (
-    <button type="button" className={styles.danger} onClick={engine.stopAi} title="Cancel the in-flight AI call and stop auto-continue (latches ABORTED)">
+    <button type="button" className={styles.danger} onClick={() => void engine.invoke('guard.abort', { reason: 'AI stop button' })} title="Cancel the in-flight AI call and stop auto-continue (latches ABORTED)">
       ■ Stop AI{engine.continuing ? ' (auto-continue)' : ''}
     </button>
   );
@@ -106,7 +106,7 @@ export function ReverseControl({ engine }: { engine: AssistEngine }) {
     return <span className={styles.syncDetail} aria-label="Reverse last action" title={reversal.reason}>↶ Last {what}: cannot reverse — {reversal.reason}</span>;
   }
   return (
-    <button type="button" aria-label="Reverse last action" onClick={() => void engine.reverseLast()} disabled={reversing} title={reversal.summary}>
+    <button type="button" aria-label="Reverse last action" onClick={() => void engine.invoke('reverse.last')} disabled={reversing} title={reversal.summary}>
       ↶ Reverse {what}{armed ? '' : ' (dry run)'}
     </button>
   );
@@ -118,16 +118,16 @@ export function SafetyControls({ engine }: { engine: AssistEngine }) {
   return (
     <div className={styles.safety} data-armed={armed} data-aborted={aborted} aria-live="assertive">
       <RealInputIndicator engine={engine} />
-      <button type="button" className={armed ? styles.danger : ''} onClick={engine.toggleArmed} aria-pressed={armed} title="Real input is only sent to the PC while armed; disarmed runs are dry runs">
+      <button type="button" className={armed ? styles.danger : ''} onClick={() => void engine.invoke('guard.arm', { on: !armed })} aria-pressed={armed} title="Real input is only sent to the PC while armed; disarmed runs are dry runs">
         {armed ? '🔴 Real input ARMED — click to disarm' : '🟢 Dry run (disarmed) — click to arm real input'}
       </button>
       {aborted ? (
         <>
           <strong className={styles.aborted}>⛔ ABORTED</strong>
-          <button type="button" onClick={engine.clearAbort}>Clear abort</button>
+          <button type="button" onClick={() => void engine.invoke('guard.clearAbort')}>Clear abort</button>
         </>
       ) : (
-        <button type="button" className={styles.danger} onClick={() => engine.triggerAbort('stop button')} title={`Emergency stop (${settings.abortHotkey})`}>
+        <button type="button" className={styles.danger} onClick={() => void engine.invoke('guard.abort', { reason: 'stop button' })} title={`Emergency stop (${settings.abortHotkey})`}>
           ⛔ Emergency stop <small>{settings.abortHotkey}</small>
         </button>
       )}
@@ -154,20 +154,20 @@ export function Hud({ engine }: { engine: AssistEngine }) {
               <button type="button" onClick={engine.useDemo}>Use demo desktop</button>
             </>
           )}
-          <button type="button" className={recording ? styles.danger : ''} onClick={engine.toggleRecording} disabled={replaying}>
+          <button type="button" className={recording ? styles.danger : ''} onClick={() => void engine.invoke('record.toggle')} disabled={replaying}>
             {recording ? '■ Stop recording' : '● Record'}
           </button>
           {replaying ? (
-            <button type="button" className={styles.danger} onClick={engine.stop}>■ Stop</button>
+            <button type="button" className={styles.danger} onClick={() => void engine.invoke('replay.stop')}>■ Stop</button>
           ) : (
             <>
-              <button type="button" className={styles.primary} onClick={() => engine.replay(false)} disabled={recording || !total} title="Performs every step as real input on the PC through the desktop bridge">▶ Replay + drift</button>
-              <button type="button" onClick={() => engine.replay(true)} disabled={recording || !total} title="Verifies each step on the live desktop; sends no input">🧪 AI self-test (no input)</button>
+              <button type="button" className={styles.primary} onClick={() => void engine.invoke('replay.run', { selfTest: false })} disabled={recording || !total} title="Performs every step as real input on the PC through the desktop bridge">▶ Replay + drift</button>
+              <button type="button" onClick={() => void engine.invoke('replay.run', { selfTest: true })} disabled={recording || !total} title="Verifies each step on the live desktop; sends no input">🧪 AI self-test (no input)</button>
             </>
           )}
-          <button type="button" onClick={() => void engine.explainScreen()} disabled={aiOff || aiBusy} title={aiTitle}>👁 Point out</button>
-          <button type="button" className={engine.ruler.on ? styles.primary : ''} onClick={engine.ruler.toggle} aria-pressed={engine.ruler.on} title="Ruler mode: click points on the screen to measure distances">📏 Ruler{engine.ruler.on ? ' (on)' : ''}</button>
-          <button type="button" onClick={() => engine.ruler.recalibrateNow('manual')} title="Re-measure the baseline references on the live frame and rescale stored coordinates on drift">⟲ Recalibrate</button>
+          <button type="button" onClick={() => void engine.invoke('research.ask')} disabled={aiOff || aiBusy} title={aiTitle}>👁 Point out</button>
+          <button type="button" className={engine.ruler.on ? styles.primary : ''} onClick={() => void engine.invoke('ruler.toggle')} aria-pressed={engine.ruler.on} title="Ruler mode: click points on the screen to measure distances">📏 Ruler{engine.ruler.on ? ' (on)' : ''}</button>
+          <button type="button" onClick={() => void engine.invoke('ruler.recalibrate')} title="Re-measure the baseline references on the live frame and rescale stored coordinates on drift">⟲ Recalibrate</button>
         </div>
         <form
           className={styles.goal}
@@ -188,10 +188,10 @@ export function Hud({ engine }: { engine: AssistEngine }) {
         <ReverseControl engine={engine} />
         <AiStatusBadge status={aiStatus} />
         <SyncStatus level={engine.sync.level} detail={engine.sync.detail} />
-        <label><input type="checkbox" checked={settings.autoAct} onChange={(e) => setSettings({ ...settings, autoAct: e.target.checked })} disabled={aiOff} /> Auto act{aiOff && ' (AI unavailable)'}</label>
+        <label><input type="checkbox" checked={settings.autoAct} onChange={(e) => void engine.invoke('autoact.set', { on: e.target.checked })} disabled={aiOff} /> Auto act{aiOff && ' (AI unavailable)'}</label>
         <label><input type="checkbox" checked={settings.aiHelp} onChange={(e) => setSettings({ ...settings, aiHelp: e.target.checked })} disabled={aiOff} /> AI help{aiOff && ' (AI unavailable)'}</label>
         <label title="After a replay, verify the goal on the live screen and keep planning and running until it is done"><input type="checkbox" checked={settings.autoContinue} onChange={(e) => setSettings({ ...settings, autoContinue: e.target.checked })} disabled={aiOff} /> Auto-continue{aiOff && ' (AI unavailable)'}</label>
-        <label>Max iterations <input type="number" min={1} max={20} value={settings.maxIterations} onChange={(e) => setSettings({ ...settings, maxIterations: Math.min(20, Math.max(1, Math.floor(e.target.valueAsNumber) || 1)) })} aria-label="Auto-continue max iterations" /></label>
+        <label>Max iterations <input type="number" min={1} max={20} value={settings.maxIterations} onChange={(e) => void engine.invoke('setting.maxIterations', { value: Math.min(20, Math.max(1, Math.floor(e.target.valueAsNumber) || 1)) })} aria-label="Auto-continue max iterations" /></label>
         <label><input type="checkbox" checked={settings.showTrail} onChange={(e) => setSettings({ ...settings, showTrail: e.target.checked })} /> Trail</label>
         <label title="Labeled A1..H12 grid on the preview; the AI answers with these cells"><input type="checkbox" checked={settings.showGrid} onChange={(e) => setSettings({ ...settings, showGrid: e.target.checked })} aria-label="Grid overlay" /> Grid</label>
         <label title="Label every cell (A1..H12); off shows only the edge numbers and letters"><input type="checkbox" checked={settings.gridLabels} onChange={(e) => setSettings({ ...settings, gridLabels: e.target.checked })} disabled={!settings.showGrid} aria-label="Grid cell labels" /> Grid labels</label>

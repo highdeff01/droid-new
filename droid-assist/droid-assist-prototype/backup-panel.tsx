@@ -17,12 +17,12 @@ export function confirmAndRestore(backup: Backup, mode: RestoreMode, ask: (quest
   return true;
 }
 
-/** Settings → Backup: export every learned store to one JSON file, or validate and restore one. */
-export function BackupSettings() {
+/** Settings → Backup: export every learned store to one JSON file (through `onExport` when given), or validate and restore one. */
+export function BackupSettings({ onExport }: { onExport?: () => void } = {}) {
   const [backup, setBackup] = useState<Backup | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const exportAll = () => downloadText(backupFileName(), JSON.stringify(exportBackup(), null, 2), 'application/json');
+  const exportAll = onExport ?? (() => downloadText(backupFileName(), JSON.stringify(exportBackup(), null, 2), 'application/json'));
 
   const pick = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

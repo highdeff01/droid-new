@@ -53,6 +53,16 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
+import { LIVE_SETTINGS, applyLiveSetting, capabilityPrompt, permission, requesterName, type AgentId, type CapabilityRequest, type LiveSetting, type Params, type Requester } from './capabilities.js';
+import { useCapabilities } from './use-capabilities.js';
+import type { AssistStatus } from './main-app-bridge.js';
+import { backupFileName, exportBackup } from './backup.js';
+import { runTotals } from './run-stats.js';
+import { sanitizeBudget } from './safety.js';
+
+/** The main AI and the main Droid app as capability requesters. */
+const AI: Requester = { kind: 'ai' };
+const MAIN_APP: Requester = { kind: 'main-app' };
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -2249,7 +2259,8 @@ export function useAssist() {
 
   /** Auto-continue re-plan: the model plans the remaining steps, which become the next run; timeline + log. */
   const planNext = async (runGoal: string, ran: WorkflowStep[], check: GoalCheck, n: number) => {
-    const plan = await thought(`Continue #${n}: ${runGoal}`, () => planRemaining(askFor('planner'), runGoal, framesRef.current[0] ?? null, ran, check.reason, patternsRef.current), (r) => `${r.steps.length} step(s): ${stepsText(r.steps)}`);
+    const plan = await thought(`Continue #${n}: ${runGoal}`, () => planRemaining(askFor('planner'), runGoal, framesRef.current[0] ?? null, ran, check.reason, patternsRef.current, capabilityPrompt(capabilities.registry.list, AI)), (r) => `${r.steps.length} step(s): ${stepsText(r.steps)}`);
+    await runAiRequests(plan.capabilities);
     stepsRef.current = plan.steps;
     setSteps(plan.steps);
     addLog('Auto-continue', `Iteration ${n} plan: ${plan.steps.length} step(s) — ${stepsText(plan.steps)}`, 'info');
@@ -2345,10 +2356,13 @@ export function useAssist() {
     const applied = relevantHabits(text, habitContext(), habitsRef.current);
     if (applied.length) addLog('Habits', `Applying ${applied.length} habit(s) to planning: ${applied.map(habitLine).join(' | ')}`, 'info');
     let planned = false;
+    let requested: CapabilityRequest[] = [];
     planningRef.current = true;
     await withAi(async () => {
       try {
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current, capabilityPrompt(capabilities.registry.list, AI)), planSummary);
+        requested = plan.capabilities;
+        if (!plan.steps.length) return;
         if (planGuardRef.current.after(plan.steps) === 'duplicate') {
           addLog('Planner', `Re-plan guard: the plan for "${text.trim()}" is identical to the previous one — kept the current steps and will not ask the model again until the screen or a step changes`, 'warn');
           return;
@@ -2364,6 +2378,7 @@ export function useAssist() {
         planningRef.current = false;
       }
     });
+    await runAiRequests(requested);
     return planned;
   };
 
@@ -2484,19 +2499,21 @@ export function useAssist() {
   };
 
   /** AI help: the model answers a question about the live screen and points out what it means. */
-  const askScreen = async (question = 'What on this screen needs my attention, and what should I do next?') => {
+  const askScreen = async (question = 'What on this screen needs my attention, and what should I do next?'): Promise<string> => {
     const f = framesRef.current[0];
     if (!stageOn('screenWatcher')) {
       addLog('AI help', `${stageOff('screenWatcher')} — not asked`, 'warn');
-      return;
+      return '';
     }
     if (!f) {
       addLog('AI help', 'No captured frame yet — share the screen or connect the bridge first', 'warn');
-      return;
+      return '';
     }
+    let answered = '';
     await withAi(async () => {
       try {
         const { answer, annotations: items } = await thought(`Ask: ${question}`, () => describeScreen(askFor('screenWatcher'), f, question, goal), (r) => r.answer);
+        answered = answer;
         setAiAnswer(answer);
         setAnnotations(items);
         addLog('AI help', answer, 'info');
@@ -2506,6 +2523,7 @@ export function useAssist() {
         addLog('AI help', aiFailure('AI unavailable — no answer', error), 'error');
       }
     });
+    return answered;
   };
 
   /** Point out: the default AI-help question. */
@@ -2803,13 +2821,18 @@ export function useAssist() {
     }
   };
 
-  const saveCard = () => {
-    if (!draftCard) return;
+  /** Stores `draft` with the current steps as a Library card (a saved operation); returns its id. */
+  const storeCard = (draft: { name: string; description: string }) => {
     const id = uid('card');
     flowRef.current = id;
-    setCards((c) => [{ id, ...draftCard, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
-    addLog('Library', `Saved "${draftCard.name}"`, 'ok');
+    setCards((c) => [{ id, ...draft, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
+    addLog('Library', `Saved "${draft.name}"`, 'ok');
     setDraftCard(null);
+    return id;
+  };
+
+  const saveCard = () => {
+    if (draftCard) storeCard(draftCard);
   };
 
   const loadCard = (card: SavedCard) => {
@@ -2938,6 +2961,136 @@ export function useAssist() {
     return () => clearInterval(id);
   }, [anyTriggerOn]);
 
+  /** Relaxation mode: the settings it replaced, restored when it is switched off; null while off. */
+  const relaxedRef = useRef<Pick<AssistSettings, 'captureMs' | 'watchMs' | 'monitorMode' | 'autoAct'> | null>(null);
+
+  /** Replaces the settings at once (the ref first, so a running loop sees them) and in the panel. */
+  const putSettings = (next: AssistSettings) => {
+    settingsRef.current = next;
+    setSettings(next);
+  };
+
+  /** A live adjustment from the AI (or any requester): validated, applied immediately and logged; throws when rejected. */
+  const adjustSetting = (key: LiveSetting, value: unknown, requester: Requester) => {
+    const r = applyLiveSetting(settingsRef.current, key, value);
+    if (!r.ok) throw new Error(r.message);
+    putSettings(r.settings);
+    addLog('Live adjust', `${requesterName(requester)}: ${r.message}`, 'ok');
+    return r.message;
+  };
+
+  const setRelaxed = (on: boolean) => {
+    const s = settingsRef.current;
+    if (on === !!relaxedRef.current) return `relaxation mode already ${on ? 'on' : 'off'}`;
+    if (on) {
+      relaxedRef.current = { captureMs: s.captureMs, watchMs: s.watchMs, monitorMode: s.monitorMode, autoAct: s.autoAct };
+      putSettings({ ...s, captureMs: LIVE_SETTINGS.captureMs.max, watchMs: LIVE_SETTINGS.watchMs.max, monitorMode: 'app', autoAct: false });
+    } else {
+      putSettings({ ...s, ...relaxedRef.current });
+      relaxedRef.current = null;
+    }
+    addLog('Relaxation mode', on ? 'On — slowest capture and watcher cadence, app monitor, Auto Act off' : 'Off — previous cadence, monitor mode and Auto Act restored', 'info');
+    return `relaxation mode ${on ? 'on' : 'off'}`;
+  };
+
+  /** The saved flow named or with id `ref` (case-insensitive name). */
+  const findCard = (ref: string) => cardsRef.current.find((c) => c.id === ref || c.name.toLowerCase() === ref.trim().toLowerCase());
+
+  const saveWorkflow = (name?: string) => {
+    if (!stepsRef.current.length) throw new Error('no steps to save — plan or record a workflow first');
+    const generated = generateCard(stepsRef.current, goalRef.current);
+    const draft = name?.trim() ? { name: name.trim(), description: generated.description } : draftCard ?? generated;
+    return `saved "${draft.name}" as ${storeCard(draft)}`;
+  };
+
+  const loadWorkflow = (ref: string) => {
+    const card = findCard(ref);
+    if (!card) throw new Error(`no saved workflow "${ref}"`);
+    loadCard(card);
+    return `loaded "${card.name}" (${card.steps.length} step(s))`;
+  };
+
+  /** A schedule trigger for a saved flow (or the draft card) due in `inSec`, repeating every `everySec` (0 = once). */
+  const schedule = (name: string, inSec: number, everySec: number, flow?: string) => {
+    const card = flow ? findCard(flow) : undefined;
+    if (flow && !card) throw new Error(`no saved workflow "${flow}"`);
+    const before = triggersRef.current[0];
+    addTrigger({ kind: 'schedule', name, at: Date.now() + inSec * 1000, everySec, cooldownSec: 0, maxRuns: 0, target: card ? { kind: 'card', cardId: card.id } : { kind: 'draft' } });
+    const created = triggersRef.current[0];
+    if (!created || created === before) throw new Error(`"${name}" not created — see the log`);
+    return `scheduled "${created.name}" (${created.id}) ${conditionText(created, elementMapRef.current)}`;
+  };
+
+  const snip = async (box: Box) => {
+    const f = framesRef.current[0];
+    if (!f) throw new Error('no captured frame yet — share the screen or connect the bridge first');
+    const crop = await cropFrame(f, box);
+    addLog('Snip', `Snipped (${pct(box.x)}, ${pct(box.y)}) ${pct(box.w)}×${pct(box.h)} of frame #${f.id}`, 'info', [crop.url]);
+    return `snipped ${pct(box.w)}×${pct(box.h)} of frame #${f.id} into the log`;
+  };
+
+  /** Screenshot verification: the model checks the goal on the live frame. */
+  const verifyScreen = async (g: string) => {
+    const check = await thought(`Verify: ${g || runGoalOf()}`, () => verifyGoal(askFor('autoContinue'), framesRef.current[0] ?? null, g || runGoalOf(), stepsRef.current), goalSummary);
+    return goalSummary(check);
+  };
+
+  const setBudget = (limit: number) => {
+    const actionBudget = sanitizeBudget(limit);
+    putSettings({ ...settingsRef.current, actionBudget });
+    return `action budget ${actionBudget}`;
+  };
+
+  /** The snapshot the main Droid app can query over the bridge. */
+  const assistStatus = (): AssistStatus => {
+    const s = settingsRef.current;
+    return {
+      time: Date.now(), armed: armedRef.current, aborted: abortedRef.current, running: executorBusy(), goal: goalRef.current, steps: stepsRef.current.length,
+      settings: { captureMs: s.captureMs, watchMs: s.watchMs, stepRetries: s.stepRetries, maxIterations: s.maxIterations, monitorMode: s.monitorMode, aiView: s.aiView, autoAct: s.autoAct, relaxed: !!relaxedRef.current, stages: s.stages },
+      capabilities: capabilities.registry.list.filter((c) => !permission(c, MAIN_APP)).map((c) => c.id),
+    };
+  };
+
+  const capabilities = useCapabilities({
+    plan: autoPlan, replay, stop, toggleRecording, setStage: toggleStage,
+    setAgent: (id, on) => setAgents((list) => list.map((a) => (a.id === id ? { ...a, on } : a))),
+    adjustSetting, setAutoAct: (on) => putSettings({ ...settingsRef.current, autoAct: on }), setRelaxed,
+    saveWorkflow, loadWorkflow, workflows: () => cardsRef.current.map((c) => `${c.id}: ${c.name} (${c.steps.length} step(s))`),
+    schedule, toggleTrigger, fireTrigger: (id) => fireTrigger(id, 'requested through capabilities'),
+    triggers: () => triggersRef.current.map((t) => `${t.id}: ${t.name} — ${conditionText(t, elementMapRef.current)}${t.enabled ? '' : ' (disabled)'}`),
+    stats: () => {
+      const t = runTotals(runs);
+      return `${t.runs} run(s): ${t.successes} succeeded, ${t.failures} failed (${pct(t.rate)} success)`;
+    },
+    exportBackup: () => {
+      const name = backupFileName();
+      downloadText(name, JSON.stringify(exportBackup(), null, 2), 'application/json');
+      return `backup downloaded as ${name}`;
+    },
+    exportHistory, snip, rulerToggle: ruler.toggle,
+    recalibrate: () => (ruler.recalibrateNow('manual') ? 'recalibrated' : 'no baseline to recalibrate against'),
+    measure: ruler.measureQuery, toggleMapMode,
+    elements: () => [...elements.map((e) => `${e.name} at ${at(e.x, e.y)} (${e.source})`), ...elementMap.map((e) => `${e.name} at ${at(boxCenter(e.box).x, boxCenter(e.box).y)} (mapped)`)],
+    testElement: (name, x, y) => testClick({ id: uid('el'), name, x, y, source: 'familiar' }),
+    testRoutes: (spec) => testRoutes(parseTestSpec(spec)), supervise: superviseRun,
+    sections: (g) => sectionsOf(parseTestSpec(g)), ask: askScreen, verifyScreen, reverseLast,
+    setArmed: (on) => {
+      if (armedRef.current !== on) toggleArmed();
+    },
+    abort: triggerAbort, clearAbort, setBudget, status: assistStatus,
+  }, addLog, { url: settings.bridgeUrl, token: settings.bridgeToken });
+
+  /** Runs the operations the AI asked for, in order, through the registry as the AI (refused while ABORTED). */
+  const runAiRequests = async (requests: CapabilityRequest[]) => {
+    for (const r of requests) {
+      if (abortedRef.current) return addLog('Capabilities', `AI request "${r.id}" refused — ABORTED is active`, 'error');
+      await capabilities.invoke(r.id, r.params, AI);
+    }
+  };
+
+  /** A bus agent asks for a feature operation; the registry checks it may (guardrails and other agents' stages are refused). */
+  const requestCapability = (agent: AgentId, id: string, params: Params = {}) => capabilities.invoke(id, params, { kind: 'agent', agent });
+
   return {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
@@ -2958,6 +3111,8 @@ export function useAssist() {
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
     dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
     reverse, reverseLast, reversing, briefings,
+    /** The capability registry: the single dispatch surface for buttons, the AI, agents and the main app. */
+    capabilities: capabilities.registry.list, invocations: capabilities.invocations, invoke: capabilities.invoke, requestCapability, relaxed: !!relaxedRef.current,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
   };
 }
