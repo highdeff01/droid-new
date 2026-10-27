@@ -81,6 +81,8 @@ import { findWorldElement, initialWorld, onWorldToggle, worldClick, worldContext
 import { findScenario, progressLines, scenarioComplete } from './test-world-scenarios.js';
 import { MAX_DISCOVERY, OBJECTIVE_TONE, chainReport, discoverTarget, isChainGoal, locateTarget, objectiveLine, planChain, type ChainObjective, type ChainPlan, type ChainRun, type DiscoveryMove } from './chain.js';
 import { applyReach, currentPath, deletePath, editPath, isHopAction, learnPaths, parseHops, pathLine, pathOutcome, pathSteps, reachTarget, relevantPaths, runPath, usablePath, type AccessProfile, type Reach } from './access-paths.js';
+import { useResolution } from './use-resolution.js';
+import { DISAGREEMENT_THRESHOLD } from './resolution-center.js';
 import { dropGoal, loadGoals, projectId, queueGoal, saveGoals, settleGoal, startGoal, type GoalRecord } from './goal-tracer.js';
 import { ALL_PROJECTS, addUserNote, loadKnowledge, markInjected, noteLine, pendingNotesFor, saveKnowledge, type UserNote } from './knowledge-store.js';
 import { MAIN_AI, markPreferred, type PreferredShot } from './live-briefing.js';
@@ -4237,6 +4239,73 @@ export function useAssist() {
     return report(out);
   };
 
+  /** Element recovery: one re-location of a named element on the live frame (learned anchor first, then the AI). */
+  const locateElement = async (name: string): Promise<{ x: number; y: number } | null> => {
+    const live = framesRef.current[0];
+    if (!live) return null;
+    const step: WorkflowStep = { id: uid('step'), name: `Find ${name}`, action: 'move', target: name, x: 0.5, y: 0.5, status: 'pending' };
+    const seed = learnedPoint(live, step) ?? habitSeed(live, step);
+    if (seed) return { x: seed.x, y: seed.y };
+    if (!aiOnline()) return null;
+    return grounding.relocate(live, step, `"${name}" was lost; find it on the current screen`).catch(() => null);
+  };
+
+  /**
+   * Settles a disputed position: an off-screen point fails; with the AI online the target is
+   * confirmed on a zoomed crop of the live frame, otherwise the coordinate learner's memory of it
+   * must lie within the disagreement threshold of the point.
+   */
+  const confirmAt = async (name: string, p: { x: number; y: number }): Promise<boolean> => {
+    if (p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1) return false;
+    const live = framesRef.current[0];
+    const step: WorkflowStep = { id: uid('step'), name: `Test ${name}`, action: 'move', target: name, x: p.x, y: p.y, status: 'pending' };
+    if (live && aiOnline()) return grounding.confirm(live, step, p).then((c) => c.visible, () => false);
+    const known = findFamiliar(familiarRef.current, name);
+    return !!known && Math.hypot(known.x - p.x, known.y - p.y) <= DISAGREEMENT_THRESHOLD;
+  };
+
+  /** A replay (or self-test) as a recovery result. */
+  const replayOutcome = async (selfTest: boolean, label: string) => {
+    const out = await runReplay(selfTest, { label, goal: runGoalOf() });
+    return out ? { ok: out.ok === out.total && !out.stopped, message: `${out.ok}/${out.total} step(s) ${out.dryRun ? 'verified (dry run)' : 'executed'}` } : { ok: false, message: `${label} refused — see the log` };
+  };
+
+  /** The AI resolution center and recovery operations, on the engine's gated pipeline and memories. */
+  const resolution = useResolution({
+    steps,
+    bus,
+    context: habitContext,
+    goal: () => goalRef.current,
+    addLog,
+    ask: askFor('supervisor'),
+    aiOnline,
+    frame: () => framesRef.current[0] ?? null,
+    currentSteps: () => stepsRef.current,
+    setPlan: (next) => {
+      stepsRef.current = next;
+      setSteps(next);
+    },
+    newBudget: () => createBudget(settingsRef.current.actionBudget),
+    perform: async (step, actor, why, budget) => {
+      const out = await perform(step, actor, budget, !armedRef.current, recordLocal(actor, step, why), false);
+      return { ok: out.ok, message: out.message };
+    },
+    confirm: confirmAt,
+    locate: locateElement,
+    forwardElement,
+    addPatterns,
+    recordHabit: (o) => {
+      if (stageOn('coords')) commitHabits(recordOutcome(habitsRef.current, o));
+    },
+    retry: () => replayOutcome(false, 'Main retry'),
+    selfTest: () => replayOutcome(true, 'Main test'),
+    fix: async () => {
+      await superviseRun();
+      return { ok: supervisorRef.current.status === 'done', message: supervisorRef.current.detail };
+    },
+    connect: () => connectBridge(),
+  });
+
   // Bridge takeover: when a configured bridge answers, frames come from the real desktop unless the user chose the demo.
   useEffect(() => {
     const url = settings.bridgeUrl;
@@ -5363,6 +5432,8 @@ export function useAssist() {
     reverse, reverseLast, reversing, briefings,
     /** The per-project lifecycle engine and its approval queue. */
     projects: projectEngine,
+    /** The AI resolution center: disagreements, resolutions, recovery operations and the approval queue. */
+    resolution,
     goals, queueNextGoal, removeGoal, userNotes, addNote, preferred, preferFrame,
     /** The capability registry and its artifacts; `invokeCapability` is the one permission-checked path for the main AI, the user and agents. */
     artifactCapabilities: caps.registry, invokeCapability: caps.invoke, presentations: caps.presentations, scripts: caps.scripts, artifactKnowledge: caps.knowledge,

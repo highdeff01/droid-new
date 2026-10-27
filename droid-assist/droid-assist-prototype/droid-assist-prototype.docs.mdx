@@ -42,6 +42,23 @@ The **Workflow Packs** section (`PacksPanel`) sits directly below the screen pre
 - A failed run, replay or subagent is saved as a failure reminder: what failed, the failed steps and targets, and the screenshots taken when it failed (dropped first when storage is full). It is logged under `Memory`.
 - Starting a similar operation (a plan, replay, trigger fire or subagent assignment) logs a `Memory` reminder of the similar failures with their screenshots, so the AI and agents adjust before acting. The pre-action briefing cross-references them as `failure` entries on the same target.
 - The **Operation memory** panel (`OperationMemoryPanel`) groups everything per operation: notes (add and forget), failures with screenshots (forget), the blacklist and successful runs.
+## Resolution center and recovery operations
+
+The **Resolution center** panel (`ResolutionPanel`, driven by `use-resolution.ts`) settles judgment differences between AIs:
+
+- A **disagreement** is two or more distinct reporters, the main AI's plan or the agents forwarding on the bus, placing the same element (case and spacing ignored) more than 0.05 apart. Agreeing reports are not listed.
+- **Resolve disagreements** asks the model for a ruling `{winner, workflow, info, needs_test}`. The winning position is applied to the plan, and the main AI is told the edit, the workflow and the info that go with it. When the AI is offline, unsure or asks for a test, each report is tested in turn: an off-screen point fails, and otherwise the element must be confirmed at the reported point (by the AI on a zoomed crop of the live screen when it is online, or by the coordinate learner's memory of it when it is not). The first report that passes wins, and if none passes the disagreement stays unresolved.
+- **Recovery operations**:
+  - main retry and main test (replay and self-test)
+  - error fix (supervisor review)
+  - app recovery
+  - element recovery and hard tracking (repeated re-acquisition; the found point is forwarded to the agents)
+  - app creation (a scaffold of `main.js` and `README.md`, refused when the script breaks the sandboxed script rules: destructive commands, power or registry changes, network or registry writes, privilege escalation, or more than 8000 characters)
+  - computer maintenance (`repair`, `backup` or `cleanup` via computer control)
+  - re-chat (`Program: message` in another AI's program)
+  - reconnect (the bridge, retried with exponential backoff)
+- Every real-input step goes through the real-input guarantee: a recorded proposal, abort, arm, the executor stage and the action budget. Maintenance is admin-class and only queues until it is approved in the panel.
+- Every resolution and recovery result is logged under `Resolution center` and saved as a learned pattern and a habit outcome.
 
 ## Error forwarding
 
