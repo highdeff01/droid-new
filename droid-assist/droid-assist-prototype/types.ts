@@ -278,6 +278,10 @@ export interface AssistSettings {
   aiMaxInFlight: number;
   /** Per-request AI timeout in ms; queued calls get it when they start. Cancelling still aborts at once. */
   aiTimeoutMs: number;
+  /** Master Prompt Override: a free-text directive injected into every AI prompt; empty = none. */
+  masterPrompt: string;
+  /** Overlap mode: each AI ask also fires a second, freshly worded call; the first valid answer wins. */
+  aiOverlap: boolean;
   /** Loop control: on/off per automation stage and agent (guardrails are never in it). */
   stages: StageMap;
   /** Error forwarding: the error-fix app's HTTP endpoint captured errors are POSTed to. */
