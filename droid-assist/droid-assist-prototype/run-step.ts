@@ -238,11 +238,8 @@ export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepO
     end = e.point;
   }
   if (!deps.dispatch) return { ok: true, executed: false, message: `verified on the live screen — ${DRY_RUN}`, target, end, correction, live };
-  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, { token: deps.bridgeToken });
-  if (!sent.ok) return { ok: false, executed: false, bridgeFailed: true, message: sent.message, target, end, correction, live };
-  if (!deps.dispatch) return { ok: true, executed: false, message: 'verified on the live screen — self-test, not dispatched', target, end, correction, live };
   const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, { token: deps.bridgeToken, origin: frameOrigin(live) });
-  if (!sent.ok) return { ok: false, executed: false, message: sent.message, target, end, correction, live };
+  if (!sent.ok) return { ok: false, executed: false, bridgeFailed: true, message: sent.message, target, end, correction, live };
   const after = await verifyAfter(step, live, target, deps);
   const done: StepOutcome = { ok: true, executed: true, message: sent.message, target, end, correction, live, ...after };
   return retryMissed(step, done, deps);

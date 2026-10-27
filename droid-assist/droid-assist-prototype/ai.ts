@@ -357,7 +357,7 @@ export function createAiSession(store: HistoryStore | null, render?: RenderFn, o
     const user: ChatMessage = { role: 'user', content, ...(images.length ? { images } : {}) };
     const system = systemText(req.system, shots.view);
     const turns = history.map(({ role, content: text }) => ({ role, content: text }));
-    const reply = await chat(cfg, [{ role: 'system', content: system }, ...turns, user], req.json, undefined, signal);
+    const reply = await chat(cfg, [{ role: 'system', content: system }, ...turns, user], req.json, cfg.timeoutMs, signal);
     const time = Date.now();
     history = [...history, { role: 'user' as const, content, time }, { role: 'assistant' as const, content: reply.content, time }];
     if (history.length > HISTORY_MAX) shrink(HISTORY_MAX, 'cap');

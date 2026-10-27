@@ -90,6 +90,10 @@ export function RealInputIndicator({ engine }: { engine: AssistEngine }) {
         ✓ Verify real input
       </button>
     </>
+  );
+}
+
+/**
  * Reverse: offered right after a real action; a dry run unless real input is armed. A
  * non-invertible action says "cannot reverse" with the reason instead of a button.
  */

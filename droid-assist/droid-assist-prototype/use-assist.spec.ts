@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useAssist } from './use-assist.js';
 import type { NativeCaptureApi, NativeFrame } from './electron/capture-api.js';
@@ -32,6 +32,8 @@ function installNative() {
 }
 
 afterEach(() => {
+  // Unmount every hook so a previous test's bridge monitor never polls into the next test's fetch stub.
+  cleanup();
   delete window.droidNative;
   localStorage.clear();
 });
