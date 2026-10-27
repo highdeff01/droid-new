@@ -1,5 +1,6 @@
 import type { StageMap } from './loop-control.js';
 import type { AiView } from './ai.js';
+import type { AutoApplyMap, SelfTestMode } from './initiative.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
@@ -286,4 +287,12 @@ export interface AssistSettings {
   errorForwarding: boolean;
   /** Optional bearer token for the error endpoint; never written to the activity log. */
   errorToken: string;
+  /** AI initiative: seconds between the AI's own screen scans (it may ask to scan sooner). */
+  scanSec: number;
+  /** AI initiative: self-tests verify-only in the background, or highlighted (real when armed) in the foreground. */
+  selfTestMode: SelfTestMode;
+  /** AI initiative: cycles per input kind the heavy element tester runs. */
+  stressCycles: number;
+  /** AI initiative: per category, apply without asking (still inside arm, budget and loop control). */
+  autoApply: AutoApplyMap;
 }

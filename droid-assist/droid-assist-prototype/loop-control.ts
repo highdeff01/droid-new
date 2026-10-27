@@ -36,6 +36,10 @@ export const STAGES = [
   { id: 'supervisor', group: 'agent', name: 'Supervisor', description: 'Reviews finished runs: saves flows and learns patterns', verifies: false },
   { id: 'elementMap', group: 'agent', name: 'Element-mapping intercept', description: 'Remembers used targets as familiar elements', verifies: false },
   { id: 'subagents', group: 'agent', name: 'Subagent testing', description: 'Test-clicks single elements from the Elements panel', verifies: false },
+  { id: 'initiativeScan', group: 'agent', name: 'Initiative scan', description: 'AI scans the screen on its interval for popups, changed elements and incomplete states, and proposes actions', verifies: false },
+  { id: 'selfTest', group: 'agent', name: 'Self-test', description: 'AI tests its mapped elements and familiar targets, and the heavy element tester stress-tests one', verifies: false },
+  { id: 'workarounds', group: 'agent', name: 'Workarounds', description: 'After a failed step the AI proposes workflow edits: new, removed or reordered steps and alternate targets', verifies: false },
+  { id: 'workflowCreation', group: 'agent', name: 'Workflow creation', description: 'AI turns successful sequences into new workflow packs, verified by an agent before proposing', verifies: false },
 ] as const satisfies ReadonlyArray<Omit<Stage, 'id'> & { id: string }>;
 
 /** The id of a stage or agent. */

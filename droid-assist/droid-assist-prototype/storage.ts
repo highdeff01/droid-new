@@ -15,6 +15,8 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
+import { EMPTY_INITIATIVE, INITIATIVE_CATEGORIES, INITIATIVE_LOG_LIMIT, INITIATIVE_PROPOSAL_LIMIT, INITIATIVE_STATUSES, SCAN_SEC_MAX, SCAN_SEC_MIN, SELF_TEST_MODES, STRESS_CYCLES_MAX, STRESS_CYCLES_MIN, STRESS_LIMIT } from './initiative.js';
+import type { AutoApplyMap, InitiativeCategory, InitiativeEntry, InitiativeProposal, InitiativeState, InitiativeStatus, SelfTestMode, StressReport } from './initiative.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -23,7 +25,7 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', initiative: 'droid-assist.initiative' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -34,7 +36,7 @@ const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'scanSec' | 'stressCycles', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
@@ -48,6 +50,8 @@ const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | '
   gridOpacity: GRID_OPACITY_RANGE,
   aiMaxInFlight: [AI_MAX_IN_FLIGHT_MIN, AI_MAX_IN_FLIGHT_MAX],
   aiTimeoutMs: [AI_TIMEOUT_MS_MIN, AI_TIMEOUT_MS_MAX],
+  scanSec: [SCAN_SEC_MIN, SCAN_SEC_MAX],
+  stressCycles: [STRESS_CYCLES_MIN, STRESS_CYCLES_MAX],
 };
 
 /** A step as persisted: its screenshot without the pixel buffer. */
@@ -103,6 +107,16 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   if (stored.displayId === null || (typeof stored.displayId === 'string' && stored.displayId)) out.displayId = stored.displayId;
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
   out.stages = sanitizeStages(stored.stages ?? defaults.stages);
+  if (typeof stored.selfTestMode === 'string' && SELF_TEST_MODES.includes(stored.selfTestMode as SelfTestMode)) out.selfTestMode = stored.selfTestMode as SelfTestMode;
+  out.autoApply = sanitizeAutoApply(stored.autoApply, defaults.autoApply);
+  return out;
+}
+
+/** A stored auto-apply map over `defaults`: only boolean values of known categories are kept. */
+function sanitizeAutoApply(raw: unknown, defaults: AutoApplyMap): AutoApplyMap {
+  const out = { ...defaults };
+  if (!isObject(raw)) return out;
+  for (const c of INITIATIVE_CATEGORIES) if (typeof raw[c] === 'boolean') out[c] = raw[c] as boolean;
   return out;
 }
 
@@ -354,4 +368,33 @@ export const loadTriggers = (): Trigger[] => listOf(readJson(KEYS.triggers), isT
 /** Persists the triggers, capped at TRIGGER_LIMIT. */
 export function saveTriggers(triggers: Trigger[]) {
   writeJson(KEYS.triggers, triggers.slice(0, TRIGGER_LIMIT));
+}
+
+const isCategory = (v: unknown) => INITIATIVE_CATEGORIES.includes(v as InitiativeCategory);
+
+function isInitiativeProposal(v: unknown): v is InitiativeProposal {
+  return isObject(v) && isStr(v.id) && isNum(v.time) && isCategory(v.category) && isStr(v.text)
+    && INITIATIVE_STATUSES.includes(v.status as InitiativeStatus)
+    && (v.step === undefined || isObject(v.step)) && (v.edits === undefined || Array.isArray(v.edits)) && (v.pack === undefined || (isObject(v.pack) && Array.isArray(v.pack.steps)));
+}
+
+function isInitiativeEntry(v: unknown): v is InitiativeEntry {
+  return isObject(v) && isStr(v.id) && isNum(v.time) && isCategory(v.category) && typeof v.text === 'string' && typeof v.ok === 'boolean';
+}
+
+function isStressReport(v: unknown): v is StressReport {
+  return isObject(v) && isStr(v.id) && isNum(v.time) && typeof v.target === 'string' && isNum(v.attempts) && isNum(v.succeeded)
+    && isNum(v.reliability) && isObject(v.byAction) && typeof v.dryRun === 'boolean';
+}
+
+/** The stored AI initiative proposals, log and stress reports; invalid entries are dropped. */
+export function loadInitiative(): InitiativeState {
+  const stored = readJson(KEYS.initiative);
+  if (!isObject(stored)) return EMPTY_INITIATIVE;
+  return { proposals: listOf(stored.proposals, isInitiativeProposal, INITIATIVE_PROPOSAL_LIMIT), log: listOf(stored.log, isInitiativeEntry, INITIATIVE_LOG_LIMIT), stress: listOf(stored.stress, isStressReport, STRESS_LIMIT) };
+}
+
+/** Persists the AI initiative state, capped per list. */
+export function saveInitiative(state: InitiativeState) {
+  writeJson(KEYS.initiative, { proposals: state.proposals.slice(0, INITIATIVE_PROPOSAL_LIMIT), log: state.log.slice(0, INITIATIVE_LOG_LIMIT), stress: state.stress.slice(0, STRESS_LIMIT) });
 }
