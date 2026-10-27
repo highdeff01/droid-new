@@ -41,10 +41,10 @@ export interface TrailPoint {
  * `drag` presses at (x, y), travels to (endX, endY) and releases there; `measure` only measures
  * distances (no input).
  */
-export type StepAction = 'click' | 'double_click' | 'move' | 'drag' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media' | 'measure';
+export type StepAction = 'click' | 'double_click' | 'move' | 'drag' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media' | 'measure' | 'snip';
 
 /** Every step action, in the order the planner contract lists them. */
-export const STEP_ACTIONS: readonly StepAction[] = ['click', 'double_click', 'move', 'drag', 'scroll', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media', 'measure'];
+export const STEP_ACTIONS: readonly StepAction[] = ['click', 'double_click', 'move', 'drag', 'scroll', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media', 'measure', 'snip'];
 
 /** Step actions that point the mouse at an on-screen target, so their coordinates must be grounded. */
 export const POINTER_ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(['click', 'double_click', 'move', 'drag', 'scroll']);

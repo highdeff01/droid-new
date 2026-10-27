@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, session, type WebContents } from 'electron';
 import { CAPTURE_CHANNELS } from './capture-api.js';
 import { startCaptureLoop, type CaptureLoop } from './capture-loop.js';
-import { grabScreen, listDisplays } from './screen-grab.js';
+import { grabDisplay, grabScreen, listDisplays } from './screen-grab.js';
 import { BRIDGE_URL_PATTERNS, withBridgeCors } from './bridge-cors.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -33,6 +33,7 @@ function registerCaptureIpc() {
     contents.once('destroyed', () => { stopLoop(contents); selected.delete(contents.id); });
   });
   ipcMain.handle(CAPTURE_CHANNELS.displays, () => listDisplays());
+  ipcMain.handle(CAPTURE_CHANNELS.grabDisplay, (_event, id: string | null) => grabDisplay(id));
   ipcMain.on(CAPTURE_CHANNELS.selectDisplay, (event, id: string | null) => { selected.set(event.sender.id, id); });
   ipcMain.on(CAPTURE_CHANNELS.setInterval, (event, intervalMs: number) => loops.get(event.sender.id)?.setInterval(intervalMs));
   ipcMain.on(CAPTURE_CHANNELS.stop, (event) => stopLoop(event.sender));

@@ -52,3 +52,13 @@ describe('/arrange', () => {
     expect(r && 'message' in r ? r.message : '').toMatch(/\/arrange/);
   });
 });
+
+describe('/snip', () => {
+  it('parses /snip with its region', () => {
+    expect(parseCommand('/snip 0.1,0.2,0.3,0.4 640x display 2')).toEqual({ kind: 'snip', target: '0.1,0.2,0.3,0.4 640x display 2' });
+  });
+  it('rejects /snip without a region and shows its usage', () => {
+    const r = parseCommand('/snip');
+    expect(r && 'message' in r ? r.message : '').toMatch(/\/snip x,y,w,h/);
+  });
+});

@@ -58,8 +58,10 @@ export interface FrameComparison {
 /** One review-and-update action taken before dispatch. */
 export interface Revision {
   time: number;
-  kind: 'recalibrate' | 'reground' | 'replan';
+  kind: 'recalibrate' | 'reground' | 'reroute' | 'replan';
   text: string;
+  /** The fresh snip of the target region a reroute decided on, shown with the revision. */
+  snip?: Frame;
 }
 
 /** How a briefing ended: nothing to fix, fixed, still conflicting, or skipped. */

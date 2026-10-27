@@ -3,6 +3,7 @@ import { useAssist } from './use-assist.js';
 import { Stage } from './stage.js';
 import { Hud } from './hud.js';
 import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, CapabilitiesPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
+import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, SnipGalleryPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
 import { AgentBusPanel, SubagentReportPanel } from './bus-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
 import { AccessPathsPanel } from './access-paths-panel.js';
@@ -41,6 +42,7 @@ function AssistScreen() {
             <RulerPanel engine={engine} />
             <ElementsPanel engine={engine} />
             <ElementMapPanel engine={engine} />
+            <SnipGalleryPanel engine={engine} />
             <LearnedCoordsPanel engine={engine} />
             <LibraryPanel engine={engine} />
             <PatternsPanel engine={engine} />

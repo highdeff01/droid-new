@@ -34,6 +34,9 @@ const api: NativeCaptureApi = {
   selectDisplay(id) {
     ipcRenderer.send(CAPTURE_CHANNELS.selectDisplay, id);
   },
+  grabDisplay(id) {
+    return ipcRenderer.invoke(CAPTURE_CHANNELS.grabDisplay, id);
+  },
 };
 
 contextBridge.exposeInMainWorld('droidNative', api);

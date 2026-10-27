@@ -9,6 +9,7 @@ import type { FamiliarElement, Frame, Habit, LogEntry } from './types.js';
 import type { Box } from './assist-ai.js';
 import type { Briefing } from './briefing.js';
 import { OBJECTIVE_TONE, type ChainRun } from './chain.js';
+import { snipText, type Snip } from './snip.js';
 import { DisplayPicker } from './display-picker.js';
 import { BridgeWizard } from './bridge-wizard.js';
 import { isReliable, successRate } from './habits.js';
@@ -737,7 +738,7 @@ export function LearnedCoordsPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement', attempt: '🔄 Attempt' };
+const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement', attempt: '🔄 Attempt', snip: '✂️ Snip' };
 
 /** Tone of an entry: failures as errors, verdicts and checks by their outcome, unready proposals as warnings, the rest informational. */
 function entryTone(e: ThinkingEntry): LogEntry['tone'] {
@@ -758,6 +759,7 @@ function ThinkingItem({ entry }: { entry: ThinkingEntry }) {
       ) : (
         <>
           <p>{entry.text}</p>
+          {entry.frame && <img src={entry.frame.url} alt={`Snip for ${entry.step}`} style={{ maxWidth: '100%' }} />}
           {entry.thinking ? <pre className={styles.muted}>{entry.thinking}</pre> : <p className={styles.muted}>No thinking returned by the model</p>}
         </>
       )}
@@ -816,7 +818,7 @@ function BriefingItem({ b }: { b: Briefing }) {
       {b.revisions.length > 0 && (
         <>
           <h4>Review and update</h4>
-          <ol>{b.revisions.map((r, i) => <li key={i}><small>{clock(r.time)}</small> <b>{r.kind}</b> {r.text}</li>)}</ol>
+          <ol>{b.revisions.map((r, i) => <li key={i}><small>{clock(r.time)}</small> <b>{r.kind}</b> {r.text}{r.snip && <img src={r.snip.url} alt={`Fresh snip for ${b.stepName}`} style={{ display: 'block', maxWidth: '100%' }} />}</li>)}</ol>
         </>
       )}
     </li>
@@ -844,6 +846,41 @@ function ChainBreakdown({ chain }: { chain: ChainRun }) {
         </ul>
       )}
     </div>
+/** One snip: the image, its region and size, and Save to element map. */
+function SnipItem({ engine, s }: { engine: AssistEngine; s: Snip }) {
+  const [name, setName] = useState('');
+  return (
+    <figure>
+      <img src={s.frame.url} alt={`Snip ${s.label}`} />
+      <figcaption>
+        <small>{clock(s.time)} · {s.by}{s.displayId ? ` · display ${s.displayId}` : ''}</small> {snipText(s)}
+        {!s.displayId && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              engine.snipToMap(s.id, name);
+              setName('');
+            }}
+          >
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Element name" aria-label={`Name for snip ${s.label}`} />
+            <button type="submit" disabled={!name.trim()}>Save to element map</button>
+          </form>
+        )}
+      </figcaption>
+    </figure>
+  );
+}
+
+/** Snip gallery: regions the AI, agents, reroutes and the user snipped, newest first. */
+export function SnipGalleryPanel({ engine }: { engine: AssistEngine }) {
+  const { snips, snipMode } = engine;
+  return (
+    <section className={styles.panel} aria-label="Snip gallery">
+      <h3>Snips <small>{snips.length} kept</small></h3>
+      <button type="button" aria-pressed={snipMode} onClick={engine.toggleSnipMode}>{snipMode ? 'Cancel snip' : '✂ Snip a region'}</button>
+      {!snips.length && <p className={styles.muted}>Press ✂ Snip and drag a region on the screen, or type /snip x,y,w,h [WxH] [display id].</p>}
+      <div className={styles.gallery}>{snips.map((s) => <SnipItem key={s.id} engine={engine} s={s} />)}</div>
+    </section>
   );
 }
 

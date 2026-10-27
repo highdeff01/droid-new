@@ -57,7 +57,9 @@ import type { Calibration } from './calibration.js';
 import { remapStep, useMeasure } from './use-measure.js';
 import { anchoredHabit, habitLine, recordOutcome, relevantHabits, seedFromAnchor, strengthenHabit, togglePin } from './habits.js';
 import type { StepVerdict } from './assist-ai.js';
-import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
+import { addBriefing, briefingIssues, briefingText, buildBriefing, type Briefing } from './briefing.js';
+import { addSnip, clampBox, parseSnipArgs, snipFrame, snipText, type Snip, type SnipBy, type SnipSize, type SnipSource } from './snip.js';
+import { fromSnip, reroute, targetRegion, toSnip, type RerouteDecision, type RerouteDeps } from './reroute.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
 import { useKnowledge } from './use-knowledge.js';
@@ -289,6 +291,10 @@ export function useAssist() {
   const [elementMap, setElementMap] = useState<MappedElement[]>([]);
   const [mapMode, setMapMode] = useState(false);
   const [mapDraft, setMapDraft] = useState<Box | null>(null);
+  /** Snipped regions (AI, agents, reroutes, user), newest first, in memory. */
+  const [snips, setSnips] = useState<Snip[]>([]);
+  /** The user is dragging a region to snip on the stage. */
+  const [snipMode, setSnipMode] = useState(false);
   /** Per-target, per-app habits learned from every executed step, applied to planning and grounding. */
   const [habits, setHabits] = useState<Habit[]>(() => loadHabits());
   /** One summary per finished run (newest first), for the Stats panel. */
@@ -1300,6 +1306,7 @@ export function useAssist() {
     if (step.action === 'measure') return measureStep(step, actor);
     const held = dryRun ? null : approvals.gate(step, actor, { goal: goalRef.current, planned: stepsRef.current.some((s) => s.id === step.id) });
     if (held) return refused(step, held);
+    if (step.action === 'snip') return snipStep(step);
     const out = await performInput(step, actor, budget, dryRun);
     ruler.noteGrounding(out);
     if (out.ok) markOutcome(step, out);
@@ -1328,6 +1335,14 @@ export function useAssist() {
   };
 
   /** The measure action: no input is sent and no budget spent; the result (or the loud error) goes to the log and the model. */
+  /** A planned "snip" step: the AI or an agent screenshots the region its text names (else around its point). */
+  const snipStep = async (step: WorkflowStep): Promise<Performed> => {
+    const req = parseSnipArgs(step.text ?? '');
+    const box = 'error' in req ? targetRegion(step) : req.box;
+    const s = 'error' in req ? await snip(box, { label: step.name }) : await snip(box, { size: req.size, displayId: req.displayId, label: step.name });
+    return { ok: !!s, executed: false, message: s ? `Snipped ${snipText(s)}` : `"${step.name}": nothing to snip`, target: { x: step.x, y: step.y } };
+  };
+
   const measureStep = (step: WorkflowStep, actor: string): Performed => {
     const target = { x: step.x, y: step.y };
     try {
@@ -1505,7 +1520,7 @@ export function useAssist() {
       retries: settingsRef.current.stepRetries ?? DEFAULT_STEP_RETRIES,
       run: (s) => performIdentified(s, actor, budget, dryRun),
       stopped: ladderStopped,
-      replan: replanFailed,
+      replan: (s, why) => rerouteFailed(actor, s, why),
       onAttempt: (s, a) => noteAttempt(actor, s, a),
       log: (m, tone) => addLog(actor, m, tone),
     });
@@ -1639,10 +1654,15 @@ export function useAssist() {
   /** Names the drawn box and maps it on the current frame; also remembered as a familiar element. */
   const saveMapped = async (name: string) => {
     if (!mapDraft || !name.trim()) return;
-    const frame = framesRef.current[0];
-    const el: MappedElement = { id: uid('map'), name: name.trim(), box: mapDraft, mappedAt: Date.now(), ...(frame ? { frame } : {}) };
-    setMap(mapElement(elementMapRef.current, el));
     setMapDraft(null);
+    await mapBox(name, mapDraft);
+  };
+
+  /** Maps `box` as `name` on the current frame and remembers it as a familiar element. */
+  const mapBox = async (name: string, box: Box) => {
+    const frame = framesRef.current[0];
+    const el: MappedElement = { id: uid('map'), name: name.trim(), box, mappedAt: Date.now(), ...(frame ? { frame } : {}) };
+    setMap(mapElement(elementMapRef.current, el));
     const patch = frame ? await patchAt(frame, boxCenter(el.box)).catch(() => undefined) : undefined;
     setFamiliar((list) => rememberElement(list, toFamiliar(el, Date.now(), patch)));
     addLog('Element map', `Mapped "${el.name}" at ${gridRef(boxCenter(el.box))} (${pct(el.box.w)} x ${pct(el.box.h)} of the screen)`, 'ok');
@@ -1744,6 +1764,64 @@ export function useAssist() {
         setHighlight(null);
       }
     }
+  };
+
+   * The image a snip of `displayId` is cut from: the live frame for the captured display (or none
+   * named), else a native full-resolution grab of that display (desktop app only).
+   */
+  const snipSource = async (displayId: string | null): Promise<SnipSource | null> => {
+    if (displayId === null || displayId === settingsRef.current.displayId) return framesRef.current[0] ?? null;
+    if (!window.droidNative) throw new Error(`display ${displayId} can only be snipped in the desktop app`);
+    return { ...(await window.droidNative.grabDisplay(displayId)), source: 'screen' };
+  };
+
+  /**
+   * Programmatic snip for the AI and agents: a crop of any region of the live screen (or of any
+   * display) at any size, kept in the snip gallery and shown on the thinking timeline. Null when
+   * there is nothing to snip; a failure is logged, never thrown.
+   */
+  const snip = async (region: Box, opts: { size?: Partial<SnipSize>; displayId?: string | null; by?: SnipBy; label?: string } = {}): Promise<Snip | null> => {
+    const { size = {}, displayId = null, by = 'ai', label = 'AI snip' } = opts;
+    const box = clampBox(region);
+    try {
+      const src = box && (await snipSource(displayId));
+      if (!box || !src) {
+        addLog('Snip', `${label}: ${box ? 'no live screen to snip' : 'the region is outside the screen'}`, 'warn');
+        return null;
+      }
+      const s: Snip = { id: uid('snip'), time: Date.now(), box, frame: await snipFrame(src, box, ++frameId.current, size), by, label, displayId };
+      setSnips((list) => addSnip(list, s));
+      note({ step: label, kind: 'snip', text: snipText(s), thinking: null, frame: s.frame });
+      addLog('Snip', snipText(s), 'ok');
+      return s;
+    } catch (error) {
+      addLog('Snip', `${label} failed — ${errorText(error)}`, 'error');
+      return null;
+    }
+  };
+
+  const toggleSnipMode = () => setSnipMode((m) => !m);
+
+  /** The user's dragged region (null when too small) is snipped into the gallery. */
+  const userSnip = async (box: Box | null) => {
+    setSnipMode(false);
+    if (box) await snip(box, { by: 'user', label: 'User snip' });
+  };
+
+  /** Saves a snip of the captured display to the element map as `name`. */
+  const snipToMap = (id: string, name: string) => {
+    const s = snips.find((x) => x.id === id);
+    if (s && !s.displayId && name.trim()) void mapBox(name, s.box);
+  };
+
+  /** /snip x,y,w,h [WxH] [display <id>]: snips that region. */
+  const snipCommand = async (args: string) => {
+    const req = parseSnipArgs(args);
+    if ('error' in req) {
+      addLog('/snip', req.error, 'warn');
+      return;
+    }
+    await snip(req.box, { size: req.size, displayId: req.displayId, label: '/snip' });
   };
 
   /**
@@ -2226,6 +2304,40 @@ export function useAssist() {
     setBriefings((list) => list.map((x) => (x.id === b.id && x.revisions.length === b.revisions.length ? { ...x, liveCrop, referenceCrop } : x)));
   };
 
+  /**
+   * What a reroute routes through: a fresh snip of the target region, re-identified by the
+   * grounding agent on that snip, the known access paths, and the planner's re-plan.
+   */
+  const rerouteDeps = (): RerouteDeps => ({
+    online: aiOnline() && stageOn('grounding'),
+    knowledge: knowledge(),
+    snip: async (box) => (await snip(box, { by: 'reroute', label: 'Reroute snip' }))?.frame ?? null,
+    identify: async (step, crop, box) => {
+      const p = await grounding.relocate(crop, { ...step, ...toSnip(box, { x: step.correctedX ?? step.x, y: step.correctedY ?? step.y }), correctedX: undefined, correctedY: undefined }, 'reroute: re-identify the target on this fresh snip of its region');
+      return p && fromSnip(box, p);
+    },
+    replan: replanFailed,
+  });
+
+  /** Shows a mid-run reroute in the pre-action briefing of the rerouted step before it dispatches. */
+  const publishReroute = async (d: RerouteDecision, why: string) => {
+    if (!stageOn('briefing') || d.kind === 'none') return;
+    const b = buildBriefingFor(d.step, localProposal(d.step, `rerouted mid-run: ${why}`));
+    const revision = { time: Date.now(), kind: d.kind === 'replan' ? 'replan' as const : 'reroute' as const, text: d.text, ...(d.snip ? { snip: d.snip } : {}) };
+    await publishBriefing({ ...b, revisions: [revision], outcome: briefingIssues(b).length ? 'unresolved' : 'corrected' });
+  };
+
+  /**
+   * The retry ladder's last rung: reroute the failed step mid-run (fresh snip → alternate access
+   * path → re-plan) and brief the decision; null when nothing was found (the run goes on).
+   */
+  const rerouteFailed = async (actor: string, step: WorkflowStep, why: string): Promise<WorkflowStep | null> => {
+    const d = await reroute(step, why, rerouteDeps());
+    addLog(actor, `"${step.name}": ${d.text}`, d.kind === 'none' ? 'warn' : 'ok');
+    await publishReroute(d, why);
+    return d.kind === 'none' ? null : d.step;
+  };
+
   /** The routes the review takes: the ruler, the grounding agent on a zoomed crop, and the executor's re-plan. */
   const reviewDeps = (actor: string): ReviewDeps => ({
     online: aiOnline(),
@@ -2239,6 +2351,7 @@ export function useAssist() {
       const live = framesRef.current[0];
       return live ? grounding.relocate(live, step, `pre-action briefing: ${feedback}`) : null;
     },
+    reroute: (step, why) => reroute(step, why, { ...rerouteDeps(), replan: undefined }),
     replan: async (step, reason) => {
       const p = await proposeNow(actor, step, reason);
       return p.ready ? { step: adopt(step, p, true), proposal: p } : null;
@@ -3360,6 +3473,8 @@ export function useAssist() {
     await autoPlan(scenario.goal);
     addLog('/scenario', `${scenario.title} checklist: ${progressLines(scenario, worldRef.current).join(' · ')}`, scenarioComplete(scenario, worldRef.current) ? 'ok' : 'warn');
   };
+  /** Each slash command's runner. */
+  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'snip', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, snip: snipCommand };
 
   /** The capability registry: presentations, scripts, simulations, video notes and computer control on the real-input path. */
   const caps = useCapabilities({
@@ -3951,6 +4066,7 @@ export function useAssist() {
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     scanNow, setElementPerform, proposePerform, addNavigateStep, trainMapped, training,
+    snips, snip, snipMode, toggleSnipMode, userSnip, snipToMap,
     watcher, acceptProposal, dismissProposal, testProposal,
     approvals: approvals.items, approvalTree: approvals.tree, approveItem, editItem, rejectItem, runApprovalCheck, setOperationPolicy,
     triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger,

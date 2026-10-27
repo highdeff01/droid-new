@@ -59,6 +59,7 @@ const baseDeps = (): ReviewDeps => ({
   hasBaseline: false,
   recalibrate: vi.fn(),
   reground: vi.fn(async () => null),
+  reroute: vi.fn(async (s: WorkflowStep) => ({ kind: 'none' as const, step: s, text: 'no reroute' })),
   replan: vi.fn(async () => null),
   rebuild: vi.fn(),
   publish: vi.fn(),
@@ -170,5 +171,52 @@ describe('reviewBriefing — unresolved', () => {
     expect(result.briefing.outcome).toBe('unresolved');
     expect(result.step).toBe(s);
     expect(result.proposal).toBe(p);
+  });
+});
+
+describe('reviewBriefing — reroute on a failed comparison', () => {
+  it('reroutes on a fresh snip when re-grounding finds nothing, showing the decision and snip before dispatch, without re-planning', async () => {
+    const s = step();
+    const p = proposal();
+    const briefing = briefingFor(s, p, { comparison: failedComparison });
+    const stillFailing = briefingFor(s, p, { comparison: failedComparison });
+    const rerouted = step({ x: 0.2, y: 0.8 });
+    const cleanBriefing = briefingFor(rerouted, proposal({ x: 0.2, y: 0.8 }));
+    const rebuild = vi.fn().mockReturnValueOnce(stillFailing).mockReturnValueOnce(cleanBriefing);
+    const snip = fakeFrame(9);
+    const published: Briefing[] = [];
+    const deps: ReviewDeps = {
+      ...baseDeps(),
+      reground: vi.fn(async () => null),
+      reroute: vi.fn(async () => ({ kind: 'resnip' as const, step: rerouted, text: 're-identified "Button" at (20.0%, 80.0%)', snip })),
+      rebuild,
+      publish: vi.fn((b: Briefing) => { published.push(b); }),
+    };
+    const result = await reviewBriefing({ briefing, step: s, proposal: p }, deps);
+    expect(deps.reroute).toHaveBeenCalledWith(s, expect.stringMatching(/comparison failed/));
+    expect(deps.replan).not.toHaveBeenCalled();
+    expect(result.step).toBe(rerouted);
+    expect(result.proposal).toMatchObject({ x: 0.2, y: 0.8, what: 'click "Button" at (20%, 80%)' });
+    expect(result.briefing.revisions.map((r) => r.kind)).toEqual(['reground', 'reroute']);
+    expect(result.briefing.revisions[1]).toMatchObject({ text: expect.stringMatching(/^Rerouted mid-run/), snip });
+    expect(published[published.length - 1].revisions.map((r) => r.kind)).toEqual(['reground', 'reroute']);
+    expect(result.briefing.outcome).toBe('corrected');
+  });
+
+  it('skips a reroute that found nothing and goes on to re-plan', async () => {
+    const s = step();
+    const p = proposal();
+    const briefing = briefingFor(s, p, { comparison: failedComparison });
+    const replannedStep = step({ x: 0.7, y: 0.2 });
+    const replannedProposal = proposal({ x: 0.7, y: 0.2 });
+    const deps: ReviewDeps = {
+      ...baseDeps(),
+      groundingOn: false,
+      replan: vi.fn(async () => ({ step: replannedStep, proposal: replannedProposal })),
+      rebuild: vi.fn(() => briefingFor(replannedStep, replannedProposal)),
+    };
+    const result = await reviewBriefing({ briefing, step: s, proposal: p }, deps);
+    expect(deps.reroute).toHaveBeenCalledTimes(1);
+    expect(result.briefing.revisions.map((r) => r.kind)).toEqual(['replan']);
   });
 });

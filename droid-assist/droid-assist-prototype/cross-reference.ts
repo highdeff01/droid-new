@@ -37,7 +37,8 @@ export const AGREE_DISTANCE = 0.03;
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
 const at = (p: Point) => `(${pct(p.x)}, ${pct(p.y)})`;
-const related = (a: string, b: string) => similarity(a, b) > 0 || similarity(b, a) > 0;
+/** Whether two names share a meaningful word (either way). */
+export const related = (a: string, b: string) => similarity(a, b) > 0 || similarity(b, a) > 0;
 const status = (ok: boolean): Agreement => (ok ? 'consistent' : 'conflicting');
 
 /** A remembered point compared with the plan: consistent within AGREE_DISTANCE. */
@@ -60,7 +61,7 @@ function mappedChecks(target: string, p: Point, k: Knowledge): CrossCheck[] {
 }
 
 /** The habits recorded for this target in this context. */
-const habitsFor = (target: string, k: Knowledge) => k.habits.filter((h) => habitKey(h.target, h.context) === habitKey(target, k.context));
+export const habitsFor = (target: string, k: Knowledge) => k.habits.filter((h) => habitKey(h.target, h.context) === habitKey(target, k.context));
 
 /** Last-known-good coordinates (familiar elements and habit anchors) against the plan. */
 function learnedChecks(target: string, p: Point, k: Knowledge): CrossCheck[] {

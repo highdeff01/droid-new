@@ -10,6 +10,7 @@ const COMMANDS = {
   arrange: 'Usage: /arrange <how to move or reorder elements>, e.g. /arrange move the Files icon below Game',
   scenario: 'Usage: /scenario <dragon|wedding> — resets the test world and plans that persona goal',
   do: 'Usage: /do <capability id> {json params} · /do <request for the main AI>, e.g. /do script.run {"name":"login"}',
+  snip: 'Usage: /snip x,y,w,h [WxH] [display <id>], e.g. /snip 0.1,0.2,0.3,0.25 800x',
 } as const;
 
 /** The name of a slash command. */
@@ -21,6 +22,7 @@ const isCommand = (name: string): name is CommandName => Object.prototype.hasOwn
  * "/use <target>" attaches to an app; "/move <target>" moves the mouse onto an on-screen target;
  * "/measure <a> to <b>" measures between points; "/arrange <goal>" plans and runs a drag
  * rearrangement; "/do <capability>" invokes a registered capability. A command without a target and unknown commands are errors.
+ * rearrangement; "/snip <region>" screenshots a region. A command without a target and unknown commands are errors.
  */
 export function parseCommand(input: string): AssistCommand | null {
   const text = input.trim();
@@ -29,6 +31,7 @@ export function parseCommand(input: string): AssistCommand | null {
   const name = match?.[1] ?? '';
   if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal> or /scenario <dragon|wedding>` };
   if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal> or /do <capability>` };
+  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal> or /snip x,y,w,h` };
   const target = (match[2] ?? '').trim();
   return target ? { kind: name, target } : { kind: 'error', message: COMMANDS[name] };
 }
