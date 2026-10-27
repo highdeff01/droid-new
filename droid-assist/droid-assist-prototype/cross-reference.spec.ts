@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { AGREE_DISTANCE, conflictsOf, crossReference, type CrossCheck, type Knowledge } from './cross-reference.js';
 import type { MappedElement } from './element-map-studio.js';
 import type { FamiliarElement, Habit, LearnedPattern } from './types.js';
+import { newFailure } from './operation-memory.js';
 
 const target = 'Play button';
 const point = { x: 0.5, y: 0.5 };
 
-const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], familiar: [], habits: [], patterns: [], context: 'Media App', ...over });
+const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], familiar: [], habits: [], patterns: [], failures: [], context: 'Media App', ...over });
 
 const mapped = (over: Partial<MappedElement> = {}): MappedElement => ({ id: 'e1', name: 'Play icon', box: { x: 0, y: 0, w: 0.1, h: 0.1 }, mappedAt: 0, ...over });
 
@@ -99,6 +100,19 @@ describe('crossReference — avoid patterns', () => {
     const h = habit({ lessons: [{ kind: 'avoid', text: 'double-click triggers an error', time: 0 }] });
     const checks = crossReference(target, point, knowledge({ habits: [h] }));
     expect(checks).toContainEqual({ source: 'avoid', status: 'conflicting', text: 'Habit avoid: double-click triggers an error' });
+  });
+});
+
+describe('crossReference — failure reminders', () => {
+  const failure = (targets: string[]) => newFailure({ operation: 'Play the intro video', actor: 'Subagent 1', what: 'Step "Play" did not complete', steps: [], targets, shots: [] }, 0);
+
+  it('marks a failure reminder on this target conflicting', () => {
+    const checks = crossReference(target, point, knowledge({ failures: [failure(['play button'])] }));
+    expect(checks.filter((c) => c.source === 'failure')).toEqual([{ source: 'failure', status: 'conflicting', text: expect.stringContaining('Failed before: "Play the intro video" (Subagent 1') }]);
+  });
+
+  it('ignores failures on other targets', () => {
+    expect(crossReference(target, point, knowledge({ failures: [failure(['Settings gear'])] })).filter((c) => c.source === 'failure')).toEqual([]);
   });
 });
 

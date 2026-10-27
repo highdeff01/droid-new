@@ -3,12 +3,13 @@ import { mappedAt, type MappedElement } from './element-map-studio.js';
 import { findFamiliar } from './coords.js';
 import { habitKey, isReliable, successRate } from './habits.js';
 import { similarity } from './planner.js';
+import { failureLine, sameTarget, type FailureRecord } from './operation-memory.js';
 
 /** Whether a piece of known knowledge agrees with the planned coordinates. */
 export type Agreement = 'consistent' | 'conflicting';
 
 /** Which kind of knowledge an entry comes from. */
-export type CrossSource = 'mapped' | 'learned' | 'habit' | 'avoid';
+export type CrossSource = 'mapped' | 'learned' | 'habit' | 'avoid' | 'failure';
 
 /** One cross-reference entry: what is known, and whether it agrees with the plan. */
 export interface CrossCheck {
@@ -23,6 +24,8 @@ export interface Knowledge {
   familiar: FamiliarElement[];
   habits: Habit[];
   patterns: LearnedPattern[];
+  /** Failure reminders of earlier operations. */
+  failures: FailureRecord[];
   /** The app/window the habits of this moment belong to. */
   context: string;
 }
@@ -83,7 +86,12 @@ function avoidChecks(target: string, _p: Point, k: Knowledge): CrossCheck[] {
   return [...learned, ...lessons].map((text): CrossCheck => ({ source: 'avoid', status: 'conflicting', text }));
 }
 
-const CHECKS = [mappedChecks, learnedChecks, habitChecks, avoidChecks];
+/** Failure reminders of operations that failed on this target; each conflicts. */
+function failureChecks(target: string, _p: Point, k: Knowledge): CrossCheck[] {
+  return k.failures.filter((f) => f.targets.some((t) => sameTarget(t, target))).map((f): CrossCheck => ({ source: 'failure', status: 'conflicting', text: `Failed before: ${failureLine(f)}` }));
+}
+
+const CHECKS = [mappedChecks, learnedChecks, habitChecks, avoidChecks, failureChecks];
 
 /** Every piece of known knowledge about `target` and whether it agrees with the planned point `p`. */
 export const crossReference = (target: string, p: Point, k: Knowledge): CrossCheck[] => CHECKS.flatMap((check) => check(target, p, k));
