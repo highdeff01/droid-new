@@ -4,6 +4,7 @@ import type { AiStatus } from './ai.js';
 import { MONITOR_MODES } from './capture.js';
 import { insecureBridgeUrl } from './bridge.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
+import { DisplayPicker } from './display-picker.js';
 import styles from './droid-assist.module.css';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
@@ -42,6 +43,7 @@ export function MonitorStatus({ engine }: { engine: AssistEngine }) {
           {(Object.keys(MONITOR_MODES) as MonitorMode[]).map((m) => <option key={m} value={m}>{MONITOR_MODES[m].label}</option>)}
         </select>
       </label>
+      <DisplayPicker engine={engine} compact />
       <span>⏱ every <b>{intervalMs} ms</b></span>
       <span>📸 <b>{shotCount}</b> screenshots</span>
       <span>Source: <b>{SOURCE_LABEL[source]}</b></span>

@@ -130,6 +130,9 @@ async function verifyAfter(step: WorkflowStep, before: Frame, target: { x: numbe
 /** A point as native pixels on `live`, for messages. */
 const px = (p: Point, live: Frame) => `(${Math.round(p.x * live.srcW)}, ${Math.round(p.y * live.srcH)})px`;
 
+/** Where a frame's display sits on the virtual desktop, for input on a secondary monitor. */
+const frameOrigin = (f: Frame): Point => ({ x: f.originX ?? 0, y: f.originY ?? 0 });
+
 /**
  * The AI grounding pass for a named pointer target: confirm the target is at the proposed
  * point on a zoomed crop; if not, re-ask the planner once with why and confirm its new point.
@@ -230,7 +233,7 @@ export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepO
     end = e.point;
   }
   if (!deps.dispatch) return { ok: true, executed: false, message: 'verified on the live screen — self-test, not dispatched', target, end, correction, live };
-  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, { token: deps.bridgeToken });
+  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, { token: deps.bridgeToken, origin: frameOrigin(live) });
   if (!sent.ok) return { ok: false, executed: false, message: sent.message, target, end, correction, live };
   const after = await verifyAfter(step, live, target, deps);
   const done: StepOutcome = { ok: true, executed: true, message: sent.message, target, end, correction, live, ...after };
@@ -268,7 +271,7 @@ async function retryMissed(step: WorkflowStep, out: StepOutcome, deps: StepDeps)
   const shot = out.shot!;
   deps.log(`"${step.name}": missed by ${delta} — retrying once at ${px(miss.at, shot)}`, 'warn');
   deps.aim?.(miss.at);
-  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: miss.at.x, correctedY: miss.at.y }, shot.srcW, shot.srcH);
+  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: miss.at.x, correctedY: miss.at.y }, shot.srcW, shot.srcH, { origin: frameOrigin(shot) });
   const retry = { dxPx: miss.dxPx, dyPx: miss.dyPx, at: miss.at, ok: sent.ok, message: sent.message };
   if (!sent.ok) return { ...out, retry };
   const after = await verifyAfter(step, shot, miss.at, deps);

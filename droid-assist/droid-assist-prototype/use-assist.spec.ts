@@ -24,6 +24,8 @@ function installNative() {
     }),
     setCaptureInterval: vi.fn(),
     stopCapture: vi.fn(),
+    listDisplays: vi.fn(async () => []),
+    selectDisplay: vi.fn(),
   };
   window.droidNative = api;
   return { api, hooks };
@@ -730,6 +732,7 @@ describe('useAssist loop control', () => {
     const m = hangingReflect();
     const result = await mount();
     expect(result.current.settings.aiMaxInFlight).toBe(2);
+    expect(result.current.settings.aiTimeoutMs).toBe(90_000);
     act(() => result.current.setSteps([{ id: 's1', name: 'Calc', action: 'calc', text: '2+2', x: 0.5, y: 0.5, status: 'pending' }]));
     let run!: Promise<void>;
     act(() => {

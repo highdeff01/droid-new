@@ -17,6 +17,9 @@ export interface Frame {
   /** Source resolution of the captured screen (for converting to native coordinates). */
   srcW: number;
   srcH: number;
+  /** Physical position of the captured display's top-left on the virtual desktop (multi-monitor); absent = 0,0. Input lands at origin + normalized × src size. */
+  originX?: number;
+  originY?: number;
   /** Where the frame came from: the demo canvas, a shared screen, or a real desktop screenshot from the bridge. */
   source: 'demo' | 'screen' | 'desktop';
 }
@@ -238,6 +241,8 @@ export interface AssistSettings {
   /** Drift: template search radius, in sample pixels of the 320x180 drift buffer. */
   driftRadius: number;
   monitorMode: MonitorMode;
+  /** Electron display id native capture takes screenshots from; null = the primary display. */
+  displayId: string | null;
   /** How often the Screen watcher observes the live frame, in ms. */
   watchMs: number;
   autoAct: boolean;
@@ -271,6 +276,8 @@ export interface AssistSettings {
   stepRetries: number;
   /** Cap on model calls in flight at once; further calls wait in the shared priority queue. */
   aiMaxInFlight: number;
+  /** Per-request AI timeout in ms; queued calls get it when they start. Cancelling still aborts at once. */
+  aiTimeoutMs: number;
   /** Loop control: on/off per automation stage and agent (guardrails are never in it). */
   stages: StageMap;
   /** Error forwarding: the error-fix app's HTTP endpoint captured errors are POSTed to. */

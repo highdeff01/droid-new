@@ -6,7 +6,8 @@ import { AD_CYCLE, demoAd, demoDrag, demoFileAt, demoPlayButton, drawDemoDesktop
 import { AI_PLAN_SOURCE, calculate, generateCard, patternLine, planFromGoal, planRemaining, relevantPatterns, relocateTarget, replanDrag, replanStep, uid } from './planner.js';
 import { checkMoved, sameElement, verifyArrangement, type Expectation, type MovedElement } from './rearrange.js';
 import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi } from './ai.js';
-import type { AiReply, AiStatus, AskFn, AskRequest } from './ai.js';
+import type { AiReply, AiStatus, AskFn, AskRequest, HistoryChangeFn } from './ai.js';
+import { historyChangeText } from './ai-history.js';
 import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type StageId } from './loop-control.js';
 import { DEFAULT_AI_MAX_IN_FLIGHT, createAiQueue, type AiQueue, type AiQueueStats } from './ai-queue.js';
 import { confirmTarget, decidePopup, describeScreen, judgeStep, reflectOn, verifyGoal, type GoalCheck, type PopupDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
@@ -25,7 +26,8 @@ import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, fullJpeg, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
 import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './recorder.js';
-import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveSettings, saveWatcher } from './storage.js';
+import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveWatcher } from './storage.js';
+import { appendSummary, runSummary, type RunSummary } from './run-stats.js';
 import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, reorderSteps, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
 import { forgetElement, listElements, rememberElement, type ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
@@ -146,6 +148,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   driftMatched: MATCHED,
   driftRadius: SEARCH_RADIUS,
   monitorMode: 'app',
+  displayId: null,
   watchMs: 5000,
   autoAct: false,
   aiHelp: true,
@@ -164,6 +167,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   maxIterations: DEFAULT_MAX_ITERATIONS,
   stepRetries: DEFAULT_STEP_RETRIES,
   aiMaxInFlight: DEFAULT_AI_MAX_IN_FLIGHT,
+  aiTimeoutMs: DEFAULT_AI_TIMEOUT_MS,
   stages: DEFAULT_STAGES,
   errorUrl: '',
   errorForwarding: false,
@@ -224,6 +228,8 @@ export function useAssist() {
   const [mapDraft, setMapDraft] = useState<Box | null>(null);
   /** Per-target, per-app habits learned from every executed step, applied to planning and grounding. */
   const [habits, setHabits] = useState<Habit[]>(() => loadHabits());
+  /** One summary per finished run (newest first), for the Stats panel. */
+  const [runs, setRuns] = useState<RunSummary[]>(loadRunSummaries);
   /** The Screen watcher's notes, proposals and test results (persisted). */
   const [watcher, setWatcher] = useState<WatcherState>(loadWatcher);
   const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
@@ -296,13 +302,16 @@ export function useAssist() {
   const armedRef = useRef(armed);
   const abortedRef = useRef(aborted);
   const autoBudgetRef = useRef<ActionBudget>(createBudget(settings.actionBudget));
-  const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage, renderView));
+  /** Trims and resets of the AI history land here (wired to the log once addLog exists). */
+  const historyChangeRef = useRef<HistoryChangeFn>(() => undefined);
+  const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage, renderView, (c) => historyChangeRef.current(c)));
+  const [aiHistory, setAiHistory] = useState(() => aiSessionRef.current.history());
   /** Cancels every in-flight model call when aborted; replaced by a fresh one after each cancel. */
   const aiCtrlRef = useRef(new AbortController());
   /** Loop control: one controller per stage, so unchecking a stage cancels only its in-flight calls. */
   const stageCtrlsRef = useRef(createStageControllers());
   /** Shared model-call queue: executor/grounding first, pipeline next, agents last; at most aiMaxInFlight running. */
-  const [aiQueueApi] = useState(() => createAiQueue(settings.aiMaxInFlight, setAiQueue));
+  const [aiQueueApi] = useState(() => createAiQueue(settings.aiMaxInFlight, setAiQueue, settings.aiTimeoutMs));
   const aiQueueRef = useRef<AiQueue>(aiQueueApi);
   const aiStatusRef = useRef(aiStatus);
   const logRef = useRef(log);
@@ -326,6 +335,12 @@ export function useAssist() {
   const targetRef = useRef(target);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
+  /** This app session (one page load), stamped on every run summary. */
+  const sessionRef = useRef(uid('session'));
+  /** When the current run started; null between runs. */
+  const runStartRef = useRef<number | null>(null);
+  /** The saved flow (card id) the current steps came from or were saved as; null for a fresh plan. */
+  const flowRef = useRef<string | null>(null);
   /** Auto Act's verify → plan → continue loop while it is running; null between loops. */
   const autoLoopRef = useRef<AutoLoop | null>(null);
   const timelineRef = useRef(timeline);
@@ -392,10 +407,12 @@ export function useAssist() {
   // Persistence: settings, log and cards.
   useEffect(() => saveSettings(settings), [settings]);
   useEffect(() => aiQueueRef.current.setLimit(settings.aiMaxInFlight), [settings.aiMaxInFlight]);
+  useEffect(() => aiQueueRef.current.setTimeoutMs(settings.aiTimeoutMs), [settings.aiTimeoutMs]);
   useEffect(() => saveLog(log), [log]);
   useEffect(() => savePatterns(patterns), [patterns]);
   useEffect(() => saveFamiliar(familiar), [familiar]);
   useEffect(() => saveHabits(habits), [habits]);
+  useEffect(() => saveRunSummaries(runs), [runs]);
   useEffect(() => saveWatcher(watcher), [watcher]);
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
@@ -432,6 +449,22 @@ export function useAssist() {
 
   const addLog = useCallback((from: string, message: string, tone: LogEntry['tone'] = 'info', shots?: string[]) => {
     setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}) }, ...l].slice(0, LOG_LIMIT));
+  }, []);
+
+  /** Every trim or reset of the AI conversation history is logged and shown. */
+  historyChangeRef.current = (change) => {
+    setAiHistory(aiSessionRef.current.history());
+    addLog('AI history', historyChangeText(change), change.reason === 'manual' ? 'info' : 'warn');
+  };
+
+  /** Keeps only the newest `keep` messages of the AI conversation. */
+  const trimAiHistory = useCallback((keep: number) => aiSessionRef.current.trim(keep), []);
+
+  /** Cancels in-flight model calls and clears the AI conversation entirely. */
+  const resetAiSession = useCallback(() => {
+    aiCtrlRef.current.abort();
+    aiCtrlRef.current = new AbortController();
+    aiSessionRef.current.reset();
   }, []);
 
   /** Error forwarding: reports carry the recent log and the current frame. */
@@ -494,10 +527,11 @@ export function useAssist() {
     const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage), req.signal);
     setAiCalls((n) => n + 1);
     try {
-      const reply = await aiQueueRef.current.run(stage, () => {
+      const reply = await aiQueueRef.current.run(stage, (timeoutMs) => {
         const { aiUrl, aiModel, aiView } = settingsRef.current;
-        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView] }, { ...req, context, signal });
+        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs }, { ...req, context, signal });
       }, signal);
+      setAiHistory(aiSessionRef.current.history());
       const { aiModel } = settingsRef.current;
       if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${aiModel}` });
       return reply;
@@ -526,9 +560,14 @@ export function useAssist() {
 
   const note = useCallback((entry: Omit<ThinkingEntry, 'id' | 'time'>) => setTimeline((t) => addEntry(t, entry)), []);
 
-  /** A reply that held no JSON is logged as an AI parse failure with its truncated raw text — never shown as an answer. */
+  /**
+   * A reply that held no JSON is logged as an AI parse failure with its truncated raw text — never shown as an answer —
+   * and counts toward the session's stale-context guard.
+   */
   const reportParseFailure = useCallback((step: string, error: unknown) => {
-    if (error instanceof AiParseError) addLog('AI parse', `Unparseable reply for "${step}" (raw, truncated): ${error.raw}`, 'error');
+    if (!(error instanceof AiParseError)) return;
+    addLog('AI parse', `Unparseable reply for "${step}" (raw, truncated): ${error.raw}`, 'error');
+    aiSessionRef.current.noteParse(false);
   }, [addLog]);
 
   /**
@@ -539,7 +578,10 @@ export function useAssist() {
     try {
       const r = await call();
       const text = summary(r);
-      if (text !== null) note({ step, kind, text, thinking: r.thinking });
+      if (text !== null) {
+        note({ step, kind, text, thinking: r.thinking });
+        aiSessionRef.current.noteParse(true);
+      }
       return r;
     } catch (error) {
       note({ step, kind, text: '', thinking: null, error: errorText(error) });
@@ -640,20 +682,31 @@ export function useAssist() {
   const autoSaveFlow = useCallback((runGoal: string, runSteps: WorkflowStep[]) => {
     const { cards: next, replaced } = upsertCard(cardsRef.current, flowCard(runGoal, runSteps));
     cardsRef.current = next;
+    flowRef.current = next[0].id;
     setCards(next);
     addLog('Library', `Flow saved: "${next[0].name}" (${runSteps.length} step(s), drift-corrected)${replaced ? ` — updated the existing "${replaced.name}"` : ''}`, 'ok');
   }, [addLog]);
 
+  /** Appends the finished run's summary (goal, steps, duration, outcome, flow) to the persisted run records. */
+  const recordRun = useCallback((runGoal: string, runSteps: WorkflowStep[], opts: { dryRun: boolean; stopped: boolean }) => {
+    const startedAt = runStartRef.current ?? Date.now();
+    runStartRef.current = null;
+    const summary = runSummary({ goal: runGoal, steps: runSteps, startedAt, ...opts, session: sessionRef.current, flowId: flowRef.current });
+    setRuns((r) => appendSummary(r, summary));
+  }, []);
+
   /**
    * Run memory: a successful real run is saved as a flow; a failed one records its failure
    * pattern instead. Either way the model is asked for lessons; its failure never blocks saving.
+   * Every finished run, remembered or not, leaves a run summary.
    */
   const learnFromRun = useCallback(async (runSteps: WorkflowStep[], opts: { dryRun: boolean; stopped: boolean }) => {
     const verdict = runVerdict(runSteps, opts);
-    if (verdict === 'ignored' || !stageOn('supervisor')) return;
     const runGoal = goalRef.current.trim();
-    if (verdict === 'success') autoSaveFlow(runGoal, runSteps);
-    else {
+    if (verdict === 'success' && stageOn('supervisor')) autoSaveFlow(runGoal, runSteps);
+    recordRun(runGoal, runSteps, opts);
+    if (verdict === 'ignored' || !stageOn('supervisor')) return;
+    if (verdict === 'failed') {
       const lesson = failurePattern(runGoal, runSteps);
       addPatterns([lesson]);
       addLog('Patterns', `Run failed — not saved as a flow. Learned: avoid ${lesson.pattern}`, 'warn');
@@ -665,7 +718,7 @@ export function useAssist() {
     } catch (error) {
       addLog('Patterns', `AI unavailable — no patterns learned from this run: ${errorText(error)}`, 'warn');
     }
-  }, [addLog, addPatterns, askFor, autoSaveFlow]);
+  }, [addLog, addPatterns, askFor, autoSaveFlow, recordRun]);
 
   const triggerAbort = useCallback((reason: string) => {
     abortRef.current = true;
@@ -971,7 +1024,10 @@ export function useAssist() {
       bridgeUrl,
       bridgeToken,
       capture: async () => {
-        const f = await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current);
+        // Native multi-monitor capture: verify on the chosen display's own frames, which carry
+        // its desktop origin so input lands on that display; otherwise the bridge's screenshot.
+        const native = sourceRef.current === 'screen' && captureRef.current?.kind === 'native' ? framesRef.current[0] : undefined;
+        const f = native ?? await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current);
         size = { w: f.srcW, h: f.srcH };
         return f;
       },
@@ -1652,6 +1708,7 @@ export function useAssist() {
   /** Starts a new plan: a fresh baseline for "changed since the plan" and fresh re-proposal allowances. */
   const markPlan = () => {
     autoLoopRef.current = null;
+    flowRef.current = null;
     planAtRef.current = Date.now();
     reproposedRef.current = new Set();
     staleHandledRef.current = null;
@@ -1732,6 +1789,7 @@ export function useAssist() {
     }
     if (j.kind === 'fail') failUnjustified(idx, 'Auto-Actor', j.reason);
     else {
+      runStartRef.current ??= Date.now();
       updateStep(idx, { status: 'running' });
       const out = await perform(j.step, 'Auto-Actor', autoBudgetRef.current, dry, j.proposal);
       applyOutcome(idx, out, dry, frame);
@@ -1845,6 +1903,11 @@ export function useAssist() {
   useEffect(() => {
     captureRef.current?.setInterval(intervalMs);
   }, [intervalMs]);
+
+  // The running native capture follows the chosen display live (Settings or the HUD quick-switch).
+  useEffect(() => {
+    captureRef.current?.selectDisplay(settings.displayId);
+  }, [settings.displayId]);
 
   useEffect(() => () => captureRef.current?.stop(), []);
 
@@ -2025,6 +2088,7 @@ export function useAssist() {
     if (dryRun && !selfTest) addLog('Safety', 'Real input disarmed — replay runs as a dry run (nothing is sent)', 'warn');
     const budget = createBudget(settingsRef.current.actionBudget);
     abortRef.current = false;
+    runStartRef.current = Date.now();
     reproposedRef.current = new Set();
     setReplaying(true);
     const shots: Frame[] = [];
@@ -2367,6 +2431,7 @@ export function useAssist() {
   /** Captures the real screen: Electron native capture, else the browser picker. Resolves whether it started. */
   const shareScreen = async (): Promise<boolean> => {
     const capture = createScreenCapture();
+    capture.selectDisplay(settingsRef.current.displayId);
     try {
       await capture.start(monitorInterval(settingsRef.current.monitorMode, settingsRef.current.captureMs), { onImage: onScreenImage, onLost: onCaptureLost });
     } catch (error) {
@@ -2380,9 +2445,13 @@ export function useAssist() {
     return true;
   };
 
-  /** Switches the monitor to real desktop screenshots from the bridge, after a health check. */
-  const connectBridge = async (): Promise<boolean> => {
-    const health = await checkBridge(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken);
+  /**
+   * Switches the monitor to real desktop screenshots from the bridge, after a health check.
+   * `target` connects to a bridge just verified by the wizard, before its settings re-render.
+   */
+  const connectBridge = async (target?: { url: string; token: string }): Promise<boolean> => {
+    const { url, token } = target ?? { url: settingsRef.current.bridgeUrl, token: settingsRef.current.bridgeToken };
+    const health = await checkBridge(url, token);
     if (!health.ok) {
       addLog('Bridge', health.message, 'error');
       captureError({ kind: 'bridge', message: health.message });
@@ -2602,7 +2671,9 @@ export function useAssist() {
 
   const saveCard = () => {
     if (!draftCard) return;
-    setCards((c) => [{ id: uid('card'), ...draftCard, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
+    const id = uid('card');
+    flowRef.current = id;
+    setCards((c) => [{ id, ...draftCard, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
     addLog('Library', `Saved "${draftCard.name}"`, 'ok');
     setDraftCard(null);
   };
@@ -2611,6 +2682,7 @@ export function useAssist() {
     expectRef.current = [];
     setSteps(card.steps.map((s) => ({ ...s, status: 'pending' as const })));
     markPlan();
+    flowRef.current = card.id;
     addLog('Library', `Loaded "${card.name}"`);
   };
 
@@ -2619,11 +2691,12 @@ export function useAssist() {
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
     armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
-    ruler, continuing, habits, deleteHabit, pinHabit,
+    ruler, continuing, habits, deleteHabit, pinHabit, runs,
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     watcher, acceptProposal, dismissProposal, testProposal,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
+    aiHistory, trimAiHistory, resetAiSession,
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
