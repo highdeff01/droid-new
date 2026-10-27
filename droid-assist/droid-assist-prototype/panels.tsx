@@ -17,7 +17,8 @@ import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js
 import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
 import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
-import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, type AiView } from './ai.js';
+import { AI_VIEWS, type AiView } from './ai.js';
+import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-history.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { BackupSettings } from './backup-panel.js';
@@ -456,6 +457,32 @@ export function AiHelpPanel({ engine }: { engine: AssistEngine }) {
       </form>
       {aiStatus.state === 'offline' && <p className={styles.muted} role="alert">{aiStatus.detail}. AI plan, Auto act and AI help are unavailable.</p>}
       {aiAnswer && <p>{aiAnswer}</p>}
+    </section>
+  );
+}
+
+/** The AI session's conversation history: roles, sizes, times, a token estimate, trim-to-N and reset. */
+export function AiHistoryPanel({ engine }: { engine: AssistEngine }) {
+  const { aiHistory } = engine;
+  const [keep, setKeep] = useState(STALE_KEEP);
+  const stats = historyStats(aiHistory);
+  return (
+    <section className={styles.panel}>
+      <h3>AI conversation <small>{stats.messages}/{HISTORY_MAX} message(s) · {stats.chars} chars · ~{stats.tokens} tokens</small></h3>
+      <div className={styles.row}>
+        <label>
+          Keep last <input type="number" min={0} max={HISTORY_MAX} value={keep} onChange={(e) => setKeep(Number(e.target.value))} aria-label="Messages to keep" />
+        </label>
+        <button type="button" onClick={() => engine.trimAiHistory(keep)} disabled={aiHistory.length <= keep}>Trim</button>
+        <button type="button" onClick={engine.resetAiSession}>Reset session</button>
+      </div>
+      <ul className={styles.log}>
+        {aiHistory.map((m, i) => (
+          <li key={i} data-tone={m.role === 'assistant' ? 'ok' : 'info'}>
+            <time>{m.time ? new Date(m.time).toLocaleTimeString() : '—'}</time> <b>{m.role}</b> {m.content.length} chars · ~{estimateTokens(m.content)} tokens
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

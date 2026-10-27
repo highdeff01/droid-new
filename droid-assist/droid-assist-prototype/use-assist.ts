@@ -5,8 +5,9 @@ import { MATCHED, SAMPLE_H, SAMPLE_W, SEARCH_RADIUS, STABLE, boundingBox, boxDis
 import { AD_CYCLE, demoAd, demoDrag, demoFileAt, demoPlayButton, drawDemoDesktop, findIcon, initialDemoFile, initialDemoIcons, moveIcon, type DemoFile, type DemoIcon } from './demo-desktop.js';
 import { AI_PLAN_SOURCE, calculate, generateCard, patternLine, planFromGoal, planRemaining, relevantPatterns, relocateTarget, replanDrag, replanStep, uid } from './planner.js';
 import { checkMoved, sameElement, verifyArrangement, type Expectation, type MovedElement } from './rearrange.js';
-import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi } from './ai.js';
-import type { AiReply, AiStatus, AskFn, AskRequest } from './ai.js';
+import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi } from './ai.js';
+import type { AiReply, AiStatus, AskFn, AskRequest, HistoryChangeFn } from './ai.js';
+import { historyChangeText } from './ai-history.js';
 import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type StageId } from './loop-control.js';
 import { DEFAULT_AI_MAX_IN_FLIGHT, createAiQueue, type AiQueue, type AiQueueStats } from './ai-queue.js';
 import { confirmTarget, decidePopup, describeScreen, judgeStep, reflectOn, verifyGoal, type GoalCheck, type PopupDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
@@ -293,7 +294,10 @@ export function useAssist() {
   const armedRef = useRef(armed);
   const abortedRef = useRef(aborted);
   const autoBudgetRef = useRef<ActionBudget>(createBudget(settings.actionBudget));
-  const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage, renderView));
+  /** Trims and resets of the AI history land here (wired to the log once addLog exists). */
+  const historyChangeRef = useRef<HistoryChangeFn>(() => undefined);
+  const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage, renderView, (c) => historyChangeRef.current(c)));
+  const [aiHistory, setAiHistory] = useState(() => aiSessionRef.current.history());
   /** Cancels every in-flight model call when aborted; replaced by a fresh one after each cancel. */
   const aiCtrlRef = useRef(new AbortController());
   /** Loop control: one controller per stage, so unchecking a stage cancels only its in-flight calls. */
@@ -432,6 +436,22 @@ export function useAssist() {
     setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}) }, ...l].slice(0, LOG_LIMIT));
   }, []);
 
+  /** Every trim or reset of the AI conversation history is logged and shown. */
+  historyChangeRef.current = (change) => {
+    setAiHistory(aiSessionRef.current.history());
+    addLog('AI history', historyChangeText(change), change.reason === 'manual' ? 'info' : 'warn');
+  };
+
+  /** Keeps only the newest `keep` messages of the AI conversation. */
+  const trimAiHistory = useCallback((keep: number) => aiSessionRef.current.trim(keep), []);
+
+  /** Cancels in-flight model calls and clears the AI conversation entirely. */
+  const resetAiSession = useCallback(() => {
+    aiCtrlRef.current.abort();
+    aiCtrlRef.current = new AbortController();
+    aiSessionRef.current.reset();
+  }, []);
+
   /** Error forwarding: reports carry the recent log and the current frame. */
   const errorForwarding = useErrorForwarding(settings, addLog, () => ({ log: logRef.current, frame: framesRef.current[0] ?? null }));
   const captureError = errorForwarding.capture;
@@ -496,6 +516,7 @@ export function useAssist() {
         const { aiUrl, aiModel, aiView } = settingsRef.current;
         return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs }, { ...req, context, signal });
       }, signal);
+      setAiHistory(aiSessionRef.current.history());
       const { aiModel } = settingsRef.current;
       if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${aiModel}` });
       return reply;
@@ -524,9 +545,14 @@ export function useAssist() {
 
   const note = useCallback((entry: Omit<ThinkingEntry, 'id' | 'time'>) => setTimeline((t) => addEntry(t, entry)), []);
 
-  /** A reply that held no JSON is logged as an AI parse failure with its truncated raw text — never shown as an answer. */
+  /**
+   * A reply that held no JSON is logged as an AI parse failure with its truncated raw text — never shown as an answer —
+   * and counts toward the session's stale-context guard.
+   */
   const reportParseFailure = useCallback((step: string, error: unknown) => {
-    if (error instanceof AiParseError) addLog('AI parse', `Unparseable reply for "${step}" (raw, truncated): ${error.raw}`, 'error');
+    if (!(error instanceof AiParseError)) return;
+    addLog('AI parse', `Unparseable reply for "${step}" (raw, truncated): ${error.raw}`, 'error');
+    aiSessionRef.current.noteParse(false);
   }, [addLog]);
 
   /**
@@ -537,7 +563,10 @@ export function useAssist() {
     try {
       const r = await call();
       const text = summary(r);
-      if (text !== null) note({ step, kind, text, thinking: r.thinking });
+      if (text !== null) {
+        note({ step, kind, text, thinking: r.thinking });
+        aiSessionRef.current.noteParse(true);
+      }
       return r;
     } catch (error) {
       note({ step, kind, text: '', thinking: null, error: errorText(error) });
@@ -2584,6 +2613,7 @@ export function useAssist() {
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     watcher, acceptProposal, dismissProposal, testProposal,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
+    aiHistory, trimAiHistory, resetAiSession,
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
