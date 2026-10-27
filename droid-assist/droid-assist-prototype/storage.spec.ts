@@ -11,6 +11,8 @@ import { LOG_LIMIT, PATTERN_LIMIT, SYSTEM_FOLDER_LIMIT, loadCards, loadElementMa
 import { DEFAULT_AUTO_ACT, NOTIFICATION_LIMIT, type AssistNotification } from './notifications.js';
 import type { Persona } from './persona.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadPersonas, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, savePersonas, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
+import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard, WorkflowStep } from './types.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperations, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveOperations, saveSettings, saveWatcher } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { HABIT_STALE_MS } from './habits.js';
 import { DEFAULT_STAGES } from './loop-control.js';
@@ -23,6 +25,7 @@ import { MASTER_PROMPT_MAX } from './ai.js';
 import { ACCESS_PATH_LIMIT, type AccessProfile } from './access-paths.js';
 import type { PositionDossier } from './position-dossier.js';
 import { GOAL_LIMIT, createGoal, trace, type TraceContext } from './goal-tracer.js';
+import type { SavedOperation } from './saved-operations.js';
 
 const DEFAULTS: AssistSettings = { ...DEFAULT_SETTINGS, aiUrl: 'https://ai.example/api/chat', autoContinue: false };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
@@ -766,5 +769,86 @@ describe('loadPersonas', () => {
       null,
     ]));
     expect(loadPersonas()).toEqual([{ ...persona(3), entries: [{ kind: 'learned', text: 'ok', time: 3 }] }]);
+describe('loadSettings: playbackWindowSec', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('defaults to 30 s', () => {
+    expect(DEFAULTS.playbackWindowSec).toBe(30);
+    expect(loadSettings(DEFAULTS).playbackWindowSec).toBe(30);
+  });
+
+  it('keeps stored windows inside 30..600 s, including both ends', () => {
+    for (const ok of [30, 300, 600]) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ playbackWindowSec: ok }));
+      expect(loadSettings(DEFAULTS).playbackWindowSec).toBe(ok);
+    }
+  });
+
+  it('falls back to the default for 29, 601 and non-numbers', () => {
+    for (const bad of [29, 601, '120']) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ playbackWindowSec: bad }));
+      expect(loadSettings(DEFAULTS).playbackWindowSec).toBe(30);
+    }
+  });
+});
+
+describe('loadSettings: operationRetries', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('keeps a stored operationRetries of 5', () => {
+    localStorage.setItem('droid-assist.settings', '{"operationRetries":5}');
+    expect(loadSettings(DEFAULTS).operationRetries).toBe(5);
+  });
+
+  it('falls back to the default (2) for 11 and -1', () => {
+    for (const bad of [11, -1]) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ operationRetries: bad }));
+      expect(loadSettings(DEFAULTS).operationRetries).toBe(DEFAULTS.operationRetries);
+    }
+  });
+});
+
+describe('loadOperations / saveOperations', () => {
+  beforeEach(() => localStorage.clear());
+
+  const operation: SavedOperation = {
+    id: 'op_1',
+    name: 'Open YouTube',
+    goal: 'open youtube in chrome',
+    steps: [{ id: 's1', name: 'Click Chrome', action: 'click', x: 0.5, y: 0.5, status: 'done' } as WorkflowStep],
+    screenshots: [],
+    source: 'ai',
+    savedAt: 100,
+    runs: 2,
+    successes: 1,
+  };
+
+  it('round-trips name/goal/steps(pending)/runs/successes/source', async () => {
+    saveOperations([operation]);
+    const [loaded] = await loadOperations();
+    expect(loaded).toMatchObject({ name: 'Open YouTube', goal: 'open youtube in chrome', runs: 2, successes: 1, source: 'ai' });
+    expect(loaded.steps.map((s) => s.status)).toEqual(['pending']);
+    expect(loaded.screenshots).toEqual([]);
+  });
+
+  it('drops invalid entries', async () => {
+    localStorage.setItem('droid-assist.operations', JSON.stringify([operation, { id: 'bad' }, null]));
+    const loaded = await loadOperations();
+    expect(loaded).toHaveLength(1);
+  });
+
+  it('leaves other stored keys untouched', () => {
+    saveCards([]);
+    const triggers = ['droid-assist.triggers', JSON.stringify([{ foo: 'bar' }])] as const;
+    localStorage.setItem(triggers[0], triggers[1]);
+    saveOperations([operation]);
+    expect(localStorage.getItem('droid-assist.cards')).toBe('[]');
+    expect(localStorage.getItem('droid-assist.triggers')).toBe(triggers[1]);
+  });
+
+  it('gives [] screenshots when none are saved', async () => {
+    saveOperations([operation]);
+    const [loaded] = await loadOperations();
+    expect(loaded.screenshots).toEqual([]);
   });
 });

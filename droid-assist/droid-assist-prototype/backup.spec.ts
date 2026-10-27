@@ -31,6 +31,7 @@ describe('export', () => {
     expect(Object.keys(backup.stores).sort()).toEqual(['accessPaths', 'cards', 'elementMap', 'familiar', 'habits', 'history', 'log', 'outbox', 'patterns', 'portfolios', 'profile', 'sections', 'settings', 'variations', 'watcher']);
     expect(Object.keys(backup.stores).sort()).toEqual(['cards', 'elementMap', 'familiar', 'habits', 'history', 'log', 'outbox', 'packs', 'patterns', 'settings', 'watcher']);
     expect(Object.keys(backup.stores).sort()).toEqual(['cards', 'dossiers', 'elementMap', 'familiar', 'habits', 'history', 'log', 'outbox', 'patterns', 'settings', 'watcher']);
+    expect(Object.keys(backup.stores).sort()).toEqual(['cards', 'elementMap', 'familiar', 'habits', 'history', 'log', 'operations', 'outbox', 'patterns', 'settings', 'watcher']);
   });
 
   it('round-trips through a wiped browser: every store loads back unchanged', () => {

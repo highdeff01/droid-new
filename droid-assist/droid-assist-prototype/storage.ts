@@ -1,6 +1,6 @@
 import type { AssistSettings, FamiliarElement, Habit, HabitAnchor, HabitLesson, LearnedPattern, LogEntry, MonitorMode, SavedCard, StepAction, StepStatus, WorkflowStep } from './types.js';
 import { STEP_ACTIONS } from './types.js';
-import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
+import { decodeFrame, decodeFrames, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 import { sanitizeBudget } from './safety.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { MAP_LIMIT, type ElementKind, type MappedElement, type MoveEvent, type PerformFn, type PositionRecord } from './element-map-studio.js';
@@ -47,6 +47,9 @@ import { SYSTEM_REFRESH_SEC_RANGE } from './system-info.js';
 export const SYSTEM_FOLDER_LIMIT = 10;
 import { isExecutionMode } from './execution-mode.js';
 import { sanitizeAutoApply } from './aggressive.js';
+import { OPERATION_LIMIT, OPERATION_SOURCES, type OperationSource, type SavedOperation } from './saved-operations.js';
+import { OPERATION_RETRIES_MAX, OPERATION_RETRIES_MIN } from './operation-retry.js';
+import { PLAYBACK_WINDOW_SEC_MAX, PLAYBACK_WINDOW_SEC_MIN } from './playback.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -73,6 +76,7 @@ const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', l
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', initiative: 'droid-assist.initiative' } as const;
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', goals: 'droid-assist.goals' } as const;
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', notifications: 'droid-assist.notifications' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', operations: 'droid-assist.operations' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -92,6 +96,7 @@ const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | '
 const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'goalStall', [number, number]> = {
 const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'breakMinutes' | 'systemRefreshSec', [number, number]> = {
 const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'operationRetries' | 'playbackWindowSec', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
@@ -114,6 +119,8 @@ const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | '
   mainBridgePort: [MAIN_BRIDGE_PORT_MIN, MAIN_BRIDGE_PORT_MAX],
   mainBridgeBackoffMinMs: [MAIN_BRIDGE_BACKOFF_MIN_MS, 10000],
   mainBridgeBackoffMaxMs: [1000, MAIN_BRIDGE_BACKOFF_MAX_MS],
+  operationRetries: [OPERATION_RETRIES_MIN, OPERATION_RETRIES_MAX],
+  playbackWindowSec: [PLAYBACK_WINDOW_SEC_MIN, PLAYBACK_WINDOW_SEC_MAX],
 };
 
 const BRIDGE_MODES: ReadonlyArray<AssistSettings['mainBridgeMode']> = ['listen', 'dial'];
@@ -818,4 +825,43 @@ export const loadNotifications = (): AssistNotification[] => listOf(readJson(KEY
 /** Persists the newest NOTIFICATION_LIMIT notifications. */
 export function saveNotifications(list: AssistNotification[]) {
   writeJson(KEYS.notifications, list.slice(0, NOTIFICATION_LIMIT));
+/** An operation as persisted: step and reference screenshots without their pixel buffers. */
+type StoredOperation = Omit<SavedOperation, 'steps' | 'screenshots'> & { steps: StoredStep[]; screenshots: StoredFrame[] };
+
+/** A valid stored operation with its valid steps and screenshots, or null. */
+function parseOperation(v: unknown): StoredOperation | null {
+  if (!isObject(v) || !isStr(v.id) || !isStr(v.name) || !Array.isArray(v.steps)) return null;
+  const steps = v.steps.map(parseStep).filter((s): s is StoredStep => s !== null);
+  const counter = (n: unknown) => (isNum(n) && n >= 0 ? Math.floor(n) : 0);
+  const runs = counter(v.runs);
+  return {
+    id: v.id,
+    name: v.name,
+    goal: typeof v.goal === 'string' && v.goal.trim() ? v.goal : v.name,
+    steps,
+    screenshots: Array.isArray(v.screenshots) ? v.screenshots.filter(isStoredFrame) : [],
+    source: OPERATION_SOURCES.includes(v.source as OperationSource) ? (v.source as OperationSource) : 'recorded',
+    savedAt: isNum(v.savedAt) ? v.savedAt : 0,
+    runs,
+    successes: Math.min(runs, counter(v.successes)),
+    ...(isNum(v.lastRun) ? { lastRun: v.lastRun } : {}),
+  };
+}
+
+/** The stored saved operations (at most OPERATION_LIMIT) with screenshots decoded; invalid entries are dropped. */
+export async function loadOperations(): Promise<SavedOperation[]> {
+  const stored = readJson(KEYS.operations);
+  if (!Array.isArray(stored)) return [];
+  const ops = stored.map(parseOperation).filter((o): o is StoredOperation => o !== null).slice(0, OPERATION_LIMIT);
+  return Promise.all(ops.map(async (o) => ({ ...o, steps: await Promise.all(o.steps.map(restoreStep)), screenshots: await decodeFrames(o.screenshots) })));
+}
+
+/** Persists the saved operations; when they do not fit, retries without screenshots. */
+export function saveOperations(ops: SavedOperation[]) {
+  const toStored = (keepFrames: boolean): StoredOperation[] => ops.slice(0, OPERATION_LIMIT).map((o) => ({
+    ...o,
+    steps: o.steps.map(({ refFrame, beforeFrame: _b, afterFrame: _a, shot: _s, ...s }) => (keepFrames && refFrame ? { ...s, refFrame: toStoredFrame(refFrame) } : s)),
+    screenshots: keepFrames ? o.screenshots.map(toStoredFrame) : [],
+  }));
+  if (!writeJson(KEYS.operations, toStored(true))) writeJson(KEYS.operations, toStored(false));
 }

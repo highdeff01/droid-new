@@ -197,6 +197,75 @@ export async function captureDesktop(bridgeUrl: string, token: string): Promise<
   }
 }
 
+/** The message for a main app whose bridge does not serve the action history route. */
+export const HISTORY_UNSUPPORTED = 'main app does not support playback history yet';
+
+/** One performed action as the main Droid app's action history reports it (native pixel coordinates). */
+export interface HistoryRecord {
+  id: string;
+  /** When it happened, ms since epoch. */
+  timestamp: number;
+  /** Set on real mouse/keyboard input only. */
+  inputKind?: 'mouse' | 'keyboard';
+  action?: string;
+  x?: number;
+  y?: number;
+  /** Typed text or key chord of a keyboard action. */
+  input?: string;
+  executed?: boolean;
+  screenshotId?: string;
+}
+
+const NOT_SERVED = new Set([404, 405, 501]);
+const optNum = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+const optStr = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+const stampOf = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' ? Date.parse(v) : NaN);
+
+/** A history row as a record, or null when it has no id or time. */
+function toRecord(v: unknown): HistoryRecord | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = v as Record<string, unknown>;
+  const timestamp = stampOf(r.timestamp);
+  if (!optStr(r.id) || !Number.isFinite(timestamp)) return null;
+  const inputKind = r.inputKind === 'mouse' || r.inputKind === 'keyboard' ? r.inputKind : undefined;
+  return {
+    id: r.id as string, timestamp, inputKind, action: optStr(r.action), x: optNum(r.x), y: optNum(r.y), input: optStr(r.input),
+    executed: typeof r.executed === 'boolean' ? r.executed : undefined, screenshotId: optStr(r.screenshotId),
+  };
+}
+
+/**
+ * The main app's performed actions of the last `windowSec` seconds (GET /api/ai/action-history?limit=N&windowSec=S).
+ * A bridge that does not serve the route (404/405/501, or a reply without a history list) yields HISTORY_UNSUPPORTED; nothing is invented.
+ */
+export async function requestActionHistory(bridgeUrl: string, token: string, limit = 200, windowSec = 30): Promise<{ ok: true; records: HistoryRecord[] } | { ok: false; message: string }> {
+  if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };
+  try {
+    const res = await fetch(`${base(bridgeUrl)}/api/ai/action-history?limit=${limit}&windowSec=${windowSec}`, { headers: bridgeHeaders(token), signal: AbortSignal.timeout(8000) });
+    const body = await res.json().catch(() => null);
+    if (NOT_SERVED.has(res.status)) return { ok: false, message: HISTORY_UNSUPPORTED };
+    if (!res.ok || body?.success === false) return { ok: false, message: failure(res, body) };
+    if (!Array.isArray(body?.history)) return { ok: false, message: HISTORY_UNSUPPORTED };
+    return { ok: true, records: body.history.map(toRecord).filter((r: HistoryRecord | null): r is HistoryRecord => r !== null) };
+  } catch (error) {
+    return { ok: false, message: `${BRIDGE_REQUIRED} (unreachable: ${errorText(error)})` };
+  }
+}
+
+/** The screenshot the main app took at an action (GET /api/ai/action-history/screenshots/:id) as an image data URL, or null. */
+export async function requestHistoryScreenshot(bridgeUrl: string, token: string, id: string): Promise<string | null> {
+  if (!bridgeUrl) return null;
+  try {
+    const res = await fetch(`${base(bridgeUrl)}/api/ai/action-history/screenshots/${encodeURIComponent(id)}`, { headers: bridgeHeaders(token), signal: AbortSignal.timeout(8000) });
+    const body = await res.json().catch(() => null);
+    const image = body?.imageData;
+    if (!res.ok || typeof image !== 'string' || !image) return null;
+    return image.startsWith('data:image/') ? image : `data:image/png;base64,${image}`;
+  } catch {
+    return null;
+  }
+}
+
 /** Pings the bridge health endpoint, giving up after `timeoutMs`. */
 export async function checkBridge(bridgeUrl: string, token: string, timeoutMs = 4000): Promise<BridgeResult> {
   if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };

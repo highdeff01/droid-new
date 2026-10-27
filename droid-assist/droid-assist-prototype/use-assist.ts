@@ -41,6 +41,8 @@ import { logSightings, monitorChanges, perspective, planLanes, type ElementRepor
 import { askPlayTurn, type PlayTurn } from './play-turn.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadPersonas, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, savePersonas, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
 import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
+import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
+import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, targetText, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
 import { appendSummary, runSummary, type RunSummary } from './run-stats.js';
 import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, recallNotes, reorderSteps, type NoteKind, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
 import { DEFAULT_WAKE_MS } from './wake.js';
@@ -140,6 +142,9 @@ import { DEFAULT_EXECUTION_MODE, EXECUTION_MODES, modeCaptureMs, modeChangeText,
 import { DEFAULT_AUTO_APPLY, autoApplyDecision, bestGrounding, groundGoal, groundedStep, groundingShift, judgeCandidate, judgmentText, type KnownGrounding, type HeldCandidate, type Judgment } from './aggressive.js';
 import { NOT_CONNECTED, createMainBridge, type MainBridge, type MainBridgeConfig, type MainBridgeState } from './main-bridge.js';
 import type { FramePayload, InboundMessage, InterceptKind, InterceptPayload, RunScriptPayload } from './main-bridge-protocol.js';
+import { DEFAULT_OPERATION_RETRIES } from './operation-retry.js';
+import { DEFAULT_PLAYBACK_WINDOW_SEC } from './playback.js';
+import { useOperations } from './use-operations.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -314,6 +319,8 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   autoContinue: true,
   maxIterations: DEFAULT_MAX_ITERATIONS,
   stepRetries: DEFAULT_STEP_RETRIES,
+  operationRetries: DEFAULT_OPERATION_RETRIES,
+  playbackWindowSec: DEFAULT_PLAYBACK_WINDOW_SEC,
   aiMaxInFlight: DEFAULT_AI_MAX_IN_FLIGHT,
   aiTimeoutMs: DEFAULT_AI_TIMEOUT_MS,
   goalStall: DEFAULT_GOAL_STALL,
@@ -4093,6 +4100,7 @@ export function useAssist() {
         planned = next.length > 0;
         kb.recordAi('work', `Planned ${next.length} step(s) for "${text.trim()}" (${why})`);
         for (const a of agents.filter((x) => x.on)) kb.recordFor(a.id, 'work', `Assigned to "${text.trim()}": ${a.description}`);
+        if (planned) ops.suggestFor(text);
       } catch (error) {
         addLog('Planner', aiFailure('AI plan failed — no steps created', error), 'error');
       } finally {
@@ -5490,8 +5498,26 @@ export function useAssist() {
     triggersRef.current = next;
     setTriggers(next);
   };
+
+  /** Saved operations, playback of the main app's last 30 s, and detect + retry, all running through runReplay. */
+  const ops = useOperations({
+    addLog,
+    settings: () => settingsRef.current,
+    liveFrame: () => framesRef.current[0] ?? null,
+    steps: () => stepsRef.current,
+    loadSteps: (name, next, flowId) => {
+      loadCard({ id: flowId ?? '', name, description: '', savedAt: 0, steps: next });
+      flowRef.current = flowId;
+    },
+    plan: (text) => autoPlan(text),
+    replay: (label, runGoal) => runReplay(false, { label, goal: runGoal }),
+    busy: () => triggerBusyRef.current || executorBusy(),
+    habits: () => habitsRef.current,
+    habitContext,
+    runs,
+  });
   const patchTrigger = (id: string, fn: (t: Trigger) => Trigger) => setTriggerList(triggersRef.current.map((t) => (t.id === id ? fn(t) : t)));
-  const targetLabel = (t: Trigger) => (t.target.kind === 'draft' ? 'the draft card' : `flow "${cardsRef.current.find((c) => c.id === (t.target as { cardId: string }).cardId)?.name ?? 'deleted flow'}"`);
+  const targetLabel = (t: Trigger) => targetText(t.target, cardsRef.current, ops.operations);
 
   /** Creates a trigger from the Triggers panel; appear/disappear need an element mapped with its template frame. */
   const addTrigger = (draft: TriggerDraft) => {
@@ -5539,7 +5565,7 @@ export function useAssist() {
     }
     const now = Date.now();
     const skip = fireGate(t, now);
-    const target = resolveTarget(t.target, cardsRef.current, draftCard);
+    const target = resolveTarget(t.target, cardsRef.current, draftCard, ops.operations);
     const refusal = skip ? skip.detail : abortedRef.current ? 'ABORTED is active; clear the abort first' : 'error' in target ? `cannot run — ${target.error}` : null;
     if (refusal !== null || 'error' in target) {
       addLog(!skip && abortedRef.current ? 'Safety' : 'Triggers', `"${t.name}" skipped (${why}): ${refusal}`, skip?.reason === 'cooldown' ? 'info' : 'warn');
@@ -5551,9 +5577,12 @@ export function useAssist() {
     addLog('Triggers', `Fired "${t.name}" (${why}) — running ${target.name}, run ${fired.runs}${fired.maxRuns ? ` of ${fired.maxRuns}` : ''}`, 'info');
     if (!fired.enabled && t.enabled) addLog('Triggers', `"${t.name}" ${fired.kind === 'schedule' && fired.everySec === 0 ? 'was a one-time schedule' : `reached its run limit (${fired.maxRuns})`} — disabled`, 'info');
     if (target.card) loadCard(target.card);
+    if (target.operation) ops.loadOperation(target.operation);
     triggerBusyRef.current = true;
     try {
-      const result = outcomeText(await runReplay(false, { label: `Trigger "${t.name}"`, goal: triggeredGoal(target.card) }));
+      const outcome = await runReplay(false, { label: `Trigger "${t.name}"`, goal: target.operation?.goal ?? triggeredGoal(target.card) });
+      if (target.operation) ops.countOutcome(target.operation.id, outcome);
+      const result = outcomeText(outcome);
       addLog('Triggers', `"${t.name}" result: ${result.text}`, result.tone);
     } finally {
       triggerBusyRef.current = false;
@@ -5805,6 +5834,7 @@ export function useAssist() {
     triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger,
     accessPaths, editAccessPath, deleteAccessPath, testAccessPath,
     triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger, packs,
+    ...ops,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
     aiHistory, trimAiHistory, resetAiSession,
     memory, operations, addOperationNote, forgetMemory,

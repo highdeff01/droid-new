@@ -33,6 +33,7 @@ import { DatabasePanel } from './database-panel.js';
 import { CapabilitiesPanel } from './capabilities-panel.js';
 import { PresentationPanel } from './presentation-panel.js';
 import { NotificationStack } from './notification-stack.js';
+import { OperationsPanel } from './operations-panel.js';
 import styles from './droid-assist.module.css';
 
 /** The Droid Assist workspace: live screen + overlay, HUDs, workflow, gallery, agents and log. */
@@ -88,6 +89,7 @@ function AssistScreen() {
             <ArtifactsPanel engine={engine} />
             <CapabilitiesPanel engine={engine} />
             <PresentationPanel engine={engine} />
+            <OperationsPanel engine={engine} />
           </div>
         </div>
         <div className={styles.bottom}>
