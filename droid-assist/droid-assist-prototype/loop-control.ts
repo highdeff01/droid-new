@@ -20,6 +20,7 @@ export interface Stage {
 export const STAGES = [
   { id: 'planner', group: 'pipeline', name: 'Planner', description: 'AI plans steps from the goal (AI plan, /move, auto-continue re-plans)', verifies: false },
   { id: 'grounding', group: 'pipeline', name: 'Grounding', description: 'AI confirms each named target on a zoomed crop before input', verifies: true },
+  { id: 'briefing', group: 'pipeline', name: 'Pre-action briefing', description: 'Before each step: objectives, live-vs-reference screenshot comparison and knowledge cross-reference; recalibrates, re-grounds or re-plans on conflicts', verifies: false },
   { id: 'executor', group: 'pipeline', name: 'Executor', description: 'Runs steps as input (demo or desktop bridge)', verifies: false },
   { id: 'reflect', group: 'pipeline', name: 'Reflect', description: 'AI reflects on the screen after each executed step', verifies: true },
   { id: 'verdict', group: 'pipeline', name: 'Verdict', description: 'AI gives the final success verdict and lessons for each step', verifies: true },

@@ -4,7 +4,7 @@ import { DEFAULT_STAGES, STAGES, createStageControllers, sanitizeStages, stageOf
 describe('loop-control catalogue', () => {
   it('covers every pipeline stage and agent, and no guardrail', () => {
     const ids = STAGES.map((s) => s.id);
-    expect(ids).toEqual(expect.arrayContaining(['planner', 'grounding', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder']));
+    expect(ids).toEqual(expect.arrayContaining(['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder']));
     expect(ids).toEqual(expect.arrayContaining(['popup', 'drift', 'progress', 'goal', 'screenWatcher', 'coords', 'supervisor', 'elementMap', 'subagents']));
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids.some((id) => /arm|abort|budget|hotkey/i.test(id))).toBe(false);
@@ -18,6 +18,10 @@ describe('loop-control catalogue', () => {
   it('describes a stage by id', () => {
     expect(stageOf('reflect')).toMatchObject({ group: 'pipeline', name: 'Reflect', verifies: true });
     expect(stageOff('popup')).toBe('Popup watcher stage is unchecked in Loop control');
+  });
+
+  it('marks the pre-action briefing a non-verifying pipeline stage', () => {
+    expect(stageOf('briefing')).toMatchObject({ group: 'pipeline', verifies: false });
   });
 });
 
@@ -36,6 +40,10 @@ describe('unverifiedStages and toggleMessage', () => {
     const off = unverifiedStages({ ...DEFAULT_STAGES, grounding: false, planner: false, verdict: false });
     expect(off.map((s) => s.id)).toEqual(['grounding', 'verdict']);
     expect(unverifiedStages(DEFAULT_STAGES)).toEqual([]);
+  });
+
+  it('does not mark grounding unverified when only the briefing stage is off', () => {
+    expect(unverifiedStages({ ...DEFAULT_STAGES, briefing: false })).toEqual([]);
   });
 
   it('says what a toggle did', () => {
