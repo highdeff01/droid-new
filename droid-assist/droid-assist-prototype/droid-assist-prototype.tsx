@@ -14,6 +14,7 @@ import { LiveBriefingPanel } from './live-briefing-panel.js';
 import { ArtifactsPanel } from './capabilities-panel.js';
 import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
 import { VariationsPanel } from './variations-panel.js';
+import { InventoryPanel, RetestPanel, RoutesPanel } from './screen-ai-panels.js';
 import styles from './droid-assist.module.css';
 
 /** The Droid Assist workspace: live screen + overlay, HUDs, workflow, gallery, agents and log. */
@@ -43,6 +44,9 @@ function AssistScreen() {
             <ElementsPanel engine={engine} />
             <ElementMapPanel engine={engine} />
             <SnipGalleryPanel engine={engine} />
+            <InventoryPanel engine={engine} />
+            <RoutesPanel engine={engine} />
+            <RetestPanel engine={engine} />
             <LearnedCoordsPanel engine={engine} />
             <LibraryPanel engine={engine} />
             <PatternsPanel engine={engine} />

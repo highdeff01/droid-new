@@ -28,6 +28,7 @@ import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, dispatchStat
 import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './recorder.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, saveOperationMemory, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, loadAccessPaths, saveAccessPaths, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
+import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, loadRouteProfiles, loadFixMethods, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher, saveRouteProfiles, saveFixMethods } from './storage.js';
 import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
 import { appendSummary, runSummary, type RunSummary } from './run-stats.js';
 import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, reorderSteps, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
@@ -84,6 +85,10 @@ import { sanitizeBudget } from './safety.js';
 const AI: Requester = { kind: 'ai' };
 const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
+import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
+import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
+import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
+import { refreshStep, retestSummary, retestText, retestedSteps, runRetest, selectSteps, type RetestStepResult, type RetestSummary } from './retest.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -359,6 +364,26 @@ export function useAssist() {
   const [preferred, setPreferred] = useState<PreferredShot[]>([]);
   const [captureLost, setCaptureLost] = useState<string | null>(null);
   const [supervisor, setSupervisor] = useState<SupervisorState>({ status: 'idle', detail: 'No review yet', review: null, applied: false });
+  /** The full-screen reading of the newest frame: every detected element. */
+  const [inventory, setInventory] = useState<InventoryElement[]>([]);
+  const inventoryRef = useRef<InventoryElement[]>([]);
+  const inventoryFrameRef = useRef<Frame | null>(null);
+  /** The ranked routes last plotted for the goal. */
+  const [routes, setRoutes] = useState<Route[]>([]);
+  const routesRef = useRef<Route[]>([]);
+  /** Reusable access-path profiles: routes that reached a goal (persisted). */
+  const [routeProfiles, setRouteProfiles] = useState<RouteProfile[]>(loadRouteProfiles);
+  const routeProfilesRef = useRef(routeProfiles);
+  /** Fix scripts that repaired an element/flow, offered first next time (persisted). */
+  const [fixMethods, setFixMethods] = useState<FixMethod[]>(loadFixMethods);
+  const fixMethodsRef = useRef(fixMethods);
+  /** Consecutive failures per element/flow, for when to propose a fix script. */
+  const failuresRef = useRef<Record<string, number>>({});
+  /** The fix script awaiting review in the pre-action briefing; null when none. */
+  const [pendingFix, setPendingFix] = useState<FixScript | null>(null);
+  const pendingFixRef = useRef<FixScript | null>(null);
+  /** The last retest's per-step results and verdict; null before the first. */
+  const [retest, setRetest] = useState<{ results: RetestStepResult[]; summary: RetestSummary } | null>(null);
 
   const demoCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const captureRef = useRef<ScreenCapture | null>(null);
@@ -567,6 +592,8 @@ export function useAssist() {
   useEffect(() => saveTriggers(triggers), [triggers]);
   useEffect(() => saveOperationMemory(memory), [memory]);
   useEffect(() => saveAccessPaths(accessPaths), [accessPaths]);
+  useEffect(() => saveRouteProfiles(routeProfiles), [routeProfiles]);
+  useEffect(() => saveFixMethods(fixMethods), [fixMethods]);
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
   }, [cards]);
@@ -909,7 +936,7 @@ export function useAssist() {
     relocate: async (live, step, feedback) => {
       const { point } = await thought(step.name, async () => {
         const crop = await zoomFrame(live, step).catch(() => undefined);
-        const next = await relocateTarget(askFor('grounding'), live, step, feedback, mapContext(elementMapRef.current), crop);
+        const next = await relocateTarget(askFor('grounding'), live, step, feedback, [...mapContext(elementMapRef.current), ...inventoryLines(inventoryRef.current)], crop);
         return { point: next, thinking: next?.thinking ?? null };
       }, (r) => (r.point ? `Re-planned "${step.target ?? step.name}" at ${at(r.point.x, r.point.y)}` : `Re-planned: "${step.target ?? step.name}" is not visible`));
       return point;
@@ -2516,6 +2543,7 @@ export function useAssist() {
     framesRef.current = [frame, ...framesRef.current].slice(0, settingsRef.current.gallerySize);
     setFrames(framesRef.current);
     setShotCount((n) => n + 1);
+    readScreen(frame);
     void putStoredFrame(toStoredFrame(frame), settingsRef.current.gallerySize).catch(() => undefined);
     if (prev) {
       watchChanges(prev, frame);
@@ -2758,6 +2786,7 @@ export function useAssist() {
     const out = await execute(pin ? { ...j.step, ...pin } : j.step, label, budget, dryRun, j.proposal);
     applyOutcome(i, out, dryRun, before);
     addLog(label, `${planned.name}: ${out.message}`, out.ok ? 'ok' : 'error');
+    trackFailure(planned, out);
     return out;
   };
 
@@ -2912,6 +2941,176 @@ export function useAssist() {
     return { ran: all, ok };
   };
 
+  /** Full-screen reading of `frame`: every detectable element, classified against the previous reading. */
+  const readScreen = (frame: Frame) => {
+    const next = buildInventory({ frame, mapped: elementMapRef.current, familiar: familiarRef.current, prev: inventoryRef.current, prevFrame: inventoryFrameRef.current });
+    inventoryRef.current = next;
+    inventoryFrameRef.current = frame;
+    setInventory(next);
+  };
+
+  const commitProfiles = (next: RouteProfile[]) => {
+    routeProfilesRef.current = next;
+    setRouteProfiles(next);
+  };
+
+  /** Plots ranked routes to `text` (the goal by default) from the screen reading and the saved access paths. */
+  const plotRoute = (text = goalRef.current): Route[] => {
+    const next = text.trim() ? plotRoutes(text, inventoryRef.current, routeProfilesRef.current) : [];
+    routesRef.current = next;
+    setRoutes(next);
+    addLog('Routes', next.length ? `${next.length} route(s) to "${text.trim()}": ${next.map(routeText).join(' | ')}` : `No route to "${text.trim()}" in the screen reading — use AI plan for fresh grounding`, next.length ? 'info' : 'warn');
+    return next;
+  };
+
+  /** A route as steps at their elements' current positions; a hop gone from the screen is left to fresh grounding. */
+  const routeToSteps = (route: Route): WorkflowStep[] => routeSteps(route).map((s, i) => {
+    const where = resolveHop(route.hops[i], inventoryRef.current);
+    return where.kind === 'inventory' ? { ...s, x: where.x, y: where.y } : { ...s, unlocated: true };
+  });
+
+  /** Runs plotted route `index` through the replay pipeline; a real run that reaches the goal is saved as its access-path profile. */
+  const runRoute = async (index = 0) => {
+    const route = routesRef.current[index];
+    const text = goalRef.current.trim();
+    if (!route || !text) {
+      addLog('Routes', 'Type a goal and plot a route first', 'warn');
+      return;
+    }
+    applyPlan(text, routeToSteps(route), `Route ${routeText(route)}`);
+    const out = await runReplay(false, { label: 'Route', goal: text });
+    if (!out || out.dryRun) return;
+    const ok = !out.stopped && out.total > 0 && out.ok === out.total;
+    commitProfiles(ok ? recordProfileResult(saveProfile(routeProfilesRef.current, text, route.hops), text, true) : recordProfileResult(routeProfilesRef.current, text, false));
+    addLog('Routes', ok ? `Route reached "${text}" — saved as its access-path profile` : `Route did not reach "${text}" — its profile records the miss`, ok ? 'ok' : 'warn');
+  };
+
+  const commitFixMethods = (next: FixMethod[]) => {
+    fixMethodsRef.current = next;
+    setFixMethods(next);
+  };
+
+  const showFix = (script: FixScript | null) => {
+    pendingFixRef.current = script;
+    setPendingFix(script);
+  };
+
+  /** Generates the fix script for a stuck element/flow (memory → AI → local) and holds it for review. */
+  const proposeFix = async (ctx: FixContext) => {
+    const ask = aiOnline() && stageOn('executor') ? askFor('executor') : null;
+    const script = await generateFixScript(ctx, fixMethodsRef.current, ask, framesRef.current[0] ?? null, inventoryLines(inventoryRef.current));
+    showFix(script);
+    addLog('Fix script', `"${ctx.element}" failed ${FAIL_THRESHOLD}× in a row (${ctx.problem}) — proposed ${fixScriptText(script)}; review it in the pre-action briefing before it runs`, 'warn');
+  };
+
+  /** Counts a step's result per element/flow; at FAIL_THRESHOLD failures in a row a fix script is proposed. A guardrail refusal is not counted. */
+  const trackFailure = (step: WorkflowStep, out: Performed) => {
+    if (out.halt && !out.executed) return;
+    const ctx: FixContext = { element: step.target ?? step.name, flow: goalRef.current.trim() || 'current flow', problem: out.message };
+    const k = failureKey(ctx.element, ctx.flow);
+    failuresRef.current = noteResult(failuresRef.current, k, out.ok);
+    if (needsFix(failuresRef.current, k) && !pendingFixRef.current) void proposeFix(ctx);
+  };
+
+  /** One fix step through the pre-action briefing and the normal grounded pipeline. */
+  const runFixStep = async (step: WorkflowStep, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
+    const j: Justified = await justify('Fix script', step, false).catch((error: unknown) => ({ kind: 'fail' as const, reason: `No proposal for "${step.name}": ${errorText(error)} — not executed` }));
+    if (j.kind !== 'go') {
+      addLog('Fix script', j.reason, 'error');
+      return { ok: false, executed: false, message: j.reason, target: { x: step.x, y: step.y } };
+    }
+    const out = await execute(j.step, 'Fix script', budget, dryRun, j.proposal);
+    addLog('Fix script', `${step.name}: ${out.message}`, out.ok ? 'ok' : 'error');
+    return out;
+  };
+
+  /** Runs every step of `script` in order until one fails, the run halts or Stop is pressed; true when all passed. */
+  const runFixSteps = async (script: FixScript, budget: ActionBudget, dryRun: boolean) => {
+    for (const step of script.steps) {
+      if (abortRef.current) return false;
+      const out = await runFixStep(step, budget, dryRun);
+      if (!out.ok || out.halt) return false;
+    }
+    return true;
+  };
+
+  /** Runs the reviewed fix script inside the guardrails (ABORTED, arm/disarm, budget, executor stage); a real success is saved as the fix method. */
+  const runFixScript = async () => {
+    const script = pendingFixRef.current;
+    if (!script) return;
+    if (abortedRef.current || replayingRef.current) {
+      addLog('Safety', abortedRef.current ? 'Fix script refused — ABORTED is active; clear the abort first' : 'Fix script waits — a run is in progress', 'error');
+      return;
+    }
+    showFix(null);
+    const dryRun = !armedRef.current;
+    if (dryRun) addLog('Safety', `Real input disarmed — the fix script runs as a ${DRY_RUN}`, 'warn');
+    abortRef.current = false;
+    replayingRef.current = true;
+    setReplaying(true);
+    const ok = await runFixSteps(script, createBudget(settingsRef.current.actionBudget), dryRun).finally(() => {
+      replayingRef.current = false;
+      setReplaying(false);
+    });
+    if (!dryRun) commitFixMethods(saveFixMethod(fixMethodsRef.current, script, ok));
+    if (ok) failuresRef.current = noteResult(failuresRef.current, failureKey(script.context.element, script.context.flow), true);
+    addLog('Fix script', `${ok ? 'Repaired' : 'Did not repair'} "${script.context.element}"${dryRun ? ' (dry run — not saved)' : ok ? ' — saved as its fix method' : ''}`, ok ? 'ok' : 'error');
+  };
+
+  /** Drops the fix script under review without running it. */
+  const dismissFix = () => {
+    if (pendingFixRef.current) addLog('Fix script', `Dismissed the fix for "${pendingFixRef.current.context.element}"`, 'info');
+    showFix(null);
+  };
+
+  /** One retested step: re-pointed to the live screen, its covering popup noted, then replayed. */
+  const retestStep = async (s: WorkflowStep, i: number, budget: ActionBudget, dryRun: boolean) => {
+    updateStep(i, s);
+    const obstacle = coveredBy(popupRef.current, s) ? 'a popup covers the target' : null;
+    const out = await replayStep(i, budget, dryRun, 'Retest');
+    return { ok: out.ok, executed: out.executed || (dryRun && out.ok), message: out.message, halt: !!out.halt || abortRef.current, obstacle };
+  };
+
+  /** Feeds a retest into habits (one outcome per executed step, its obstacle as a lesson) and run statistics. */
+  const recordRetest = (flow: WorkflowStep[], results: RetestStepResult[], dryRun: boolean) => {
+    const context = habitContext();
+    if (stageOn('coords')) commitHabits(results.filter((r) => r.executed).reduce((h, r) => recordOutcome(h, { target: r.target, context, success: r.ok, avoid: r.ok ? null : r.obstacle }), habitsRef.current));
+    const ran = new Set(results.map((r) => r.index));
+    recordRun(`Retest: ${goalRef.current.trim() || 'flow'}`, retestedSteps(flow, results).filter((_, i) => ran.has(i)), { dryRun, stopped: abortRef.current });
+  };
+
+  /**
+   * Route back: re-runs the whole flow (or the selected 0-based steps) for retesting, each step
+   * brought up to date with the screen reading (moved elements, popups) first; per-step results and
+   * a pass/fail summary go to the Retest panel, habits and run statistics.
+   */
+  const retestFlow = async (indices: number[] = []) => {
+    const flow = stepsRef.current;
+    if (!flow.length || abortedRef.current || replayingRef.current) {
+      addLog('Retest', !flow.length ? 'Nothing to retest — record or plan a flow first' : abortedRef.current ? 'Retest refused — ABORTED is active' : 'Retest waits — a run is in progress', 'warn');
+      return null;
+    }
+    const selected = selectSteps(flow.length, indices);
+    const dryRun = !armedRef.current;
+    const budget = createBudget(settingsRef.current.actionBudget);
+    abortRef.current = false;
+    runStartRef.current = Date.now();
+    replayingRef.current = true;
+    setReplaying(true);
+    addLog('Retest', `Routing back over ${selected.length} of ${flow.length} step(s)${dryRun ? ` as a ${DRY_RUN}` : ''}`);
+    const results = await runRetest(flow, selected, { prepare: (s) => refreshStep(s, inventoryRef.current), perform: (s, i) => retestStep(s, i, budget, dryRun) }).finally(() => {
+      setActiveIndex(null);
+      replayingRef.current = false;
+      setReplaying(false);
+    });
+    const summary = retestSummary(results, selected.length);
+    setRetest({ results, summary });
+    recordRetest(flow, results, dryRun);
+    const obstacles = results.filter((r) => r.obstacle).map((r) => `step ${r.index + 1}: ${r.obstacle}`);
+    addLog('Retest', `${retestText(summary)}${obstacles.length ? ` — obstacles: ${obstacles.join('; ')}` : ''}`, summary.pass ? 'ok' : 'error');
+    return summary;
+  };
+
   /** Replay's ■ Stop: ends the run between steps and cancels the in-flight AI call. */
   const stop = () => {
     abortRef.current = true;
@@ -2985,6 +3184,7 @@ export function useAssist() {
         requested = plan.capabilities;
         if (!plan.steps.length) return;
         const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...trackingContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...inventoryLines(inventoryRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
         if (planGuardRef.current.after(plan.steps) === 'duplicate') {
           addLog('Planner', `Re-plan guard: the plan for "${text.trim()}" is identical to the previous one — kept the current steps and will not ask the model again until the screen or a step changes`, 'warn');
           return;
@@ -3023,7 +3223,7 @@ export function useAssist() {
     }
     await withAi(async () => {
       try {
-        const { steps: planned } = await thought(`/move ${name}`, () => planFromGoal(`Move the mouse cursor onto the ${name} (hover, do not click)`, [], framesRef.current[0] ?? null, askFor('planner'), mapContext(elementMapRef.current)), planSummary);
+        const { steps: planned } = await thought(`/move ${name}`, () => planFromGoal(`Move the mouse cursor onto the ${name} (hover, do not click)`, [], framesRef.current[0] ?? null, askFor('planner'), [...mapContext(elementMapRef.current), ...inventoryLines(inventoryRef.current)]), planSummary);
         const move = planned.find((s) => s.action === 'move');
         if (!move) {
           addLog('/move', `AI did not plan a mouse move to "${name}" (it proposed ${planned.map((s) => s.action).join(', ')}) — nothing executed`, 'error');
@@ -3235,7 +3435,7 @@ export function useAssist() {
   const subagentPipeline = async (task: SubagentTask, dryRun: boolean, label: string): Promise<SubagentOutcome> => {
     const base = { dry: dryRun, shots: [] as Frame[], thinking: [] as string[] };
     const stopped = () => abortRef.current || abortedRef.current;
-    const plan = await thought(`${label}: ${task.label}`, () => planFromGoal(task.goal, [], framesRef.current[0] ?? null, askFor('planner'), knownRef.current.map(elementLine), patternsRef.current), planSummary);
+    const plan = await thought(`${label}: ${task.label}`, () => planFromGoal(task.goal, [], framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...inventoryLines(inventoryRef.current)], patternsRef.current), planSummary);
     if (plan.thinking) base.thinking.push(plan.thinking);
     const budget = createBudget(task.budget);
     let last: { x: number; y: number } | undefined;
@@ -4090,6 +4290,7 @@ export function useAssist() {
     artifactCapabilities: caps.registry, invokeCapability: caps.invoke, presentations: caps.presentations, scripts: caps.scripts, artifactKnowledge: caps.knowledge,
     /** The capability registry: the single dispatch surface for buttons, the AI, agents and the main app. */
     capabilities: capabilities.registry.list, invocations: capabilities.invocations, invoke: capabilities.invoke, requestCapability, relaxed: !!relaxedRef.current,
+    inventory, routes, routeProfiles, plotRoute, runRoute, fixMethods, pendingFix, runFixScript, dismissFix, retest, retestFlow,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
   };
 }

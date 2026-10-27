@@ -26,6 +26,8 @@ import { SECTION_LIMIT, isKnowledgeSection, type KnowledgeSection } from './know
 import { VARIATION_LIMIT, VARIATION_STATUSES, type Variation, type VariationStatus } from './variations.js';
 import { PACK_TEST_LIMIT, type GoalSource, type PackKind, type PackTestResult, type WorkflowPack } from './packs.js';
 import type { SubagentStatus } from './subagents.js';
+import { PROFILE_LIMIT, type RouteHop, type RouteProfile } from './route-plot.js';
+import { FIX_ACTIONS, FIX_METHOD_LIMIT, type FixMethod } from './fix-script.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -37,6 +39,7 @@ export const LOG_LIMIT = 200;
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', portfolios: 'droid-assist.portfolios', profile: 'droid-assist.user-profile', sections: 'droid-assist.knowledge-sections', variations: 'droid-assist.variations', accessPaths: 'droid-assist.access-paths', approvals: 'droid-assist.approvals' } as const;
 const STEP_STATUSES: readonly StepStatus[] = ['pending', 'running', 'done', 'drift', 'failed'];
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', packs: 'droid-assist.packs' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', routes: 'droid-assist.routes', fixMethods: 'droid-assist.fix-methods' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -464,6 +467,49 @@ export function saveWatcher(state: WatcherState) {
 
 /** The stored triggers; invalid entries are dropped. */
 export const loadTriggers = (): Trigger[] => listOf(readJson(KEYS.triggers), isTrigger, TRIGGER_LIMIT);
+
+const HOP_VIAS: ReadonlyArray<RouteHop['via']> = ['start', 'opens', 'contains', 'adjacent'];
+
+function isHop(v: unknown): v is RouteHop {
+  return isObject(v) && isStr(v.name) && isUnit(v.x) && isUnit(v.y) && HOP_VIAS.includes(v.via as RouteHop['via']);
+}
+
+function isProfile(v: unknown): v is RouteProfile {
+  return isObject(v) && isStr(v.id) && isStr(v.goal) && Array.isArray(v.hops) && v.hops.length > 0 && v.hops.every(isHop)
+    && isNum(v.uses) && isNum(v.successes) && isNum(v.savedAt);
+}
+
+/** The stored access-path (route) profiles; invalid entries are dropped. */
+export const loadRouteProfiles = (): RouteProfile[] => listOf(readJson(KEYS.routes), isProfile, PROFILE_LIMIT);
+
+/** Persists the route profiles, capped at PROFILE_LIMIT. */
+export function saveRouteProfiles(profiles: RouteProfile[]) {
+  writeJson(KEYS.routes, profiles.slice(0, PROFILE_LIMIT));
+}
+
+/** A fix-method step: an allowed fix action at a point inside the screen. */
+const isFixStep = (v: unknown) => isObject(v) && FIX_ACTIONS.has(v.action as StepAction) && parseStep(v) !== null;
+
+function isFixMethod(v: unknown): v is FixMethod {
+  return isObject(v) && isStr(v.id) && isStr(v.element) && typeof v.flow === 'string' && Array.isArray(v.steps) && v.steps.length > 0
+    && v.steps.every(isFixStep) && isNum(v.uses) && isNum(v.successes) && isNum(v.savedAt);
+}
+
+/** The stored fix methods with their steps normalised to pending; invalid entries are dropped. */
+export function loadFixMethods(): FixMethod[] {
+  return listOf(readJson(KEYS.fixMethods), isFixMethod, FIX_METHOD_LIMIT).map((m) => ({ ...m, steps: m.steps.map(fixStep) }));
+}
+
+/** A validated stored fix step as a pending step without a screenshot. */
+function fixStep(v: unknown): WorkflowStep {
+  const { refFrame: _refFrame, ...s } = parseStep(v)!;
+  return s;
+}
+
+/** Persists the fix methods, capped at FIX_METHOD_LIMIT. */
+export function saveFixMethods(methods: FixMethod[]) {
+  writeJson(KEYS.fixMethods, methods.slice(0, FIX_METHOD_LIMIT));
+}
 
 /** Persists the triggers, capped at TRIGGER_LIMIT. */
 export function saveTriggers(triggers: Trigger[]) {
