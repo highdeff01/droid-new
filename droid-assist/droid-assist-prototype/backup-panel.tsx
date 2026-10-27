@@ -1,6 +1,7 @@
 import { useState, type ChangeEvent } from 'react';
 import { downloadText } from './action-history.js';
 import { BackupError, backupFileName, exportBackup, parseBackup, replaceLosses, restoreBackup, summarizeBackup, type Backup, type RestoreMode, type StoreLoss } from './backup.js';
+import { snapshotLastGood } from './recovery.js';
 import styles from './droid-assist.module.css';
 
 /** The confirmation question for a replace that would drop local data. */
@@ -22,7 +23,11 @@ export function BackupSettings() {
   const [backup, setBackup] = useState<Backup | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const exportAll = () => downloadText(backupFileName(), JSON.stringify(exportBackup(), null, 2), 'application/json');
+  /** Downloads every store and keeps the same export as the last good export the Restore button returns to. */
+  const exportAll = () => {
+    downloadText(backupFileName(), JSON.stringify(exportBackup(), null, 2), 'application/json');
+    snapshotLastGood();
+  };
 
   const pick = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

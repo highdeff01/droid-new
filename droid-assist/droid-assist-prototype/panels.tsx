@@ -26,6 +26,7 @@ import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-hist
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { BackupSettings } from './backup-panel.js';
+import { RecoverySettings, RelaxSettings } from './relax-recovery-settings.js';
 import styles from './droid-assist.module.css';
 
 const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity' };
@@ -392,7 +393,9 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <ModelPicker url={settings.aiUrl} model={settings.aiModel} onSelect={(aiModel) => setSettings({ ...settings, aiModel })} />
       <AiStatusBadge status={engine.aiStatus} />
       <ErrorForwardingSettings engine={engine} />
+      <RelaxSettings engine={engine} />
       <BackupSettings />
+      <RecoverySettings engine={engine} />
     </section>
   );
 }

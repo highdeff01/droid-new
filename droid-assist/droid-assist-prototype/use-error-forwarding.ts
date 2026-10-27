@@ -24,15 +24,17 @@ const sampleReport = (ctx: ErrorContext, token: string): ErrorReport =>
  * endpoint in the background (one retry, then the persisted outbox), suppresses duplicates and
  * tracks the endpoint's last-known status. Nothing here blocks the caller.
  */
-export function useErrorForwarding(settings: AssistSettings, addLog: AddLog, context: () => ErrorContext) {
+export function useErrorForwarding(settings: AssistSettings, addLog: AddLog, context: () => ErrorContext, onOutcome?: (what: string, ok: boolean, detail: string) => void) {
   const [errors, setErrors] = useState<ForwardedError[]>(() => loadOutbox().map((report) => ({ report, status: 'outbox', repeats: 0 })));
   const [endpoint, setEndpoint] = useState<EndpointStatus>({ state: 'unknown', time: null, detail: 'Nothing sent yet' });
   const settingsRef = useRef(settings);
   const contextRef = useRef(context);
+  const onOutcomeRef = useRef(onOutcome);
   const seenRef = useRef(new Map<string, number>());
   useLayoutEffect(() => {
     settingsRef.current = settings;
     contextRef.current = context;
+    onOutcomeRef.current = onOutcome;
   });
 
   useEffect(() => saveOutbox(errors.filter((e) => e.status === 'outbox').map((e) => e.report)), [errors]);
@@ -47,6 +49,7 @@ export function useErrorForwarding(settings: AssistSettings, addLog: AddLog, con
     const detail = redact(`${r.detail}${r.attempts > 1 ? ` after ${r.attempts} attempts` : ''}`, errorToken);
     setEndpoint({ state: r.ok ? 'ok' : 'failed', time: Date.now(), detail });
     addLog(SOURCE, redact(`${what} ${r.ok ? 'delivered' : 'not delivered'} — ${detail}`, errorToken), r.ok ? 'ok' : 'error');
+    onOutcomeRef.current?.(redact(what, errorToken), r.ok, detail);
   }, [addLog]);
 
   /** Delivers a listed report; a failure lands it in the outbox. */
