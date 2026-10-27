@@ -13,8 +13,8 @@ function engineWith(triggers: Trigger[]) {
     triggers, armed: false,
     elementMap: [{ id: 'e1', name: 'Play button', box: { x: 0.1, y: 0.1, w: 0.1, h: 0.1 }, mappedAt: 1 }],
     cards: [{ id: 'c1', name: 'Calc flow', description: '', savedAt: 1, steps: [] }],
-    addTrigger: vi.fn(), toggleTrigger: vi.fn(), deleteTrigger: vi.fn(), fireTrigger: vi.fn(async () => {}),
-  } as unknown as AssistEngine & { addTrigger: ReturnType<typeof vi.fn>; toggleTrigger: ReturnType<typeof vi.fn>; fireTrigger: ReturnType<typeof vi.fn>; deleteTrigger: ReturnType<typeof vi.fn> };
+    addTrigger: vi.fn(), deleteTrigger: vi.fn(), invoke: vi.fn(async () => ({ ok: true, result: '' })),
+  } as unknown as AssistEngine & { addTrigger: ReturnType<typeof vi.fn>; invoke: ReturnType<typeof vi.fn>; deleteTrigger: ReturnType<typeof vi.fn> };
 }
 
 describe('TriggersPanel', () => {
@@ -49,8 +49,8 @@ describe('TriggersPanel', () => {
     fireEvent.click(screen.getByLabelText('Enable Nightly'));
     fireEvent.click(screen.getByText('Run now'));
     fireEvent.click(screen.getByLabelText('Delete Nightly'));
-    expect(engine.toggleTrigger).toHaveBeenCalledWith('t1');
-    expect(engine.fireTrigger).toHaveBeenCalledWith('t1', expect.any(String));
+    expect(engine.invoke).toHaveBeenCalledWith('trigger.toggle', { id: 't1' });
+    expect(engine.invoke).toHaveBeenCalledWith('trigger.fire', { id: 't1' });
     expect(engine.deleteTrigger).toHaveBeenCalledWith('t1');
   });
 });

@@ -5,7 +5,11 @@ import { Hud } from './hud.js';
 import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel } from './panels.js';
 import { AgentBusPanel, ResolutionPanel, SubagentReportPanel } from './bus-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
+import { ApprovalsPanel } from './approvals-panel.js';
 import { StatsPanel } from './stats-panel.js';
+import { LiveBriefingPanel } from './live-briefing-panel.js';
+import { CapabilitiesPanel } from './capabilities-panel.js';
+import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
 import styles from './droid-assist.module.css';
 
 /** The Droid Assist workspace: live screen + overlay, HUDs, workflow, gallery, agents and log. */
@@ -25,6 +29,7 @@ function AssistScreen() {
       </header>
       <main className={styles.main}>
         <Hud engine={engine} />
+        <LiveBriefingPanel engine={engine} />
         <div className={styles.work}>
           <Stage engine={engine} />
           <div className={styles.side}>
@@ -35,9 +40,13 @@ function AssistScreen() {
             <LearnedCoordsPanel engine={engine} />
             <LibraryPanel engine={engine} />
             <PatternsPanel engine={engine} />
+            <KnowledgePanel engine={engine} />
+            <ProfilePanel engine={engine} />
             <StatsPanel engine={engine} />
             <WatcherPanel engine={engine} />
             <TriggersPanel engine={engine} />
+            <ApprovalsPanel engine={engine} />
+            <CapabilitiesPanel engine={engine} />
           </div>
         </div>
         <div className={styles.bottom}>
@@ -48,7 +57,9 @@ function AssistScreen() {
           <QwenThinkingPanel engine={engine} />
           <SupervisorPanel engine={engine} />
           <AgentsPanel engine={engine} />
+          <PortfoliosPanel engine={engine} />
           <LoopControlPanel engine={engine} />
+          <CapabilitiesPanel engine={engine} />
           <SettingsPanel engine={engine} />
           <AgentBusPanel engine={engine} />
           <SubagentReportPanel engine={engine} />
