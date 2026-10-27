@@ -1,4 +1,5 @@
 import type { Frame } from './types.js';
+import { escalate, type EscalationHooks, type EscalationStage } from './ai-escalation.js';
 import { HISTORY_MAX, STALE_KEEP, STALE_PARSE_LIMIT, trimHistory, type HistoryChange, type HistoryEntry, type TrimReason } from './ai-history.js';
 
 /** The primary Ollama-compatible chat endpoint and its default model. */
@@ -13,10 +14,10 @@ export interface AiConfig {
   view?: ViewSize;
   /** Per-request timeout in ms; absent means DEFAULT_AI_TIMEOUT_MS. */
   timeoutMs?: number;
-  /** The user's Master Prompt Override, appended to every system prompt; blank means none. */
-  masterPrompt?: string;
   /** Ask the model to think before answering (Ollama `think`); absent means false. */
   think?: boolean;
+  /** The user's Master Prompt Override, appended to every system prompt; blank means none. */
+  masterPrompt?: string;
 }
 
 /** Default per-request AI timeout, and the Settings range it is validated against. */
@@ -78,6 +79,8 @@ export interface AiReply {
   view?: ViewSize;
   /** True when the model never put an answer in message.content and `content` is its thinking. */
   thinkingOnly?: boolean;
+  /** The thinking-on escalation stage that produced this reply; absent when the first reply had content or no escalation ran. */
+  answeredBy?: EscalationStage;
 }
 
 /** Pixel coordinates of `view` read back as a point in the 0..1 sample space. */
@@ -191,7 +194,7 @@ async function fetchReply(cfg: AiConfig, messages: ChatMessage[], json: boolean,
 }
 
 /**
- * One non-streaming chat with thinking enabled; resolves with message.content and message.thinking.
+ * One non-streaming chat thinking as `cfg.think` asks; resolves with message.content and message.thinking.
  * A reply whose content is empty but whose thinking is not walks the retry ladder: up to
  * CONTENT_RETRY_LADDER.length retries, each with a differently worded instruction, then one fallback
  * question (the last question alone, rephrased). The first reply with content wins. When every try is
@@ -199,18 +202,17 @@ async function fetchReply(cfg: AiConfig, messages: ChatMessage[], json: boolean,
  * `thinkingOnly`. A first reply with neither content nor thinking rejects with an AiError. HTTP
  * errors, network errors and the timeout of the first request reject with AiError; aborting `cancel`
  * cancels the in-flight fetch and rejects at once with AiCancelled.
- * One non-streaming chat, thinking as `cfg.think` asks; resolves with message.content and message.thinking.
- * A reply whose content is empty but whose thinking is not is retried once with an instruction to
- * answer in content; a still-empty answer, or one with neither content nor thinking, rejects with an
- * AiError naming the cause. HTTP errors, network errors and the timeout reject with AiError;
- * aborting `cancel` cancels the in-flight fetch and rejects at once with AiCancelled.
+ * With thinking on (`cfg.think`) and `escalation` given, a thinking-only first reply walks the
+ * escalation pipeline of ai-escalation.ts instead of the ladder.
  * @param json ask the server for a JSON-formatted reply
  * @param cancel aborts the request (alongside the per-request timeout)
+ * @param escalation the session's app-context provider and stage reporter
  */
-export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = DEFAULT_AI_TIMEOUT_MS, cancel?: AbortSignal): Promise<AiReply> {
+export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = DEFAULT_AI_TIMEOUT_MS, cancel?: AbortSignal, escalation?: EscalationHooks): Promise<AiReply> {
   const first = await post(cfg, messages, json, timeoutMs, cancel);
   if (first.content) return first;
   if (!first.thinking) throw new AiError('AI endpoint returned no message content and no thinking');
+  if (cfg.think && escalation) return escalate((msgs, signal) => post(cfg, msgs, json, timeoutMs, linkSignals(cancel, signal)), messages, json, first.thinking, escalation);
   const send = (msgs: ChatMessage[]) => post(cfg, msgs, json, timeoutMs, cancel);
   let thinking = first.thinking;
   try {
@@ -402,8 +404,9 @@ export type HistoryChangeFn = (change: HistoryChange) => void;
  * flight (they reject with AiError); `trim(n)` keeps the newest n messages; `reset()` cancels and
  * clears everything; `noteParse(ok)` feeds the stale-context guard, which trims to STALE_KEEP after
  * STALE_PARSE_LIMIT unparseable replies in a row. Every trim and reset is reported to `onChange`.
+ * With thinking on, a thinking-only reply escalates with `escalation` (app context + stage reports).
  */
-export function createAiSession(store: HistoryStore | null, render?: RenderFn, onChange?: HistoryChangeFn) {
+export function createAiSession(store: HistoryStore | null, render?: RenderFn, onChange?: HistoryChangeFn, escalation: EscalationHooks = {}) {
   let history = loadHistory(store);
   let controller = new AbortController();
   let parseFailures = 0;
@@ -425,7 +428,7 @@ export function createAiSession(store: HistoryStore | null, render?: RenderFn, o
     const user: ChatMessage = { role: 'user', content, ...(images.length ? { images } : {}) };
     const system = withMasterPrompt(systemText(req.system, shots.view), cfg.masterPrompt);
     const turns = history.map(({ role, content: text }) => ({ role, content: text }));
-    const reply = await chat(cfg, [{ role: 'system', content: system }, ...turns, user], req.json, cfg.timeoutMs, signal);
+    const reply = await chat(cfg, [{ role: 'system', content: system }, ...turns, user], req.json, cfg.timeoutMs, signal, escalation);
     const time = Date.now();
     history = [...history, { role: 'user' as const, content, time }, { role: 'assistant' as const, content: reply.content, time }];
     if (history.length > HISTORY_MAX) shrink(HISTORY_MAX, 'cap');

@@ -535,16 +535,16 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         <small>Background keeps the main capture and acts via the bridge; foreground switches to the side window first.</small>
       </label>
       <ModelPicker url={settings.aiUrl} model={settings.aiModel} onSelect={(aiModel) => setSettings({ ...settings, aiModel })} />
-      <span className={styles.row}>
-        <button type="button" onClick={() => void engine.connectAi()} disabled={engine.aiStatus.state === 'checking' || !settings.aiUrl} aria-label="Connect AI">Connect</button>
-        <AiStatusBadge status={engine.aiStatus} />
-      </span>
       <label className={styles.setting}>
         <input type="checkbox" checked={settings.aiThink} onChange={(e) => setSettings({ ...settings, aiThink: e.target.checked })} aria-label="Model thinking" />
         Model thinking (may slow replies / empty answers)
         <small>Off sends think:false; small models can spend the whole reply thinking and return an empty answer.</small>
+        <small>Escalation (when on): a thinking-only reply is retried 3 times with the thinking added to the conversation, then a similar question, then a re-ask with fresh app context (screenshot, elements, log, goal, habits), then two overlapping calls. If none answers, the thinking is shown as the response and a next workflow is proposed in the Screen watcher.</small>
       </label>
-      <AiStatusBadge status={engine.aiStatus} />
+      <span className={styles.row}>
+        <button type="button" onClick={() => void engine.connectAi()} disabled={engine.aiStatus.state === 'checking' || !settings.aiUrl} aria-label="Connect AI">Connect</button>
+        <AiStatusBadge status={engine.aiStatus} />
+      </span>
       <ErrorForwardingSettings engine={engine} />
       <BackupSettings onExport={() => void engine.invoke('backup.export')} />
       <RelaxSettings engine={engine} />

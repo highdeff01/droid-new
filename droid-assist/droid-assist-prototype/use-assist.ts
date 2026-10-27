@@ -8,6 +8,7 @@ import { checkMoved, sameElement, verifyArrangement, type Expectation, type Move
 import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi, stripThinking } from './ai.js';
 import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi, thinkingOnlyNotice } from './ai.js';
 import { OVERLAP_PREFIX, firstValid } from './ai-overlap.js';
+import { STAGE_LABEL, appContextSections, escalationNotice, suggestedGoal, type EscalationEvent, type EscalationHooks } from './ai-escalation.js';
 import type { AiReply, AiStatus, AskFn, AskRequest, HistoryChangeFn } from './ai.js';
 import { historyChangeText } from './ai-history.js';
 import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type StageId } from './loop-control.js';
@@ -561,7 +562,12 @@ export function useAssist() {
   const mirrorBridgeRef = useRef(false);
   /** Trims and resets of the AI history land here (wired to the log once addLog exists). */
   const historyChangeRef = useRef<HistoryChangeFn>(() => undefined);
-  const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage, renderView, (c) => historyChangeRef.current(c)));
+  /** The thinking-on escalation hooks of the session, set below once the app-context sources exist. */
+  const escalationRef = useRef<Required<EscalationHooks>>({ appContext: async () => ({ sections: [] }), onStage: () => undefined });
+  const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage, renderView, (c) => historyChangeRef.current(c), {
+    appContext: () => escalationRef.current.appContext(),
+    onStage: (e) => escalationRef.current.onStage(e),
+  }));
   const [aiHistory, setAiHistory] = useState(() => aiSessionRef.current.history());
   /** Cancels every in-flight model call when aborted; replaced by a fresh one after each cancel. */
   const aiCtrlRef = useRef(new AbortController());
@@ -921,10 +927,10 @@ export function useAssist() {
 
   const aiCheckSeqRef = useRef(0);
   /** Pings `url`+`model` with the health check and shows the result; a result overtaken by a newer check is dropped. */
-  const checkAi = useCallback(async (url: string, model: string): Promise<AiStatus> => {
+  const checkAi = useCallback(async (url: string, model: string, think: boolean): Promise<AiStatus> => {
     const seq = ++aiCheckSeqRef.current;
     setAiStatus({ state: 'checking', detail: `Connecting to ${url}…` });
-    const status = await pingAi({ url, model });
+    const status = await pingAi({ url, model, think });
     if (seq !== aiCheckSeqRef.current) return status;
     setAiStatus(status);
     addLog('AI', status.detail, status.state === 'online' ? 'ok' : 'error');
@@ -934,25 +940,17 @@ export function useAssist() {
 
   // AI endpoint health: at startup and whenever the endpoint or model changes.
   useEffect(() => {
-    void checkAi(settings.aiUrl, settings.aiModel);
-    let live = true;
-    setAiStatus({ state: 'checking', detail: `Connecting to ${settings.aiUrl}…` });
-    void pingAi({ url: settings.aiUrl, model: settings.aiModel, think: settings.aiThink }).then((status) => {
-      if (!live) return;
-      setAiStatus(status);
-      addLog('AI', status.detail, status.state === 'online' ? 'ok' : 'error');
-      if (status.state !== 'online') captureError({ kind: 'ai', message: status.detail });
-    });
+    void checkAi(settings.aiUrl, settings.aiModel, settings.aiThink);
     return () => {
       aiCheckSeqRef.current++;
     };
-  }, [settings.aiUrl, settings.aiModel, checkAi]);
+  }, [settings.aiUrl, settings.aiModel, settings.aiThink, checkAi]);
 
   /** One-click Connect: saves the settings as they stand and pings their endpoint+model. */
   const connectAi = useCallback(() => {
     const s = settingsRef.current;
     saveSettings(s);
-    return checkAi(s.aiUrl, s.aiModel);
+    return checkAi(s.aiUrl, s.aiModel, s.aiThink);
   }, [checkAi]);
 
   /** Marks user notes as received by `project`'s AI call and logs the injection. */
@@ -1018,10 +1016,26 @@ export function useAssist() {
     return { r, level: syncLevelFor(r, t) };
   };
 
+  /**
+   * Every escalation stage failed: the thinking is the response (labelled thinking-only on the
+   * timeline), the log says plainly that content was never produced, and a workflow proposal derived
+   * from the thinking and the goal is added to the Screen watcher for the user to accept (queue as the goal) or dismiss.
+   */
+  const thinkingOnlyOutput = useCallback((thinking: string, stage: StageId) => {
+    const text = escalationNotice(thinking);
+    setTimeline((t) => addEntry(t, { step: `AI (${stage}) · thinking only`, kind: 'thought', text, thinking }));
+    addLog('AI', `Content was never produced for this ${stage} call — the model's thinking is shown as the response.`, 'warn');
+    const goal = suggestedGoal(thinking, goalRef.current);
+    const { proposals, added } = mergeProposals(watcherRef.current.proposals, [{ kind: 'workflow', text: `Suggested next workflow from the AI's thinking: ${goal}`, target: goal }]);
+    watcherRef.current = { ...watcherRef.current, proposals };
+    setWatcher(watcherRef.current);
+    if (added.length) addLog('Screen watcher', `Proposed workflow from thinking-only reply: ${goal} — Accept to queue it as the goal`, 'info');
+  }, [addLog]);
+
   /** One model call of `stage` through the shared queue, with the current settings (master prompt included). */
   const queuedAsk = useCallback((req: AskRequest, stage: StageId, signal: AbortSignal): Promise<AiReply> => aiQueueRef.current.run(stage, (timeoutMs) => {
-    const { aiUrl, aiModel, aiView, masterPrompt } = settingsRef.current;
-    return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs, masterPrompt }, { ...req, signal });
+    const { aiUrl, aiModel, aiView, masterPrompt, aiThink } = settingsRef.current;
+    return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs, masterPrompt, think: aiThink }, { ...req, signal });
   }, signal), []);
 
   /**
@@ -1061,7 +1075,8 @@ export function useAssist() {
       if (injected.length) injectNotes(injected, project);
       const { aiModel } = settingsRef.current;
       if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${aiModel}` });
-      if (reply.thinkingOnly) {
+      if (reply.answeredBy === 'thinking-only') thinkingOnlyOutput(reply.content, stage);
+      else if (reply.thinkingOnly) {
         const text = thinkingOnlyNotice(reply.content);
         setTimeline((t) => addEntry(t, { step: `AI (${stage})`, kind: 'thought', text, thinking: reply.thinking }));
         addLog('AI', text, 'warn');
@@ -1078,6 +1093,7 @@ export function useAssist() {
     }
   }, [addLog, captureError, queuedAsk]);
   }, [captureError, injectNotes]);
+  }, [addLog, captureError, queuedAsk, thinkingOnlyOutput]);
 
   /** The AskFn of one loop-control stage. */
   const askFor = useCallback((stage: StageId): AskFn => (req) => askAi(req, stage), [askAi]);
@@ -2086,6 +2102,25 @@ export function useAssist() {
     aborted,
     isAborted: () => abortedRef.current,
   });
+  /** Each escalation attempt goes to the thinking timeline and the activity log. */
+  const noteEscalation = (e: EscalationEvent) => {
+    note({ step: `Escalation: ${STAGE_LABEL[e.stage]}`, kind: 'attempt', text: e.detail, thinking: e.thinking });
+    addLog('AI escalation', e.detail, e.ok ? 'ok' : 'warn');
+  };
+
+  /** More app material for the app-context re-ask: a fresh screenshot, goal/steps, mapped elements, the log and habits. */
+  const appContext = async () => {
+    const frame = await liveFrame().catch(() => null);
+    const sections = appContextSections({
+      goal: goalRef.current,
+      steps: stepsRef.current.map((s, i) => `${i + 1}. ${s.action} "${s.target ?? s.name}" [${s.status}]`),
+      elements: mapContext(elementMapRef.current),
+      log: logRef.current.slice(0, 12).map((l) => `[${l.source}] ${l.message}`),
+      habits: relevantHabits(goalRef.current, habitContext(), habitsRef.current).map(habitLine),
+    });
+    return { sections, frame: frame?.url ?? null };
+  };
+  escalationRef.current = { appContext, onStage: noteEscalation };
 
   /**
    * The agent test of a proposal: a dry-run move to the proposed point, verified against the
@@ -5229,6 +5264,12 @@ export function useAssist() {
       if (!p.target || p.x === undefined || p.y === undefined) return null;
       setFamiliar((list) => rememberElement(list, { id: uid('el'), name: p.target!, x: p.x!, y: p.y!, lastSeen: Date.now() }));
       return `saved "${p.target}" as a familiar element`;
+    },
+    workflow: (p) => {
+      const next = p.target ?? p.text;
+      goalRef.current = next;
+      setGoal(next);
+      return `queued "${next}" as the goal — press Plan to run it`;
     },
     pattern: (p) => {
       const kind = /^avoid\b/i.test(p.text) ? 'avoid' : 'add';

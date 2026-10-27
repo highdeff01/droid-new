@@ -250,14 +250,6 @@ describe('useAssist Qwen thinking timeline', () => {
     expect(result.current.timeline[0]).toMatchObject({ kind: 'thought', text: 'Top bar', thinking: null });
   });
 
-  it('accepts a thinking-only reply as the answer and shows what happened on the timeline and the log', async () => {
-    const result = await askWith(chatReply({ content: '', thinking: 'I think {"answer":"Search sits in the top bar","items":[]}' }));
-    const notice = result.current.timeline.find((e) => /only in its thinking/.test(e.text));
-    expect(notice).toMatchObject({ kind: 'thought', thinking: 'I think {"answer":"Search sits in the top bar","items":[]}' });
-    expect(notice!.text).toMatch(/self-test|queue/);
-    expect(result.current.timeline[0]).toMatchObject({ step: 'Ask: Where is search?', text: 'Search sits in the top bar' });
-    expect(result.current.log.some((l) => l.source === 'AI' && l.tone === 'warn' && /only in its thinking/.test(l.message))).toBe(true);
-    expect(result.current.aiStatus.state).toBe('online');
   const thinkSent = (fetchImpl: ReturnType<typeof vi.fn>) => fetchImpl.mock.calls.map((c) => JSON.parse((c as unknown as [string, RequestInit])[1].body as string).think);
 
   it('sends think:false on every AI request by default', async () => {
@@ -273,6 +265,16 @@ describe('useAssist Qwen thinking timeline', () => {
     const result = await askWith(fetchImpl);
     expect(new Set(thinkSent(fetchImpl))).toEqual(new Set([true]));
     expect(result.current.timeline[0]).toMatchObject({ text: 'Top bar', thinking: 'top' });
+  });
+
+  it('accepts a thinking-only reply as the answer and shows what happened on the timeline and the log', async () => {
+    const result = await askWith(chatReply({ content: '', thinking: 'I think {"answer":"Search sits in the top bar","items":[]}' }));
+    const notice = result.current.timeline.find((e) => /only in its thinking/.test(e.text));
+    expect(notice).toMatchObject({ kind: 'thought', thinking: 'I think {"answer":"Search sits in the top bar","items":[]}' });
+    expect(notice!.text).toMatch(/self-test|queue/);
+    expect(result.current.timeline[0]).toMatchObject({ step: 'Ask: Where is search?', text: 'Search sits in the top bar' });
+    expect(result.current.log.some((l) => l.source === 'AI' && l.tone === 'warn' && /only in its thinking/.test(l.message))).toBe(true);
+    expect(result.current.aiStatus.state).toBe('online');
   });
 
   it('records the plan thought, reflection and verdict of a /move step run through the pipeline', async () => {
@@ -1629,5 +1631,46 @@ describe('useAssistExecutionModes', () => {
       expect(modeLog?.message).toMatch(/rejected/);
       expect(result.current.armed).toBe(false);
     });
+describe('useAssist thinking-on escalation', () => {
+  const THOUGHT = 'Search is probably in the top bar. Try clicking the search icon.';
+
+  /** Asks about the screen with every model reply thinking only, with model thinking on or off in Settings. */
+  async function askThinking(aiThink: boolean) {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ aiThink }));
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ message: { role: 'assistant', content: '', thinking: THOUGHT } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchImpl);
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(frame()));
+    act(() => result.current.setGoal('Find search'));
+    await act(() => result.current.askScreen('Where is search?'));
+    return result;
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('logs every escalation stage, shows the thinking as a thinking-only response and says content was never produced', async () => {
+    const result = await askThinking(true);
+    const steps = result.current.timeline.map((e) => e.step);
+    for (const stage of ['Conversation update', 'Similar question', 'App-context re-ask', 'Overlap AI']) expect(steps).toContain(`Escalation: ${stage}`);
+    expect(result.current.log.filter((l) => l.source === 'AI escalation').length).toBeGreaterThanOrEqual(6);
+    expect(result.current.timeline.find((e) => /thinking only/.test(e.step))).toMatchObject({ thinking: THOUGHT });
+    expect(result.current.log.some((l) => /Content was never produced/.test(l.message))).toBe(true);
+  });
+
+  it('proposes a next workflow from the thinking that Accept queues as the goal', async () => {
+    const result = await askThinking(true);
+    const p = result.current.watcher.proposals.find((x) => x.kind === 'workflow');
+    expect(p).toMatchObject({ status: 'pending', target: 'Find search — next: Try clicking the search icon' });
+    act(() => result.current.acceptProposal(p!.id));
+    expect(result.current.goal).toBe(p!.target);
+    expect(result.current.watcher.proposals.find((x) => x.id === p!.id)!.status).toBe('accepted');
+  });
+
+  it('runs no escalation with model thinking off', async () => {
+    const result = await askThinking(false);
+    expect(result.current.timeline.some((e) => e.step.startsWith('Escalation:'))).toBe(false);
+    expect(result.current.watcher.proposals.some((x) => x.kind === 'workflow')).toBe(false);
   });
 });
