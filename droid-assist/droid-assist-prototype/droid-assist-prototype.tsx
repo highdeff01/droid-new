@@ -9,7 +9,7 @@ import { AccessPathsPanel } from './access-paths-panel.js';
 import { ApprovalsPanel } from './approvals-panel.js';
 import { StatsPanel } from './stats-panel.js';
 import { LiveBriefingPanel } from './live-briefing-panel.js';
-import { CapabilitiesPanel } from './capabilities-panel.js';
+import { ArtifactsPanel } from './capabilities-panel.js';
 import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
 import { VariationsPanel } from './variations-panel.js';
 import styles from './droid-assist.module.css';
@@ -49,7 +49,7 @@ function AssistScreen() {
             <WatcherPanel engine={engine} />
             <TriggersPanel engine={engine} />
             <ApprovalsPanel engine={engine} />
-            <CapabilitiesPanel engine={engine} />
+            <ArtifactsPanel engine={engine} />
           </div>
         </div>
         <div className={styles.bottom}>

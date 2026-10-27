@@ -65,6 +65,7 @@ import { ALL_PROJECTS, addUserNote, loadKnowledge, markInjected, noteLine, pendi
 import { MAIN_AI, markPreferred, type PreferredShot } from './live-briefing.js';
 import { LIVE_SETTINGS, applyLiveSetting, capabilityPrompt, permission, requesterName, type AgentId, type CapabilityRequest, type LiveSetting, type Params, type Requester } from './capabilities.js';
 import { useCapabilities } from './use-capabilities.js';
+import { useCapabilityRegistry } from './use-capability-registry.js';
 import type { AssistStatus } from './main-app-bridge.js';
 import { backupFileName, exportBackup } from './backup.js';
 import { runTotals } from './run-stats.js';
@@ -2963,8 +2964,6 @@ export function useAssist() {
     addLog('/scenario', `${scenario.title} checklist: ${progressLines(scenario, worldRef.current).join(' · ')}`, scenarioComplete(scenario, worldRef.current) ? 'ok' : 'warn');
   };
 
-  /** Each slash command's runner. */
-  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'scenario', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, scenario: scenarioCommand };
   /** The capability registry: presentations, scripts, simulations, video notes and computer control on the real-input path. */
   const caps = useCapabilities({
     runBriefed: async (actor, step, budget, dryRun) => {
@@ -2987,7 +2986,7 @@ export function useAssist() {
   });
 
   /** Each slash command's runner. */
-  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'do', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, do: caps.doCommand };
+  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'scenario' | 'do', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, scenario: scenarioCommand, do: caps.doCommand };
 
   /** Submits the assist input: /use, /move, /measure, /arrange and /do run, anything else is planned as a goal. */
   const submitInput = async () => {
@@ -3222,9 +3221,9 @@ export function useAssist() {
   const storeCard = (draft: { name: string; description: string }) => {
     const id = uid('card');
     flowRef.current = id;
-    setCards((c) => [{ id, ...draftCard, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
-    addLog('Library', `Saved "${draftCard.name}"`, 'ok');
-    kb.noteSignal('saved', draftCard.name);
+    setCards((c) => [{ id, ...draft, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
+    addLog('Library', `Saved "${draft.name}"`, 'ok');
+    kb.noteSignal('saved', draft.name);
     setDraftCard(null);
     return id;
   };
@@ -3459,7 +3458,7 @@ export function useAssist() {
     };
   };
 
-  const capabilities = useCapabilities({
+  const capabilities = useCapabilityRegistry({
     plan: autoPlan, replay, stop, toggleRecording, setStage: toggleStage,
     setAgent: (id, on) => setAgents((list) => list.map((a) => (a.id === id ? { ...a, on } : a))),
     adjustSetting, setAutoAct: (on) => putSettings({ ...settingsRef.current, autoAct: on }), setRelaxed,
@@ -3515,16 +3514,16 @@ export function useAssist() {
     aiHistory, trimAiHistory, resetAiSession,
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
-    onStageMove, onStageClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
+    onStageMove, onStageClick, onStageDoubleClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
     knowledge: kb, removeStep, variations,
-    shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
+    shareScreen, connectBridge, connectAi, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
     bridgeOnline, verifyRealInput,
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
     dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
     reverse, reverseLast, reversing, briefings,
     goals, queueNextGoal, removeGoal, userNotes, addNote, preferred, preferFrame,
     /** The capability registry and its artifacts; `invokeCapability` is the one permission-checked path for the main AI, the user and agents. */
-    capabilities: caps.registry, invokeCapability: caps.invoke, presentations: caps.presentations, scripts: caps.scripts, knowledge: caps.knowledge,
+    artifactCapabilities: caps.registry, invokeCapability: caps.invoke, presentations: caps.presentations, scripts: caps.scripts, artifactKnowledge: caps.knowledge,
     /** The capability registry: the single dispatch surface for buttons, the AI, agents and the main app. */
     capabilities: capabilities.registry.list, invocations: capabilities.invocations, invoke: capabilities.invoke, requestCapability, relaxed: !!relaxedRef.current,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,

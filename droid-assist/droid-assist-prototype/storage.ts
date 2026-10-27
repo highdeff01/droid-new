@@ -29,7 +29,7 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', portfolios: 'droid-assist.portfolios', profile: 'droid-assist.user-profile', sections: 'droid-assist.knowledge-sections', variations: 'droid-assist.variations' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', portfolios: 'droid-assist.portfolios', profile: 'droid-assist.user-profile', sections: 'droid-assist.knowledge-sections', variations: 'droid-assist.variations', accessPaths: 'droid-assist.access-paths', approvals: 'droid-assist.approvals' } as const;
 const STEP_STATUSES: readonly StepStatus[] = ['pending', 'running', 'done', 'drift', 'failed'];
 
 /** Most learned patterns kept. */
@@ -371,12 +371,16 @@ export const loadAccessPaths = (): AccessProfile[] => listOf(readJson(KEYS.acces
 /** Persists the access-path profiles, capped at ACCESS_PATH_LIMIT. */
 export function saveAccessPaths(profiles: AccessProfile[]) {
   writeJson(KEYS.accessPaths, profiles.slice(0, ACCESS_PATH_LIMIT));
+}
+
 /** The stored approval queue (newest first); invalid entries are dropped. */
 export const loadApprovals = (): ApprovalItem[] => listOf(readJson(KEYS.approvals), isApprovalItem, APPROVAL_LIMIT);
 
 /** Persists the approval queue, capped at APPROVAL_LIMIT. */
 export function saveApprovals(items: ApprovalItem[]) {
   writeJson(KEYS.approvals, items.slice(0, APPROVAL_LIMIT));
+}
+
 /** Every actor's stored portfolio entries; invalid entries are dropped. */
 export const loadPortfolios = (): PortfolioEntry[] => listOf(readJson(KEYS.portfolios), isPortfolioEntry, PORTFOLIO_LIMIT);
 
