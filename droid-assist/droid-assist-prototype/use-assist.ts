@@ -53,6 +53,9 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
+import { DEFAULT_AUTO_ACT } from './notifications.js';
+import { DEFAULT_BREAK_MINUTES } from './relax.js';
+import { DEFAULT_SYSTEM_REFRESH_SEC } from './system-info.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -176,6 +179,11 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   errorUrl: '',
   errorForwarding: false,
   errorToken: '',
+  relaxMode: false,
+  breakMinutes: DEFAULT_BREAK_MINUTES,
+  systemRefreshSec: DEFAULT_SYSTEM_REFRESH_SEC,
+  notifyAutoAct: DEFAULT_AUTO_ACT,
+  systemFolders: [],
 };
 
 /** A background agent the user can toggle; each also has an inbox on the inter-agent bus. */

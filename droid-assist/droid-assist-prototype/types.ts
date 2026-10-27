@@ -1,5 +1,6 @@
 import type { StageMap } from './loop-control.js';
 import type { AiView } from './ai.js';
+import type { AutoActMap } from './notifications.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
@@ -286,4 +287,14 @@ export interface AssistSettings {
   errorForwarding: boolean;
   /** Optional bearer token for the error endpoint; never written to the activity log. */
   errorToken: string;
+  /** Relaxation mode: slower cadence, no background agent tests, dimmed info notifications, break reminders. */
+  relaxMode: boolean;
+  /** Minutes between "take a break" reminders while relaxation mode is on. */
+  breakMinutes: number;
+  /** Seconds between automatic System panel refreshes. */
+  systemRefreshSec: number;
+  /** Auto-act on notifications, per category; every category defaults off. */
+  notifyAutoAct: AutoActMap;
+  /** Folders (native paths) the System panel reports file specs for. */
+  systemFolders: string[];
 }

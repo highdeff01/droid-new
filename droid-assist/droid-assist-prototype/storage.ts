@@ -15,6 +15,12 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
+import { NOTIFICATION_LIMIT, isNotification, sanitizeAutoAct, type AssistNotification } from './notifications.js';
+import { BREAK_MINUTES_RANGE } from './relax.js';
+import { SYSTEM_REFRESH_SEC_RANGE } from './system-info.js';
+
+/** Most folders the System panel reports on. */
+export const SYSTEM_FOLDER_LIMIT = 10;
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -23,7 +29,7 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', notifications: 'droid-assist.notifications' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -34,7 +40,7 @@ const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'breakMinutes' | 'systemRefreshSec', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
@@ -48,6 +54,8 @@ const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | '
   gridOpacity: GRID_OPACITY_RANGE,
   aiMaxInFlight: [AI_MAX_IN_FLIGHT_MIN, AI_MAX_IN_FLIGHT_MAX],
   aiTimeoutMs: [AI_TIMEOUT_MS_MIN, AI_TIMEOUT_MS_MAX],
+  breakMinutes: BREAK_MINUTES_RANGE,
+  systemRefreshSec: SYSTEM_REFRESH_SEC_RANGE,
 };
 
 /** A step as persisted: its screenshot without the pixel buffer. */
@@ -87,7 +95,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     const v = stored[key];
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'relaxMode'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
   for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken'] as const) {
@@ -103,6 +111,8 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   if (stored.displayId === null || (typeof stored.displayId === 'string' && stored.displayId)) out.displayId = stored.displayId;
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
   out.stages = sanitizeStages(stored.stages ?? defaults.stages);
+  out.notifyAutoAct = sanitizeAutoAct(stored.notifyAutoAct ?? defaults.notifyAutoAct);
+  if (Array.isArray(stored.systemFolders)) out.systemFolders = [...new Set(stored.systemFolders.filter(isStr).map((p) => p.trim()))].slice(0, SYSTEM_FOLDER_LIMIT);
   return out;
 }
 
@@ -354,4 +364,12 @@ export const loadTriggers = (): Trigger[] => listOf(readJson(KEYS.triggers), isT
 /** Persists the triggers, capped at TRIGGER_LIMIT. */
 export function saveTriggers(triggers: Trigger[]) {
   writeJson(KEYS.triggers, triggers.slice(0, TRIGGER_LIMIT));
+}
+
+/** The stored notifications (newest first, at most NOTIFICATION_LIMIT); invalid entries are dropped. */
+export const loadNotifications = (): AssistNotification[] => listOf(readJson(KEYS.notifications), isNotification, NOTIFICATION_LIMIT);
+
+/** Persists the newest NOTIFICATION_LIMIT notifications. */
+export function saveNotifications(list: AssistNotification[]) {
+  writeJson(KEYS.notifications, list.slice(0, NOTIFICATION_LIMIT));
 }

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import { CAPTURE_CHANNELS, type NativeCaptureApi, type NativeFrame } from './capture-api.js';
+import { SYSTEM_CHANNELS, type NativeSystemApi } from './system-api.js';
 
 let frameListener: ((event: IpcRendererEvent, frame: NativeFrame) => void) | null = null;
 let errorListener: ((event: IpcRendererEvent, message: string) => void) | null = null;
@@ -12,7 +13,7 @@ function dropListeners() {
 }
 
 /** The narrow capture API the renderer sees as `window.droidNative`. */
-const api: NativeCaptureApi = {
+const api: NativeCaptureApi & Required<NativeSystemApi> = {
   async startCapture(intervalMs, onFrame, onError) {
     dropListeners();
     frameListener = (_event, frame) => onFrame(frame);
@@ -33,6 +34,15 @@ const api: NativeCaptureApi = {
   },
   selectDisplay(id) {
     ipcRenderer.send(CAPTURE_CHANNELS.selectDisplay, id);
+  },
+  systemInfo() {
+    return ipcRenderer.invoke(SYSTEM_CHANNELS.info);
+  },
+  folderSpecs(paths) {
+    return ipcRenderer.invoke(SYSTEM_CHANNELS.folderSpecs, paths);
+  },
+  pickFolder() {
+    return ipcRenderer.invoke(SYSTEM_CHANNELS.pickFolder);
   },
 };
 

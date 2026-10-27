@@ -58,6 +58,17 @@ export function putStoredFrame(frame: StoredFrame, keep: number): Promise<void> 
   });
 }
 
+/** Deletes every record that is not a valid stored frame (startup recovery); resolves how many were removed. */
+export function pruneCorruptFrames(): Promise<number> {
+  return withStore('readwrite', 0, async (store) => {
+    const all: unknown[] = await request(store.getAll());
+    const keys = await request(store.getAllKeys());
+    const bad = keys.filter((_k, i) => !isStoredFrame(all[i]));
+    await Promise.all(bad.map((k) => request(store.delete(k))));
+    return bad.length;
+  });
+}
+
 /** Test seam: closes and forgets the cached connection so the next call reopens the database. */
 export async function resetFrameStore() {
   const db = await dbPromise;
