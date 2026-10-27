@@ -17,7 +17,10 @@ import type { DeliveryStatus, EndpointStatus, ForwardedError } from './error-for
 import { segmentLine } from './ruler.js';
 import type { ElementSource, ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
-import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js';
+import { MAP_COLS, MAP_ROWS, boxCenter, mapCells, type MappedElement, type PerformFn, type PerformKind } from './element-map-studio.js';
+import { countHere, ghostPositions, motionOf, motionTiming, type MotionKind } from './element-tracking.js';
+import { PERFORM_KINDS, checkPerform, performText } from './element-perform.js';
+import { TRAIN_MODES, type TrainMode, type TrainingReport } from './element-training.js';
 import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
 import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
@@ -558,12 +561,22 @@ export function ElementsPanel({ engine }: { engine: AssistEngine }) {
 
 /** Element map studio: toggle the map mode, name the drawn box, list and delete mapped elements. */
 export function ElementMapPanel({ engine }: { engine: AssistEngine }) {
-  const { elementMap, mapMode, mapDraft } = engine;
+  const { elementMap, mapMode, mapDraft, settings, setSettings } = engine;
   const [name, setName] = useState('');
   return (
     <section className={styles.panel} aria-label="Element map">
       <h3>Element map <small>{elementMap.length} mapped · own {MAP_ROWS}x{MAP_COLS} grid</small></h3>
       <button type="button" aria-pressed={mapMode} onClick={engine.toggleMapMode}>{mapMode ? 'Done mapping' : 'Map elements'}</button>
+      <button type="button" onClick={() => engine.scanNow()}>Scan now</button>
+      <label>
+        <input type="checkbox" checked={settings.autoScan} onChange={(e) => setSettings({ ...settings, autoScan: e.target.checked })} /> Auto-scan every frame
+      </label>
+      <label>
+        Training{' '}
+        <select value={settings.trainMode} onChange={(e) => setSettings({ ...settings, trainMode: e.target.value as TrainMode })} aria-label="Training mode">
+          {TRAIN_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+      </label>
       {mapMode && !mapDraft && <p className={styles.muted}>Click-drag on the live screen to draw an element's boundary.</p>}
       {mapDraft && (
         <form
@@ -579,14 +592,91 @@ export function ElementMapPanel({ engine }: { engine: AssistEngine }) {
         </form>
       )}
       <ul className={styles.log}>
-        {elementMap.map((el) => (
-          <li key={el.id} data-tone="info">
-            <b>{el.name}</b> · {mapCells(el.box)} · center {gridRef(boxCenter(el.box))}
-            <button type="button" aria-label={`Delete ${el.name}`} onClick={() => engine.deleteMapped(el.id)}>✕</button>
+        {elementMap.map((el) => <MappedItem key={el.id} engine={engine} el={el} />)}
+      </ul>
+      {engine.training && <TrainingReportView report={engine.training} />}
+    </section>
+  );
+}
+
+const MOTION_LABEL: Record<MotionKind, string> = { static: 'static', moved: 'moved', in_motion: 'always in motion' };
+
+/** Where an element is and was: motion label with move counts, ghost positions with counts, and observed timing. */
+function TrackingInfo({ el }: { el: MappedElement }) {
+  const motion = motionOf(el);
+  const timing = motionTiming(el);
+  const ghosts = ghostPositions(el);
+  return (
+    <small>
+      {' '}· {el.origin === 'auto' ? `auto ${el.kind ?? ''}` : 'drawn'} · <b>{MOTION_LABEL[motion.kind]}</b>
+      {motion.kind !== 'static' && ` (user ${motion.user}, AI ${motion.ai}, self ${motion.self})`}
+      {el.timesSeen !== undefined && ` · seen ${el.timesSeen}× (${countHere(el)}× here)`}
+      {ghosts.length > 0 && ` · was at ${ghosts.map((g) => `${mapCells(g.box)} ${g.count}×`).join(', ')}`}
+      {timing && ` · moves every ~${Math.round(timing.meanMs)} ms ±${Math.round(timing.jitterMs)} (intervals ${timing.intervals.map((i) => Math.round(i)).join('/')}) · next move ~${new Date(timing.nextAt).toLocaleTimeString()}`}
+    </small>
+  );
+}
+
+/** The user's perform editor: kind, text for type, drop element for drag. */
+function PerformEditor({ engine, el }: { engine: AssistEngine; el: MappedElement }) {
+  const [kind, setKind] = useState<PerformKind>(el.perform?.kind ?? 'click');
+  const [text, setText] = useState(el.perform?.text ?? '');
+  const [drop, setDrop] = useState(el.perform?.toElementId ?? '');
+  const others = engine.elementMap.filter((o) => o.id !== el.id);
+  const draft: PerformFn = { kind, source: 'user', ...(kind === 'type' ? { text } : {}), ...(kind === 'drag' && drop ? { toElementId: drop } : {}) };
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        engine.setElementPerform(el.id, draft);
+      }}
+    >
+      <select value={kind} onChange={(e) => setKind(e.target.value as PerformKind)} aria-label={`Perform of ${el.name}`}>
+        {PERFORM_KINDS.map((k) => <option key={k} value={k}>{k.replace('_', ' ')}</option>)}
+      </select>
+      {kind === 'type' && <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Text to type" aria-label={`Text for ${el.name}`} />}
+      {kind === 'drag' && (
+        <select value={drop} onChange={(e) => setDrop(e.target.value)} aria-label={`Drop target of ${el.name}`}>
+          <option value="">Drop on…</option>
+          {others.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+        </select>
+      )}
+      <button type="submit" disabled={!checkPerform(draft).ok}>Set perform</button>
+    </form>
+  );
+}
+
+/** One mapped element: tracking info, its perform, and the perform / workflow / training actions. */
+function MappedItem({ engine, el }: { engine: AssistEngine; el: MappedElement }) {
+  return (
+    <li data-tone={motionOf(el).kind === 'in_motion' ? 'warn' : 'info'}>
+      <b>{el.name}</b> · {mapCells(el.box)} · center {gridRef(boxCenter(el.box))}
+      <TrackingInfo el={el} />
+      {el.perform && <small> · performs {performText(el.perform, engine.elementMap)} ({el.perform.source === 'ai' ? 'AI' : 'you'})</small>}
+      <PerformEditor engine={engine} el={el} />
+      <button type="button" onClick={() => void engine.proposePerform(el.id)}>Ask AI</button>
+      <button type="button" disabled={!el.perform} onClick={() => engine.addNavigateStep(el.id)}>Add to workflow</button>
+      <button type="button" onClick={() => void engine.trainMapped(el.id)}>Train</button>
+      <button type="button" aria-label={`Delete ${el.name}`} onClick={() => engine.deleteMapped(el.id)}>✕</button>
+    </li>
+  );
+}
+
+/** The latest training session: status, each action with its screenshot, related elements and research. */
+function TrainingReportView({ report }: { report: TrainingReport }) {
+  return (
+    <div aria-label="Training report">
+      <h4>Training "{report.name}" <small>{report.mode} · {report.status} · {report.related.length} related</small></h4>
+      <ul className={styles.log}>
+        {report.entries.map((e, i) => (
+          <li key={i} data-tone={e.ok ? 'ok' : 'error'}>
+            {e.shot && <img src={e.shot.url} alt={`${e.label} screenshot`} width={96} />}
+            <b>{e.label}</b> — {e.message}
           </li>
         ))}
       </ul>
-    </section>
+      {report.research && <p>{report.research}</p>}
+    </div>
   );
 }
 

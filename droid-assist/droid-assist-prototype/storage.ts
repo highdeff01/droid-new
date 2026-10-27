@@ -3,7 +3,9 @@ import { STEP_ACTIONS } from './types.js';
 import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 import { sanitizeBudget } from './safety.js';
 import { FAMILIAR_LIMIT } from './elements.js';
-import { MAP_LIMIT, type MappedElement } from './element-map-studio.js';
+import { MAP_LIMIT, type ElementKind, type MappedElement, type MoveEvent, type PerformFn, type PositionRecord } from './element-map-studio.js';
+import { TRAIN_MODES, type TrainMode } from './element-training.js';
+import { PERFORM_KINDS, checkPerform } from './element-perform.js';
 import { pruneHabits } from './habits.js';
 import { OUTBOX_LIMIT, isErrorReport, type ErrorReport } from './error-forwarding.js';
 import { EMPTY_WATCHER, NOTE_KINDS, NOTE_LIMIT, PROPOSAL_KINDS, PROPOSAL_LIMIT, PROPOSAL_STATUSES, TEST_LIMIT } from './watcher.js';
@@ -87,7 +89,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     const v = stored[key];
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels', 'autoScan'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
   for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken'] as const) {
@@ -99,6 +101,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     if (typeof v === 'string' && v.trim()) out[key] = v;
   }
   if (typeof stored.aiView === 'string' && Object.hasOwn(AI_VIEWS, stored.aiView)) out.aiView = stored.aiView as AiView;
+  if (typeof stored.trainMode === 'string' && TRAIN_MODES.includes(stored.trainMode as TrainMode)) out.trainMode = stored.trainMode as TrainMode;
   if (typeof stored.monitorMode === 'string' && MODES.includes(stored.monitorMode as MonitorMode)) out.monitorMode = stored.monitorMode as MonitorMode;
   if (stored.displayId === null || (typeof stored.displayId === 'string' && stored.displayId)) out.displayId = stored.displayId;
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
@@ -224,17 +227,72 @@ export function loadFamiliar(): FamiliarElement[] {
 type StoredMapped = Omit<MappedElement, 'frame'> & { frame?: StoredFrame };
 
 const isUnit = (v: unknown) => isNum(v) && v >= 0 && v <= 1;
+const ELEMENT_KINDS: readonly ElementKind[] = ['button', 'icon', 'text', 'input', 'region'];
+const MOVE_CAUSES: ReadonlyArray<MoveEvent['cause']> = ['user', 'ai', 'self'];
+
+/** A box inside the screen, or null. */
+function parseBox(v: unknown): MappedElement['box'] | null {
+  if (!isObject(v)) return null;
+  const { x, y, w, h } = v;
+  if (!isUnit(x) || !isUnit(y) || !isUnit(w) || !isUnit(h) || (x as number) + (w as number) > 1.0001 || (y as number) + (h as number) > 1.0001) return null;
+  return { x: x as number, y: y as number, w: w as number, h: h as number };
+}
+
+function parsePosition(v: unknown): PositionRecord | null {
+  const box = isObject(v) ? parseBox(v.box) : null;
+  if (!box || !isObject(v) || !isNum(v.count) || !isNum(v.firstSeen) || !isNum(v.lastSeen)) return null;
+  return { box, count: v.count, firstSeen: v.firstSeen, lastSeen: v.lastSeen };
+}
+
+function parseMove(v: unknown): MoveEvent | null {
+  if (!isObject(v) || !isNum(v.time) || !MOVE_CAUSES.includes(v.cause as MoveEvent['cause'])) return null;
+  const from = parseBox(v.from);
+  const to = parseBox(v.to);
+  return from && to ? { time: v.time, cause: v.cause as MoveEvent['cause'], from, to } : null;
+}
+
+/** A complete stored perform function, or null. */
+function parsePerform(v: unknown): PerformFn | null {
+  if (!isObject(v) || !PERFORM_KINDS.includes(v.kind as PerformFn['kind']) || (v.source !== 'user' && v.source !== 'ai')) return null;
+  const p: PerformFn = {
+    kind: v.kind as PerformFn['kind'],
+    source: v.source,
+    ...(typeof v.text === 'string' ? { text: v.text } : {}),
+    ...(isObject(v.to) && isUnit(v.to.x) && isUnit(v.to.y) ? { to: { x: v.to.x as number, y: v.to.y as number } } : {}),
+    ...(typeof v.toElementId === 'string' && v.toElementId ? { toElementId: v.toElementId } : {}),
+    ...(typeof v.reason === 'string' && v.reason ? { reason: v.reason } : {}),
+  };
+  return checkPerform(p).ok ? p : null;
+}
+
+const parsedList = <T>(v: unknown, parse: (x: unknown) => T | null): T[] => (Array.isArray(v) ? v.map(parse).filter((x): x is T => x !== null) : []);
+
+/** The auto-scan and tracking fields of a stored mapped element; invalid ones are dropped. */
+function parseTracking(v: Json): Partial<MappedElement> {
+  const perform = parsePerform(v.perform);
+  return {
+    ...(v.origin === 'user' || v.origin === 'auto' ? { origin: v.origin } : {}),
+    ...(ELEMENT_KINDS.includes(v.kind as ElementKind) ? { kind: v.kind as ElementKind } : {}),
+    ...(isObject(v.appearance) && isNum(v.appearance.lum) && isNum(v.appearance.edges) ? { appearance: { lum: v.appearance.lum, edges: v.appearance.edges } } : {}),
+    ...(isNum(v.timesSeen) ? { timesSeen: v.timesSeen } : {}),
+    ...(isNum(v.lastSeen) ? { lastSeen: v.lastSeen } : {}),
+    ...(Array.isArray(v.positions) ? { positions: parsedList(v.positions, parsePosition) } : {}),
+    ...(Array.isArray(v.moves) ? { moves: parsedList(v.moves, parseMove) } : {}),
+    ...(perform ? { perform } : {}),
+  };
+}
 
 /** A valid stored mapped element (box inside the screen), or null. */
 function parseMapped(v: unknown): StoredMapped | null {
-  if (!isObject(v) || typeof v.id !== 'string' || typeof v.name !== 'string' || !v.name.trim() || !isObject(v.box)) return null;
-  const { x, y, w, h } = v.box;
-  if (!isUnit(x) || !isUnit(y) || !isUnit(w) || !isUnit(h) || (x as number) + (w as number) > 1.0001 || (y as number) + (h as number) > 1.0001) return null;
+  if (!isObject(v) || typeof v.id !== 'string' || typeof v.name !== 'string' || !v.name.trim()) return null;
+  const box = parseBox(v.box);
+  if (!box) return null;
   return {
     id: v.id,
     name: v.name,
-    box: { x: x as number, y: y as number, w: w as number, h: h as number },
+    box,
     mappedAt: isNum(v.mappedAt) ? v.mappedAt : 0,
+    ...parseTracking(v),
     ...(isStoredFrame(v.frame) ? { frame: v.frame } : {}),
   };
 }

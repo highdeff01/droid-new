@@ -5,7 +5,7 @@ import { MATCHED, SAMPLE_H, SAMPLE_W, SEARCH_RADIUS, STABLE, boundingBox, boxDis
 import { AD_CYCLE, demoAd, demoDrag, demoFileAt, demoPlayButton, drawDemoDesktop, findIcon, initialDemoFile, initialDemoIcons, moveIcon, type DemoFile, type DemoIcon } from './demo-desktop.js';
 import { AI_PLAN_SOURCE, calculate, generateCard, patternLine, planFromGoal, planRemaining, relevantPatterns, relocateTarget, replanDrag, replanStep, uid } from './planner.js';
 import { checkMoved, sameElement, verifyArrangement, type Expectation, type MovedElement } from './rearrange.js';
-import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi } from './ai.js';
+import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi, stripThinking } from './ai.js';
 import type { AiReply, AiStatus, AskFn, AskRequest, HistoryChangeFn } from './ai.js';
 import { historyChangeText } from './ai-history.js';
 import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type StageId } from './loop-control.js';
@@ -33,7 +33,11 @@ import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, prop
 import { forgetElement, listElements, rememberElement, type ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
 import { POINTER_LIMIT, detectDwell, dwellObservation, findFamiliar, learnCoordinate, learnedSeed, learnedTargets, type CoordObservation } from './coords.js';
-import { boxCenter, mapContext, mapElement, toFamiliar, unmapElement, type MappedElement } from './element-map-studio.js';
+import { boxCenter, mapContext, mapElement, mappedLine, toFamiliar, unmapElement, type MappedElement, type PerformFn } from './element-map-studio.js';
+import { scanElements } from './auto-scan.js';
+import { catchPlan, mergeScan, motionOf, motionTiming, trackingContext, type ActorInput, type ScanMerge } from './element-tracking.js';
+import { navigateStep, parsePerformProposal, performRequest, performText, resolveMappedStep, setPerform } from './element-perform.js';
+import { RESEARCH_SYSTEM, trainElement, type TrainingDeps, type TrainingReport } from './element-training.js';
 import { cropFrame, identifyAndVerify, identifyRequest, noteChange, parseIdentification, recentlySent, type AgentCheck, type ChangeHit, type IdentifyInput, type IdentifyOutcome, type IdentifyReason, type Identification } from './identify.js';
 import type { Box } from './assist-ai.js';
 import { decodeFrames, toStoredFrame } from './frame-codec.js';
@@ -142,6 +146,17 @@ const STOP_TONE: Record<ContinueStop, LogEntry['tone']> = { complete: 'ok', abor
 /** Timeline text of a watcher observation. */
 const observationSummary = (o: Observation) => `${o.notes.length} note(s), ${o.proposals.length} proposal(s)${o.notes.length ? `: ${o.notes.map((n) => n.text).join('; ')}` : ''}`;
 
+/** Actors whose recorded input is the user's own; every other actor is an AI/agent. */
+const USER_ACTORS: ReadonlySet<string> = new Set(['You', 'Recorder']);
+/** Most recent user/AI inputs kept for move attribution. */
+const ACTOR_INPUT_LIMIT = 50;
+/** Log text of one auto-scan that changed the map; null when nothing changed. */
+const scanSummary = (r: ScanMerge): string | null => {
+  if (!r.added && !r.moved.length) return null;
+  const moves = r.moved.map(({ element, move }) => `"${element.name}" moved ${at(boxCenter(move.from).x, boxCenter(move.from).y)} → ${at(boxCenter(move.to).x, boxCenter(move.to).y)} (${move.cause === 'self' ? 'by itself' : `by the ${move.cause === 'user' ? 'user' : 'AI'}`})`);
+  return [`${r.added} new, ${r.seen} seen, ${r.moved.length} moved`, ...moves].join(' · ');
+};
+
 /** Default settings. */
 export const DEFAULT_SETTINGS: AssistSettings = {
   gallerySize: 10,
@@ -176,6 +191,8 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   errorUrl: '',
   errorForwarding: false,
   errorToken: '',
+  autoScan: true,
+  trainMode: 'background',
 };
 
 /** A background agent the user can toggle; each also has an inbox on the inter-agent bus. */
@@ -367,6 +384,13 @@ export function useAssist() {
   /** True while link/route subagents hold the screen; Auto Act pauses meanwhile. */
   const subRunningRef = useRef(false);
   const elementMapRef = useRef<MappedElement[]>([]);
+  /** Recent user and AI inputs, for blaming element moves on whoever caused them. */
+  const actorInputsRef = useRef<ActorInput[]>([]);
+  /** True while an element training session runs. */
+  const trainingRef = useRef(false);
+  /** Set by Stop: the running training session ends after its current action. */
+  const trainStopRef = useRef(false);
+  const [training, setTraining] = useState<TrainingReport | null>(null);
   const mapHydratedRef = useRef(false);
   const changeHitsRef = useRef<ChangeHit[]>([]);
   const identifySentRef = useRef<Array<{ box: Box; time: number }>>([]);
@@ -882,6 +906,11 @@ export function useAssist() {
 
   const adDismissed = () => Math.floor(tickRef.current / AD_CYCLE) === dismissedCycleRef.current;
 
+  /** Notes one user or AI input at `p`, kept for MOVE_BLAME_MS-scale move attribution (last ACTOR_INPUT_LIMIT). */
+  const noteInput = (p: { x: number; y: number }, actor: ActorInput['actor']) => {
+    actorInputsRef.current = [...actorInputsRef.current, { time: Date.now(), x: p.x, y: p.y, actor }].slice(-ACTOR_INPUT_LIMIT);
+  };
+
   /** Appends one performed mouse/keyboard action to the persistent history, with the pointer's prior point, screen size and prior text for reversal. */
   const recordAction = useCallback((step: WorkflowStep, out: StepOutcome, actor: string, via: ActionRecord['via'], srcW: number, srcH: number) => {
     const kind = INPUT_ACTIONS[step.action];
@@ -891,6 +920,7 @@ export function useAssist() {
     const prev = lastPointerRef.current ? px(lastPointerRef.current) : null;
     const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message: out.message };
     if (POINTER_ACTIONS.has(step.action)) lastPointerRef.current = out.end ?? out.target;
+    if (out.executed) noteInput(out.target, USER_ACTORS.has(actor) ? 'user' : 'ai');
     setHistory((h) => appendHistory(h, rec));
   }, []);
 
@@ -1096,14 +1126,26 @@ export function useAssist() {
 
   const forgetFamiliar = (id: string) => setFamiliar((list) => forgetElement(list, id));
 
+  /** Before a navigate step on an always-in-motion element: waits per its observed timing so it is caught where expected. */
+  const catchOnTime = async (step: WorkflowStep, actor: string) => {
+    const el = step.mappedId ? elementMapRef.current.find((e) => e.id === step.mappedId) : undefined;
+    if (!el || motionOf(el).kind !== 'in_motion') return;
+    const plan = catchPlan(motionTiming(el), Date.now());
+    addLog(actor, `"${el.name}" is always in motion: ${plan.reason}`, 'info');
+    if (plan.waitMs) await sleep(plan.waitMs);
+  };
+
   /**
    * performStep (with element identification on a miss), then reflect-after-step: every step the
    * pipeline ran gets the model's reflection and verdict, and the verdict of a step that really
    * ran (not a dry run) updates its habit. No step is dispatched without a recorded proposal for
    * it (intent before action). The verdict is returned so subagents can judge their own steps.
    */
-  const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null, ladder = true): Promise<Performed & { verdict?: StepVerdict | null }> => {
-    if (!proposal?.ready) return refused(step, `No recorded proposal for "${step.name}" — not executed`);
+  const perform = async (planned: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null, ladder = true): Promise<Performed & { verdict?: StepVerdict | null }> => {
+    if (!proposal?.ready) return refused(planned, `No recorded proposal for "${planned.name}" — not executed`);
+    await catchOnTime(planned, actor);
+    const step = resolveMappedStep(planned, elementMapRef.current);
+    if ('error' in step) return refused(planned, `${step.error} — not executed`);
     const before = framesRef.current[0] ?? null;
     const out = ladder ? await performWithRetries(step, actor, budget, dryRun) : await performIdentified(step, actor, budget, dryRun);
     learnFromOutcome(step, out, before);
@@ -1307,6 +1349,102 @@ export function useAssist() {
   };
 
   const deleteMapped = (id: string) => setMap(unmapElement(elementMapRef.current, id));
+
+  /**
+   * Auto-scan: every identifiable element on `frame` (default: the latest) is merged into the map —
+   * seen again, moved (old position kept as a ghost, the move blamed on the user, the AI or nobody)
+   * or newly mapped. Changes are logged with the frame as evidence.
+   */
+  const scanNow = (frame: Frame | undefined = framesRef.current[0]) => {
+    if (!frame) return addLog('Element map', 'Nothing to scan — no captured frame yet', 'warn');
+    const r = mergeScan(elementMapRef.current, scanElements(frame.data), frame.time, actorInputsRef.current, () => uid('auto'));
+    setMap(r.map);
+    const text = scanSummary(r);
+    if (text) addLog('Auto-scan', text, r.moved.length ? 'warn' : 'info', [frame.url]);
+  };
+
+  /** Sets (null clears) the perform function of a mapped element, as chosen by the user or the AI. */
+  const setElementPerform = (id: string, p: PerformFn | null) => {
+    const el = elementMapRef.current.find((e) => e.id === id);
+    if (!el) return;
+    const next = setPerform(elementMapRef.current, id, p);
+    if (next === elementMapRef.current) return addLog('Element map', `Perform for "${el.name}" is incomplete — not set`, 'warn');
+    setMap(next);
+    addLog('Element map', p ? `"${el.name}" performs ${performText(p, next)} (set by ${p.source === 'ai' ? 'the AI' : 'you'})` : `Cleared the perform of "${el.name}"`, 'ok');
+  };
+
+  /** Appends a workflow step "auto-navigate to the element, then perform its function". */
+  const addNavigateStep = (id: string) => {
+    const el = elementMapRef.current.find((e) => e.id === id);
+    if (!el) return;
+    const step = navigateStep(el, elementMapRef.current);
+    if ('error' in step) return addLog('Workflow', step.error, 'warn');
+    stepsRef.current = [...stepsRef.current, step];
+    setSteps(stepsRef.current);
+    addLog('Workflow', `Added "${step.name}"`, 'ok');
+  };
+
+  /** Asks the AI for an element's perform function; a proposal to train it starts training when the trainer agent is on. */
+  const proposePerform = async (id: string) => {
+    const el = elementMapRef.current.find((e) => e.id === id);
+    const frame = framesRef.current[0];
+    if (!el || !frame) return addLog('Element map', 'No element or frame to propose a perform for', 'warn');
+    if (!aiOnline() || !stageOn('trainer')) return addLog('Element map', `No AI perform for "${el.name}" — ${aiOnline() ? stageOff('trainer') : 'AI offline'}`, 'warn');
+    try {
+      const crop = await cropFrame(frame, el.box).catch(() => frame);
+      const r = await thought(`Perform for "${el.name}"`, async () => parsePerformProposal(await askFor('trainer')(performRequest(el, frame, crop))), (p) => `Proposed ${performText(p.perform)} for "${el.name}"${p.perform.reason ? ` — ${p.perform.reason}` : ''}${p.train ? ' (suggests training)' : ''}`);
+      setElementPerform(id, r.perform);
+      if (r.train) void trainMapped(id, 'AI');
+    } catch (error) {
+      addLog('Element map', aiFailure(`AI unavailable — no perform for "${el.name}"`, error), 'error');
+    }
+  };
+
+  /** The guarded executor, screenshots, AI research and stop signal a training session runs with. */
+  const trainingDeps = (budget: ActionBudget, dryRun: boolean): TrainingDeps => ({
+    perform: (step) => performStep(step, 'Trainer', budget, dryRun),
+    capture: async () => (sourceRef.current === 'demo' ? demoSnapshot() : liveFrame().catch(() => framesRef.current[0] ?? null)),
+    research: async (el, frame, related) => {
+      if (!aiOnline()) return null;
+      const reply = await askFor('trainer')({ system: RESEARCH_SYSTEM, prompt: `${mappedLine(el)}\nIt opened ${related.length} new element(s): ${related.map((d) => d.kind).join(', ') || 'none'}.`, frame });
+      return stripThinking(reply.content) || null;
+    },
+    stopped: () => trainStopRef.current || abortedRef.current,
+    progress: setTraining,
+  });
+
+  /**
+   * Trains a mapped element: an exclusive session that performs it, explores what it opened and
+   * researches it, in the foreground (Auto Act pauses, the element is highlighted) or on its own
+   * background task per Settings. Disarmed is a dry run; Stop or the emergency abort ends it.
+   */
+  const trainMapped = async (id: string, by = 'You') => {
+    const el = elementMapRef.current.find((e) => e.id === id);
+    if (!el) return;
+    if (abortedRef.current) return addLog('Trainer', 'Training refused — ABORTED is active; clear the abort first', 'error');
+    if (!stageOn('trainer')) return addLog('Trainer', `Training "${el.name}" refused — ${stageOff('trainer')}`, 'warn');
+    if (trainingRef.current) return addLog('Trainer', 'A training session is already running', 'warn');
+    const mode = settingsRef.current.trainMode;
+    const foreground = mode === 'foreground';
+    trainingRef.current = true;
+    trainStopRef.current = false;
+    if (foreground) {
+      subRunningRef.current = true;
+      setHighlight({ ...boxCenter(el.box), label: `Training ${el.name}` });
+    }
+    addLog('Trainer', `Training "${el.name}" in the ${mode} (started by ${by})${armedRef.current ? '' : ' — real input disarmed: dry run'}`, 'info');
+    try {
+      const report = await trainElement(el, elementMapRef.current, mode, trainingDeps(createBudget(settingsRef.current.actionBudget), !armedRef.current));
+      if (report.related.length) setMap(mergeScan(elementMapRef.current, report.related, Date.now(), [], () => uid('auto')).map);
+      addLog('Trainer', `Training "${el.name}": ${report.status} — ${report.entries.filter((e) => e.ok).length}/${report.entries.length} action(s) ok, ${report.related.length} related element(s)${report.research ? ` · ${report.research}` : ''}`, report.status === 'pass' ? 'ok' : 'warn', report.entries.flatMap((e) => (e.shot ? [e.shot.url] : [])));
+    } finally {
+      trainingRef.current = false;
+      if (foreground) {
+        subRunningRef.current = false;
+        setHighlight(null);
+      }
+    }
+  };
 
   /**
    * Where the element map puts `name`: the live layout on the demo desktop (sidebar icons, the
@@ -1935,6 +2073,7 @@ export function useAssist() {
       watchScreen(prev, frame);
     }
     learnFromDwell(frame);
+    if (settingsRef.current.autoScan) scanNow(frame);
     const next = stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running');
     if (next?.refFrame && stageOn('drift')) {
       const { r, level } = driftCheck(next, frame);
@@ -2036,7 +2175,10 @@ export function useAssist() {
       addLog('Recorder', `Captured ${hover ? 'mouse move' : 'click'} at (${pct(x)}, ${pct(y)}) with screenshot`, 'info');
       return;
     }
-    if (sourceRef.current === 'demo' && !hover) addLog('You', demoClick(x, y));
+    if (sourceRef.current === 'demo' && !hover) {
+      noteInput({ x, y }, 'user');
+      addLog('You', demoClick(x, y));
+    }
   };
 
   /** Recorded key press (with modifiers) on the focused stage: becomes a key step. The abort hotkey is never recorded. */
@@ -2289,6 +2431,7 @@ export function useAssist() {
   /** Replay's ■ Stop: ends the run between steps and cancels the in-flight AI call. */
   const stop = () => {
     abortRef.current = true;
+    trainStopRef.current = true;
     cancelAi();
     addLog(subRunningRef.current ? 'Supervisor' : 'Replay', subRunningRef.current ? 'Stopped by user — the running subagent ends and the rest are aborted' : 'Stopped by user', 'warn');
   };
@@ -2348,7 +2491,7 @@ export function useAssist() {
     planningRef.current = true;
     await withAi(async () => {
       try {
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...trackingContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
         if (planGuardRef.current.after(plan.steps) === 'duplicate') {
           addLog('Planner', `Re-plan guard: the plan for "${text.trim()}" is identical to the previous one — kept the current steps and will not ask the model again until the screen or a step changes`, 'warn');
           return;
@@ -2946,6 +3089,7 @@ export function useAssist() {
     ruler, continuing, habits, deleteHabit, pinHabit, runs,
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
+    scanNow, setElementPerform, proposePerform, addNavigateStep, trainMapped, training,
     watcher, acceptProposal, dismissProposal, testProposal,
     triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,

@@ -1,5 +1,6 @@
 import type { StageMap } from './loop-control.js';
 import type { AiView } from './ai.js';
+import type { TrainMode } from './element-training.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
@@ -288,4 +289,8 @@ export interface AssistSettings {
   errorForwarding: boolean;
   /** Optional bearer token for the error endpoint; never written to the activity log. */
   errorToken: string;
+  /** Auto-map every identifiable element on each captured frame into the element map. */
+  autoScan: boolean;
+  /** Element training runs exclusively in the foreground (Auto Act pauses) or on its own background task. */
+  trainMode: TrainMode;
 }

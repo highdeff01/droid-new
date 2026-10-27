@@ -4,6 +4,7 @@ import type { Measurement } from './ruler.js';
 import { classifyGesture, type StagePoint } from './gesture.js';
 import { drawGrid } from './grid-overlay.js';
 import { MAP_COLS, MAP_ROWS, dragBox } from './element-map-studio.js';
+import { countHere, ghostPositions } from './element-tracking.js';
 import styles from './droid-assist.module.css';
 
 const RULER = '#f97316';
@@ -67,6 +68,18 @@ function drawMapBox(ctx: CanvasRenderingContext2D, b: { x: number; y: number; w:
   ctx.fillText(label, b.x * w + 3, Math.max(12, b.y * h - 4));
 }
 
+/** A position an element was seen at before it moved: a faint dashed box with how often it was there. */
+function drawGhost(ctx: CanvasRenderingContext2D, b: { x: number; y: number; w: number; h: number }, label: string, w: number, h: number) {
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.8)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.strokeRect(b.x * w, b.y * h, b.w * w, b.h * h);
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
+  ctx.font = '10px sans-serif';
+  ctx.fillText(label, b.x * w + 2, b.y * h + b.h * h + 10);
+}
+
 /** A test-click target: crosshair, ring and its label. */
 function drawHighlight(ctx: CanvasRenderingContext2D, x: number, y: number, label: string) {
   ctx.strokeStyle = '#f43f5e';
@@ -109,7 +122,10 @@ export function Stage({ engine }: { engine: AssistEngine }) {
 
     if (mapMode) {
       drawMapGrid(ctx, w, h);
-      elementMap.forEach((el) => drawMapBox(ctx, el.box, el.name, w, h));
+      elementMap.forEach((el) => {
+        ghostPositions(el).forEach((g) => drawGhost(ctx, g.box, `${el.name} was here ×${g.count}`, w, h));
+        drawMapBox(ctx, el.box, el.timesSeen ? `${el.name} ×${countHere(el)}` : el.name, w, h);
+      });
       if (mapDraft) drawMapBox(ctx, mapDraft, 'new element', w, h, true);
       return;
     }
