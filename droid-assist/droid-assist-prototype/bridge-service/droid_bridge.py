@@ -58,6 +58,11 @@ def perform(step):
         gui.mouseDown()
         gui.moveTo(step["endX"], step["endY"], duration=duration)
         gui.mouseUp()
+    elif action == "mouse_down":
+        gui.moveTo(x, y)
+        gui.mouseDown()
+    elif action == "mouse_up":
+        gui.mouseUp(x, y)
     elif action == "scroll":
         gui.scroll(500 if step.get("keyPayload") == "up" else -500, x=x, y=y)
     elif action == "type_text":
