@@ -4,6 +4,9 @@ import { app, BrowserWindow, dialog, ipcMain, screen, session, type WebContents 
 import { CAPTURE_CHANNELS } from './capture-api.js';
 import { SYSTEM_CHANNELS } from './system-api.js';
 import { nativeSystemInfo, scanFolder } from './system-scan.js';
+import { app, BrowserWindow, ipcMain, session, type IpcMainInvokeEvent, type WebContents } from 'electron';
+import { CAPTURE_CHANNELS } from './capture-api.js';
+import { WINDOW_CHANNELS, type WindowState } from './window-api.js';
 import { startCaptureLoop, type CaptureLoop } from './capture-loop.js';
 import { grabDisplay, grabScreen, listDisplays } from './screen-grab.js';
 import { BRIDGE_URL_PATTERNS, withBridgeCors } from './bridge-cors.js';
@@ -88,6 +91,26 @@ function registerMainBridgeIpc() {
   });
   ipcMain.handle(MAIN_BRIDGE_CHANNELS.send, (event, text: string) => listeners.get(event.sender.id)?.send(text) ?? false);
   ipcMain.on(MAIN_BRIDGE_CHANNELS.stop, (event) => stopListener(event.sender));
+/** The placement of the window `contents` belongs to. */
+function windowState(win: BrowserWindow): WindowState {
+  return { visible: win.isVisible() && !win.isMinimized(), minimized: win.isMinimized(), focused: win.isFocused(), alwaysOnTop: win.isAlwaysOnTop(), bounds: win.getBounds() };
+}
+
+/** Wires the window-placement IPC: the App-placement agent steps the assist window aside or brings it back. */
+function registerWindowIpc() {
+  const placed = (event: IpcMainInvokeEvent, move: (win: BrowserWindow) => void) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) throw new Error('No window for this renderer');
+    move(win);
+    return windowState(win);
+  };
+  ipcMain.handle(WINDOW_CHANNELS.state, (event) => placed(event, () => undefined));
+  ipcMain.handle(WINDOW_CHANNELS.stepAside, (event) => placed(event, (win) => win.minimize()));
+  ipcMain.handle(WINDOW_CHANNELS.restore, (event) => placed(event, (win) => {
+    win.restore();
+    win.show();
+    win.focus();
+  }));
 }
 
 function createWindow() {
@@ -116,6 +139,7 @@ void app.whenReady().then(() => {
   registerCaptureIpc();
   registerSystemIpc();
   registerMainBridgeIpc();
+  registerWindowIpc();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

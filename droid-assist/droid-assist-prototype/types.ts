@@ -226,6 +226,10 @@ export interface LogEntry {
   shots?: string[];
   /** Project (trimmed goal text) the entry was logged under; absent when no goal was set. */
   project?: string;
+  /** The operation (goal) the entry belongs to, tagged by the Logging agent for recall. */
+  op?: string;
+  /** How many identical entries in a row the Logging agent folded into this one (absent = 1). */
+  repeat?: number;
 }
 
 /** A saved, named workflow card for later comparison and selection. */

@@ -3,8 +3,8 @@
  * emergency stop, action budget, abort) are deliberately not stages — no switch can disable them.
  */
 
-/** Whether a stage is a step of the plan → ground → execute → reflect → verdict pipeline or a background agent. */
-export type StageGroup = 'pipeline' | 'agent';
+/** Whether a stage is a step of the plan → ground → execute → reflect → verdict pipeline, a background agent or an Operations agent. */
+export type StageGroup = 'pipeline' | 'agent' | 'operations';
 
 /** One switchable stage: what it is and the code path it gates. */
 export interface Stage {
@@ -49,6 +49,15 @@ export const STAGES = [
   { id: 'goalTracer', group: 'agent', name: 'Goal tracer', description: 'Traces the active goal live: step outcomes, verdicts and agent reports; flags off-path, stalls and completion', verifies: false },
   { id: 'crew', group: 'agent', name: 'Agent crew', description: 'Crew agents work the main AI\'s commands (/crew), each with its own AI call and grounding, then report back and wait', verifies: false },
   { id: 'dragTrackers', group: 'agent', name: 'Live drag swarm', description: 'Coordinate agents track each drag segment live and correct the path in real time (with Live drag on)', verifies: false },
+  { id: 'opsMonitor', group: 'operations', name: 'Monitor agent', description: 'Watches the live frame and element map continuously and reports changes to the bus', verifies: false },
+  { id: 'opsLogging', group: 'operations', name: 'Logging agent', description: 'Keeps the log complete and deduplicated, tagging every entry with its operation', verifies: false },
+  { id: 'opsTesting', group: 'operations', name: 'Testing agent', description: 'Background-tests proposed actions and elements first, then foreground when armed', verifies: false },
+  { id: 'opsApply', group: 'operations', name: 'Apply agent', description: 'Dispatches verified actions through the real-input path (armed = bridge, never simulated)', verifies: false },
+  { id: 'opsRecheck', group: 'operations', name: 'Recheck agent', description: 'Re-verifies by screenshot comparison that an applied action took effect', verifies: true },
+  { id: 'opsReapply', group: 'operations', name: 'Reapply agent', description: 'Reapplies a failed recheck at corrected coordinates up to the retry limit, then escalates for a re-plan', verifies: false },
+  { id: 'opsLoopControl', group: 'operations', name: 'Loop-control agent', description: 'Enforces the loop-control checkboxes on command and reports what runs vs what is disabled', verifies: false },
+  { id: 'opsPlacement', group: 'operations', name: 'App-placement agent', description: 'Steps the assist window aside before foreground actions (Electron) and reports window state', verifies: false },
+  { id: 'opsScreenshots', group: 'operations', name: 'Screenshot-verification agent', description: 'Captures before/after frames of every applied action into the frame store as evidence', verifies: false },
 ] as const satisfies ReadonlyArray<Omit<Stage, 'id'> & { id: string }>;
 
 /** The id of a stage or agent. */

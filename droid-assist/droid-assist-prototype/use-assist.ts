@@ -40,6 +40,7 @@ import { addEntry as addPortfolioEntry, createPersona, upsertPersona, type Perso
 import { logSightings, monitorChanges, perspective, planLanes, type ElementReport, type Lane, type Perspective, type Sighting } from './element-relevance.js';
 import { askPlayTurn, type PlayTurn } from './play-turn.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadPersonas, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, savePersonas, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
+import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadOpsState, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, saveOperationMemory, saveOpsState, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
 import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
 import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, targetText, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
@@ -147,6 +148,10 @@ import { DEFAULT_PLAYBACK_WINDOW_SEC } from './playback.js';
 import { useOperations } from './use-operations.js';
 import { CREW_AGENTS, createScreenLock, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
 import { runLiveDrag, type DragIntervention, type LiveDragResult, type SwarmAgent } from './drag-swarm.js';
+import { FAILURE_CONTEXT_LIMIT, RECENT_LINES, addFailure, addNote, failureFromRun, failureLine, forget, memoryBlock, newFailure, objectiveText, operationGroups, similarFailures, type FailureRecord, type OperationMemory } from './operation-memory.js';
+import { OPS_AGENTS, OPS_SYSTEM, addEvidence, addOpsReport, changeKey, changeLine, dedupeLog, enabledOps, loopReport, mapDelta, markEvidence, monitorChange, opsAgent, opsFor, parseOpsTarget, patchOpsAgent, shouldReport, tagLog, type MonitorChange, type OpsAgentId, type OpsState, type TestCandidate } from './operations.js';
+import { createOpsWorkers, type Applied, type OpsWorkResult } from './ops-workers.js';
+import { placeWindow } from './window-placement.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -236,6 +241,8 @@ const refused = (step: WorkflowStep, message: string): Performed => ({ ok: false
 type DemoOutcome = { message: string; ok: boolean };
 /** A Desktop-scene message as an outcome: a blocked target or a miss is not ok. */
 const desktopOutcome = (message: string): DemoOutcome => ({ message, ok: !/blocked|nothing/.test(message) });
+/** The actor name the Apply agent dispatches under; it records its own before/after evidence. */
+const OPS_APPLY_ACTOR = 'Apply agent';
 
 const at = (x: number, y: number) => `(${(x * 100).toFixed(1)}%, ${(y * 100).toFixed(1)}%)`;
 /** Timeline text of a popup decision. */
@@ -464,6 +471,9 @@ export function useAssist() {
   /** The agent crew the main AI commands (/crew) and whether a crew run is going. */
   const [crew, setCrew] = useState<CrewAgent[]>(() => CREW_AGENTS.map((id) => ({ id, status: 'waiting', task: null, lastReport: null })));
   const [crewRunning, setCrewRunning] = useState(false);
+  /** The Operations agents: statuses, reports and the before/after evidence trail (persisted), and whether an /ops run is going. */
+  const [ops, setOps] = useState<OpsState>(loadOpsState);
+  const [opsRunning, setOpsRunning] = useState(false);
   /** The coordinate agents of the running (or last) live drag. */
   const [swarm, setSwarm] = useState<SwarmAgent[]>([]);
   const [liveDragging, setLiveDragging] = useState(false);
@@ -650,6 +660,16 @@ export function useAssist() {
   const crewRunningRef = useRef(false);
   /** Real input from crew agents goes through one lock: two agents never move the pointer at once. */
   const screenLockRef = useRef(createScreenLock());
+  const opsRef = useRef(ops);
+  const opsRunningRef = useRef(false);
+  /** The Monitor agent's last seen change, last reported change, and the element-map names it last saw. */
+  const opsChangeRef = useRef<MonitorChange | null>(null);
+  const opsReportedRef = useRef<{ key: string; time: number } | null>(null);
+  const opsMapNamesRef = useRef<string[]>([]);
+  /** Real-input budget of commands given to single Operations agents, renewed by each /ops run. */
+  const opsBudgetRef = useRef<ActionBudget>(createBudget(settings.actionBudget));
+  /** The last action the Apply agent dispatched, for the Recheck and Reapply agents. */
+  const opsAppliedRef = useRef<Applied | null>(null);
   /** The user's pending live-drag intervention (re-aim or release), taken before the next segment. */
   const dragControlRef = useRef<DragIntervention | null>(null);
   const liveDragRef = useRef(false);
@@ -781,6 +801,7 @@ export function useAssist() {
   useEffect(() => saveRouteProfiles(routeProfiles), [routeProfiles]);
   useEffect(() => saveFixMethods(fixMethods), [fixMethods]);
   useEffect(() => saveSections(sections), [sections]);
+  useEffect(() => saveOpsState(ops), [ops]);
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
   }, [cards]);
@@ -818,6 +839,15 @@ export function useAssist() {
   const takeNote = useCallback((kind: NoteKind, text: string, source: string) => {
     watcherRef.current = { ...watcherRef.current, notes: mergeNotes(watcherRef.current.notes, [{ kind, text, source, ...(goalRef.current.trim() ? { op: goalRef.current.trim() } : {}) }]).notes };
     setWatcher(watcherRef.current);
+  /**
+   * Every engine event lands here. With the Logging agent on, each entry is tagged with its operation
+   * and an entry identical to the newest is folded into it instead of duplicated.
+   */
+  const addLog = useCallback((from: string, message: string, tone: LogEntry['tone'] = 'info', shots?: string[]) => {
+    const entry: LogEntry = { id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}) };
+    if (!settingsRef.current.stages.opsLogging) return setLog((l) => [entry, ...l].slice(0, LOG_LIMIT));
+    const tagged = tagLog(entry, operationRef.current ?? goalRef.current);
+    setLog((l) => dedupeLog(l, tagged, LOG_LIMIT));
   }, []);
 
   /** Every log line; an error line is also kept as an 'error' note so errors stay recallable. */
@@ -1423,6 +1453,7 @@ export function useAssist() {
       stageCtrlsRef.current.cancel(id);
     }
     addLog('Loop control', toggleMessage(id, on), on ? 'ok' : 'warn');
+    if (settingsRef.current.stages.opsLoopControl) addLog('Loop-control agent', loopReport(settingsRef.current.stages, runningStages()).text, 'info');
   };
 
   /** Replaces the position dossiers. */
@@ -1595,6 +1626,11 @@ export function useAssist() {
   });
   const projectInjectRef = useRef(projectEngine.injectRunning);
   projectInjectRef.current = projectEngine.injectRunning;
+    operations: (e) => `Monitor agent tracks "${e.name}" at ${at(e.x, e.y)}; testing agent can test it`,
+  };
+
+  /** Whether a bus recipient handles a message now: habits always, the Operations agents while their Monitor is on, others while switched on. */
+  const recipientOn = (id: BusAgentId) => (id === 'habits' ? true : id === 'operations' ? stageOn('opsMonitor') : agentsRef.current(id));
 
   /**
    * Forwards a discovered element from one agent into the inboxes of the others (all of them by
@@ -1606,6 +1642,7 @@ export function useAssist() {
     let updated = next;
     queued.forEach((m) => {
       if (m.to !== 'habits' && m.to !== 'mainApp' && !agentsRef.current(m.to)) return;
+      if (!recipientOn(m.to)) return;
       updated = markHandled(updated, m.id, busHandlers[m.to](element, from));
     });
     busRef.current = updated;
@@ -2070,6 +2107,21 @@ export function useAssist() {
   };
 
   /**
+   * Screenshot-verification agent, for every executed step of any actor: its before/after frames go to
+   * the frame store and the evidence trail with the step, carrying the pipeline's own re-verify result.
+   * The Apply agent records its own (with its recheck verdict).
+   */
+  const recordStepEvidence = (step: WorkflowStep, out: Performed, before: Frame | null, after: Frame | null) => {
+    if (!out.executed || !stageOn('opsScreenshots')) return;
+    [before, after].forEach((f) => f && void putStoredFrame(toStoredFrame(f), settingsRef.current.gallerySize).catch(() => undefined));
+    const verdict = out.check ? (out.check.changed ? 'effect' : 'no-effect') : null;
+    updateOps((s) => {
+      const next = addEvidence(s, { op: operationNow(), step: step.name, action: step.action, x: out.target.x, y: out.target.y, beforeId: before?.id ?? null, afterId: after?.id ?? null, before: before?.url ?? null, after: after?.url ?? null });
+      return markEvidence(next, next.evidence[0].id, verdict);
+    });
+  };
+
+  /**
    * performStep (with element identification on a miss), then reflect-after-step: every step the
    * pipeline ran gets the model's reflection and verdict, and the verdict of a step that really
    * ran (not a dry run) updates its habit. No step is dispatched without a recorded proposal for
@@ -2086,6 +2138,7 @@ export function useAssist() {
     learnFromOutcome(step, out, before);
     kb.recordFor(actor, 'result', `"${step.name}": ${out.message}`, out.ok);
     void rememberTarget(step, out);
+    if (actor !== OPS_APPLY_ACTOR) recordStepEvidence(step, out, before, out.shot ?? null);
     if (!out.ok && !out.bridgeFailed) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
     if (out.halt || !aiOnline()) return out;
     const verdict = await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
@@ -3429,6 +3482,7 @@ export function useAssist() {
     if (prev) {
       watchChanges(prev, frame);
       watchScreen(prev, frame);
+      if (stageOn('opsMonitor')) monitorFrame(prev, frame);
     }
     learnFromDwell(frame);
     if (settingsRef.current.autoScan) scanNow(frame);
@@ -4200,6 +4254,172 @@ export function useAssist() {
     } finally {
       setAiBusy(false);
     }
+  };
+
+  /** Applies one change to the Operations state. */
+  const updateOps = (fn: (s: OpsState) => OpsState) => {
+    opsRef.current = fn(opsRef.current);
+    setOps(opsRef.current);
+  };
+
+  /**
+   * One Operations agent's report: kept with its operation, logged under the agent's name, and put on
+   * the bus (Screen watcher and Supervisor) when it acted at a point.
+   */
+  const recordOpsReport = (agent: OpsAgentId, task: string, r: OpsWorkResult) => {
+    const op = operationNow();
+    updateOps((s) => addOpsReport(s, { agent, task, ok: r.ok, found: r.found, op }));
+    addLog(opsAgent(agent).name, `Report on "${task}": ${r.found}`, r.ok ? 'ok' : 'warn');
+    if (r.point) forwardElement('operations', { name: `${opsAgent(agent).name}: ${task}`, ...r.point }, ['screen', 'supervisor']);
+  };
+
+  /** Stages doing work right now, for the Loop-control agent's report. */
+  const runningStages = (): StageId[] => {
+    const busy: Array<[StageId, boolean]> = [
+      ['executor', executorBusy()], ['planner', planningRef.current], ['crew', crewRunningRef.current], ['screenWatcher', watchBusyRef.current],
+      ['supervisor', supervisorBusyRef.current], ['identify', identifyBusyRef.current], ['subagents', subRunningRef.current],
+      ...OPS_AGENTS.map((a): [StageId, boolean] => [a.stage, opsRef.current.agents.some((x) => x.id === a.id && x.status === 'working')]),
+    ];
+    return busy.filter(([, on]) => on).map(([id]) => id);
+  };
+
+  /** Everything the testing agent can name: watcher proposals, mapped, familiar and bus-known elements. */
+  const testCandidates = (): TestCandidate[] => [
+    ...watcherRef.current.proposals.flatMap((p) => (p.target && p.x !== undefined && p.y !== undefined ? [{ name: p.target, x: p.x, y: p.y, proposalId: p.id }] : [])),
+    ...elementMapRef.current.map((m) => ({ name: m.name, ...boxCenter(m.box) })),
+    ...familiarRef.current.map((f) => ({ name: f.name, x: f.x, y: f.y })),
+    ...knownRef.current.map((k) => ({ name: k.name, x: k.x, y: k.y })),
+  ];
+
+  /** Why Operations work must not start: abort or Stop plan; null when it may. */
+  const opsHalted = (): string | null => {
+    if (abortedRef.current) return 'Aborted';
+    return abortRef.current ? 'Plan stopped' : null;
+  };
+
+  /** A fresh frame for evidence: the demo canvas as it is now, else a bridge screenshot or the newest monitor frame. */
+  const evidenceFrame = async (): Promise<Frame | null> => (sourceRef.current === 'demo' ? demoSnapshot() : liveFrame());
+
+  /** The Operations agents wired to the engine; every dispatch goes through the same guarded pipeline as any step. */
+  const opsWorker = createOpsWorkers({
+    op: operationNow,
+    stageOn,
+    halted: opsHalted,
+    report: recordOpsReport,
+    lastChange: () => opsChangeRef.current,
+    mapNames: () => elementMapRef.current.map((m) => m.name),
+    log: () => logRef.current,
+    candidates: testCandidates,
+    test: (step, proposalId, dryRun) => testStep(step, { proposalId, context: step.target ?? step.name, source: 'Testing agent' }, dryRun, opsBudgetRef.current),
+    armed: () => armedRef.current,
+    plan: async (task) => (await thought(`Apply agent: ${task}`, () => planFromGoal(task, [], framesRef.current[0] ?? null, askFor('opsApply'), knownRef.current.map(elementLine), patternsRef.current), planSummary)).steps,
+    apply: (step) => screenLockRef.current(async () => {
+      const local = recordLocal(OPS_APPLY_ACTOR, step, `the main AI asked the Apply agent to apply "${step.name}"`);
+      const briefed = await brief(OPS_APPLY_ACTOR, { kind: 'go', step, proposal: local });
+      return briefed.kind === 'go' ? execute(briefed.step, OPS_APPLY_ACTOR, opsBudgetRef.current, !armedRef.current, briefed.proposal) : refused(step, `"${step.name}" not justified by the pre-action briefing`);
+    }),
+    capture: evidenceFrame,
+    store: (f) => void putStoredFrame(toStoredFrame(f), settingsRef.current.gallerySize).catch(() => undefined),
+    addEvidence: (e) => {
+      updateOps((s) => addEvidence(s, e));
+      return opsRef.current.evidence[0].id;
+    },
+    markEvidence: (id, verdict) => updateOps((s) => markEvidence(s, id, verdict)),
+    correct: (ref, live, p) => correctDrift(ref.data, live.data, p.x, p.y, live.srcW, live.srcH, driftThresholds()),
+    replan: async (step, why) => {
+      addLog('Reapply agent', `Escalating "${step.name}" to the main AI for a re-plan — ${why}`, 'warn');
+      return replanFailed(step, why);
+    },
+    retries: () => settingsRef.current.stepRetries ?? DEFAULT_STEP_RETRIES,
+    stages: () => settingsRef.current.stages,
+    running: runningStages,
+    toggle: toggleStage,
+    place: (command) => placeWindow(command),
+    lastApplied: opsAppliedRef,
+  });
+
+  /** One command to one Operations agent: it works (status working), reports, then waits for the next command. */
+  const workOps = async (agent: OpsAgentId, task: string): Promise<OpsWorkResult> => {
+    updateOps((s) => patchOpsAgent(s, agent, { status: 'working', task }));
+    const r = await opsWorker(agent, task);
+    recordOpsReport(agent, task, r);
+    updateOps((s) => patchOpsAgent(s, agent, { status: opsHalted() ? 'parked' : 'waiting' }));
+    return r;
+  };
+
+  /** The /ops run must stop: Stop plan, abort or the planner (main AI) unchecked. */
+  const opsStopped = () => !!opsHalted() || !stageOn('planner');
+
+  /**
+   * "/ops <goal>": the main AI (planner stage) commands the enabled Operations agents in the crew loop —
+   * assign → work → report → wait — until done, stalled, Max iterations rounds, or Stop plan / abort.
+   * "/ops <agent>: <task>" commands one agent directly.
+   */
+  const runOps = async (text: string) => {
+    if (abortedRef.current) return addLog('Operations', 'Operations refused — ABORTED is active; clear the abort first', 'error');
+    if (opsRunningRef.current) return addLog('Operations', 'An Operations run is already going', 'warn');
+    const target = parseOpsTarget(text);
+    abortRef.current = false;
+    opsBudgetRef.current = createBudget(settingsRef.current.actionBudget);
+    opsRunningRef.current = true;
+    setOpsRunning(true);
+    try {
+      if ('agent' in target) await workOps(target.agent, target.task);
+      else await delegateOps(target.goal);
+    } finally {
+      opsRunningRef.current = false;
+      setOpsRunning(false);
+    }
+  };
+
+  /** The main AI's command loop over the enabled Operations agents. */
+  const delegateOps = async (goalText: string) => {
+    const roster = enabledOps(settingsRef.current.stages);
+    if (!stageOn('planner') || !roster.length) return addLog('Operations', `${stageOn('planner') ? 'Every Operations agent is unchecked in Loop control' : stageOff('planner')} — no Operations run`, 'warn');
+    operationRef.current = goalText;
+    addLog('Operations', `Main AI delegates "${goalText}" to ${roster.length} Operations agent(s)${armedRef.current ? '' : ' (real input disarmed: dry run)'}`, 'info');
+    try {
+      await withAi(async () => {
+        const out = await runCrew({
+          agents: roster,
+          maxRounds: settingsRef.current.maxIterations,
+          decide: (reports, round) => thought(`Operations round ${round}: ${goalText}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, goalText, opsRef.current.agents.filter((a) => roster.includes(a.id as OpsAgentId)), reports, OPS_SYSTEM), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
+          work: async (c) => ({ agent: c.agent, task: c.task, ...(await opsWorker(c.agent as OpsAgentId, c.task)) }),
+          shouldStop: opsStopped,
+          onAgents: (agents) => updateOps((s) => ({ ...s, agents: s.agents.map((a) => agents.find((x) => x.id === a.id) ?? a) })),
+          onReport: (r) => recordOpsReport(r.agent as OpsAgentId, r.task, r),
+          onDecision: (d, round) => {
+            if (d.ignored.length) addLog('Operations', `Round ${round}: ignored command(s) for ${d.ignored.join(', ')} (unknown or disabled agent, or a second command)`, 'warn');
+          },
+        });
+        addLog('Operations', `Operations ${out.stop} after ${out.rounds} round(s), ${out.reports.length} report(s) — ${out.summary}`, CREW_TONE[out.stop]);
+      });
+    } catch (error) {
+      addLog('Operations', aiFailure('AI unavailable — Operations run stopped', error), 'error');
+    } finally {
+      operationRef.current = null;
+    }
+  };
+
+  /**
+   * Monitor agent, on every new frame: a material change (DEFAULT_CHANGE_CELLS cells) is recorded and,
+   * once per change, reported to the log and the bus with the mapped elements it touches; element-map
+   * additions and removals are reported too.
+   */
+  const monitorFrame = (prev: Frame, frame: Frame) => {
+    const map = elementMapRef.current;
+    const names = map.map((m) => m.name);
+    const delta = mapDelta(opsMapNamesRef.current, names);
+    opsMapNamesRef.current = names;
+    if (delta.added.length || delta.removed.length) addLog('Monitor agent', `Element map changed: ${delta.added.length ? `added ${delta.added.join(', ')}` : ''}${delta.added.length && delta.removed.length ? '; ' : ''}${delta.removed.length ? `removed ${delta.removed.join(', ')}` : ''}`, 'info');
+    const change = monitorChange(prev.data, frame.data, map, settingsRef.current.changeCells);
+    if (!change) return;
+    opsChangeRef.current = change;
+    const now = Date.now();
+    if (!shouldReport(opsReportedRef.current, change, now)) return;
+    opsReportedRef.current = { key: changeKey(change), time: now };
+    addLog('Monitor agent', `Screen change: ${changeLine(change)}`, 'info');
+    map.filter((m) => change.elements.includes(m.name)).forEach((m) => forwardElement('operations', { name: m.name, ...boxCenter(m.box), w: m.box.w, h: m.box.h }));
   };
 
   /** What the re-plan guard compares: the newest frame and how many step statuses execution changed. */
@@ -5070,6 +5290,7 @@ export function useAssist() {
     return r;
   };
   const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'crew', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, crew: runCrewGoal };
+  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'crew' | 'ops', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, crew: runCrewGoal, ops: runOps };
 
   /** "/replicate <name> x,y,w,h" or "/replicate <mapped element>": the AI snips and saves the element itself. */
   const replicateCommand = async (arg: string) => {
@@ -5368,11 +5589,19 @@ export function useAssist() {
       addLog('Screen watcher', `"${p.text}" has no on-screen target to test`, 'warn');
       return;
     }
-    const dryRun = !armedRef.current;
+    await testStep(step, { proposalId: p.id, context: p.text, source: 'Screen watcher' }, !armedRef.current, watchBudgetRef.current);
+  };
+
+  /**
+   * The watcher's background-test machinery for one click step (also the Testing agent's): a dry run
+   * or a real click through performStep, reflected on, recorded as a watcher test, and a failure
+   * learned as an "avoid" pattern.
+   */
+  const testStep = async (step: WorkflowStep, of: { proposalId: string; context: string; source: string }, dryRun: boolean, budget: ActionBudget) => {
     const tried = `${dryRun ? 'Dry-run' : 'Real'} click on "${step.target}" at ${gridRef(step)}`;
-    const actor = dryRun ? 'Screen watcher (dry run)' : 'Screen watcher';
+    const actor = dryRun ? `${of.source} (dry run)` : of.source;
     // performStep, not perform: a test must not remember its target as familiar — only Accept does.
-    const out = await performStep(step, actor, watchBudgetRef.current, dryRun);
+    const out = await performStep(step, actor, budget, dryRun);
     if (!out.halt && aiOnline()) await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
     const verdict = out.ok ? 'passed' : 'failed';
     updateWatcher((w) => ({ ...w, tests: addTest(w.tests, { proposalId: p.id, tried, happened: out.message, verdict, dryRun }), proposals: patchProposal(w.proposals, p.id, { tested: true }) }));
@@ -5381,6 +5610,13 @@ export function useAssist() {
     if (out.ok) return;
     addPatterns([newPattern('avoid', `${tried} failed — ${out.message}`, p.text)]);
     addLog('Patterns', `Watcher test failed — learned: avoid ${tried}`, 'warn');
+    updateWatcher((w) => ({ ...w, tests: addTest(w.tests, { proposalId: of.proposalId, tried, happened: out.message, verdict, dryRun }), proposals: patchProposal(w.proposals, of.proposalId, { tested: true }) }));
+    addLog(of.source, `Test ${verdict}: ${tried} — ${out.message}`, out.ok ? 'ok' : 'warn');
+    if (!out.ok) {
+      addPatterns([newPattern('avoid', `${tried} failed — ${out.message}`, of.context)]);
+      addLog('Patterns', `${of.source} test failed — learned: avoid ${tried}`, 'warn');
+    }
+    return { ok: out.ok, message: out.message };
   };
 
   /** A new proposal with the prior operations relevant to it, recorded as a proposed idea. */
@@ -6016,6 +6252,7 @@ export function useAssist() {
     aiHistory, trimAiHistory, resetAiSession,
     memory, operations, addOperationNote, forgetMemory,
     operations: operationDb.operations, exportOperations: operationDb.exportOperations, clearOperations: operationDb.clearOperations,
+    ops, opsRunning, runOps, opsFor: (operation: string) => opsFor(operation, ops, log),
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDoubleClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,

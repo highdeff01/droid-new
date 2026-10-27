@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import { CAPTURE_CHANNELS, type NativeCaptureApi, type NativeFrame } from './capture-api.js';
 import { SYSTEM_CHANNELS, type NativeSystemApi } from './system-api.js';
 import { MAIN_BRIDGE_CHANNELS, type MainBridgeNativeApi } from './main-bridge-api.js';
+import { WINDOW_CHANNELS, type NativeWindowApi } from './window-api.js';
 
 let frameListener: ((event: IpcRendererEvent, frame: NativeFrame) => void) | null = null;
 let errorListener: ((event: IpcRendererEvent, message: string) => void) | null = null;
@@ -85,3 +86,11 @@ const mainBridge: MainBridgeNativeApi = {
 };
 
 contextBridge.exposeInMainWorld('droidMainBridge', mainBridge);
+/** The window-placement API the renderer sees as `window.droidWindow`. */
+const windowApi: NativeWindowApi = {
+  state: () => ipcRenderer.invoke(WINDOW_CHANNELS.state),
+  stepAside: () => ipcRenderer.invoke(WINDOW_CHANNELS.stepAside),
+  restore: () => ipcRenderer.invoke(WINDOW_CHANNELS.restore),
+};
+
+contextBridge.exposeInMainWorld('droidWindow', windowApi);

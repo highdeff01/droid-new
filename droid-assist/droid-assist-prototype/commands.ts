@@ -20,6 +20,7 @@ const COMMANDS = {
   sidetest: 'Usage: /sidetest <target window> : <experimental action> [: <main action>], e.g. /sidetest Game : move character left : move character to the door',
   research: 'Usage: /research <window or URL> : <what to find>',
   crew: 'Usage: /crew <goal>, e.g. /crew find the Save button and the Files icon — the main AI commands a crew of agents',
+  ops: 'Usage: /ops <goal> — the main AI commands the Operations agents · /ops <agent>: <task>, e.g. /ops apply: click Save, /ops loopControl: disable Reflect',
 } as const;
 
 /** The name of a slash command. */
@@ -44,6 +45,7 @@ export function parseCommand(input: string): AssistCommand | null {
   if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal>, /crew <locate|test ...>, /intercept <text> or /backtrack <n>` };
   if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal>, /section <name> x,y,w,h, /scope <sections>, /replicate <name> x,y,w,h, /sidetest <target> : <action> or /research <target> : <query>` };
   if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal> or /crew <goal>` };
+  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal>, /crew <goal> or /ops <goal>` };
   const target = (match[2] ?? '').trim();
   return target ? { kind: name, target } : { kind: 'error', message: COMMANDS[name] };
 }

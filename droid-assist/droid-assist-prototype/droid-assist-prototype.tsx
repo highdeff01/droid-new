@@ -36,6 +36,7 @@ import { CapabilitiesPanel } from './capabilities-panel.js';
 import { PresentationPanel } from './presentation-panel.js';
 import { NotificationStack } from './notification-stack.js';
 import { OperationsPanel } from './operations-panel.js';
+import { OperationsPanel } from './ops-panel.js';
 import styles from './droid-assist.module.css';
 
 /** The Droid Assist workspace: live screen + overlay, HUDs, workflow, gallery, agents and log. */
@@ -108,6 +109,7 @@ function AssistScreen() {
           <SettingsPanel engine={engine} />
           <AgentBusPanel engine={engine} />
           <CrewPanel engine={engine} />
+          <OperationsPanel engine={engine} />
           <SubagentReportPanel engine={engine} />
           <ResolutionPanel engine={engine} />
           <LogPanel engine={engine} />

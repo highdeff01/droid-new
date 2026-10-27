@@ -334,6 +334,7 @@ export function CapabilitiesPanel({ engine }: { engine: AssistEngine }) {
 const STAGE_GROUPS: Array<{ group: StageGroup; title: string }> = [
   { group: 'pipeline', title: 'Pipeline' },
   { group: 'agent', title: 'Agents' },
+  { group: 'operations', title: 'Operations' },
 ];
 
 /**

@@ -50,6 +50,7 @@ import { sanitizeAutoApply } from './aggressive.js';
 import { OPERATION_LIMIT, OPERATION_SOURCES, type OperationSource, type SavedOperation } from './saved-operations.js';
 import { OPERATION_RETRIES_MAX, OPERATION_RETRIES_MIN } from './operation-retry.js';
 import { PLAYBACK_WINDOW_SEC_MAX, PLAYBACK_WINDOW_SEC_MIN } from './playback.js';
+import { readOpsState, type OpsState } from './operations.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -77,6 +78,7 @@ const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', l
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', goals: 'droid-assist.goals' } as const;
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', notifications: 'droid-assist.notifications' } as const;
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', operations: 'droid-assist.operations' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', memory: 'droid-assist.memory', ops: 'droid-assist.ops' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -219,7 +221,8 @@ export function saveSettings(settings: AssistSettings) {
 
 function isLogEntry(v: unknown): v is LogEntry {
   return isObject(v) && typeof v.id === 'string' && isNum(v.time) && typeof v.source === 'string'
-    && typeof v.message === 'string' && TONES.includes(v.tone as LogEntry['tone']);
+    && typeof v.message === 'string' && TONES.includes(v.tone as LogEntry['tone'])
+    && (v.op === undefined || typeof v.op === 'string') && (v.repeat === undefined || isNum(v.repeat));
 }
 
 /** The stored action log (newest first, at most LOG_LIMIT); invalid entries are dropped. */
@@ -682,6 +685,14 @@ export function savePersonas(personas: Persona[]) {
 /** Persists the triggers, capped at TRIGGER_LIMIT. */
 export function saveTriggers(triggers: Trigger[]) {
   writeJson(KEYS.triggers, triggers.slice(0, TRIGGER_LIMIT));
+}
+
+/** The stored Operations agents' state (statuses, reports, evidence); invalid entries are dropped. */
+export const loadOpsState = (): OpsState => readOpsState(readJson(KEYS.ops));
+
+/** Persists the Operations state; when it does not fit, retries without the evidence screenshots. */
+export function saveOpsState(state: OpsState) {
+  if (!writeJson(KEYS.ops, state)) writeJson(KEYS.ops, { ...state, evidence: state.evidence.map((e) => ({ ...e, before: null, after: null })) });
 }
 
 /** The stored operation memory (failure reminders and notes); invalid entries are dropped. */
