@@ -469,6 +469,70 @@ describe('useAssist key and scroll recorder with human timing', () => {
   });
 });
 
+describe('useAssist multi-element chain', () => {
+  const objective = (name: string, extra: Record<string, unknown>) => ({ name, what: `${name} on the desktop`, why: `${name} is the next element of the goal`, action: 'move', target: name, ...extra });
+
+  function stubChain(objectives: unknown[], discovery = '{"visible":false,"step":null,"why":"no menu reveals it"}') {
+    const replies: Record<string, Record<string, unknown>> = {
+      plan: { content: JSON.stringify({ objectives }), thinking: 'Three elements in order.' },
+      discover: { content: discovery, thinking: null },
+      reflect: { content: 'Done.', thinking: null },
+      verdict: { content: '{"success":true,"pattern_avoid":null,"pattern_add":null}', thinking: null },
+      propose: { content: '{"ready":true,"x":0.055,"y":0.105,"why":"it is the next element of the chain."}', thinking: null },
+    };
+    const pick = (body: string) => (body.includes('discovery agent') ? 'discover' : body.includes('final verdict') ? 'verdict' : body.includes('reviewing a step') ? 'reflect' : body.includes('state WHAT') ? 'propose' : 'plan');
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => new Response(JSON.stringify({ message: { role: 'assistant', ...replies[pick(init.body as string)] } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    return fetch;
+  }
+
+  async function chain(goal: string) {
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.toggleArmed());
+    act(() => result.current.setGoal(goal));
+    await act(() => result.current.submitInput());
+    return result;
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('plans the objective breakdown and executes every element in order with before/after screenshots', async () => {
+    const fetch = stubChain([objective('Files icon', { x: 0.055, y: 0.105 }), objective('Game icon', { x: 0.055, y: 0.425, path: ['Files icon'] }), objective('Notes icon', { x: 0.055, y: 0.265 })]);
+    const result = await chain('hover Files, then hover Game; hover Notes');
+    const run = result.current.chain!;
+    expect(run.goal).toBe('hover Files, then hover Game; hover Notes');
+    expect(run.objectives.map((o) => [o.name, o.status])).toEqual([['Files icon', 'done'], ['Game icon', 'done'], ['Notes icon', 'done']]);
+    expect(run.objectives[1]).toMatchObject({ what: 'Game icon on the desktop', why: 'Game icon is the next element of the goal', path: ['Files icon'] });
+    expect(run.report).toMatchObject({ complete: true, failed: null });
+    expect(result.current.steps.map((s) => s.status)).toEqual(['done', 'done', 'done']);
+    const planCalls = fetch.mock.calls.filter(([, init]) => (init.body as string).includes('MULTI-ELEMENT CHAIN'));
+    expect(planCalls).toHaveLength(1);
+    const chainLog = result.current.log.filter((l) => l.source === 'Chain').map((l) => l.message);
+    expect(chainLog.some((m) => m.startsWith('Chain COMPLETE — 3/3'))).toBe(true);
+  });
+
+  it('discovers a hidden target, then reports INCOMPLETE in red naming the failed objective and why', async () => {
+    stubChain([objective('Files icon', { x: 0.055, y: 0.105 }), objective('Talk option', { discover: 'behind the menu' }), objective('Game icon', { x: 0.055, y: 0.425 })]);
+    const result = await chain('hover Files, talk to the priest, hover Game');
+    const run = result.current.chain!;
+    expect(run.objectives.map((o) => o.status)).toEqual(['done', 'failed', 'not run']);
+    expect(run.objectives[1].reason).toMatch(/not found/);
+    expect(run.report).toMatchObject({ complete: false, failed: { name: 'Talk option' } });
+    const discovery = result.current.log.find((l) => l.source === 'Chain' && l.message.startsWith('Discovery 1/3 for "Talk option"'));
+    expect(discovery?.message).toMatch(/gave up — no menu reveals it/);
+    const incomplete = result.current.log.find((l) => l.source === 'Chain' && l.message.startsWith('Chain INCOMPLETE'));
+    expect(incomplete).toMatchObject({ tone: 'error' });
+    expect(incomplete?.message).toMatch(/objective 2 "Talk option" failed: target not found.*1\/3 done, 1 not run/);
+  });
+
+  it('keeps a single-clause goal on the single plan path', async () => {
+    stubChain([]);
+    const result = await chain('dismiss the ads and play the videos');
+    expect(result.current.chain).toBeNull();
+  });
+});
+
 describe('useAssist rearrangement on the demo desktop', () => {
   // Files starts at (0.055, 0.105), Game at (0.055, 0.425): "below Game" means the same column, lower.
   const plan = (endY: number, endX = 0.12) => ({ content: JSON.stringify({ steps: [{ name: 'Move Files', action: 'drag', target: 'Files icon', x: 0.055, y: 0.105, endTarget: 'free spot below Game', endX, endY }], expect: [{ element: 'Files icon', relation: 'below', anchor: 'Game' }] }), thinking: 'Files goes under Game.' });

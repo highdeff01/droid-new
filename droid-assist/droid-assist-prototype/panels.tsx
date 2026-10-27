@@ -8,6 +8,7 @@ import { ModelPicker } from './model-picker.js';
 import type { FamiliarElement, Frame, Habit, LogEntry } from './types.js';
 import type { Box } from './assist-ai.js';
 import type { Briefing } from './briefing.js';
+import { OBJECTIVE_TONE, type ChainRun } from './chain.js';
 import { DisplayPicker } from './display-picker.js';
 import { BridgeWizard } from './bridge-wizard.js';
 import { isReliable, successRate } from './habits.js';
@@ -822,12 +823,37 @@ function BriefingItem({ b }: { b: Briefing }) {
   );
 }
 
+/** The multi-element chain: each objective's what, why and status, then the completion report (red when incomplete). */
+function ChainBreakdown({ chain }: { chain: ChainRun }) {
+  return (
+    <div aria-label="Chain objectives">
+      <h4>Objective breakdown <small>{chain.goal}</small></h4>
+      <ol className={styles.log}>
+        {chain.objectives.map((o) => (
+          <li key={o.id} data-tone={OBJECTIVE_TONE[o.status]}>
+            <b>{o.name}</b> <small>· {o.status}</small>
+            <p><b>What:</b> {o.what}{o.path.length > 0 && <small> (via {o.path.join(' → ')})</small>}</p>
+            <p><b>Why:</b> {o.why}</p>
+            {o.reason && <p><b>Reason:</b> {o.reason}</p>}
+          </li>
+        ))}
+      </ol>
+      {chain.report && (
+        <ul className={styles.log}>
+          <li data-tone={chain.report.complete ? 'ok' : 'error'} role={chain.report.complete ? undefined : 'alert'}><b>{chain.report.text}</b></li>
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** Pre-action briefing: the reasoning and evidence for each step, recorded before it dispatches. */
 export function BriefingPanel({ engine }: { engine: AssistEngine }) {
-  const { briefings, settings } = engine;
+  const { briefings, settings, chain } = engine;
   return (
     <section className={styles.panel} aria-label="Pre-action briefing">
       <h3>Pre-action briefing <small>{settings.stages.briefing ? `${briefings.length} recorded` : 'stage unchecked in Loop control'}</small></h3>
+      {chain && <ChainBreakdown chain={chain} />}
       {!briefings.length && <p className={styles.muted}>No step briefed yet.</p>}
       <ul className={styles.log}>
         {briefings.map((b) => <BriefingItem key={`${b.id}:${b.revisions.length}`} b={b} />)}

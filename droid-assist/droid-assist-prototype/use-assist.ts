@@ -63,6 +63,7 @@ import { useKnowledge } from './use-knowledge.js';
 import { useVariations } from './use-variations.js';
 import { findWorldElement, initialWorld, onWorldToggle, worldClick, worldContext, worldDoubleClick, worldDrag, worldKey, worldTick, worldType, type World, type WorldResult } from './test-world.js';
 import { findScenario, progressLines, scenarioComplete } from './test-world-scenarios.js';
+import { MAX_DISCOVERY, OBJECTIVE_TONE, chainReport, discoverTarget, isChainGoal, locateTarget, objectiveLine, planChain, type ChainObjective, type ChainPlan, type ChainRun, type DiscoveryMove } from './chain.js';
 import { applyReach, currentPath, deletePath, editPath, isHopAction, learnPaths, parseHops, pathLine, pathOutcome, pathSteps, reachTarget, relevantPaths, runPath, usablePath, type AccessProfile, type Reach } from './access-paths.js';
 import { dropGoal, loadGoals, projectId, queueGoal, saveGoals, settleGoal, startGoal, type GoalRecord } from './goal-tracer.js';
 import { ALL_PROJECTS, addUserNote, loadKnowledge, markInjected, noteLine, pendingNotesFor, saveKnowledge, type UserNote } from './knowledge-store.js';
@@ -168,6 +169,17 @@ const goalSummary = (c: GoalCheck) => `${c.complete ? 'Goal COMPLETE' : 'Goal no
 const stepsText = (steps: WorkflowStep[]) => steps.map((s) => `${s.action} "${s.target ?? s.name}"`).join(' → ');
 /** Log tone of each way an auto-continue loop ends. */
 const STOP_TONE: Record<ContinueStop, LogEntry['tone']> = { complete: 'ok', aborted: 'warn', halted: 'error', cap: 'warn', 'no-progress': 'warn' };
+
+/** Log source of a multi-element chain run. */
+const CHAIN = 'Chain';
+/** Timeline text of a chain breakdown. */
+const chainSummary = (p: ChainPlan) => `${p.objectives.length} objective(s): ${p.objectives.map((o) => o.name).join(' → ')}`;
+/** Timeline and log text of a discovery decision. */
+const discoverySummary = (m: DiscoveryMove) => {
+  if (m.kind === 'found') return `found at ${at(m.x, m.y)} — ${m.why}`;
+  if (m.kind === 'explore') return `${m.step.action} "${m.step.target ?? m.step.name}"${m.step.text ? ` ${m.step.text}` : ''} to reveal it — ${m.why}`;
+  return `gave up — ${m.why}`;
+};
 
 /** Timeline text of a watcher observation. */
 const observationSummary = (o: Observation) => `${o.notes.length} note(s), ${o.proposals.length} proposal(s)${o.notes.length ? `: ${o.notes.map((n) => n.text).join('; ')}` : ''}`;
@@ -325,6 +337,9 @@ export function useAssist() {
   const [timeline, setTimeline] = useState<ThinkingEntry[]>([]);
   /** Pre-action briefings, newest first (in memory, BRIEFING_LIMIT), one per dispatched step. */
   const [briefings, setBriefings] = useState<Briefing[]>([]);
+  /** The multi-element chain being run or last run: its objective breakdown and completion report. */
+  const [chain, setChain] = useState<ChainRun | null>(null);
+  const chainRef = useRef<ChainRun | null>(null);
   /** Goal-tracer records (persisted): the current objective, next goals and settled ones. */
   const [goals, setGoals] = useState<GoalRecord[]>(() => loadGoals());
   /** User notes in the knowledge store (persisted), injected once into each targeted project's next AI call. */
@@ -2559,7 +2574,7 @@ export function useAssist() {
     !!popup && s.x >= popup.x && s.x <= popup.x + popup.w && s.y >= popup.y && s.y <= popup.y + popup.h;
 
   /** Runs one replay step, clearing a covering popup first when AI help is on, after a recorded what/why proposal. */
-  const replayStep = async (i: number, budget: ActionBudget, dryRun: boolean, label: string): Promise<Performed> => {
+  const replayStep = async (i: number, budget: ActionBudget, dryRun: boolean, label: string, pin?: { x: number; y: number }): Promise<Performed & { verdict?: StepVerdict | null }> => {
     const planned = stepsRef.current[i];
     setActiveIndex(i);
     updateStep(i, { status: 'running' });
@@ -2583,7 +2598,7 @@ export function useAssist() {
       return { ok: false, executed: false, halt: true, message: `Stopped before "${planned.name}" — not executed`, target: { x: planned.x, y: planned.y } };
     }
     const before = framesRef.current[0] ?? null;
-    const out = await execute(j.step, label, budget, dryRun, j.proposal);
+    const out = await execute(pin ? { ...j.step, ...pin } : j.step, label, budget, dryRun, j.proposal);
     applyOutcome(i, out, dryRun, before);
     addLog(label, `${planned.name}: ${out.message}`, out.ok ? 'ok' : 'error');
     return out;
@@ -2595,6 +2610,32 @@ export function useAssist() {
    */
   const replay = async (selfTest = false) => {
     await runReplay(selfTest, { label: selfTest ? 'Self-test' : 'Replay', goal: runGoalOf() });
+  };
+
+  /** Whether the desktop bridge answers its health check; a failure is logged and captured. */
+  const bridgeReady = async (label: string): Promise<boolean> => {
+    const health = await checkBridge(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken);
+    setBridgeOnline(health.ok);
+    if (health.ok) return true;
+    addLog(label, `${health.message} — no step was executed`, 'error');
+    captureError({ kind: 'bridge', message: health.message, goal: goalRef.current });
+    return false;
+  };
+
+  /** Starts a run: clears the stop flag and the per-run memory and shows the run as replaying. */
+  const beginRun = () => {
+    abortRef.current = false;
+    runStartRef.current = Date.now();
+    reproposedRef.current = new Set();
+    replayingRef.current = true;
+    setReplaying(true);
+  };
+
+  /** Ends a run: no active step, not replaying. */
+  const endRun = () => {
+    setActiveIndex(null);
+    replayingRef.current = false;
+    setReplaying(false);
   };
 
   /**
@@ -2612,29 +2653,15 @@ export function useAssist() {
       return null;
     }
     const viaBridge = sourceRef.current !== 'demo' || (!selfTest && armedRef.current && !!settingsRef.current.bridgeUrl);
-    if (viaBridge) {
-      const health = await checkBridge(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken);
-      setBridgeOnline(health.ok);
-      if (!health.ok) {
-        addLog(label, `${health.message} — no step was executed`, 'error');
-        captureError({ kind: 'bridge', message: health.message, goal: goalRef.current });
-        return null;
-      }
-    }
+    if (viaBridge && !(await bridgeReady(label))) return null;
     const dryRun = selfTest || !armedRef.current;
     if (dryRun && !selfTest) addLog('Safety', `Real input disarmed — ${label} runs as a ${DRY_RUN}`, 'warn');
     const budget = createBudget(settingsRef.current.actionBudget);
-    abortRef.current = false;
-    runStartRef.current = Date.now();
-    reproposedRef.current = new Set();
-    replayingRef.current = true;
-    setReplaying(true);
+    beginRun();
     const shots: Frame[] = [];
     const looping = continueEnabled() && !selfTest;
     const { ran, ok } = looping ? await continueToGoal(runGoal, budget, dryRun, label, shots) : await runSteps(budget, dryRun, label, shots);
-    setActiveIndex(null);
-    replayingRef.current = false;
-    setReplaying(false);
+    endRun();
     const picks = shots.map((f, i) => ({ f, score: i === 0 ? 1 : frameDistance(shots[i - 1].data, f.data) })).sort((a, b) => b.score - a.score).slice(0, 3).map((p) => p.f);
     if (picks.length) setPinned(picks);
     picks.forEach((f) => preferFrame(f, MAIN_AI, 'most informative change of the run'));
@@ -2859,6 +2886,165 @@ export function useAssist() {
         addLog('/move', aiFailure('AI unavailable — nothing executed', error), 'error');
       }
     });
+  };
+
+  /** Shows the chain in the briefing panel. */
+  const publishChain = (next: ChainRun) => {
+    chainRef.current = next;
+    setChain(next);
+  };
+
+  /** Patches one objective of the current chain. */
+  const updateObjective = (i: number, patch: Partial<ChainObjective>) => {
+    const run = chainRef.current!;
+    publishChain({ ...run, objectives: run.objectives.map((o, j) => (j === i ? { ...o, ...patch } : o)) });
+  };
+
+  /** The model's objective breakdown of a multi-element goal; null (logged) when the AI failed. */
+  const planChainFor = async (text: string): Promise<ChainObjective[] | null> => {
+    const context = [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current)];
+    setAiBusy(true);
+    try {
+      const plan = await thought(`Chain: ${text}`, () => planChain(text, framesRef.current[0] ?? null, askFor('planner'), context), chainSummary);
+      return plan.objectives;
+    } catch (error) {
+      addLog(CHAIN, aiFailure('AI chain plan failed — nothing executed', error), 'error');
+      return null;
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  /** Moves through the plotted path elements that can be located; an unknown one is logged and skipped. Resolves false when the run must stop. */
+  const walkPath = async (path: string[], budget: ActionBudget, dryRun: boolean): Promise<boolean> => {
+    for (const name of path) {
+      const loc = locateTarget(name, elementMapRef.current, familiarRef.current);
+      if (!loc) {
+        addLog(CHAIN, `Path element "${name}" is not in the element map or learned coordinates — skipped`, 'warn');
+        continue;
+      }
+      const out = await performStep({ id: uid('step'), name: `Pass ${name}`, action: 'move', x: loc.x, y: loc.y, target: name, status: 'pending' }, CHAIN, budget, dryRun);
+      if (out.halt) return false;
+    }
+    return true;
+  };
+
+  /** Grounds step `i` on the element map or learned coordinates: the point that pins its input, null when memory does not know it. */
+  const placeTarget = (i: number): { x: number; y: number } | null => {
+    const s = stepsRef.current[i];
+    if (!POINTER_ACTIONS.has(s.action)) return null;
+    const loc = locateTarget(s.target ?? s.name, elementMapRef.current, familiarRef.current);
+    if (!loc) return null;
+    updateStep(i, { x: loc.x, y: loc.y, unlocated: undefined });
+    addLog(CHAIN, `Located "${s.target ?? s.name}" from the ${loc.source} at ${at(loc.x, loc.y)}`);
+    return { x: loc.x, y: loc.y };
+  };
+
+  /**
+   * Background discovery of objective `i`'s hidden target: the discovery agent either points at
+   * it or proposes one scroll/click that reveals it, run through the guarded executor, up to
+   * MAX_DISCOVERY times. Resolves whether the target was found (step `i` now points at it).
+   */
+  const discover = async (i: number, budget: ActionBudget, dryRun: boolean): Promise<boolean> => {
+    const o = chainRef.current!.objectives[i];
+    const name = o.step.target ?? o.name;
+    const tried: string[] = [];
+    for (let n = 0; n < MAX_DISCOVERY && !abortRef.current; n++) {
+      let move: DiscoveryMove;
+      try {
+        move = await thought(`Discover: ${name}`, () => discoverTarget(askFor('planner'), framesRef.current[0] ?? null, o, tried), discoverySummary);
+      } catch (error) {
+        addLog(CHAIN, aiFailure(`Discovery of "${name}" failed`, error), 'error');
+        return false;
+      }
+      addLog(CHAIN, `Discovery ${n + 1}/${MAX_DISCOVERY} for "${name}": ${discoverySummary(move)}`);
+      if (move.kind === 'found') {
+        updateStep(i, { x: move.x, y: move.y, unlocated: undefined, refFrame: undefined });
+        return true;
+      }
+      if (move.kind === 'give-up') return false;
+      const out = await performStep(move.step, CHAIN, budget, dryRun);
+      tried.push(`${move.step.action} "${move.step.target ?? move.step.name}"${move.step.text ? ` ${move.step.text}` : ''}`);
+      if (out.halt) return false;
+    }
+    return false;
+  };
+
+  /** Why an objective failed: not found, the step's own failure, or a failure verdict; null when it succeeded. */
+  const objectiveFailure = (out: (Performed & { verdict?: StepVerdict | null }) | null): string | null => {
+    if (!out) return 'target not found — not on screen and discovery could not reveal it';
+    if (!out.ok) return out.message;
+    return out.verdict?.success === false ? 'the AI verdict says the step did not succeed' : null;
+  };
+
+  /**
+   * One objective: walk its path, locate its target (element map → learned coordinates → planner
+   * point), run the pre-staged action through the grounded pipeline with screenshots before and
+   * after, and discover the target when it is not found. Resolves whether it succeeded.
+   */
+  const runObjective = async (i: number, budget: ActionBudget, dryRun: boolean): Promise<boolean> => {
+    const o = chainRef.current!.objectives[i];
+    updateObjective(i, { status: 'running' });
+    addLog(CHAIN, `Objective ${i + 1}/${chainRef.current!.objectives.length}: ${o.what} — why: ${o.why}`);
+    const before = framesRef.current[0];
+    if (!(await walkPath(o.path, budget, dryRun))) return settleObjective(i, refused(o.step, 'Stopped while moving along the path'), before);
+    const pin = placeTarget(i) ?? undefined;
+    let out = pin || !stepsRef.current[i].unlocated ? await replayStep(i, budget, dryRun, CHAIN, pin) : null;
+    if (!out?.ok && !out?.halt && (await discover(i, budget, dryRun))) out = await replayStep(i, budget, dryRun, CHAIN);
+    return settleObjective(i, out, before);
+  };
+
+  /** Records an objective's outcome and its before/after screenshots; resolves whether it succeeded. */
+  const settleObjective = (i: number, out: (Performed & { verdict?: StepVerdict | null }) | null, before: Frame | undefined): boolean => {
+    const reason = objectiveFailure(out);
+    const s = stepsRef.current[i];
+    const after = s.afterFrame ?? out?.shot ?? framesRef.current[0];
+    updateObjective(i, { status: reason ? 'failed' : 'done', reason: reason ?? undefined, before: s.beforeFrame ?? before ?? after, after });
+    return !reason;
+  };
+
+  /** Logs every objective's completion and the chain report: red INCOMPLETE naming the failed objective and why. */
+  const reportChain = () => {
+    const run = chainRef.current!;
+    const report = chainReport(run.objectives);
+    publishChain({ ...run, report });
+    run.objectives.forEach((o, i) => addLog(CHAIN, objectiveLine(o, i), OBJECTIVE_TONE[o.status]));
+    addLog(CHAIN, report.text, report.complete ? 'ok' : 'error');
+    if (!report.complete) captureError({ kind: 'step', message: report.text, goal: run.goal, step: report.failed?.name });
+  };
+
+  /**
+   * A multi-element goal as one workflow: the planner's objective breakdown (what/why per element)
+   * becomes the plan, then every objective runs in order under the run's guardrails (arm, budget,
+   * kill-switch, loop-control stages). The chain stops at the first failed objective; the rest are
+   * reported as not run.
+   */
+  const runChain = async (text: string) => {
+    if (!stageOn('planner')) {
+      addLog(CHAIN, `${stageOff('planner')} — no chain planned`, 'warn');
+      return;
+    }
+    if (abortedRef.current) {
+      addLog('Safety', 'Chain refused — ABORTED is active; clear the abort first', 'error');
+      return;
+    }
+    const objectives = await planChainFor(text);
+    if (!objectives) return;
+    publishChain({ goal: text, objectives, report: null });
+    applyPlan(text, objectives.map((o) => o.step), 'Chain breakdown');
+    const viaBridge = sourceRef.current !== 'demo' || (armedRef.current && !!settingsRef.current.bridgeUrl);
+    if (viaBridge && !(await bridgeReady(CHAIN))) return;
+    const dryRun = !armedRef.current;
+    if (dryRun) addLog('Safety', `Real input disarmed — the chain runs as a ${DRY_RUN}`, 'warn');
+    const budget = createBudget(settingsRef.current.actionBudget);
+    beginRun();
+    let failed = false;
+    for (let i = 0; i < objectives.length; i++) {
+      if (failed || abortRef.current) updateObjective(i, { status: 'not run', reason: failed ? 'an earlier objective failed' : 'stopped before it ran' });
+      else failed = !(await runObjective(i, budget, dryRun));
+    }
+    endRun();
+    reportChain();
   };
 
   /**
@@ -3138,6 +3324,7 @@ export function useAssist() {
     const command = parseCommand(goal);
     if (!command) {
       if (isTestGoal(goal)) await testRoutes(parseTestSpec(goal));
+      else if (isChainGoal(goal)) await runChain(goal);
       else await autoPlan(goal);
       return;
     }
@@ -3666,6 +3853,7 @@ export function useAssist() {
     bridgeOnline, verifyRealInput,
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
     dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
+    reverse, reverseLast, reversing, briefings, chain, runChain,
     reverse, reverseLast, reversing, briefings,
     goals, queueNextGoal, removeGoal, userNotes, addNote, preferred, preferFrame,
     /** The capability registry and its artifacts; `invokeCapability` is the one permission-checked path for the main AI, the user and agents. */
