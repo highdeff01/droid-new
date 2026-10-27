@@ -22,8 +22,9 @@ const EDGE_TOLERANCE = 0.1;
 export const MOVE_BLAME_MS = 3000;
 /** Margin around the old/new box an action may land in and still be blamed. */
 const BLAME_PAD = 0.03;
-/** Most positions and moves kept per element. */
+/** Most positions kept per element (least-seen ghosts dropped first). */
 export const POSITION_LIMIT = 8;
+/** Most moves kept per element (oldest dropped first). */
 export const MOVE_LIMIT = 50;
 /** Self moves an element needs (and they must outnumber user/AI moves) to be always-in-motion. */
 export const IN_MOTION_MOVES = 3;

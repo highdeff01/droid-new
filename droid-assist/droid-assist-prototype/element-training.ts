@@ -16,6 +16,7 @@ import { uid } from './planner.js';
 
 /** Foreground: exclusive and visible; background: its own task, the UI keeps going. */
 export type TrainMode = 'foreground' | 'background';
+/** Both training modes, for the Settings select and validation. */
 export const TRAIN_MODES: readonly TrainMode[] = ['foreground', 'background'];
 
 /** Most opened elements one session explores. */
@@ -31,6 +32,7 @@ export interface TrainingEntry {
   shot?: Frame;
 }
 
+/** A session's state: still running, every action passed, an action failed, or stopped by the user. */
 export type TrainingStatus = 'running' | 'pass' | 'fail' | 'aborted';
 
 /** The report of one training session. */

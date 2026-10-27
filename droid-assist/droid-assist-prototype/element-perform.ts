@@ -10,6 +10,7 @@ import { boxCenter, mappedLine, type MappedElement, type PerformFn, type Perform
  * the element's current position whenever it runs, so a moved element is still hit.
  */
 
+/** Every perform kind an element can carry, in editor order. */
 export const PERFORM_KINDS: readonly PerformKind[] = ['click', 'double_click', 'type', 'drag'];
 
 /** Why a perform function or a navigate step cannot be used. */
