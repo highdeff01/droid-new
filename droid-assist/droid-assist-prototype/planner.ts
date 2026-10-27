@@ -4,6 +4,7 @@ import { AiError, SAMPLE_VIEW, parseJsonReply } from './ai.js';
 import type { AskFn, ViewSize } from './ai.js';
 import { gridPrompt, gridRef, parseCell, replyPoint, resolveCell } from './grid.js';
 import { RELATIONS, type Expectation, type Relation } from './rearrange.js';
+import type { CapabilityRequest } from './capabilities.js';
 
 let seq = 0;
 /** A short unique id. */
@@ -78,6 +79,18 @@ Never substitute another action for the one the goal asks for; if the target is 
 /** The planner's system prompt for a sample-space (480x270) screenshot. */
 export const PLAN_SYSTEM = planSystem(SAMPLE_VIEW);
 
+/**
+ * The planner prompt extended with the app's capabilities (`list`: one compact line each): the
+ * model may request whole operations next to, or instead of, screen steps. Unchanged when empty.
+ */
+export function withCapabilities(system: string, list: string): string {
+  if (!list.trim()) return system;
+  return `${system}
+You can also request Droid Assist operations (capabilities) by adding "capabilities":[{"id":string,"params"?:object}] to the JSON reply; they run through the same guardrails. A goal that is only an operation (e.g. "export a backup now") may reply {"steps":[],"capabilities":[...]}.
+Capabilities (id(param?:type) — what it does):
+${list}`;
+}
+
 /** A plan the assistant proposes, with where it came from and the model's thinking (null when reused or absent). */
 export interface PlanResult {
   steps: WorkflowStep[];
@@ -85,6 +98,31 @@ export interface PlanResult {
   thinking: string | null;
   /** The arrangement a rearrangement goal asks for; empty for other goals and reused flows. */
   expect: Expectation[];
+  /** Operations the model asked to run through the capability registry; empty when none or reused. */
+  capabilities: CapabilityRequest[];
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** The "capabilities" requests of a planner reply; a malformed entry is an AiError, never dropped silently. */
+export function parseCapabilityRequests(reply: string): CapabilityRequest[] {
+  const raw = parseJsonReply(reply).capabilities;
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new AiError('AI "capabilities" is not a list of requests');
+  return raw.map((r: unknown) => {
+    const id = isRecord(r) ? text(r.id) : '';
+    const params = isRecord(r) ? (r.params ?? {}) : null;
+    if (!id || !isRecord(params)) throw new AiError(`AI requested an unusable capability ${JSON.stringify(r)}`);
+    return { id, params };
+  });
+}
+
+/** The steps and capability requests of a planner reply; empty steps are allowed only beside a capability request. */
+function parseReply(content: string, frame: Frame | null, view: ViewSize | undefined): Pick<PlanResult, 'steps' | 'capabilities'> {
+  const capabilities = parseCapabilityRequests(content);
+  const raw = parseJsonReply(content).steps;
+  const capabilityOnly = capabilities.length > 0 && (raw === undefined || (Array.isArray(raw) && !raw.length));
+  return { steps: capabilityOnly ? [] : parsePlan(content, frame, view), capabilities };
 }
 
 const RELATION_SET: ReadonlySet<string> = new Set(RELATIONS);
@@ -179,9 +217,10 @@ export const AI_PLAN_SOURCE = 'AI planned from the goal and the live screen';
  * Fills a workflow from a goal: reuses a similar saved workflow when one exists (no model
  * call, steps start at their last drift-corrected positions); otherwise the model plans the
  * steps from the goal, the live frame, the recent context and the learned patterns relevant
- * to this goal. Rejects with AiError when the model is unreachable or its reply is unusable.
+ * to this goal. `capabilityList` (compact lines) lets the model also request app operations.
+ * Rejects with AiError when the model is unreachable or its reply is unusable.
  */
-export async function planFromGoal(goal: string, cards: SavedCard[], frame: Frame | null, ask: AskFn, context: string[] = [], patterns: LearnedPattern[] = []): Promise<PlanResult> {
+export async function planFromGoal(goal: string, cards: SavedCard[], frame: Frame | null, ask: AskFn, context: string[] = [], patterns: LearnedPattern[] = [], capabilityList = ''): Promise<PlanResult> {
   // A flow with drags is a rearrangement whose requested relations are not saved with it, so it is always planned fresh.
   const similar = findSimilar(goal, cards.filter((c) => !c.steps.some((s) => s.action === 'drag')));
   if (similar) {
@@ -190,12 +229,14 @@ export async function planFromGoal(goal: string, cards: SavedCard[], frame: Fram
       steps: similar.steps.map(reuseStep),
       thinking: null,
       expect: [],
+      capabilities: [],
     };
   }
   const lessons = relevantPatterns(goal, patterns).map(patternLine);
-  const reply = await ask({ system: planSystem, prompt: `Goal: ${goal}`, frame, context: [...lessons, ...context], json: true });
+  const system = (view: ViewSize) => withCapabilities(planSystem(view), capabilityList);
+  const reply = await ask({ system, prompt: `Goal: ${goal}`, frame, context: [...lessons, ...context], json: true });
   const source = lessons.length ? `${AI_PLAN_SOURCE}, applying ${lessons.length} learned pattern(s)` : AI_PLAN_SOURCE;
-  return { steps: parsePlan(reply.content, frame, reply.view), source, thinking: reply.thinking, expect: parseExpectations(reply.content) };
+  return { ...parseReply(reply.content, frame, reply.view), source, thinking: reply.thinking, expect: parseExpectations(reply.content) };
 }
 
 /**
@@ -212,7 +253,7 @@ export async function planRemaining(ask: AskFn, goal: string, frame: Frame | nul
     context: lessons,
     json: true,
   });
-  return { steps: parsePlan(reply.content, frame, reply.view), source: AI_PLAN_SOURCE, thinking: reply.thinking, expect: [] };
+  return { steps: parsePlan(reply.content, frame, reply.view), source: AI_PLAN_SOURCE, thinking: reply.thinking, expect: [], capabilities: [] };
 }
 /**
  * Re-asks the planner, once, where `step`'s target is after its proposed point was rejected
