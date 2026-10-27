@@ -35,6 +35,8 @@ export const STAGES = [
   { id: 'coords', group: 'agent', name: 'Coordinate learner', description: 'Learns and reuses target coordinates from verified steps (habits)', verifies: false },
   { id: 'supervisor', group: 'agent', name: 'Supervisor', description: 'Reviews finished runs: saves flows and learns patterns', verifies: false },
   { id: 'elementMap', group: 'agent', name: 'Element-mapping intercept', description: 'Remembers used targets as familiar elements', verifies: false },
+  { id: 'wake', group: 'agent', name: 'Wake and continue', description: 'Wakes the AI after a wait (timer, or early on a notable change or error seen by the backup watcher) with the before and fresh screenshots so it decides how to continue', verifies: false },
+  { id: 'contextWorkflow', group: 'agent', name: 'Parallel context workflows', description: 'Tracks a subject against its anchor on every look and asks the AI for a corrective move only when it drifts too far', verifies: false },
   { id: 'subagents', group: 'agent', name: 'Subagent testing', description: 'Test-clicks single elements from the Elements panel', verifies: false },
   { id: 'variations', group: 'agent', name: 'Background variations', description: 'Keeps superseded goals running as background variations (pauses while the main executor needs the screen)', verifies: false },
   { id: 'trainer', group: 'agent', name: 'Element trainer', description: 'Trains mapped elements (exclusive test runs, link/popup exploration, research) and proposes their perform functions', verifies: false },

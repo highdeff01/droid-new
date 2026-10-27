@@ -32,6 +32,7 @@ import { FIX_ACTIONS, FIX_METHOD_LIMIT, type FixMethod } from './fix-script.js';
 import { DOSSIER_LIMIT, pruneDossiers, type PositionDossier } from './position-dossier.js';
 import { SIDE_TEST_MODES, type SideTestMode } from './side-test.js';
 import { SECTION_EVENT_LIMIT, SECTION_LIMIT, type ScreenSection, type SectionEvent } from './sections.js';
+import { WAKE_MS_MAX, WAKE_MS_MIN } from './wake.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -60,10 +61,12 @@ const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
 const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize', [number, number]> = {
   crewSize: [CREW_SIZE_MIN, CREW_SIZE_MAX],
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'wakeMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
   watchMs: [WATCH_MS_MIN, WATCH_MS_MAX],
+  wakeMs: [WAKE_MS_MIN, WAKE_MS_MAX],
   changeCells: [2, 40],
   maxIterations: [1, 20],
   stepRetries: [STEP_RETRIES_MIN, STEP_RETRIES_MAX],
@@ -431,7 +434,8 @@ const isStr = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
 const optNum = (v: unknown) => v === undefined || isNum(v);
 
 function isNote(v: unknown): v is WatchNote {
-  return isObject(v) && isStr(v.id) && isNum(v.time) && NOTE_KINDS.includes(v.kind as NoteKind) && isStr(v.text);
+  return isObject(v) && isStr(v.id) && isNum(v.time) && NOTE_KINDS.includes(v.kind as NoteKind) && isStr(v.text)
+    && (v.source === undefined || typeof v.source === 'string') && (v.op === undefined || typeof v.op === 'string');
 }
 
 function isProposal(v: unknown): v is WatchProposal {
