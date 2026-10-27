@@ -96,6 +96,16 @@ describe('classifyStep', () => {
     expect(classifyStep(step({ name: 'Open C:\\Windows in Explorer' }))).toBe('system_file');
   });
 
+  it('command lines typed anywhere are admin_cmd, whatever the target', () => {
+    for (const text of ['vssadmin delete shadows /all /quiet', 'schtasks /create /tn x /tr y /ru SYSTEM', 'wmic shadowcopy delete', 'cipher /w:C', 'attrib +h secret.txt', 'iex (iwr http://x)', 'tool --force', 'cleanup.ps1']) {
+      expect(classifyStep(step({ name: 'Type', target: 'Start search', text }))).toBe('admin_cmd');
+    }
+  });
+
+  it('ordinary typed text stays screen input', () => {
+    expect(classifyStep(step({ name: 'Type a greeting', target: 'Chat box', text: 'Hello there, see you at 5' }))).toBe('input');
+  });
+
   it('needsApproval is true for every class except input', () => {
     for (const cls of OPERATION_CLASSES) expect(needsApproval(cls)).toBe(cls !== 'input');
   });
