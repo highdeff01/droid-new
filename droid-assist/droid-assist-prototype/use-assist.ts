@@ -103,6 +103,9 @@ import { addSection, buildProfiles, changeInScope, createSection, inScope, findS
 import { extractReplica, parseReplicaNaming, replicaLine, replicaToFamiliar, replicaToMapped, replicateRequest, type Replica } from './replicate.js';
 import { DEFAULT_SIDE_TEST_MODE, busFeedback, feedbackLine, findingsToNotes, runSideTest, sentinelScan, splitSideArgs, textFindings, type SentinelAlert, type SideTestDeps, type SideTestPlan, type SideTestResult, type WatchedPosition } from './side-test.js';
 import type { CommandName } from './commands.js';
+import { DEFAULT_AUTO_APPLY, DEFAULT_SCAN_SEC, DEFAULT_STRESS_CYCLES } from './initiative.js';
+import { useInitiative } from './use-initiative.js';
+import { testTargets } from './self-test.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -259,6 +262,10 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   autoScan: true,
   trainMode: 'background',
   sideTestMode: DEFAULT_SIDE_TEST_MODE,
+  scanSec: DEFAULT_SCAN_SEC,
+  selfTestMode: 'background',
+  stressCycles: DEFAULT_STRESS_CYCLES,
+  autoApply: DEFAULT_AUTO_APPLY,
 };
 
 /** A background agent the user can toggle; each also has an inbox on the inter-agent bus. */
@@ -541,6 +548,8 @@ export function useAssist() {
   const watchBusyRef = useRef(false);
   /** Real-input budget of the watcher's armed tests, renewed each time the watcher is switched on. */
   const watchBudgetRef = useRef<ActionBudget>(createBudget(settings.actionBudget));
+  /** The AI initiative's after-run hook (workarounds, workflow packs), set once the initiative layer exists. */
+  const afterRunRef = useRef<(goal: string, steps: WorkflowStep[], opts: { dryRun: boolean; stopped: boolean }) => Promise<void>>(async () => undefined);
   /** The frame the next material screen change is measured against. */
   const changeBaseRef = useRef<Frame | null>(null);
   /** The in-flight change assessment; the executor waits for it before proposing. */
@@ -1066,6 +1075,7 @@ export function useAssist() {
     if (verdict === 'success' && stageOn('coords')) commitAccessPaths(learnPaths(accessPathsRef.current, runSteps, habitContext(), Date.now(), [...pathCountedRef.current]));
     pathCountedRef.current.clear();
     recordRun(runGoal, runSteps, opts);
+    await afterRunRef.current(runGoal, runSteps, opts);
     if (verdict === 'ignored' || !stageOn('supervisor')) return;
     if (verdict === 'failed') {
       const lesson = failurePattern(runGoal, runSteps);
@@ -4382,6 +4392,48 @@ export function useAssist() {
 
   /** Stores `draft` with the current steps as a Library card (a saved operation); returns its id. */
   const storeCard = (draft: { name: string; description: string }) => {
+  /** Highlights a point on the preview for 3 s. */
+  const flash = (h: { x: number; y: number; label: string }) => {
+    setHighlight(h);
+    setTimeout(() => setHighlight((cur) => (cur && cur.x === h.x && cur.y === h.y ? null : cur)), 3000);
+  };
+
+  const initiativeApi = useInitiative({
+    settings: () => settingsRef.current,
+    stageOn,
+    askFor,
+    thought,
+    addLog,
+    aiOnline,
+    screenReady: () => captureLive() && !pausedWhileHidden(),
+    executorBusy,
+    aborted: () => abortedRef.current,
+    armed: () => armedRef.current,
+    frame: () => framesRef.current[0] ?? null,
+    steps: () => stepsRef.current,
+    setSteps: (next) => {
+      stepsRef.current = next;
+      setSteps(next);
+    },
+    goal: () => goalRef.current,
+    performStep,
+    highlight: flash,
+    testTargets: () => testTargets(elementMapRef.current, familiarRef.current),
+    known: () => familiarRef.current,
+    cards: () => cardsRef.current,
+    saveCard: (card) => {
+      cardsRef.current = [card, ...cardsRef.current];
+      setCards(cardsRef.current);
+    },
+    recordHabit: (habitName, success) => {
+      if (stageOn('coords')) commitHabits(recordOutcome(habitsRef.current, { target: habitName, context: habitContext(), success }));
+    },
+    recordRun: (runGoal, runSteps, opts, startedAt) => setRuns((r) => appendSummary(r, runSummary({ goal: runGoal, steps: runSteps, startedAt, ...opts, session: sessionRef.current }))),
+  });
+  afterRunRef.current = initiativeApi.afterRun;
+
+  const saveCard = () => {
+    if (!draftCard) return;
     const id = uid('card');
     flowRef.current = id;
     setCards((c) => [{ id, ...draft, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
@@ -4723,6 +4775,8 @@ export function useAssist() {
     watcher, acceptProposal, dismissProposal, testProposal,
     approvals: approvals.items, approvalTree: approvals.tree, approveItem, editItem, rejectItem, runApprovalCheck, setOperationPolicy,
     watcher, acceptProposal, dismissProposal, testProposal, wake,
+    initiative: initiativeApi.initiative, acceptInitiative: initiativeApi.acceptInitiative, dismissInitiative: initiativeApi.dismissInitiative,
+    scanNow: initiativeApi.scanNow, stressTest: initiativeApi.stressTest, testTargets: testTargets(elementMap, familiar),
     triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger,
     accessPaths, editAccessPath, deleteAccessPath, testAccessPath,
     triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger, packs,

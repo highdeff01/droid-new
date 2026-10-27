@@ -3,6 +3,7 @@ import type { AiView } from './ai.js';
 import type { OperationPolicy } from './approvals.js';
 import type { TrainMode } from './element-training.js';
 import type { SideTestMode } from './side-test.js';
+import type { AutoApplyMap, SelfTestMode } from './initiative.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
@@ -307,4 +308,12 @@ export interface AssistSettings {
   trainMode: TrainMode;
   /** Where side tests primarily run: background (bridge, main capture kept) or foreground (capture switched to the target). */
   sideTestMode: SideTestMode;
+  /** AI initiative: seconds between the AI's own screen scans (it may ask to scan sooner). */
+  scanSec: number;
+  /** AI initiative: self-tests verify-only in the background, or highlighted (real when armed) in the foreground. */
+  selfTestMode: SelfTestMode;
+  /** AI initiative: cycles per input kind the heavy element tester runs. */
+  stressCycles: number;
+  /** AI initiative: per category, apply without asking (still inside arm, budget and loop control). */
+  autoApply: AutoApplyMap;
 }

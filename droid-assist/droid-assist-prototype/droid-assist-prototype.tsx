@@ -20,6 +20,7 @@ import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel
 import { VariationsPanel } from './variations-panel.js';
 import { InventoryPanel, RetestPanel, RoutesPanel } from './screen-ai-panels.js';
 import { MemoryPanel } from './memory-panel.js';
+import { InitiativePanel } from './initiative-panel.js';
 import styles from './droid-assist.module.css';
 
 /** The Droid Assist workspace: live screen + overlay, HUDs, workflow, gallery, agents and log. */
@@ -63,6 +64,7 @@ function AssistScreen() {
             <MemoryPanel engine={engine} />
             <WatcherPanel engine={engine} />
             <WakePanel engine={engine} />
+            <InitiativePanel engine={engine} />
             <TriggersPanel engine={engine} />
             <ApprovalsPanel engine={engine} />
             <ArtifactsPanel engine={engine} />
