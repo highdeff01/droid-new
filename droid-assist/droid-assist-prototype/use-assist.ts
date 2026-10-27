@@ -2328,6 +2328,7 @@ export function useAssist() {
   const stop = () => {
     abortRef.current = true;
     cancelAi();
+    wake.cancel('stopped by user');
     addLog(subRunningRef.current ? 'Supervisor' : 'Replay', subRunningRef.current ? 'Stopped by user — the running subagent ends and the rest are aborted' : 'Stopped by user', 'warn');
   };
 

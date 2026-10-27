@@ -137,4 +137,24 @@ describe('useAssist wake and continue', () => {
     expect(result.current.wake.wait).toBeNull();
     expect(bodies(fetchMock, WOKEN)).toHaveLength(0);
   });
+
+  it('Stop during the wait cancels it without waking', async () => {
+    vi.useFakeTimers();
+    const fetchMock = stub('{"decision":"apply","reason":"ready"}');
+    const { result } = await waitingRun();
+    act(() => result.current.stop());
+    await act(() => vi.advanceTimersByTimeAsync(10000));
+    expect(result.current.wake.wait).toBeNull();
+    expect(bodies(fetchMock, WOKEN)).toHaveLength(0);
+  });
+
+  it('turning Auto Act off during the wait cancels it, so a wait decision never re-arms', async () => {
+    vi.useFakeTimers();
+    const fetchMock = stub('{"decision":"wait","reason":"still uploading","waitMs":6000}');
+    const { result } = await waitingRun();
+    act(() => result.current.setSettings({ ...result.current.settings, autoAct: false }));
+    await act(() => vi.advanceTimersByTimeAsync(40000));
+    expect(result.current.wake.wait).toBeNull();
+    expect(bodies(fetchMock, WOKEN)).toHaveLength(0);
+  });
 });

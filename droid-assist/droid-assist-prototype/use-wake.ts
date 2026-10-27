@@ -75,7 +75,7 @@ export function useWake(deps: WakeDeps) {
   /** On wake: a separate fresh capture, then the AI decides from before + fresh; nothing acts before the decision. */
   const wake = async (ctx: WaitContext, e: WakeEvent) => {
     const d = depsRef.current;
-    if (d.isAborted() || d.goal.trim() !== ctx.goal.trim()) return;
+    if (d.isAborted() || !d.settings().autoAct || d.goal.trim() !== ctx.goal.trim()) return;
     const shot = await d.capture().catch(() => null);
     const fresh = [...(shot ? [shot] : []), ...d.frames().filter((f) => f.time > ctx.since && f.id !== shot?.id)].slice(0, BEFORE_FRAMES);
     const req = wakeRequest(ctx, { fresh, freshInfo: d.info(ctx.since) }, e);
@@ -195,17 +195,19 @@ export function useWake(deps: WakeDeps) {
     return () => clearInterval(id);
   }, [anyRunning]);
 
-  // An abort or a new operation goal cancels the wait and ends workflows started under another goal.
+  // An abort, Auto Act turned off or a new operation goal cancels the wait; workflows started under another goal end.
   const { goal, aborted } = deps;
+  const autoAct = deps.settings().autoAct;
   useEffect(() => {
     if (aborted) cancel('abort');
+    else if (!autoAct) cancel('Auto Act turned off');
     else if (sessionRef.current && wait && wait.goal.trim() !== goal.trim()) cancel('the goal changed');
     for (const wf of contextsRef.current.filter((c) => c.running)) {
       const why = stopReason(wf, goal, aborted);
       if (why) endContext(wf.id, why);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [goal, aborted]);
+  }, [goal, aborted, autoAct]);
 
   // Unmount: no timer or watcher outlives the engine.
   useEffect(() => () => sessionRef.current?.cancel(), []);
