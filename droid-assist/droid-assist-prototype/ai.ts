@@ -15,6 +15,8 @@ export interface AiConfig {
   timeoutMs?: number;
   /** Ask the model to think before answering (Ollama `think`); absent means false. */
   think?: boolean;
+  /** The user's Master Prompt Override, appended to every system prompt; blank means none. */
+  masterPrompt?: string;
 }
 
 /** Default per-request AI timeout, and the Settings range it is validated against. */
@@ -74,6 +76,8 @@ export interface AiReply {
   thinking: string | null;
   /** Pixel size the screenshots of this request were sent at; absent means SAMPLE_VIEW. */
   view?: ViewSize;
+  /** True when the model never put an answer in message.content and `content` is its thinking. */
+  thinkingOnly?: boolean;
 }
 
 /** Pixel coordinates of `view` read back as a point in the 0..1 sample space. */
@@ -86,10 +90,34 @@ function thinkingOf(raw: unknown): string | null {
   return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
 }
 
-/** The extra turn sent when the model spent its whole reply thinking and left message.content empty. */
-export const CONTENT_RETRY_INSTRUCTION =
-  'Your previous reply contained only thinking and an empty answer. Do not think further: put your final answer directly in the message content now.';
+/**
+ * The empty-content retry ladder: the extra turn sent on each retry after the model spent its whole
+ * reply thinking and left message.content empty — rephrase, then a short direct answer, then JSON only.
+ */
+export const CONTENT_RETRY_LADDER = [
+  'Your previous reply contained only thinking and an empty answer. Restate the request in your own words in one line, then put your final answer directly in the message content.',
+  'Stop reasoning. Give a short, direct answer in the message content now — one or two sentences is enough.',
+  'Reply in the message content with exactly one JSON object holding your answer and nothing else — no thinking, no prose.',
+] as const;
 const CONTENT_RETRY_JSON = ' Reply with exactly one JSON object and nothing else.';
+
+/** Prefixed to the last question when it is asked again, alone, after the ladder ran out. */
+export const FALLBACK_QUESTION_PREFIX = 'Put simply — answer briefly and directly in the message content, even if unsure:\n\n';
+
+/** Longest Master Prompt Override kept (Settings and storage). */
+export const MASTER_PROMPT_MAX = 2000;
+
+/** `system` followed by the user's master directive; unchanged when the directive is blank. */
+export function withMasterPrompt(system: string, masterPrompt?: string): string {
+  const directive = masterPrompt?.trim();
+  if (!directive) return system;
+  return `${system}\n\nUser master directive — it steers every goal, task, operation and workflow (preferred methods, tone, mood); follow it, but keep the reply format required above:\n${directive}`;
+}
+
+/** What the app shows when the model only ever answered in thinking: what happened, the thinking, and a next step. */
+export function thinkingOnlyNotice(thinking: string): string {
+  return `Model answered only in its thinking (empty message content after ${CONTENT_RETRY_LADDER.length} varied retries and a fallback question) — using its thinking as the answer: ${truncateRaw(thinking)} · Next: run a self-test of this step, or queue it as a workflow and continue.`;
+}
 
 /** A model call the user cancelled (AI stop, emergency stop, a loop stage unchecked): not an endpoint failure. */
 export class AiCancelled extends AiError {
@@ -163,11 +191,14 @@ async function fetchReply(cfg: AiConfig, messages: ChatMessage[], json: boolean,
 }
 
 /**
- * One non-streaming chat, thinking as `cfg.think` asks; resolves with message.content and message.thinking.
- * A reply whose content is empty but whose thinking is not is retried once with an instruction to
- * answer in content; a still-empty answer, or one with neither content nor thinking, rejects with an
- * AiError naming the cause. HTTP errors, network errors and the timeout reject with AiError;
- * aborting `cancel` cancels the in-flight fetch and rejects at once with AiCancelled.
+ * One non-streaming chat thinking as `cfg.think` asks; resolves with message.content and message.thinking.
+ * A reply whose content is empty but whose thinking is not walks the retry ladder: up to
+ * CONTENT_RETRY_LADDER.length retries, each with a differently worded instruction, then one fallback
+ * question (the last question alone, rephrased). The first reply with content wins. When every try is
+ * thinking only — or a later try fails (not a cancel) — the thinking itself is the answer, marked
+ * `thinkingOnly`. A first reply with neither content nor thinking rejects with an AiError. HTTP
+ * errors, network errors and the timeout of the first request reject with AiError; aborting `cancel`
+ * cancels the in-flight fetch and rejects at once with AiCancelled.
  * @param json ask the server for a JSON-formatted reply
  * @param cancel aborts the request (alongside the per-request timeout)
  */
@@ -175,10 +206,35 @@ export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false,
   const first = await post(cfg, messages, json, timeoutMs, cancel);
   if (first.content) return first;
   if (!first.thinking) throw new AiError('AI endpoint returned no message content and no thinking');
-  const instruction = `${CONTENT_RETRY_INSTRUCTION}${json ? CONTENT_RETRY_JSON : ''}`;
-  const retry = await post(cfg, [...messages, { role: 'user', content: instruction }], json, timeoutMs, cancel);
-  if (retry.content) return { content: retry.content, thinking: retry.thinking ?? first.thinking };
-  throw new AiError('AI model spent its whole reply on thinking and returned no message content, even after a retry asking for the answer in content');
+  const send = (msgs: ChatMessage[]) => post(cfg, msgs, json, timeoutMs, cancel);
+  let thinking = first.thinking;
+  try {
+    for (const reply of retryTries(messages, json)) {
+      const next = await send(reply);
+      if (next.content) return { content: next.content, thinking: next.thinking ?? thinking };
+      thinking = next.thinking ?? thinking;
+    }
+  } catch (error) {
+    if (error instanceof AiCancelled || !(error instanceof AiError)) throw error;
+  }
+  return { content: thinking, thinking, thinkingOnly: true };
+}
+
+/** The conversations of the retry ladder in order: each ladder rung appended, then the fallback question. */
+function* retryTries(messages: ChatMessage[], json: boolean): Generator<ChatMessage[]> {
+  for (const [i, rung] of CONTENT_RETRY_LADDER.entries()) {
+    const jsonNote = json && i < CONTENT_RETRY_LADDER.length - 1 ? CONTENT_RETRY_JSON : '';
+    yield [...messages, { role: 'user', content: `${rung}${jsonNote}` }];
+  }
+  yield fallbackQuestion(messages);
+}
+
+/** The system turns plus the last user turn asked again on its own, rephrased as a plain short question. */
+export function fallbackQuestion(messages: ChatMessage[]): ChatMessage[] {
+  const system = messages.filter((m) => m.role === 'system');
+  const last = [...messages].reverse().find((m) => m.role === 'user');
+  const content = `${FALLBACK_QUESTION_PREFIX}${last?.content ?? ''}`;
+  return [...system, { ...last, role: 'user', content }];
 }
 
 /** Startup / settings-change health check: a minimal chat against the configured URL and model. */
@@ -357,7 +413,7 @@ export function createAiSession(store: HistoryStore | null, render?: RenderFn, o
     const shots = await screenshots([...(req.frame ? [req.frame] : []), ...(req.frames ?? [])], cfg.view, render);
     const images = [...shots.urls, ...(req.crops ?? []).map((c) => c.url)].map(toBase64);
     const user: ChatMessage = { role: 'user', content, ...(images.length ? { images } : {}) };
-    const system = systemText(req.system, shots.view);
+    const system = withMasterPrompt(systemText(req.system, shots.view), cfg.masterPrompt);
     const turns = history.map(({ role, content: text }) => ({ role, content: text }));
     const reply = await chat(cfg, [{ role: 'system', content: system }, ...turns, user], req.json, cfg.timeoutMs, signal);
     const time = Date.now();

@@ -266,6 +266,16 @@ describe('useAssist Qwen thinking timeline', () => {
     expect(result.current.timeline[0]).toMatchObject({ text: 'Top bar', thinking: 'top' });
   });
 
+  it('accepts a thinking-only reply as the answer and shows what happened on the timeline and the log', async () => {
+    const result = await askWith(chatReply({ content: '', thinking: 'I think {"answer":"Search sits in the top bar","items":[]}' }));
+    const notice = result.current.timeline.find((e) => /only in its thinking/.test(e.text));
+    expect(notice).toMatchObject({ kind: 'thought', thinking: 'I think {"answer":"Search sits in the top bar","items":[]}' });
+    expect(notice!.text).toMatch(/self-test|queue/);
+    expect(result.current.timeline[0]).toMatchObject({ step: 'Ask: Where is search?', text: 'Search sits in the top bar' });
+    expect(result.current.log.some((l) => l.source === 'AI' && l.tone === 'warn' && /only in its thinking/.test(l.message))).toBe(true);
+    expect(result.current.aiStatus.state).toBe('online');
+  });
+
   it('records the plan thought, reflection and verdict of a /move step run through the pipeline', async () => {
     const replies: Record<string, Record<string, unknown>> = {
       plan: { content: '{"steps":[{"name":"Hover Files","action":"move","target":"files icon","x":0.1,"y":0.9}]}', thinking: 'Files sits bottom-left.' },
