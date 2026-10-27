@@ -2784,10 +2784,11 @@ export function useAssist() {
     return plan?.steps[0] ?? null;
   };
 
-  /** Research: a URL is fetched and its matching sentences kept; otherwise the AI researches on the live (side) screen. */
+  /** Research: "<URL> <query>" fetches the page and keeps its sentences matching the query; otherwise the AI researches on the live (side) screen. */
   const researchQuery = async (query: string): Promise<string[]> => {
     try {
-      if (/^https?:\/\//i.test(query)) return textFindings(await (await fetch(query)).text(), query);
+      const [first = '', ...words] = query.split(/\s+/);
+      if (/^https?:\/\//i.test(first)) return textFindings(await (await fetch(first)).text(), words.join(' ') || first);
       const frame = framesRef.current[0];
       if (!frame || !aiOnline()) return [`no AI or frame to research "${query}"`];
       return [(await describeScreen(askFor('sideTests'), frame, `Research: ${query}. Report what the screen shows about it.`, goalRef.current)).answer];
@@ -2860,9 +2861,9 @@ export function useAssist() {
   /** "/research <window or URL> : <query>": a research-only side test whose findings become watcher notes. */
   const researchCommand = async (arg: string) => {
     const { target: where, rest } = splitSideArgs(arg);
-    const query = rest.join(' ') || where;
+    const query = rest.join(' ');
     const url = /^https?:\/\//i.test(where);
-    await runSide({ name: `Research: ${query}`, target: url ? '' : where, mode: settingsRef.current.sideTestMode, research: url ? where : query });
+    await runSide({ name: `Research: ${query || where}`, target: url ? '' : where, mode: settingsRef.current.sideTestMode, research: url ? `${where} ${query}`.trim() : query || where });
   };
 
   /** Each slash command's runner. */
