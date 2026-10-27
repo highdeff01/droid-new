@@ -13,6 +13,7 @@ export const LEARNED_LIMIT = 200;
 /** Actions that move or look but never change anything: always pre-approved. */
 export const SAFE_ACTIONS: readonly StepAction[] = ['move', 'scroll', 'wait', 'calc', 'measure'];
 
+/** Where a proposed command stands: waiting, or decided by the user. */
 export type ApprovalStatus = 'pending' | 'approved' | 'edited' | 'rejected';
 
 /** One proposed command waiting for (or decided by) the user. */
@@ -39,6 +40,7 @@ export interface ApprovalState {
   learned: LearnedMethod[];
 }
 
+/** No queued requests and no learned methods. */
 export const EMPTY_APPROVALS: ApprovalState = { queue: [], learned: [] };
 
 /** What the user decided on a request. */
@@ -125,7 +127,9 @@ const isObject = (v: unknown): v is Json => !!v && typeof v === 'object' && !Arr
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const STATUSES: readonly ApprovalStatus[] = ['pending', 'approved', 'edited', 'rejected'];
 
+/** A stored approval request is well formed (used when loading from storage). */
 export const isApprovalRequest = (v: unknown): v is ApprovalRequest => isObject(v) && typeof v.id === 'string' && typeof v.projectId === 'string' && isPlannedStep(v.step)
   && isNum(v.time) && STATUSES.includes(v.status as ApprovalStatus) && (v.edited === undefined || isPlannedStep(v.edited));
 
+/** A stored learned method is well formed (used when loading from storage). */
 export const isLearnedMethod = (v: unknown): v is LearnedMethod => isObject(v) && STEP_ACTIONS.includes(v.action as StepAction) && typeof v.target === 'string' && isNum(v.time);

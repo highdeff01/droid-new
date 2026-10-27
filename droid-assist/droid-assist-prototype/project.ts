@@ -156,6 +156,7 @@ export function createProject(name: string, goal: string, now = Date.now()): Pro
   };
 }
 
+/** Whether the transition table allows moving from `from` to `to`. */
 export const canTransition = (from: ProjectState, to: ProjectState) => TRANSITIONS[from].includes(to);
 
 /** The project moved to `to` with the transition logged; throws when the table forbids it. */
@@ -250,6 +251,7 @@ const isInjection = (v: unknown) => isObject(v) && isStr(v.id) && INJECTION_SOUR
 const isEntry = (v: unknown) => isObject(v) && typeof v.complete === 'boolean' && typeof v.progress === 'boolean' && isStr(v.reason) && isNum(v.time);
 const isTurn = (v: unknown) => isObject(v) && isNum(v.turn) && isNum(v.time) && isState(v.from) && isState(v.to) && isStr(v.note);
 const isAlt = (v: unknown) => isObject(v) && isStr(v.method) && isNum(v.turn) && isNum(v.time);
+/** A stored planned step is well formed (used when loading projects and approvals). */
 export const isPlannedStep = (v: unknown): v is PlannedStep => isObject(v) && isStr(v.id) && isStr(v.name) && STEP_ACTIONS.includes(v.action as WorkflowStep['action']) && isNum(v.x) && isNum(v.y);
 const isRecord = (v: unknown) => isObject(v) && isStr(v.goal) && allOf(v.checks, isEntry) && typeof v.complete === 'boolean';
 const isCompletion = (v: unknown) => isObject(v) && typeof v.done === 'boolean' && isStr(v.reason);
