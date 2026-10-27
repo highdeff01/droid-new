@@ -86,7 +86,7 @@ export function RulerPanel({ engine }: { engine: AssistEngine }) {
         <button type="button" onClick={ruler.saveRuler} disabled={!m?.segments.length}>Keep measurement</button>
         {ruler.frameId !== null && <button type="button" onClick={() => ruler.measureFrame(null)}>Back to live</button>}
         <button type="button" onClick={ruler.setBaseline}>Set baseline</button>
-        <button type="button" onClick={() => ruler.recalibrateNow('manual')} disabled={!ruler.baseline}>⟲ Recalibrate</button>
+        <button type="button" onClick={() => void engine.invoke('ruler.recalibrate')} disabled={!ruler.baseline}>⟲ Recalibrate</button>
       </div>
       {m && m.segments.length > 0 ? (
         <ul aria-label="Ruler segments">
@@ -177,7 +177,7 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
         <div className={styles.card}>
           <input value={draftCard.name} onChange={(e) => setDraftCard({ ...draftCard, name: e.target.value })} aria-label="Workflow name" />
           <textarea value={draftCard.description} onChange={(e) => setDraftCard({ ...draftCard, description: e.target.value })} aria-label="Workflow description" />
-          <button type="button" className={styles.primary} onClick={engine.saveCard}>💾 Save</button>
+          <button type="button" className={styles.primary} onClick={() => void engine.invoke('workflow.save')}>💾 Save</button>
         </div>
       )}
     </section>
@@ -558,7 +558,7 @@ function ElementItem({ engine, el }: { engine: AssistEngine; el: ScreenElement }
       {el.patch && <img src={el.patch} alt={`${el.name} patch`} width={32} height={32} />}
       <b>{el.name}</b> <small>{SOURCE_LABEL[el.source]}</small> · {gridRef(el)} = ({(el.x * 100).toFixed(1)}%, {(el.y * 100).toFixed(1)}%)
       {el.lastSeen !== undefined && <small> · seen {new Date(el.lastSeen).toLocaleTimeString()}</small>}
-      <button type="button" onClick={() => void engine.testClick(el)} title={engine.armed ? 'Clicks this point on the PC (real input, budgeted)' : 'Highlights this point only (disarmed dry run)'}>
+      <button type="button" onClick={() => void engine.invoke('test.element', { name: el.name, x: el.x, y: el.y })} title={engine.armed ? 'Clicks this point on the PC (real input, budgeted)' : 'Highlights this point only (disarmed dry run)'}>
         Test click
       </button>
       {el.source === 'familiar' && <button type="button" aria-label={`Forget ${el.name}`} onClick={() => engine.forgetFamiliar(el.id)}>✕</button>}
@@ -620,7 +620,7 @@ function LearnedItem({ engine, el }: { engine: AssistEngine; el: FamiliarElement
     <li data-tone="info">
       <b>{el.name}</b> · {gridRef(el)} = ({(el.x * 100).toFixed(1)}%, {(el.y * 100).toFixed(1)}%)
       <small> · seen {el.timesSeen ?? 0}× · updated {new Date(el.lastSeen).toLocaleTimeString()}{el.frameId !== undefined ? ` on frame #${el.frameId}` : ''}</small>
-      <button type="button" onClick={() => void engine.testClick({ ...el, source: 'familiar' })} title={engine.armed ? 'Clicks this point on the PC (real input, budgeted)' : 'Highlights this point only (disarmed dry run)'}>
+      <button type="button" onClick={() => void engine.invoke('test.element', { name: el.name, x: el.x, y: el.y })} title={engine.armed ? 'Clicks this point on the PC (real input, budgeted)' : 'Highlights this point only (disarmed dry run)'}>
         Test click
       </button>
     </li>
