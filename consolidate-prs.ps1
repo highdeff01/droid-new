@@ -52,7 +52,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 function Step($m) { Write-Host "`n==> $m" -ForegroundColor Cyan }
-function Git { git @args; if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' ') failed" } }
+function Invoke-Git { & git @args; if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' ') failed" } }
 
 if (git status --porcelain) { throw "Working tree is dirty. Commit or stash first." }
 
@@ -61,14 +61,14 @@ $attrFile = Join-Path (git rev-parse --git-dir) "info/attributes"
 $attrBackup = $null
 
 Step "Fetching origin/$Base and $($Branches.Count) PR branch(es)"
-Git fetch origin "+refs/heads/${Base}:refs/remotes/origin/$Base"
+Invoke-Git fetch origin "+refs/heads/${Base}:refs/remotes/origin/$Base"
 foreach ($b in $Branches) {
   git fetch origin "+refs/heads/${b}:refs/remotes/origin/$b"
   if ($LASTEXITCODE -ne 0) { Write-Host "  could not fetch $b (merge will be marked failed)" -ForegroundColor Yellow }
 }
 
 Step "Creating $Branch from origin/$Base"
-Git checkout -B $Branch "origin/$Base"
+Invoke-Git checkout -B $Branch "origin/$Base"
 
 # Union driver for every text file (git's "-X union"); lockfiles keep the consolidation side.
 function Enable-Union {
@@ -94,7 +94,7 @@ function Merge-Branch($b) {
       if ($f -match $lockfiles) { git checkout --ours -- $f; git add -- $f; Write-Host "  lockfile: kept consolidation version of $f" }
     }
     $left = @(git diff --name-only --diff-filter=U)
-    if ($left.Count -eq 0) { Git commit --no-edit; return "union-merged" }
+    if ($left.Count -eq 0) { Invoke-Git commit --no-edit; return "union-merged" }
     Write-Host "  still conflicting even under union:" -ForegroundColor Red
     $left | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
     git merge --abort
@@ -141,7 +141,7 @@ if ($Verify -and (Test-Path "droid-assist/droid-assist-prototype/package.json"))
 
 if ($Push) {
   Step "Pushing $Branch"
-  Git push -u origin $Branch
+  Invoke-Git push -u origin $Branch
 }
 
 Write-Host "`n$Branch built from $($results.Count) branch(es); $($failed.Count) failed." -ForegroundColor Green
