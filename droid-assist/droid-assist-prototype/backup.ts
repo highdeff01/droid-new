@@ -20,6 +20,9 @@ export const BACKUP_STORES = {
   history: { key: HISTORY_KEY, label: 'Action history', shape: 'list' },
   watcher: { key: 'droid-assist.watcher', label: 'Watcher notes, proposals and tests', shape: 'watcher' },
   outbox: { key: 'droid-assist.outbox', label: 'Error outbox', shape: 'list' },
+  portfolios: { key: 'droid-assist.portfolios', label: 'Agent and AI portfolios', shape: 'list' },
+  profile: { key: 'droid-assist.user-profile', label: 'User-habit profile', shape: 'list' },
+  sections: { key: 'droid-assist.knowledge-sections', label: 'Knowledge sections', shape: 'list' },
 } as const satisfies Record<string, { key: string; label: string; shape: StoreShape }>;
 
 export type StoreName = keyof typeof BACKUP_STORES;

@@ -15,6 +15,9 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
+import { PORTFOLIO_LIMIT, isPortfolioEntry, type PortfolioEntry } from './portfolio.js';
+import { PROFILE_LIMIT, isProfileEvent, type ProfileEvent } from './user-profile.js';
+import { SECTION_LIMIT, isKnowledgeSection, type KnowledgeSection } from './knowledge-sections.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -23,7 +26,7 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', portfolios: 'droid-assist.portfolios', profile: 'droid-assist.user-profile', sections: 'droid-assist.knowledge-sections' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -354,4 +357,28 @@ export const loadTriggers = (): Trigger[] => listOf(readJson(KEYS.triggers), isT
 /** Persists the triggers, capped at TRIGGER_LIMIT. */
 export function saveTriggers(triggers: Trigger[]) {
   writeJson(KEYS.triggers, triggers.slice(0, TRIGGER_LIMIT));
+}
+
+/** Every actor's stored portfolio entries; invalid entries are dropped. */
+export const loadPortfolios = (): PortfolioEntry[] => listOf(readJson(KEYS.portfolios), isPortfolioEntry, PORTFOLIO_LIMIT);
+
+/** Persists the portfolio entries, capped at PORTFOLIO_LIMIT. */
+export function savePortfolios(entries: PortfolioEntry[]) {
+  writeJson(KEYS.portfolios, entries.slice(0, PORTFOLIO_LIMIT));
+}
+
+/** The stored user-profile events; invalid entries are dropped. */
+export const loadProfile = (): ProfileEvent[] => listOf(readJson(KEYS.profile), isProfileEvent, PROFILE_LIMIT);
+
+/** Persists the user-profile events, capped at PROFILE_LIMIT. */
+export function saveProfile(events: ProfileEvent[]) {
+  writeJson(KEYS.profile, events.slice(0, PROFILE_LIMIT));
+}
+
+/** The stored knowledge sections; invalid sections are dropped. */
+export const loadSections = (): KnowledgeSection[] => listOf(readJson(KEYS.sections), isKnowledgeSection, SECTION_LIMIT);
+
+/** Persists the knowledge sections, capped at SECTION_LIMIT. */
+export function saveSections(sections: KnowledgeSection[]) {
+  writeJson(KEYS.sections, sections.slice(0, SECTION_LIMIT));
 }

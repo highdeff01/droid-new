@@ -6,6 +6,7 @@ import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingP
 import { AgentBusPanel, SubagentReportPanel } from './bus-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
 import { StatsPanel } from './stats-panel.js';
+import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
 import styles from './droid-assist.module.css';
 
 /** The Droid Assist workspace: live screen + overlay, HUDs, workflow, gallery, agents and log. */
@@ -35,6 +36,8 @@ function AssistScreen() {
             <LearnedCoordsPanel engine={engine} />
             <LibraryPanel engine={engine} />
             <PatternsPanel engine={engine} />
+            <KnowledgePanel engine={engine} />
+            <ProfilePanel engine={engine} />
             <StatsPanel engine={engine} />
             <WatcherPanel engine={engine} />
             <TriggersPanel engine={engine} />
@@ -48,6 +51,7 @@ function AssistScreen() {
           <QwenThinkingPanel engine={engine} />
           <SupervisorPanel engine={engine} />
           <AgentsPanel engine={engine} />
+          <PortfoliosPanel engine={engine} />
           <LoopControlPanel engine={engine} />
           <SettingsPanel engine={engine} />
           <AgentBusPanel engine={engine} />

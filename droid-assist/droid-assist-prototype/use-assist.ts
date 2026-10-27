@@ -53,6 +53,7 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
+import { useKnowledge } from './use-knowledge.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -396,6 +397,12 @@ export function useAssist() {
   const staleHandledRef = useRef<ChangeAssessment | null>(null);
   /** Steps that already used their one re-proposal. */
   const reproposedRef = useRef(new Set<string>());
+  /** Portfolios, user-habit profile and knowledge sections; entries are attributed to the operation running now. */
+  const kb = useKnowledge({
+    source: () => ({ operation: goalRef.current.trim(), opId: planAtRef.current ? `plan_${planAtRef.current}` : null }),
+    model: () => settingsRef.current.aiModel,
+  });
+  const { recordAi, recordFor } = kb;
 
   supervisorRef.current = supervisor;
   timelineRef.current = timeline;
@@ -621,6 +628,7 @@ export function useAssist() {
       const text = verdictText(verdict);
       note({ step: step.name, kind: 'verdict', text, thinking: verdict.thinking });
       addLog(logSource, `Verdict on "${step.name}": ${text}`, verdict.success ? 'ok' : 'warn');
+      recordAi('result', `Verdict on "${step.name}": ${text}`, verdict.success);
       return verdict;
     } catch (error) {
       note({ step: step.name, kind: 'verdict', text: '', thinking: null, error: errorText(error) });
@@ -628,7 +636,7 @@ export function useAssist() {
       addLog(logSource, aiFailure(`No verdict for "${step.name}" — AI reflection failed`, error), 'error');
       return null;
     }
-  }, [addLog, askFor, note, reportParseFailure]);
+  }, [addLog, askFor, note, reportParseFailure, recordAi]);
 
   /** Replaces the habits (persisted by the effect above). */
   const commitHabits = useCallback((next: Habit[]) => {
@@ -644,6 +652,8 @@ export function useAssist() {
   const learnHabit = (step: WorkflowStep, verdict: StepVerdict) => {
     if (!stageOn('coords')) return;
     commitHabits(recordOutcome(habitsRef.current, { target: habitTarget(step), context: habitContext(), success: verdict.success, avoid: verdict.pattern_avoid, add: verdict.pattern_add }));
+    const lessons = [verdict.pattern_avoid && `avoid ${verdict.pattern_avoid}`, verdict.pattern_add && `add ${verdict.pattern_add}`].filter(Boolean);
+    if (lessons.length) kb.recordFor('coords', 'method', `"${habitTarget(step)}": ${lessons.join('; ')}`);
   };
 
   /** A verified target point strengthens its habit's remembered coordinates. */
@@ -730,11 +740,12 @@ export function useAssist() {
     try {
       const learned = await learnPatterns(askFor('supervisor'), runGoal, runSteps, verdict);
       if (learned.length) addPatterns(learned);
+      for (const p of learned) recordFor('supervisor', 'method', `${p.kind} ${p.pattern}`);
       addLog('Patterns', learned.length ? `AI learned ${learned.length} pattern(s): ${learned.map((p) => `${p.kind} "${p.pattern}"`).join('; ')}` : 'AI found no new pattern in this run', 'info');
     } catch (error) {
       addLog('Patterns', `AI unavailable — no patterns learned from this run: ${errorText(error)}`, 'warn');
     }
-  }, [addLog, addPatterns, askFor, autoSaveFlow, recordRun]);
+  }, [addLog, addPatterns, askFor, autoSaveFlow, recordRun, recordFor]);
 
   const triggerAbort = useCallback((reason: string) => {
     abortRef.current = true;
@@ -1107,6 +1118,7 @@ export function useAssist() {
     const before = framesRef.current[0] ?? null;
     const out = ladder ? await performWithRetries(step, actor, budget, dryRun) : await performIdentified(step, actor, budget, dryRun);
     learnFromOutcome(step, out, before);
+    kb.recordFor(actor, 'result', `"${step.name}": ${out.message}`, out.ok);
     void rememberTarget(step, out);
     if (!out.ok && !out.bridgeFailed) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
     if (out.halt || !aiOnline()) return out;
@@ -1666,12 +1678,19 @@ export function useAssist() {
   };
 
   /** The planning context a proposal is justified against; `redo` marks a re-proposal. */
-  const proposalContext = (redo?: string): ProposalContext => ({
+  const proposalContext = (actor: string, redo?: string): ProposalContext => ({
     goal: goalRef.current,
     change: currentChange(),
-    patterns: relevantPatterns(goalRef.current, patternsRef.current).map(patternLine),
+    patterns: [...relevantPatterns(goalRef.current, patternsRef.current).map(patternLine), ...crossReference(actor, goalRef.current)],
     redo,
   });
+
+  /** The knowledge sections and user profile cross-referenced before `actor` runs `operation`; the matched sections are logged. */
+  const crossReference = (actor: string, operation: string): string[] => {
+    const matched = kb.matchedSections(operation, actor);
+    if (matched.length) addLog(actor, `Cross-referenced knowledge section(s) before "${operation}": ${matched.join(', ')}`, 'info');
+    return kb.contextFor(operation, actor);
+  };
 
   /** Writes a proposal to the activity log (the timeline entry is recorded where the proposal is made). */
   const logProposal = (actor: string, step: WorkflowStep, p: Proposal, redo: boolean) =>
@@ -1688,7 +1707,7 @@ export function useAssist() {
   /** The model's what/why for `step` on the live screen, recorded on the timeline and in the log. */
   const proposeNow = async (actor: string, step: WorkflowStep, redo?: string): Promise<Proposal> => {
     const frame = framesRef.current[0] ?? null;
-    const p = await thought(step.name, () => proposeStep(askFor('executor'), frame, step, proposalContext(redo)), proposalText, 'proposal');
+    const p = await thought(step.name, () => proposeStep(askFor('executor'), frame, step, proposalContext(actor, redo)), proposalText, 'proposal');
     logProposal(actor, step, p, !!redo);
     return p;
   };
@@ -2208,6 +2227,8 @@ export function useAssist() {
       const total = ran.length;
       const what = dryRun ? 'verified on screen (not dispatched)' : 'executed';
       addLog('Goal reviewer', ok === total ? `All ${total} steps ${what}${goal ? ` for "${goal}"` : ''}` : `${ok}/${total} ${what} — re-plan the failed steps or let AI help clear blockers`, ok === total ? 'ok' : 'warn');
+      kb.recordFor('goal', 'result', `${ok}/${total} step(s) ${what}`, ok === total);
+      for (const s of kb.suggestions(goalRef.current)) addLog('Goal reviewer', `Suggestion: ${s}`, 'info');
     }
     await learnFromRun(ran, { dryRun, stopped: abortRef.current });
     await superviseRun();
@@ -2348,7 +2369,7 @@ export function useAssist() {
     planningRef.current = true;
     await withAi(async () => {
       try {
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine), ...crossReference('Planner', text.trim())], patternsRef.current), planSummary);
         if (planGuardRef.current.after(plan.steps) === 'duplicate') {
           addLog('Planner', `Re-plan guard: the plan for "${text.trim()}" is identical to the previous one — kept the current steps and will not ask the model again until the screen or a step changes`, 'warn');
           return;
@@ -2358,6 +2379,7 @@ export function useAssist() {
         const arrangement = expect.length ? `; arrangement: ${expect.map((e) => `"${e.element}" ${e.relation.replace('_', ' ')} "${e.anchor}"`).join(', ')}` : '';
         applyPlan(text, next, why, arrangement);
         planned = next.length > 0;
+        kb.recordAi('work', `Planned ${next.length} step(s) for "${text.trim()}" (${why})`);
       } catch (error) {
         addLog('Planner', aiFailure('AI plan failed — no steps created', error), 'error');
       } finally {
@@ -2651,6 +2673,7 @@ export function useAssist() {
       return;
     }
     setGoal('');
+    kb.noteSignal('command', goal.trim());
     if (command.kind === 'test') await testRoutes(parseTestSpec(command.target));
     else await COMMAND_RUNNERS[command.kind](command.target);
   };
@@ -2777,6 +2800,7 @@ export function useAssist() {
       return;
     }
     updateWatcher((w) => ({ ...w, proposals: patchProposal(w.proposals, id, { status: 'accepted' }) }));
+    kb.noteSignal('command', p.text);
     addLog('Screen watcher', `Accepted "${p.text}": ${done}`, 'ok');
   };
 
@@ -2784,6 +2808,7 @@ export function useAssist() {
     const p = watcherRef.current.proposals.find((x) => x.id === id && x.status === 'pending');
     if (!p) return;
     updateWatcher((w) => ({ ...w, proposals: patchProposal(w.proposals, id, { status: 'dismissed' }) }));
+    kb.noteSignal('correction', `dismissed proposal: ${p.text}`);
     addLog('Screen watcher', `Dismissed "${p.text}"`, 'info');
   };
 
@@ -2809,7 +2834,17 @@ export function useAssist() {
     flowRef.current = id;
     setCards((c) => [{ id, ...draftCard, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
     addLog('Library', `Saved "${draftCard.name}"`, 'ok');
+    kb.noteSignal('saved', draftCard.name);
     setDraftCard(null);
+  };
+
+  /** Removes a step at the user's hand: a correction of the plan, recorded in the user profile. */
+  const removeStep = (index: number) => {
+    const step = stepsRef.current[index];
+    if (!step) return;
+    stepsRef.current = stepsRef.current.filter((_, j) => j !== index);
+    setSteps(stepsRef.current);
+    kb.noteSignal('correction', `removed step: ${step.action} "${step.target ?? step.name}"`);
   };
 
   const loadCard = (card: SavedCard) => {
@@ -2953,6 +2988,7 @@ export function useAssist() {
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
+    knowledge: kb, removeStep,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
     bridgeOnline, verifyRealInput,
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
