@@ -1,5 +1,7 @@
 import type { StageMap } from './loop-control.js';
 import type { AiView } from './ai.js';
+import type { ExecutionMode } from './execution-mode.js';
+import type { AutoApplyBounds } from './aggressive.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
@@ -241,6 +243,10 @@ export interface AssistSettings {
   /** Drift: template search radius, in sample pixels of the 320x180 drift buffer. */
   driftRadius: number;
   monitorMode: MonitorMode;
+  /** How the assistant paces and grounds its work (separate from the capture monitor mode). */
+  executionMode: ExecutionMode;
+  /** The user's limits on what aggressive mode applies without asking. */
+  autoApply: AutoApplyBounds;
   /** Electron display id native capture takes screenshots from; null = the primary display. */
   displayId: string | null;
   /** How often the Screen watcher observes the live frame, in ms. */

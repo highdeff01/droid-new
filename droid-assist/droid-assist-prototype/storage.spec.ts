@@ -381,3 +381,37 @@ describe('run summaries', () => {
     expect(loadRunSummaries()).toEqual([]);
   });
 });
+
+describe('loadSettingsExecutionMode', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('persists a valid stored executionMode', () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ executionMode: 'watching' }));
+    expect(loadSettings(DEFAULTS).executionMode).toBe('watching');
+  });
+
+  it('falls back to thoughtful for an unknown or non-string executionMode', () => {
+    for (const bad of ['warp', 7]) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ executionMode: bad }));
+      expect(loadSettings(DEFAULTS).executionMode).toBe('thoughtful');
+    }
+  });
+
+  it('keeps a valid stored autoApply as given', () => {
+    const autoApply = { enabled: true, minConfidence: 0.6, maxShift: 0.1, maxPerRun: 2 };
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ autoApply }));
+    expect(loadSettings(DEFAULTS).autoApply).toEqual(autoApply);
+  });
+
+  it('sanitizes an invalid stored autoApply field by field to the defaults', () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ autoApply: { enabled: true, minConfidence: 3, maxShift: -1, maxPerRun: 0 } }));
+    expect(loadSettings(DEFAULTS).autoApply).toEqual({ enabled: true, minConfidence: 0.8, maxShift: 0.05, maxPerRun: 5 });
+  });
+
+  it('leaves monitorMode unaffected by executionMode', () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ executionMode: 'watching', monitorMode: 'background' }));
+    const loaded = loadSettings(DEFAULTS);
+    expect(loaded.executionMode).toBe('watching');
+    expect(loaded.monitorMode).toBe('background');
+  });
+});

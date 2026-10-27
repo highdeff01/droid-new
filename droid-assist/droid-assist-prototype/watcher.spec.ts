@@ -86,6 +86,33 @@ describe('observeScreen', () => {
   });
 });
 
+describe('observeScreenModeDirective', () => {
+  it('returns the mode directive from a reply with a mode object', async () => {
+    const fn = ask(JSON.stringify({ notes: [], proposals: [], mode: { mode: 'watching', reason: 'movie playing' } }));
+    const { mode } = await observeScreen(fn, frame, [], [], 'goal');
+    expect(mode).toEqual({ mode: 'watching', reason: 'movie playing' });
+  });
+
+  it('has no mode key when the reply has none or mode is blank', async () => {
+    const noMode = ask(JSON.stringify({ notes: [], proposals: [] }));
+    expect((await observeScreen(noMode, frame, [], [], 'goal')).mode).toBeUndefined();
+    const blankMode = ask(JSON.stringify({ notes: [], proposals: [], mode: { mode: '  ', reason: 'x' } }));
+    expect((await observeScreen(blankMode, frame, [], [], 'goal')).mode).toBeUndefined();
+  });
+
+  it('passes an unknown mode name through as given', async () => {
+    const fn = ask(JSON.stringify({ notes: [], proposals: [], mode: { mode: 'turbo', reason: 'why not' } }));
+    const { mode } = await observeScreen(fn, frame, [], [], 'goal');
+    expect(mode).toEqual({ mode: 'turbo', reason: 'why not' });
+  });
+
+  it('mentions watching, reacting and tracking in its system prompt', () => {
+    expect(WATCH_SYSTEM).toMatch(/watching/);
+    expect(WATCH_SYSTEM).toMatch(/reacting/);
+    expect(WATCH_SYSTEM).toMatch(/tracking/);
+  });
+});
+
 describe('mergeNotes', () => {
   const noteDraft = (text: string, kind: NoteKind = 'element'): NoteDraft => ({ kind, text });
 

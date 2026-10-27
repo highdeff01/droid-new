@@ -685,6 +685,7 @@ function BriefingItem({ b }: { b: Briefing }) {
     <li data-tone={b.outcome === 'unresolved' ? 'warn' : 'ok'}>
       <small>{clock(b.time)}</small> <b>{b.stepName}</b> <small>· {b.outcome}</small>
       {b.aiNote && <p role="alert">{b.aiNote}</p>}
+      {b.mode && <p><b>Mode:</b> {b.mode}</p>}
       <h4>Objectives</h4>
       <p><b>Goal:</b> {o.goal || '(none)'}</p>
       <ol>{o.sequence.map((s) => <li key={s.id}>{s.current ? <b>{s.action} "{s.target}" ← now</b> : `${s.action} "${s.target}" · ${s.status}`}</li>)}</ol>
