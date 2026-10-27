@@ -4,7 +4,7 @@ import type { LogEntry, WorkflowStep } from './types.js';
 import type { RunOutcome } from './triggers.js';
 import { applyDecision, createProject, injectInfo, isFinished, toPlanned, transition, type InjectionSource, type Project } from './project.js';
 import { decide, dropProject, enqueue, pendingFor, type ApprovalState, type Decided, type Decision } from './approval-queue.js';
-import { runProjectTurn, type PlanRequest, type TurnDeps } from './project-turn.js';
+import { STOPPED_NOTE, runProjectTurn, type PlanRequest, type TurnDeps } from './project-turn.js';
 import { loadApprovals, loadProjects, saveApprovals, saveProjects } from './storage.js';
 
 /** How often the project scheduler looks for a project whose turn is due. */
@@ -29,11 +29,12 @@ export interface ProjectEngineDeps {
   maxRetries: () => number;
 }
 
-/** Whether the scheduler may give the project a turn now. */
+/** Whether the scheduler may give the project a turn now; a project held by ■ Stop or the budget waits for Resume. */
 export function isReady(p: Project, pendingApprovals: number, now: number): boolean {
   if (isFinished(p)) return false;
   if (p.state === 'waiting-for-reply' && pendingApprovals > 0) return false;
-  return p.state !== 'on-hold' || now - p.updatedAt >= HOLD_RETRY_MS;
+  if (p.state !== 'on-hold') return true;
+  return !(p.history[0]?.note ?? '').startsWith(STOPPED_NOTE) && now - p.updatedAt >= HOLD_RETRY_MS;
 }
 
 /** Round robin: the ready project after `cursor` (wrapping), or null when none is ready. */
@@ -99,6 +100,7 @@ export function useProjects(deps: ProjectEngineDeps) {
       check: d.check,
       maxRetries: d.maxRetries(),
       update: (p) => patch(p.id, (stored) => mergeUpdate(stored, p)),
+      refresh: (p) => mergeUpdate(find(p.id) ?? p, p),
     };
   };
 

@@ -31,7 +31,12 @@ export interface TurnDeps {
   maxRetries: number;
   /** Every transition, as it happens. */
   update: (p: Project) => void;
+  /** The project with the info injected into it while the turn ran (kept by the engine). */
+  refresh: (p: Project) => Project;
 }
+
+/** Note prefix of a project put on hold by ■ Stop or a spent action budget; it waits for the user to resume it. */
+export const STOPPED_NOTE = 'Run stopped';
 
 type Step = { project: Project; end?: boolean };
 type Handler = (p: Project, deps: TurnDeps) => Promise<Step>;
@@ -69,17 +74,21 @@ async function planAndGate(p: Project, deps: TurnDeps, why: string | null, next:
   return { project: move(planned, next, `Planned ${steps.length} step(s)`, deps) };
 }
 
+/** A run cut short by ■ Stop or the action budget: on hold until the user resumes, never retried or failed. */
+const stopped = (p: Project, out: RunOutcome | null, label: string, deps: TurnDeps): Step | null =>
+  (out?.stopped ? { project: move(p, 'on-hold', `${STOPPED_NOTE} — ${runText(out, label)}`, deps), end: true } : null);
+
 /** A dry-run self-test of the steps, then replying with its result. */
 async function test(p: Project, deps: TurnDeps, label: string): Promise<Step> {
   const out = await deps.run(p, true);
-  return { project: move(p, 'replying', runText(out, label), deps, { lastRun: out ? { ok: out.ok, total: out.total } : { ok: 0, total: p.steps.length } }) };
+  return stopped(p, out, label, deps) ?? { project: move(p, 'replying', runText(out, label), deps, { lastRun: out ? { ok: out.ok, total: out.total } : { ok: 0, total: p.steps.length } }) };
 }
 
 /** Real input through the retry ladder: follow-up when every step verified, else retrying. */
 async function act(p: Project, deps: TurnDeps): Promise<Step> {
   const out = await deps.run(p, false);
   const lastRun = out ? { ok: out.ok, total: out.total } : { ok: 0, total: p.steps.length };
-  return { project: move(p, passed(out) ? 'follow-up' : 'retrying', runText(out, 'Run'), deps, { lastRun }) };
+  return stopped(p, out, 'Run', deps) ?? { project: move(p, passed(out) ? 'follow-up' : 'retrying', runText(out, 'Run'), deps, { lastRun }) };
 }
 
 /** Retry within the budget, then an alternative method, then terminal failure. */
@@ -95,7 +104,7 @@ async function retry(p: Project, deps: TurnDeps): Promise<Step> {
 /** The goal check after a run: complete when nothing is left to do, else the next turn (or failure at the turn cap). */
 async function followUp(p: Project, deps: TurnDeps): Promise<Step> {
   const check = await deps.check(p);
-  const checked = recordCheck({ ...p, turn: p.turn + 1 }, check);
+  const checked = recordCheck(deps.refresh({ ...p, turn: p.turn + 1 }), check);
   const done = completionCheck(checked, check, deps.pending(checked));
   if (done.done) return { project: move(checked, 'complete', done.reason, deps), end: true };
   const fed = check.complete ? checked : injectInfo(checked, { source: 'main-ai', from: 'goal check', text: check.reason });

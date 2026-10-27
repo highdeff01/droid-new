@@ -17,6 +17,7 @@ function baseDeps(): TurnDeps {
     check: vi.fn(async (): Promise<GoalCheck> => ({ complete: true, progress: true, reason: 'goal verified', thinking: '' })),
     maxRetries: 2,
     update: vi.fn(),
+    refresh: (p: Project) => p,
   };
 }
 
@@ -94,6 +95,23 @@ describe('runProjectTurn', () => {
     const result = await runProjectTurn(createProject('N', 'G'), deps);
     expect(result.state).toBe('on-hold');
     expect(result.history[0].note).toBe('Stopped: planner exploded');
+  });
+
+  it('a run stopped by ■ Stop or the budget puts the project on hold after one run, never retried or failed', async () => {
+    const deps = baseDeps();
+    (deps.run as ReturnType<typeof vi.fn>).mockImplementation(async (_p: Project, dryRun: boolean): Promise<RunOutcome> => ({ ok: dryRun ? 1 : 0, total: 1, dryRun, stopped: !dryRun }));
+    const result = await runProjectTurn(createProject('N', 'G'), deps);
+    expect(result.state).toBe('on-hold');
+    expect(result.history[0].note).toMatch(/^Run stopped/);
+    expect(deps.run).toHaveBeenCalledTimes(2);
+  });
+
+  it('info injected while the turn ran keeps the goal check from completing and feeds the next turn', async () => {
+    const deps = baseDeps();
+    deps.refresh = (p) => injectInfo(p, { source: 'agent', from: 'Drift agent', text: 'also add slide 4' });
+    const result = await runProjectTurn(createProject('N', 'G'), deps);
+    expect(result.state).toBe('working');
+    expect(result.injections.filter((i) => i.consumedTurn === undefined).map((i) => i.text)).toContain('also add slide 4');
   });
 
   it('injected info appears in the PlanRequest context of the next turn', async () => {
