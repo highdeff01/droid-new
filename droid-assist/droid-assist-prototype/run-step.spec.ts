@@ -70,7 +70,7 @@ describe('runStep', () => {
   it('fails with the bridge error when there is no live screen', async () => {
     const { d } = deps([], { capture: async () => { throw new Error('Desktop bridge not connected — connect the bridge'); } });
     const out = await runStep(step, d);
-    expect(out).toMatchObject({ ok: false, executed: false });
+    expect(out).toMatchObject({ ok: false, executed: false, bridgeFailed: true });
     expect(out.message).toMatch(/connect the bridge/);
   });
 
@@ -80,8 +80,37 @@ describe('runStep', () => {
     const { d } = deps([frame(1, image(100, 60))], { dispatch: false });
     const out = await runStep(step, d);
     expect(out).toMatchObject({ ok: true, executed: false });
-    expect(out.message).toMatch(/not dispatched/);
+    expect(out.message).toMatch(/dry run — not dispatched/);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('dispatching: every input action goes to /api/replay and the result is the bridge reply', async () => {
+    const actions: WorkflowStep['action'][] = ['click', 'double_click', 'type', 'key', 'scroll', 'drag', 'move'];
+    for (const action of actions) {
+      const fetchSpy = completedRun();
+      vi.stubGlobal('fetch', fetchSpy);
+      const s: WorkflowStep = { id: action, name: action, action, x: 0.3, y: 0.4, ...(action === 'drag' ? { endX: 0.6, endY: 0.7 } : {}), ...(action === 'key' ? { text: 'ctrl+shift+s' } : {}), status: 'pending' };
+      const out = await runStep(s, deps([frame(1, image(100, 60))], { bridgeToken: 'tok' }).d);
+      expect(fetchSpy.mock.calls[0][0]).toBe('http://pc/api/replay');
+      expect(fetchSpy.mock.calls[0][1].headers.Authorization).toBe('Bearer tok');
+      expect(out).toMatchObject({ ok: true, executed: true });
+      expect(out.message).toMatch(/on the PC .*run r$/);
+    }
+  });
+
+  it('dispatching: a bridge error fails the step with that error, never a simulated ok', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(json({ success: true, run: { id: 'r9', status: 'running' } }))
+      .mockResolvedValueOnce(json({ success: true, run: { id: 'r9', status: 'failed', error: 'window lost focus' } })));
+    const out = await runStep(step, deps([frame(1, image(100, 60))]).d);
+    expect(out).toMatchObject({ ok: false, executed: false, bridgeFailed: true, message: 'PC failed: window lost focus' });
+  });
+
+  it('dispatching: an unreachable bridge fails the step loudly', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    const out = await runStep(step, deps([frame(1, image(100, 60))]).d);
+    expect(out).toMatchObject({ ok: false, executed: false, bridgeFailed: true });
+    expect(out.message).toMatch(/unreachable: Failed to fetch/);
   });
 
   it('logs a missing visible change after the action', async () => {

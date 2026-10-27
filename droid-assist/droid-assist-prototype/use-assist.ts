@@ -6,7 +6,8 @@ import { AD_CYCLE, demoAd, demoDrag, demoFileAt, demoPlayButton, drawDemoDesktop
 import { AI_PLAN_SOURCE, calculate, generateCard, patternLine, planFromGoal, planRemaining, relevantPatterns, relocateTarget, replanDrag, replanStep, uid } from './planner.js';
 import { checkMoved, sameElement, verifyArrangement, type Expectation, type MovedElement } from './rearrange.js';
 import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi } from './ai.js';
-import type { AiReply, AiStatus, AskFn, AskRequest } from './ai.js';
+import type { AiReply, AiStatus, AskFn, AskRequest, HistoryChangeFn } from './ai.js';
+import { historyChangeText } from './ai-history.js';
 import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type StageId } from './loop-control.js';
 import { DEFAULT_AI_MAX_IN_FLIGHT, createAiQueue, type AiQueue, type AiQueueStats } from './ai-queue.js';
 import { confirmTarget, decidePopup, describeScreen, judgeStep, reflectOn, verifyGoal, type GoalCheck, type PopupDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
@@ -16,16 +17,19 @@ import { DEFAULT_MAX_ITERATIONS, autoContinue, judgeCheck, type ContinueStop, ty
 import { DEFAULT_CHANGE_CELLS, assessChange, changeText, detectChange, type ChangeAssessment, type ScreenChange } from './screen-change.js';
 import { localProposal, proposalText, proposeStep, type Proposal, type ProposalContext } from './proposal.js';
 import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './thinking-timeline.js';
-import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd } from './bridge.js';
-import { dragEndError, runStep, type Grounding, type StepOutcome } from './run-step.js';
+import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, selfTestBridge, type BridgeResult } from './bridge.js';
+import { DRY_RUN, dragEndError, runStep, type Grounding, type StepOutcome } from './run-step.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
 import { parseCommand } from './commands.js';
 import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, fullJpeg, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
-import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
+import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, dispatchState, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
 import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './recorder.js';
-import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveSettings, saveWatcher } from './storage.js';
+import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveSettings, saveTriggers, saveWatcher } from './storage.js';
+import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
+import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveWatcher } from './storage.js';
+import { appendSummary, runSummary, type RunSummary } from './run-stats.js';
 import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, reorderSteps, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
 import { forgetElement, listElements, rememberElement, type ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
@@ -36,6 +40,7 @@ import type { Box } from './assist-ai.js';
 import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
+import { REVERSE_ACTOR, reverseOffer } from './reverse.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, newPattern, runVerdict, upsertCard } from './flow-memory.js';
 import { SUPERVISOR_INTERVAL_MS, SUPERVISOR_TICK_MS, applyFixes, executorBusy as supervisorExecutorBusy, habitPatterns, isConfident, reviewRun, reviewText, staleFixes, type PendingFix, type SupervisorReview, type SupervisorState } from './supervisor.js';
 import { BUS_AGENTS, elementLine, forward, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
@@ -148,6 +153,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   driftMatched: MATCHED,
   driftRadius: SEARCH_RADIUS,
   monitorMode: 'app',
+  displayId: null,
   watchMs: 5000,
   autoAct: false,
   aiHelp: true,
@@ -166,6 +172,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   maxIterations: DEFAULT_MAX_ITERATIONS,
   stepRetries: DEFAULT_STEP_RETRIES,
   aiMaxInFlight: DEFAULT_AI_MAX_IN_FLIGHT,
+  aiTimeoutMs: DEFAULT_AI_TIMEOUT_MS,
   stages: DEFAULT_STAGES,
   errorUrl: '',
   errorForwarding: false,
@@ -191,6 +198,9 @@ export function useAssist() {
   /** The app the assistant is attached to via /use. */
   const [target, setTarget] = useState<string | null>(null);
   const [history, setHistory] = useState<ActionRecord[]>(() => loadHistory());
+  /** Normalized point the last executed pointer action left the cursor at: the previously-focused point of the next action. */
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const [reversing, setReversing] = useState(false);
   const [shotCount, setShotCount] = useState(0);
   const [frames, setFrames] = useState<Frame[]>([]);
   const [pinned, setPinned] = useState<Frame[]>([]);
@@ -223,8 +233,11 @@ export function useAssist() {
   const [mapDraft, setMapDraft] = useState<Box | null>(null);
   /** Per-target, per-app habits learned from every executed step, applied to planning and grounding. */
   const [habits, setHabits] = useState<Habit[]>(() => loadHabits());
+  /** One summary per finished run (newest first), for the Stats panel. */
+  const [runs, setRuns] = useState<RunSummary[]>(loadRunSummaries);
   /** The Screen watcher's notes, proposals and test results (persisted). */
   const [watcher, setWatcher] = useState<WatcherState>(loadWatcher);
+  const [triggers, setTriggers] = useState<Trigger[]>(loadTriggers);
   const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
@@ -248,6 +261,8 @@ export function useAssist() {
   const [subRunning, setSubRunning] = useState(false);
   const [plays, setPlays] = useState(0);
   const [armed, setArmed] = useState(false);
+  /** The last health check or bridge call reached the PC (and the PC did not fail it). */
+  const [bridgeOnline, setBridgeOnline] = useState(false);
   const [aborted, setAborted] = useState(false);
   const [aiStatus, setAiStatus] = useState<AiStatus>({ state: 'checking', detail: 'Connecting to the AI endpoint…' });
   const [aiAnswer, setAiAnswer] = useState('');
@@ -297,13 +312,16 @@ export function useAssist() {
   const armedRef = useRef(armed);
   const abortedRef = useRef(aborted);
   const autoBudgetRef = useRef<ActionBudget>(createBudget(settings.actionBudget));
-  const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage, renderView));
+  /** Trims and resets of the AI history land here (wired to the log once addLog exists). */
+  const historyChangeRef = useRef<HistoryChangeFn>(() => undefined);
+  const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage, renderView, (c) => historyChangeRef.current(c)));
+  const [aiHistory, setAiHistory] = useState(() => aiSessionRef.current.history());
   /** Cancels every in-flight model call when aborted; replaced by a fresh one after each cancel. */
   const aiCtrlRef = useRef(new AbortController());
   /** Loop control: one controller per stage, so unchecking a stage cancels only its in-flight calls. */
   const stageCtrlsRef = useRef(createStageControllers());
   /** Shared model-call queue: executor/grounding first, pipeline next, agents last; at most aiMaxInFlight running. */
-  const [aiQueueApi] = useState(() => createAiQueue(settings.aiMaxInFlight, setAiQueue));
+  const [aiQueueApi] = useState(() => createAiQueue(settings.aiMaxInFlight, setAiQueue, settings.aiTimeoutMs));
   const aiQueueRef = useRef<AiQueue>(aiQueueApi);
   const aiStatusRef = useRef(aiStatus);
   const logRef = useRef(log);
@@ -327,6 +345,12 @@ export function useAssist() {
   const targetRef = useRef(target);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
+  /** This app session (one page load), stamped on every run summary. */
+  const sessionRef = useRef(uid('session'));
+  /** When the current run started; null between runs. */
+  const runStartRef = useRef<number | null>(null);
+  /** The saved flow (card id) the current steps came from or were saved as; null for a fresh plan. */
+  const flowRef = useRef<string | null>(null);
   /** Auto Act's verify → plan → continue loop while it is running; null between loops. */
   const autoLoopRef = useRef<AutoLoop | null>(null);
   const timelineRef = useRef(timeline);
@@ -349,6 +373,12 @@ export function useAssist() {
   const identifySentRef = useRef<Array<{ box: Box; time: number }>>([]);
   const identifyBusyRef = useRef(false);
   const watcherRef = useRef(watcher);
+  const triggersRef = useRef(triggers);
+  /** A triggered run is in flight; no other trigger fires until it finishes. */
+  const triggerBusyRef = useRef(false);
+  /** The frame id element triggers last evaluated, and each watched element's state on it. */
+  const triggerFrameRef = useRef<number | null>(null);
+  const elementSnapsRef = useRef(new Map<string, ElementSnapshot>());
   const aiBusyRef = useRef(aiBusy);
   aiBusyRef.current = aiBusy;
   /** A watcher observation or test is in flight; ticks never overlap and Auto Act waits for it. */
@@ -393,11 +423,14 @@ export function useAssist() {
   // Persistence: settings, log and cards.
   useEffect(() => saveSettings(settings), [settings]);
   useEffect(() => aiQueueRef.current.setLimit(settings.aiMaxInFlight), [settings.aiMaxInFlight]);
+  useEffect(() => aiQueueRef.current.setTimeoutMs(settings.aiTimeoutMs), [settings.aiTimeoutMs]);
   useEffect(() => saveLog(log), [log]);
   useEffect(() => savePatterns(patterns), [patterns]);
   useEffect(() => saveFamiliar(familiar), [familiar]);
   useEffect(() => saveHabits(habits), [habits]);
+  useEffect(() => saveRunSummaries(runs), [runs]);
   useEffect(() => saveWatcher(watcher), [watcher]);
+  useEffect(() => saveTriggers(triggers), [triggers]);
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
   }, [cards]);
@@ -433,6 +466,22 @@ export function useAssist() {
 
   const addLog = useCallback((from: string, message: string, tone: LogEntry['tone'] = 'info', shots?: string[]) => {
     setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}) }, ...l].slice(0, LOG_LIMIT));
+  }, []);
+
+  /** Every trim or reset of the AI conversation history is logged and shown. */
+  historyChangeRef.current = (change) => {
+    setAiHistory(aiSessionRef.current.history());
+    addLog('AI history', historyChangeText(change), change.reason === 'manual' ? 'info' : 'warn');
+  };
+
+  /** Keeps only the newest `keep` messages of the AI conversation. */
+  const trimAiHistory = useCallback((keep: number) => aiSessionRef.current.trim(keep), []);
+
+  /** Cancels in-flight model calls and clears the AI conversation entirely. */
+  const resetAiSession = useCallback(() => {
+    aiCtrlRef.current.abort();
+    aiCtrlRef.current = new AbortController();
+    aiSessionRef.current.reset();
   }, []);
 
   /** Error forwarding: reports carry the recent log and the current frame. */
@@ -495,10 +544,11 @@ export function useAssist() {
     const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage), req.signal);
     setAiCalls((n) => n + 1);
     try {
-      const reply = await aiQueueRef.current.run(stage, () => {
+      const reply = await aiQueueRef.current.run(stage, (timeoutMs) => {
         const { aiUrl, aiModel, aiView } = settingsRef.current;
-        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView] }, { ...req, context, signal });
+        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs }, { ...req, context, signal });
       }, signal);
+      setAiHistory(aiSessionRef.current.history());
       const { aiModel } = settingsRef.current;
       if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${aiModel}` });
       return reply;
@@ -527,9 +577,14 @@ export function useAssist() {
 
   const note = useCallback((entry: Omit<ThinkingEntry, 'id' | 'time'>) => setTimeline((t) => addEntry(t, entry)), []);
 
-  /** A reply that held no JSON is logged as an AI parse failure with its truncated raw text — never shown as an answer. */
+  /**
+   * A reply that held no JSON is logged as an AI parse failure with its truncated raw text — never shown as an answer —
+   * and counts toward the session's stale-context guard.
+   */
   const reportParseFailure = useCallback((step: string, error: unknown) => {
-    if (error instanceof AiParseError) addLog('AI parse', `Unparseable reply for "${step}" (raw, truncated): ${error.raw}`, 'error');
+    if (!(error instanceof AiParseError)) return;
+    addLog('AI parse', `Unparseable reply for "${step}" (raw, truncated): ${error.raw}`, 'error');
+    aiSessionRef.current.noteParse(false);
   }, [addLog]);
 
   /**
@@ -540,7 +595,10 @@ export function useAssist() {
     try {
       const r = await call();
       const text = summary(r);
-      if (text !== null) note({ step, kind, text, thinking: r.thinking });
+      if (text !== null) {
+        note({ step, kind, text, thinking: r.thinking });
+        aiSessionRef.current.noteParse(true);
+      }
       return r;
     } catch (error) {
       note({ step, kind, text: '', thinking: null, error: errorText(error) });
@@ -641,20 +699,31 @@ export function useAssist() {
   const autoSaveFlow = useCallback((runGoal: string, runSteps: WorkflowStep[]) => {
     const { cards: next, replaced } = upsertCard(cardsRef.current, flowCard(runGoal, runSteps));
     cardsRef.current = next;
+    flowRef.current = next[0].id;
     setCards(next);
     addLog('Library', `Flow saved: "${next[0].name}" (${runSteps.length} step(s), drift-corrected)${replaced ? ` — updated the existing "${replaced.name}"` : ''}`, 'ok');
   }, [addLog]);
 
+  /** Appends the finished run's summary (goal, steps, duration, outcome, flow) to the persisted run records. */
+  const recordRun = useCallback((runGoal: string, runSteps: WorkflowStep[], opts: { dryRun: boolean; stopped: boolean }) => {
+    const startedAt = runStartRef.current ?? Date.now();
+    runStartRef.current = null;
+    const summary = runSummary({ goal: runGoal, steps: runSteps, startedAt, ...opts, session: sessionRef.current, flowId: flowRef.current });
+    setRuns((r) => appendSummary(r, summary));
+  }, []);
+
   /**
    * Run memory: a successful real run is saved as a flow; a failed one records its failure
    * pattern instead. Either way the model is asked for lessons; its failure never blocks saving.
+   * Every finished run, remembered or not, leaves a run summary.
    */
   const learnFromRun = useCallback(async (runSteps: WorkflowStep[], opts: { dryRun: boolean; stopped: boolean }) => {
     const verdict = runVerdict(runSteps, opts);
-    if (verdict === 'ignored' || !stageOn('supervisor')) return;
     const runGoal = goalRef.current.trim();
-    if (verdict === 'success') autoSaveFlow(runGoal, runSteps);
-    else {
+    if (verdict === 'success' && stageOn('supervisor')) autoSaveFlow(runGoal, runSteps);
+    recordRun(runGoal, runSteps, opts);
+    if (verdict === 'ignored' || !stageOn('supervisor')) return;
+    if (verdict === 'failed') {
       const lesson = failurePattern(runGoal, runSteps);
       addPatterns([lesson]);
       addLog('Patterns', `Run failed — not saved as a flow. Learned: avoid ${lesson.pattern}`, 'warn');
@@ -666,7 +735,7 @@ export function useAssist() {
     } catch (error) {
       addLog('Patterns', `AI unavailable — no patterns learned from this run: ${errorText(error)}`, 'warn');
     }
-  }, [addLog, addPatterns, askFor, autoSaveFlow]);
+  }, [addLog, addPatterns, askFor, autoSaveFlow, recordRun]);
 
   const triggerAbort = useCallback((reason: string) => {
     abortRef.current = true;
@@ -814,12 +883,15 @@ export function useAssist() {
 
   const adDismissed = () => Math.floor(tickRef.current / AD_CYCLE) === dismissedCycleRef.current;
 
-  /** Appends one performed mouse/keyboard action to the persistent history. */
+  /** Appends one performed mouse/keyboard action to the persistent history, with the pointer's prior point, screen size and prior text for reversal. */
   const recordAction = useCallback((step: WorkflowStep, out: StepOutcome, actor: string, via: ActionRecord['via'], srcW: number, srcH: number) => {
     const kind = INPUT_ACTIONS[step.action];
     if (!kind) return;
     const end = kind === 'drag' ? dragEnd(step, srcW, srcH) : null;
-    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, x: Math.round(out.target.x * srcW), y: Math.round(out.target.y * srcH), ...(end ? { endX: end.x, endY: end.y } : {}), text: step.text, source: actor, via, ok: out.ok, message: out.message };
+    const px = (p: { x: number; y: number }) => ({ x: Math.round(p.x * srcW), y: Math.round(p.y * srcH) });
+    const prev = lastPointerRef.current ? px(lastPointerRef.current) : null;
+    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message: out.message };
+    if (POINTER_ACTIONS.has(step.action)) lastPointerRef.current = out.end ?? out.target;
     setHistory((h) => appendHistory(h, rec));
   }, []);
 
@@ -899,7 +971,7 @@ export function useAssist() {
       aim(p);
       await animator().idle();
     }
-    if (dryRun) return { ok: true, executed: false, message: 'verified on the demo screen — dry run, not dispatched', target: p, ...(step.action === 'drag' ? { end: { x: step.endX!, y: step.endY! } } : {}) };
+    if (dryRun) return { ok: true, executed: false, message: `verified on the demo screen — ${DRY_RUN}`, target: p, ...(step.action === 'drag' ? { end: { x: step.endX!, y: step.endY! } } : {}) };
     if (step.action === 'drag') return demoDragStep(step, p, live);
     const message = demoEffect(step, p);
     const ok = !/blocked|nothing/.test(message);
@@ -953,14 +1025,18 @@ export function useAssist() {
     }
   };
 
-  /** A real-input step on the demo desktop or through the bridge. */
+  /**
+   * A real-input step on the demo desktop or through the bridge. Armed with a bridge URL, every
+   * step goes to the bridge whatever the screen source; the demo simulates only dry runs or when
+   * no bridge is configured. A bridge failure fails the step loudly, never a simulated success.
+   */
   const performInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
-    if (sourceRef.current === 'demo') {
+    const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
+    if (sourceRef.current === 'demo' && (dryRun || !bridgeUrl)) {
       const out = await performOnDemo(step, dryRun);
       if (out.executed) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
       return out;
     }
-    const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
     if (!bridgeUrl) return refused(step, BRIDGE_REQUIRED);
     const gate = dryRun ? null : gateRealInput(budget);
     if (gate) return refused(step, gate);
@@ -969,7 +1045,10 @@ export function useAssist() {
       bridgeUrl,
       bridgeToken,
       capture: async () => {
-        const f = await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current);
+        // Native multi-monitor capture: verify on the chosen display's own frames, which carry
+        // its desktop origin so input lands on that display; otherwise the bridge's screenshot.
+        const native = sourceRef.current === 'screen' && captureRef.current?.kind === 'native' ? framesRef.current[0] : undefined;
+        const f = native ?? await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current);
         size = { w: f.srcW, h: f.srcH };
         return f;
       },
@@ -986,7 +1065,17 @@ export function useAssist() {
       gateRetry: dryRun ? undefined : () => gateRealInput(budget),
     });
     if (out.executed) recordAction(step, out, actor, 'bridge', size.w, size.h);
+    noteBridge(step, out, actor);
     return out;
+  };
+
+  /** Tracks the bridge's reachability from a bridge step; a bridge failure is logged and forwarded as a bridge error. */
+  const noteBridge = (step: WorkflowStep, out: Performed, actor: string) => {
+    if (out.executed) setBridgeOnline(true);
+    if (!out.bridgeFailed) return;
+    setBridgeOnline(false);
+    addLog(actor, `Bridge error — "${step.name}" FAILED, nothing was simulated: ${out.message}`, 'error');
+    captureError({ kind: 'bridge', message: out.message, goal: goalRef.current, step: step.name });
   };
 
   /** Remembers the element `name` at `p` in the familiar-elements memory, with a patch of `frame` around it. */
@@ -1020,12 +1109,11 @@ export function useAssist() {
     const out = ladder ? await performWithRetries(step, actor, budget, dryRun) : await performIdentified(step, actor, budget, dryRun);
     learnFromOutcome(step, out, before);
     void rememberTarget(step, out);
-    if (!out.ok) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
+    if (!out.ok && !out.bridgeFailed) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
     if (out.halt || !aiOnline()) return out;
     const verdict = await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
     if (verdict && !dryRun) learnHabit(step, verdict);
     return { ...out, verdict };
-    return out;
   };
 
   /** Why the retry ladder may not climb another rung (abort, kill-switch, executor unchecked); null when it may. */
@@ -1335,7 +1423,7 @@ export function useAssist() {
     setTimeout(() => setHighlight((h) => (h && h.x === el.x && h.y === el.y ? null : h)), 3000);
     const where = `${gridRef(el)} (${pct(el.x)}, ${pct(el.y)})`;
     if (!armedRef.current) {
-      addLog('Test click', `"${el.name}" highlighted at ${where} — real input disarmed, dry run (nothing sent)`, 'info');
+      addLog('Test click', `"${el.name}" highlighted at ${where} — real input disarmed, ${DRY_RUN}`, 'info');
       return;
     }
     // Guardrails first: an aborted engine reports the abort from performStep, never the stage.
@@ -1352,6 +1440,41 @@ export function useAssist() {
   };
 
   const elements = listElements(steps, annotations, familiar);
+  /** The newest real action and how it reverses; null when there is none or the newest is itself a reversal. */
+  const reverse = reverseOffer(history);
+
+  /**
+   * Reverses the most recent real action: its inverse steps run through performStep (abort,
+   * executor stage, arm and a fresh budget), as a dry run unless armed. Before and after
+   * screenshots go into the log; a non-invertible action is reported as "cannot reverse".
+   */
+  const reverseLast = async () => {
+    const offer = reverseOffer(history);
+    if (!offer) return addLog(REVERSE_ACTOR, 'Nothing to reverse — no real action since the last reversal', 'warn');
+    const { record, reversal } = offer;
+    if (!reversal.ok) return addLog(REVERSE_ACTOR, `Cannot reverse ${record.action} at (${record.x}, ${record.y})px — ${reversal.reason}`, 'warn');
+    if ((record.via === 'demo') !== (sourceRef.current === 'demo')) return addLog(REVERSE_ACTOR, `Cannot reverse — the ${record.action} ran on the ${record.via === 'demo' ? 'demo desktop' : 'desktop bridge'}, which is not the current screen source`, 'error');
+    const dryRun = !armedRef.current;
+    setReversing(true);
+    try {
+      const before = await finalFrame(REVERSE_ACTOR);
+      const budget = createBudget(settingsRef.current.actionBudget);
+      const results: string[] = [];
+      let ok = true;
+      for (const step of reversal.steps) {
+        const out = await performStep(step, REVERSE_ACTOR, budget, dryRun);
+        results.push(out.message);
+        ok = out.ok;
+        if (!out.ok) break;
+      }
+      const after = await finalFrame(REVERSE_ACTOR);
+      const mode = dryRun ? 'dry run (real input disarmed), nothing sent' : ok ? 'reversed' : 'reversal failed';
+      const shots = [before?.url, after?.url].filter((u): u is string => !!u);
+      addLog(REVERSE_ACTOR, `${mode}: ${record.action} at (${record.x}, ${record.y})px — ${reversal.summary} — ${results.join('; ')}`, ok ? (dryRun ? 'info' : 'ok') : 'error', shots);
+    } finally {
+      setReversing(false);
+    }
+  };
   /** Targets the coordinate learner has observed, newest first. */
   const learned = learnedTargets(familiar);
 
@@ -1680,6 +1803,7 @@ export function useAssist() {
   /** Starts a new plan: a fresh baseline for "changed since the plan" and fresh re-proposal allowances. */
   const markPlan = () => {
     autoLoopRef.current = null;
+    flowRef.current = null;
     planAtRef.current = Date.now();
     reproposedRef.current = new Set();
     staleHandledRef.current = null;
@@ -1760,6 +1884,7 @@ export function useAssist() {
     }
     if (j.kind === 'fail') failUnjustified(idx, 'Auto-Actor', j.reason);
     else {
+      runStartRef.current ??= Date.now();
       updateStep(idx, { status: 'running' });
       const out = await perform(j.step, 'Auto-Actor', autoBudgetRef.current, dry, j.proposal);
       applyOutcome(idx, out, dry, frame);
@@ -1873,6 +1998,11 @@ export function useAssist() {
   useEffect(() => {
     captureRef.current?.setInterval(intervalMs);
   }, [intervalMs]);
+
+  // The running native capture follows the chosen display live (Settings or the HUD quick-switch).
+  useEffect(() => {
+    captureRef.current?.selectDisplay(settings.displayId);
+  }, [settings.displayId]);
 
   useEffect(() => () => captureRef.current?.stop(), []);
 
@@ -2032,34 +2162,46 @@ export function useAssist() {
    * dispatch, re-verify). Self-test, or any run while disarmed, verifies but sends nothing.
    */
   const replay = async (selfTest = false) => {
-    const label = selfTest ? 'Self-test' : 'Replay';
+    await runReplay(selfTest, { label: selfTest ? 'Self-test' : 'Replay', goal: runGoalOf() });
+  };
+
+  /**
+   * The replay pipeline shared by the Replay buttons and triggered runs. `label` names the run in the
+   * log and `goal` is what auto-continue verifies. Resolves the steps verified or executed, or null
+   * when the run was refused before any step (nothing to run, ABORTED, bridge down).
+   */
+  const runReplay = async (selfTest: boolean, { label, goal: runGoal }: { label: string; goal: string }): Promise<RunOutcome | null> => {
     if (!stepsRef.current.length) {
       addLog(label, 'Nothing to replay — record or plan a workflow first', 'warn');
-      return;
+      return null;
     }
     if (abortedRef.current) {
-      addLog('Safety', 'Replay refused — ABORTED is active; clear the abort first', 'error');
-      return;
+      addLog('Safety', `${label} refused — ABORTED is active; clear the abort first`, 'error');
+      return null;
     }
-    if (sourceRef.current !== 'demo') {
+    const viaBridge = sourceRef.current !== 'demo' || (!selfTest && armedRef.current && !!settingsRef.current.bridgeUrl);
+    if (viaBridge) {
       const health = await checkBridge(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken);
+      setBridgeOnline(health.ok);
       if (!health.ok) {
         addLog(label, `${health.message} — no step was executed`, 'error');
         captureError({ kind: 'bridge', message: health.message, goal: goalRef.current });
-        return;
+        return null;
       }
     }
     const dryRun = selfTest || !armedRef.current;
-    if (dryRun && !selfTest) addLog('Safety', 'Real input disarmed — replay runs as a dry run (nothing is sent)', 'warn');
+    if (dryRun && !selfTest) addLog('Safety', `Real input disarmed — replay runs as a ${DRY_RUN}`, 'warn');
     const budget = createBudget(settingsRef.current.actionBudget);
     abortRef.current = false;
+    runStartRef.current = Date.now();
     reproposedRef.current = new Set();
+    replayingRef.current = true;
     setReplaying(true);
     const shots: Frame[] = [];
-    const runGoal = runGoalOf();
     const looping = continueEnabled() && !selfTest;
     const { ran, ok } = looping ? await continueToGoal(runGoal, budget, dryRun, label, shots) : await runSteps(budget, dryRun, label, shots);
     setActiveIndex(null);
+    replayingRef.current = false;
     setReplaying(false);
     const picks = shots.map((f, i) => ({ f, score: i === 0 ? 1 : frameDistance(shots[i - 1].data, f.data) })).sort((a, b) => b.score - a.score).slice(0, 3).map((p) => p.f);
     if (picks.length) setPinned(picks);
@@ -2070,6 +2212,7 @@ export function useAssist() {
     }
     await learnFromRun(ran, { dryRun, stopped: abortRef.current });
     await superviseRun();
+    return { ok, total: ran.length, dryRun, stopped: abortRef.current };
   };
 
   /** One pass over the current steps in order, checking abortRef between steps. */
@@ -2294,7 +2437,7 @@ export function useAssist() {
       if (!verdict) return { ...base, status: 'fail', message: `${step.name}: no AI verdict — not counted as a pass`, point: last };
       if (!verdict.success) return { ...base, status: 'fail', message: `${step.name}: AI verdict FAILED`, avoid: verdict.pattern_avoid, add: verdict.pattern_add, point: last };
     }
-    return { ...base, status: 'pass', message: `${plan.steps.length} step(s) ${dryRun ? 'verified (dry run, nothing sent)' : 'executed'} and verified`, avoid: verdict?.pattern_avoid, add: verdict?.pattern_add, point: last };
+    return { ...base, status: 'pass', message: `${plan.steps.length} step(s) ${dryRun ? `verified (${DRY_RUN})` : 'executed'} and verified`, avoid: verdict?.pattern_avoid, add: verdict?.pattern_add, point: last };
   };
 
   /** The links or route stops of a request: as given, or listed by the model on the live frame. */
@@ -2397,6 +2540,7 @@ export function useAssist() {
   /** Captures the real screen: Electron native capture, else the browser picker. Resolves whether it started. */
   const shareScreen = async (): Promise<boolean> => {
     const capture = createScreenCapture();
+    capture.selectDisplay(settingsRef.current.displayId);
     try {
       await capture.start(monitorInterval(settingsRef.current.monitorMode, settingsRef.current.captureMs), { onImage: onScreenImage, onLost: onCaptureLost });
     } catch (error) {
@@ -2410,9 +2554,13 @@ export function useAssist() {
     return true;
   };
 
-  /** Switches the monitor to real desktop screenshots from the bridge, after a health check. */
-  const connectBridge = async (): Promise<boolean> => {
-    const health = await checkBridge(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken);
+  /**
+   * Switches the monitor to real desktop screenshots from the bridge, after a health check.
+   * `target` connects to a bridge just verified by the wizard, before its settings re-render.
+   */
+  const connectBridge = async (target?: { url: string; token: string }): Promise<boolean> => {
+    const { url, token } = target ?? { url: settingsRef.current.bridgeUrl, token: settingsRef.current.bridgeToken };
+    const health = await checkBridge(url, token);
     if (!health.ok) {
       addLog('Bridge', health.message, 'error');
       captureError({ kind: 'bridge', message: health.message });
@@ -2423,13 +2571,39 @@ export function useAssist() {
     return true;
   };
 
+  /**
+   * Verify real input: one harmless cursor move to the screen centre through the bridge, gated
+   * like every real action (abort, arm, executor stage, a one-action budget). Disarmed it is a
+   * dry run and sends nothing. Reports and returns the bridge's confirmation or its error.
+   */
+  const verifyRealInput = async (): Promise<BridgeResult> => {
+    const report = (r: BridgeResult, tone: LogEntry['tone'] = r.ok ? 'ok' : 'error') => {
+      addLog('Verify real input', r.message, tone);
+      return r;
+    };
+    if (abortedRef.current) return report({ ok: false, message: 'Aborted — real input not sent' });
+    if (!armedRef.current) return report({ ok: false, message: `Real input disarmed — ${DRY_RUN}` }, 'warn');
+    if (!stageOn('executor')) return report({ ok: false, message: `${stageOff('executor')} — not sent` });
+    const gate = gateRealInput(createBudget(1));
+    if (gate) return report({ ok: false, message: gate });
+    const { bridgeUrl, bridgeToken } = settingsRef.current;
+    const shot = await captureDesktop(bridgeUrl, bridgeToken);
+    const out = shot.ok ? await selfTestBridge(bridgeUrl, bridgeToken, shot.frame.width || 1920, shot.frame.height || 1080) : { ok: false, message: `Real input NOT verified — ${shot.message}` };
+    setBridgeOnline(out.ok);
+    if (!out.ok) captureError({ kind: 'bridge', message: out.message });
+    return report(out);
+  };
+
   // Bridge takeover: when a configured bridge answers, frames come from the real desktop unless the user chose the demo.
   useEffect(() => {
     const url = settings.bridgeUrl;
+    setBridgeOnline(false);
     if (!url) return undefined;
     let cancelled = false;
     void checkBridge(url, settings.bridgeToken).then((r) => {
-      if (cancelled || !r.ok || demoChosenRef.current || sourceRef.current !== 'demo') return;
+      if (cancelled) return;
+      setBridgeOnline(r.ok);
+      if (!r.ok || demoChosenRef.current || sourceRef.current !== 'demo') return;
       attachSource('bridge');
       addLog('Monitor', 'Desktop bridge online — screenshots now come from the real screen', 'ok');
     });
@@ -2632,32 +2806,159 @@ export function useAssist() {
 
   const saveCard = () => {
     if (!draftCard) return;
-    setCards((c) => [{ id: uid('card'), ...draftCard, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
+    const id = uid('card');
+    flowRef.current = id;
+    setCards((c) => [{ id, ...draftCard, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
     addLog('Library', `Saved "${draftCard.name}"`, 'ok');
     setDraftCard(null);
   };
 
   const loadCard = (card: SavedCard) => {
     expectRef.current = [];
-    setSteps(card.steps.map((s) => ({ ...s, status: 'pending' as const })));
+    stepsRef.current = card.steps.map((s) => ({ ...s, status: 'pending' as const }));
+    setSteps(stepsRef.current);
     markPlan();
+    flowRef.current = card.id;
     addLog('Library', `Loaded "${card.name}"`);
   };
+
+  const setTriggerList = (next: Trigger[]) => {
+    triggersRef.current = next;
+    setTriggers(next);
+  };
+  const patchTrigger = (id: string, fn: (t: Trigger) => Trigger) => setTriggerList(triggersRef.current.map((t) => (t.id === id ? fn(t) : t)));
+  const targetLabel = (t: Trigger) => (t.target.kind === 'draft' ? 'the draft card' : `flow "${cardsRef.current.find((c) => c.id === (t.target as { cardId: string }).cardId)?.name ?? 'deleted flow'}"`);
+
+  /** Creates a trigger from the Triggers panel; appear/disappear need an element mapped with its template frame. */
+  const addTrigger = (draft: TriggerDraft) => {
+    if (!draft.name.trim()) return addLog('Triggers', 'Name the trigger first', 'warn');
+    if (draft.kind === 'schedule' && !(Number.isFinite(draft.at) && draft.at >= 0)) return addLog('Triggers', `"${draft.name.trim()}" not created — set a valid run time`, 'warn');
+    if (draft.kind === 'element') {
+      const el = elementMapRef.current.find((e) => e.id === draft.elementId);
+      if (!el) return addLog('Triggers', `"${draft.name.trim()}" not created — pick a mapped element`, 'warn');
+      if (draft.event !== 'change' && !el.frame) return addLog('Triggers', `"${draft.name.trim()}" not created — "${el.name}" was mapped without a live frame, so its presence cannot be judged; re-map it on the live screen`, 'warn');
+    }
+    const t = createTrigger(draft, uid('trigger'));
+    setTriggerList([t, ...triggersRef.current].slice(0, TRIGGER_LIMIT));
+    addLog('Triggers', `Created "${t.name}": run ${targetLabel(t)} ${conditionText(t, elementMapRef.current)} (cooldown ${t.cooldownSec} s, ${t.maxRuns ? `at most ${t.maxRuns} run(s)` : 'no run limit'})`, 'ok');
+  };
+
+  const toggleTrigger = (id: string) => {
+    const t = triggersRef.current.find((x) => x.id === id);
+    if (!t) return;
+    // Re-enabling a trigger that hit its run limit starts a fresh count.
+    patchTrigger(id, (x) => (x.enabled ? { ...x, enabled: false } : { ...x, enabled: true, runs: x.maxRuns && x.runs >= x.maxRuns ? 0 : x.runs }));
+    addLog('Triggers', `"${t.name}" ${t.enabled ? 'disabled' : 'enabled'}`, t.enabled ? 'info' : 'ok');
+  };
+
+  const deleteTrigger = (id: string) => {
+    const t = triggersRef.current.find((x) => x.id === id);
+    if (!t) return;
+    setTriggerList(triggersRef.current.filter((x) => x.id !== id));
+    addLog('Triggers', `Deleted "${t.name}"`, 'info');
+  };
+
+  /** The goal a triggered run verifies: the flow's description or name, else the draft card's goal. */
+  const triggeredGoal = (card?: SavedCard) => (card ? card.description.trim() || card.name : runGoalOf());
+
+  /**
+   * Fires trigger `id` through the same replay pipeline as the Replay button (grounding, execution,
+   * reflect, verdict, auto-continue, retry ladder, arm/disarm, budget, abort, loop-control stages).
+   * A cooldown, run limit, ABORTED or a missing target skips it (logged; a schedule moves on).
+   */
+  const fireTrigger = async (id: string, why: string) => {
+    const t = triggersRef.current.find((x) => x.id === id);
+    if (!t) return;
+    if (triggerBusyRef.current || executorBusy()) {
+      addLog('Triggers', `"${t.name}" skipped (${why}) — a run is in progress`, 'warn');
+      return;
+    }
+    const now = Date.now();
+    const skip = fireGate(t, now);
+    const target = resolveTarget(t.target, cardsRef.current, draftCard);
+    const refusal = skip ? skip.detail : abortedRef.current ? 'ABORTED is active; clear the abort first' : 'error' in target ? `cannot run — ${target.error}` : null;
+    if (refusal !== null || 'error' in target) {
+      addLog(!skip && abortedRef.current ? 'Safety' : 'Triggers', `"${t.name}" skipped (${why}): ${refusal}`, skip?.reason === 'cooldown' ? 'info' : 'warn');
+      patchTrigger(id, (x) => afterSkip(x, now));
+      return;
+    }
+    const fired = afterFire(t, now);
+    patchTrigger(id, () => fired);
+    addLog('Triggers', `Fired "${t.name}" (${why}) — running ${target.name}, run ${fired.runs}${fired.maxRuns ? ` of ${fired.maxRuns}` : ''}`, 'info');
+    if (!fired.enabled && t.enabled) addLog('Triggers', `"${t.name}" ${fired.kind === 'schedule' && fired.everySec === 0 ? 'was a one-time schedule' : `reached its run limit (${fired.maxRuns})`} — disabled`, 'info');
+    if (target.card) loadCard(target.card);
+    triggerBusyRef.current = true;
+    try {
+      const result = outcomeText(await runReplay(false, { label: `Trigger "${t.name}"`, goal: triggeredGoal(target.card) }));
+      addLog('Triggers', `"${t.name}" result: ${result.text}`, result.tone);
+    } finally {
+      triggerBusyRef.current = false;
+    }
+  };
+
+  /** The element triggers whose event the newest frame shows; each frame is evaluated once, the first as a baseline. */
+  const elementEvents = (): Array<{ id: string; why: string }> => {
+    const frame = framesRef.current[0];
+    if (!frame || frame.id === triggerFrameRef.current) return [];
+    triggerFrameRef.current = frame.id;
+    const watching = triggersRef.current.filter((t): t is ElementTrigger => t.kind === 'element' && t.enabled);
+    const snaps = elementSnapsRef.current;
+    [...snaps.keys()].filter((id) => !watching.some((t) => t.elementId === id)).forEach((id) => snaps.delete(id));
+    const out: Array<{ id: string; why: string }> = [];
+    for (const el of elementMapRef.current.filter((e) => watching.some((t) => t.elementId === e.id))) {
+      const { snapshot, events } = observeElement(el, snaps.get(el.id), frame);
+      snaps.set(el.id, snapshot);
+      watching.filter((t) => t.elementId === el.id && events.includes(t.event)).forEach((t) => out.push({ id: t.id, why: `"${el.name}" ${t.event === 'change' ? 'changed' : `${t.event}ed`} on screen` }));
+    }
+    return out;
+  };
+
+  /**
+   * One trigger round: element triggers against the live frame (only while the Screen watcher stage
+   * is on and a capture is live), then due schedules. During a run, element events are logged as
+   * skipped and due schedules wait until the executor is free.
+   */
+  const triggerTick = async () => {
+    const events = stageOn('screenWatcher') && captureLive() && !pausedWhileHidden() ? elementEvents() : [];
+    if (triggerBusyRef.current || executorBusy()) {
+      events.forEach((e) => addLog('Triggers', `"${triggersRef.current.find((t) => t.id === e.id)?.name}" skipped (${e.why}) — a run is in progress`, 'warn'));
+      return;
+    }
+    const now = Date.now();
+    const due = triggersRef.current.filter((t): t is ScheduleTrigger => t.kind === 'schedule' && scheduleDue(t, now)).map((t) => ({ id: t.id, why: `scheduled for ${new Date(t.at).toLocaleTimeString()}` }));
+    for (const d of [...events, ...due]) await fireTrigger(d.id, d.why);
+  };
+  const triggerTickRef = useRef(triggerTick);
+  triggerTickRef.current = triggerTick;
+
+  // Trigger loop while any trigger is enabled.
+  const anyTriggerOn = triggers.some((t) => t.enabled);
+  useEffect(() => {
+    if (!anyTriggerOn) return undefined;
+    const id = setInterval(() => void triggerTickRef.current(), TRIGGER_TICK_MS);
+    return () => clearInterval(id);
+  }, [anyTriggerOn]);
 
   return {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
-    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, briefings, patterns, deletePattern, supervisor, superviseRun,
-    ruler, continuing, habits, deleteHabit, pinHabit,
+    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
+    ruler, continuing, habits, deleteHabit, pinHabit, runs,
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     watcher, acceptProposal, dismissProposal, testProposal,
+    triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
+    aiHistory, trimAiHistory, resetAiSession,
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
+    bridgeOnline, verifyRealInput,
+    /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
+    dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
+    reverse, reverseLast, reversing,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
   };
 }

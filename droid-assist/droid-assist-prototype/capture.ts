@@ -32,6 +32,9 @@ export interface CapturedImage {
   data: ImageData;
   srcW: number;
   srcH: number;
+  /** Physical position of the captured display on the virtual desktop; absent = 0,0. */
+  originX?: number;
+  originY?: number;
 }
 
 /** Callbacks a capture delivers to. */
@@ -48,21 +51,24 @@ export interface ScreenCapture {
   /** Begins capturing every `intervalMs`; rejects when capture cannot start. */
   start(intervalMs: number, handlers: CaptureHandlers): Promise<void>;
   setInterval(intervalMs: number): void;
+  /** Routes capture to a display (null = primary); ignored by getDisplayMedia, whose prompt picks the screen. */
+  selectDisplay(id: string | null): void;
   /** Stops capturing; onLost is not called for a requested stop. */
   stop(): void;
 }
 
 function toImage(frame: NativeFrame): CapturedImage {
   const data = new ImageData(Uint8ClampedArray.from(frame.pixels), SAMPLE_W, SAMPLE_H);
-  return { time: frame.time, url: frame.url, full: frame.url, data, srcW: frame.srcW, srcH: frame.srcH };
+  return { time: frame.time, url: frame.url, full: frame.url, data, srcW: frame.srcW, srcH: frame.srcH, originX: frame.originX, originY: frame.originY };
 }
 
-/** Electron capture: the main process screenshots the display and pushes frames, unthrottled. */
+/** Electron capture: the main process screenshots the chosen display and pushes frames, unthrottled. */
 export function nativeCapture(api: NativeCaptureApi): ScreenCapture {
   return {
     kind: 'native',
     start: (intervalMs, handlers) => api.startCapture(intervalMs, (frame) => handlers.onImage(toImage(frame)), (reason) => handlers.onLost(reason)),
     setInterval: (intervalMs) => api.setCaptureInterval(intervalMs),
+    selectDisplay: (id) => api.selectDisplay(id),
     stop: () => api.stopCapture(),
   };
 }
@@ -137,6 +143,7 @@ export function displayMediaCapture(media: MediaDevices = navigator.mediaDevices
       schedule(intervalMs);
     },
     setInterval: (intervalMs) => { if (stream) schedule(intervalMs); },
+    selectDisplay: () => {},
     stop: release,
   };
 }

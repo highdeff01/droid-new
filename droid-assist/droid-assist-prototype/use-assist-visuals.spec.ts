@@ -48,7 +48,7 @@ describe('AI visual presence during runs (demo desktop, AI offline)', () => {
     const result = await replayed([click, type, move], false);
     const { trail, cursor, log, history } = result.current;
     expect(history).toHaveLength(0);
-    expect(log.filter((l) => /dry run, not dispatched/.test(l.message)).length).toBeGreaterThanOrEqual(3);
+    expect(log.filter((l) => /dry run — not dispatched/.test(l.message)).length).toBeGreaterThanOrEqual(3);
     expect(trail.filter((p) => p.click)).toEqual([at(0.5, 0.62)]);
     expect(trail.filter((p) => p.typed)).toEqual([at(0.5, 0.62)]);
     expect(trail.filter((p) => !p.click && !p.typed).length).toBeGreaterThanOrEqual(24);
@@ -137,7 +137,7 @@ describe('Auto Act continuation', () => {
 
   async function autoActing(settings: Record<string, unknown> = {}) {
     const hooks: { onFrame?: (f: NativeFrame) => void } = {};
-    const api: NativeCaptureApi = { startCapture: vi.fn(async (_ms, onFrame) => { hooks.onFrame = onFrame; }), setCaptureInterval: vi.fn(), stopCapture: vi.fn() };
+    const api: NativeCaptureApi = { startCapture: vi.fn(async (_ms, onFrame) => { hooks.onFrame = onFrame; }), setCaptureInterval: vi.fn(), stopCapture: vi.fn(), listDisplays: vi.fn(async () => []), selectDisplay: vi.fn() };
     window.droidNative = api;
     localStorage.setItem('droid-assist.settings', JSON.stringify({ stages: { screenWatcher: false, supervisor: false }, ...settings }));
     vi.useFakeTimers({ toFake: ['Date'] });

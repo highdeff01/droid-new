@@ -4,6 +4,7 @@ import type { AiStatus } from './ai.js';
 import { MONITOR_MODES } from './capture.js';
 import { insecureBridgeUrl } from './bridge.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
+import { DisplayPicker } from './display-picker.js';
 import styles from './droid-assist.module.css';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
@@ -42,6 +43,7 @@ export function MonitorStatus({ engine }: { engine: AssistEngine }) {
           {(Object.keys(MONITOR_MODES) as MonitorMode[]).map((m) => <option key={m} value={m}>{MONITOR_MODES[m].label}</option>)}
         </select>
       </label>
+      <DisplayPicker engine={engine} compact />
       <span>⏱ every <b>{intervalMs} ms</b></span>
       <span>📸 <b>{shotCount}</b> screenshots</span>
       <span>Source: <b>{SOURCE_LABEL[source]}</b></span>
@@ -72,11 +74,46 @@ export function AiStopButton({ engine }: { engine: AssistEngine }) {
   );
 }
 
+/**
+ * Persistent real-input indicator: "Real input ACTIVE" only while armed, the bridge is connected
+ * and the executor stage is on; otherwise "Dry run" with the reason. Plus the end-to-end
+ * "Verify real input" self-test (one harmless cursor move through the bridge).
+ */
+export function RealInputIndicator({ engine }: { engine: AssistEngine }) {
+  const { dispatch } = engine;
+  return (
+    <>
+      <strong className={styles.realInput} data-real={dispatch.real} aria-live="polite" title={dispatch.reason}>
+        {dispatch.real ? '⚡ Real input ACTIVE' : '🧪 Dry run'} <small>{dispatch.reason}</small>
+      </strong>
+      <button type="button" onClick={() => void engine.verifyRealInput()} title="Sends one harmless cursor move through the bridge and reports the PC's confirmation">
+        ✓ Verify real input
+      </button>
+    </>
+ * Reverse: offered right after a real action; a dry run unless real input is armed. A
+ * non-invertible action says "cannot reverse" with the reason instead of a button.
+ */
+export function ReverseControl({ engine }: { engine: AssistEngine }) {
+  const { reverse, armed, reversing } = engine;
+  if (!reverse) return null;
+  const { record, reversal } = reverse;
+  const what = `${record.action} at (${record.x}, ${record.y})px`;
+  if (!reversal.ok) {
+    return <span className={styles.syncDetail} aria-label="Reverse last action" title={reversal.reason}>↶ Last {what}: cannot reverse — {reversal.reason}</span>;
+  }
+  return (
+    <button type="button" aria-label="Reverse last action" onClick={() => void engine.reverseLast()} disabled={reversing} title={reversal.summary}>
+      ↶ Reverse {what}{armed ? '' : ' (dry run)'}
+    </button>
+  );
+}
+
 /** Safety controls: one-click arm/disarm of real input, emergency stop and the ABORTED state. */
 export function SafetyControls({ engine }: { engine: AssistEngine }) {
   const { armed, aborted, settings } = engine;
   return (
     <div className={styles.safety} data-armed={armed} data-aborted={aborted} aria-live="assertive">
+      <RealInputIndicator engine={engine} />
       <button type="button" className={armed ? styles.danger : ''} onClick={engine.toggleArmed} aria-pressed={armed} title="Real input is only sent to the PC while armed; disarmed runs are dry runs">
         {armed ? '🔴 Real input ARMED — click to disarm' : '🟢 Dry run (disarmed) — click to arm real input'}
       </button>
@@ -144,6 +181,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
       <InsecureBridgeWarning bridgeUrl={settings.bridgeUrl} />
       <div className={styles.hud2}>
         <SafetyControls engine={engine} />
+        <ReverseControl engine={engine} />
         <AiStatusBadge status={aiStatus} />
         <SyncStatus level={engine.sync.level} detail={engine.sync.detail} />
         <label><input type="checkbox" checked={settings.autoAct} onChange={(e) => setSettings({ ...settings, autoAct: e.target.checked })} disabled={aiOff} /> Auto act{aiOff && ' (AI unavailable)'}</label>
