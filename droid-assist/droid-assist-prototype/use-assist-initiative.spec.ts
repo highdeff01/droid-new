@@ -2,7 +2,9 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useAssist } from './use-assist.js';
 import type { NativeCaptureApi, NativeFrame } from './electron/capture-api.js';
-import type { WorkflowStep } from './types.js';
+import type { Frame, WorkflowStep } from './types.js';
+import { selfTestStep, testTargets } from './self-test.js';
+import type { MappedElement } from './element-map-studio.js';
 
 vi.mock('./grounding.js', async (orig) => ({ ...(await orig<typeof import('./grounding.js')>()), boxedFrames: vi.fn(async (f: unknown) => ({ full: f, crop: f })) }));
 
@@ -169,6 +171,25 @@ describe('AI initiative: self-testing and the heavy element tester', () => {
     expect(result.current.habits.some((h) => h.target === 'Play button')).toBe(false);
     expect(result.current.history).toHaveLength(0);
   }, 30_000);
+
+  it('a guardrail refusal is not measured as unreliability: no report, no run summary', async () => {
+    const result = await mountDemo();
+    act(() => result.current.toggleStage('executor', false));
+    let report: unknown = 'unset';
+    await act(async () => {
+      report = await result.current.stressTest({ name: 'Play button', x: 0.5, y: 0.62 });
+    });
+    expect(report).toBeUndefined();
+    expect(result.current.initiative.stress).toHaveLength(0);
+    expect(result.current.runs).toHaveLength(0);
+    expect(initiativeLog(result).some((m) => /^Stress test of "Play button" stopped — /.test(m))).toBe(true);
+  }, 20_000);
+
+  it('a self-test of a mapped element carries the screenshot it was mapped on', () => {
+    const frame = { id: 7 } as unknown as Frame;
+    const [t] = testTargets([{ name: 'Save', box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, frame } as unknown as MappedElement], []);
+    expect(selfTestStep(t).refFrame).toBe(frame);
+  });
 });
 
 describe('AI initiative: workflow creation and workarounds', () => {
@@ -177,7 +198,8 @@ describe('AI initiative: workflow creation and workarounds', () => {
   it('a successful run becomes a candidate, is agent-verified, then proposed as a pack; accepting saves it to the Library', async () => {
     const result = await mountDemo();
     act(() => result.current.setGoal('play the demo video'));
-    act(() => result.current.setSteps([click]));
+    const ref = { id: 1, time: 0, url: '', data: new ImageData(new Uint8ClampedArray(320 * 180 * 4), 320, 180), srcW: 1920, srcH: 1080, source: 'demo' } as Frame;
+    act(() => result.current.setSteps([{ ...click, refFrame: ref }]));
     await act(() => result.current.replay(false));
     expect(initiativeLog(result).some((m) => /learned candidate ".*" \(1 step\(s\)\) — an agent verifies it before it is proposed/.test(m))).toBe(true);
     expect(result.current.initiative.proposals.filter((p) => p.category === 'workflow')).toHaveLength(0);
@@ -194,6 +216,16 @@ describe('AI initiative: workflow creation and workarounds', () => {
     await act(() => result.current.scanNow());
     expect(result.current.initiative.proposals.filter((p) => p.category === 'workflow')).toHaveLength(1);
   }, 30_000);
+
+  it('a dry-run sequence with no screenshot of its target is not proposed: the agent cannot confirm the target', async () => {
+    const result = await mountDemo();
+    act(() => result.current.setGoal('press the ghost'));
+    act(() => result.current.setSteps([{ ...click, name: 'Press ghost', target: 'Ghost', x: 0.03, y: 0.03 }]));
+    await act(() => result.current.replay(false));
+    await act(() => result.current.scanNow());
+    expect(result.current.initiative.proposals.filter((p) => p.category === 'workflow')).toHaveLength(0);
+    expect(initiativeLog(result).some((m) => /not proposed — agent verification failed: FAIL "Press ghost" — no reference screenshot/.test(m))).toBe(true);
+  }, 20_000);
 
   it('with Workflow creation unchecked nothing is learned', async () => {
     const result = await mountDemo();

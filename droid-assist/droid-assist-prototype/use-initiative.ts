@@ -37,7 +37,7 @@ export interface InitiativeDeps {
   setSteps: (steps: WorkflowStep[]) => void;
   goal: () => string;
   /** The engine's gated execution path (abort, executor stage, arm, budget). */
-  performStep: (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean) => Promise<StepOutcome>;
+  performStep: (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean) => Promise<StepOutcome & { halt?: boolean }>;
   highlight: (p: { x: number; y: number; label: string }) => void;
   testTargets: () => TestTarget[];
   known: () => KnownPoint[];
@@ -51,6 +51,15 @@ export interface InitiativeDeps {
 
 type Draft = Omit<InitiativeProposal, 'id' | 'time' | 'status'>;
 type Applied = { ok: boolean; message: string };
+/** A learned workflow waiting for verification, with each step's reference screenshot from the run (never stored in the pack). */
+type Candidate = { pack: Omit<WorkflowPack, 'checks'>; frames: Record<string, Frame> };
+
+/** Each step's template: its recorded reference, else the screenshot taken just before it ran. */
+const templates = (steps: WorkflowStep[]): Record<string, Frame> =>
+  Object.fromEntries(steps.flatMap((s) => {
+    const f = s.refFrame ?? s.beforeFrame;
+    return f ? [[s.id, f]] : [];
+  }));
 
 /**
  * AI initiative: periodic (and AI-requested) screen scans, self-tests of mapped and familiar
@@ -65,7 +74,7 @@ export function useInitiative(d: InitiativeDeps) {
   const budgetRef = useRef<ActionBudget>(createBudget(d.settings().actionBudget));
   const testedRef = useRef<Record<string, number>>({});
   /** Workflows learned from successful runs, waiting for the agent to verify them. */
-  const candidatesRef = useRef<Array<Omit<WorkflowPack, 'checks'>>>([]);
+  const candidatesRef = useRef<Candidate[]>([]);
   const tickRef = useRef<() => Promise<number | undefined>>(async () => undefined);
   const renewRef = useRef(() => {});
   useEffect(() => saveInitiative(initiative), [initiative]);
@@ -89,7 +98,7 @@ export function useInitiative(d: InitiativeDeps) {
     const dryRun = dryRunFor(category);
     if (!(category === 'selfTest' && d.settings().selfTestMode === 'background')) d.highlight({ x: step.x, y: step.y, label: step.target ?? step.name });
     const out = await d.performStep(step, `${INITIATIVE_SOURCE} (${CATEGORY_NAME[category]}${dryRun ? ', dry run' : ''})`, budgetRef.current, dryRun);
-    if (out.executed && step.target) d.recordHabit(step.target, out.ok);
+    if (!dryRun && !out.halt && step.target) d.recordHabit(step.target, out.ok);
     if (category === 'selfTest' && step.target) testedRef.current[step.target] = Date.now();
     return { ok: out.ok, message: out.message };
   };
@@ -235,11 +244,14 @@ export function useInitiative(d: InitiativeDeps) {
     for (const candidate of queued) await verifyAndPropose(candidate);
   };
 
-  const verifyAndPropose = async (candidate: Omit<WorkflowPack, 'checks'>) => {
+  const verifyAndPropose = async ({ pack: candidate, frames }: Candidate) => {
     const verifier = createBudget(d.settings().actionBudget);
     const { verified, pack } = await verifyPack(candidate, async (step) => {
       if (!SCREEN_ACTIONS.has(step.action)) return { ok: true, message: 'no screen target — nothing to verify' };
-      const out = await d.performStep({ ...step, status: 'pending' }, `${INITIATIVE_SOURCE} (workflow verifier, dry run)`, verifier, true);
+      const refFrame = frames[step.id];
+      if (!refFrame) return { ok: false, message: 'no reference screenshot from the run — the target cannot be confirmed' };
+      // The step's screenshot from the run is the template: the dry run fails when the target is no longer there.
+      const out = await d.performStep({ ...step, refFrame, status: 'pending' }, `${INITIATIVE_SOURCE} (workflow verifier, dry run)`, verifier, true);
       return { ok: out.ok, message: out.message };
     });
     if (!verified) {
@@ -264,8 +276,8 @@ export function useInitiative(d: InitiativeDeps) {
     const succeeded = steps.every((s) => (dryRun ? s.status !== 'failed' : s.status === 'done' || s.status === 'drift'));
     if (failed || !succeeded || !d.stageOn('workflowCreation')) return;
     const candidate = workflowCandidate(goal, steps.map(storableStep), d.cards(), stateRef.current.proposals);
-    if (!candidate || candidatesRef.current.some((c) => c.name === candidate.name)) return;
-    candidatesRef.current.push(candidate);
+    if (!candidate || candidatesRef.current.some((c) => c.pack.name === candidate.name)) return;
+    candidatesRef.current.push({ pack: candidate, frames: templates(steps) });
     record('workflow', `learned candidate "${candidate.name}" (${candidate.steps.length} step(s)) — an agent verifies it before it is proposed`, true, 'info');
   };
 
@@ -314,6 +326,7 @@ export function useInitiative(d: InitiativeDeps) {
     const results: StressResult[] = [];
     const ran: WorkflowStep[] = [];
     let stopped = false;
+    let refusal = '';
     try {
       d.highlight({ x: target.x, y: target.y, label: target.name });
       for (const step of stressSteps(target, d.settings().stressCycles)) {
@@ -322,13 +335,21 @@ export function useInitiative(d: InitiativeDeps) {
           break;
         }
         const out = await d.performStep(step, `${INITIATIVE_SOURCE} (stress test${dryRun ? ', dry run' : ''})`, budget, dryRun);
+        if (out.halt) {
+          // A guardrail refusal says nothing about the element: stop without counting it.
+          refusal = out.message;
+          stopped = true;
+          break;
+        }
         results.push({ action: step.action, ok: out.ok });
         ran.push({ ...step, status: out.ok ? 'done' : 'failed' });
-        if (out.executed) d.recordHabit(target.name, out.ok);
+        if (!dryRun) d.recordHabit(target.name, out.ok);
       }
     } finally {
       busyRef.current = false;
     }
+    if (refusal) d.addLog(INITIATIVE_SOURCE, `Stress test of "${target.name}" stopped — ${refusal}`, 'warn');
+    if (!results.length) return undefined;
     const report = stressReport(target.name, results, dryRun);
     update((s) => ({ ...s, stress: [report, ...s.stress].slice(0, STRESS_LIMIT) }));
     d.recordRun(`Stress test "${target.name}"`, ran, { dryRun, stopped }, startedAt);

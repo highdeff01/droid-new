@@ -1,4 +1,4 @@
-import type { FamiliarElement, StepAction, WorkflowStep } from './types.js';
+import type { FamiliarElement, Frame, StepAction, WorkflowStep } from './types.js';
 import { boxCenter, type MappedElement } from './element-map-studio.js';
 import { uid } from './planner.js';
 import type { StressReport } from './initiative.js';
@@ -8,11 +8,13 @@ export interface TestTarget {
   name: string;
   x: number;
   y: number;
+  /** The screenshot the element was mapped on: the template its position is checked against. */
+  frame?: Frame;
 }
 
-/** Mapped elements first, then familiar targets not already mapped by name. */
+/** Mapped elements first (with the frame they were mapped on), then familiar targets not already mapped by name. */
 export function testTargets(mapped: MappedElement[], familiar: FamiliarElement[]): TestTarget[] {
-  const fromMap = mapped.map((m) => ({ name: m.name, ...boxCenter(m.box) }));
+  const fromMap = mapped.map((m) => ({ name: m.name, ...boxCenter(m.box), ...(m.frame ? { frame: m.frame } : {}) }));
   const names = new Set(fromMap.map((t) => t.name.toLowerCase()));
   return [...fromMap, ...familiar.filter((f) => !names.has(f.name.toLowerCase())).map((f) => ({ name: f.name, x: f.x, y: f.y }))];
 }
@@ -22,8 +24,8 @@ export function nextSelfTest(targets: TestTarget[], lastTested: Record<string, n
   return targets.reduce<TestTarget | null>((best, t) => (!best || (lastTested[t.name] ?? 0) < (lastTested[best.name] ?? 0) ? t : best), null);
 }
 
-/** The click a self-test sends at a target. */
-export const selfTestStep = (t: TestTarget): WorkflowStep => ({ id: uid('selftest'), name: `Self-test: click "${t.name}"`, action: 'click', target: t.name, x: t.x, y: t.y, status: 'pending' });
+/** The click a self-test sends at a target, checked against the frame it was mapped on when there is one. */
+export const selfTestStep = (t: TestTarget): WorkflowStep => ({ id: uid('selftest'), name: `Self-test: click "${t.name}"`, action: 'click', target: t.name, x: t.x, y: t.y, status: 'pending', ...(t.frame ? { refFrame: t.frame } : {}) });
 
 /** Text the heavy element tester types into a target. */
 export const STRESS_TEXT = 'droid';
