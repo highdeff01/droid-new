@@ -14,12 +14,16 @@ export const BACKUP_STORES = {
   habits: { key: 'droid-assist.habits', label: 'Habits', shape: 'list' },
   familiar: { key: 'droid-assist.familiar', label: 'Familiar elements', shape: 'list' },
   elementMap: { key: 'droid-assist.element-map', label: 'Element map', shape: 'list' },
+  accessPaths: { key: 'droid-assist.access-paths', label: 'Access paths', shape: 'list' },
   cards: { key: 'droid-assist.cards', label: 'Saved flow cards', shape: 'list' },
   patterns: { key: 'droid-assist.patterns', label: 'Learned patterns', shape: 'list' },
   log: { key: 'droid-assist.log', label: 'Activity log', shape: 'list' },
   history: { key: HISTORY_KEY, label: 'Action history', shape: 'list' },
   watcher: { key: 'droid-assist.watcher', label: 'Watcher notes, proposals and tests', shape: 'watcher' },
   outbox: { key: 'droid-assist.outbox', label: 'Error outbox', shape: 'list' },
+  portfolios: { key: 'droid-assist.portfolios', label: 'Agent and AI portfolios', shape: 'list' },
+  profile: { key: 'droid-assist.user-profile', label: 'User-habit profile', shape: 'list' },
+  sections: { key: 'droid-assist.knowledge-sections', label: 'Knowledge sections', shape: 'list' },
 } as const satisfies Record<string, { key: string; label: string; shape: StoreShape }>;
 
 export type StoreName = keyof typeof BACKUP_STORES;

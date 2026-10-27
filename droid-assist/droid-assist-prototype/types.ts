@@ -1,5 +1,6 @@
 import type { StageMap } from './loop-control.js';
 import type { AiView } from './ai.js';
+import type { OperationPolicy } from './approvals.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
@@ -79,6 +80,8 @@ export interface ActionRecord {
   via: 'bridge' | 'demo';
   ok: boolean;
   message: string;
+  /** The bridge accepted the input but the step's effect was not confirmed on screen. */
+  dispatched?: boolean;
 }
 
 /** A lesson learned from a run: something to avoid or to add when planning similar goals. */
@@ -213,6 +216,8 @@ export interface LogEntry {
   tone: 'info' | 'ok' | 'warn' | 'error';
   /** Screenshot evidence (data URLs), e.g. a moved element before and after; never persisted. */
   shots?: string[];
+  /** Project (trimmed goal text) the entry was logged under; absent when no goal was set. */
+  project?: string;
 }
 
 /** A saved, named workflow card for later comparison and selection. */
@@ -286,4 +291,6 @@ export interface AssistSettings {
   errorForwarding: boolean;
   /** Optional bearer token for the error endpoint; never written to the activity log. */
   errorToken: string;
+  /** User-set conditions for AI operation: allowed hours, allowed operation classes, project scope. */
+  operationPolicy: OperationPolicy;
 }
