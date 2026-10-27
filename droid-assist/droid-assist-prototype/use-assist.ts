@@ -53,7 +53,7 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
-import { addSection, buildProfiles, changeInScope, createSection, findSection, parseBoxArg, parseSectionProposals, recordEvent, removeSection, scopeLines, scopeSections, scopedMapped, sectionMemoryLines, sectionsRequest, type ScreenSection, type SectionEvent } from './sections.js';
+import { addSection, buildProfiles, changeInScope, createSection, inScope, findSection, parseBoxArg, parseSectionProposals, recordEvent, removeSection, scopeLines, scopeSections, scopedMapped, sectionMemoryLines, sectionsRequest, type ScreenSection, type SectionEvent } from './sections.js';
 import { extractReplica, parseReplicaNaming, replicaLine, replicaToFamiliar, replicaToMapped, replicateRequest, type Replica } from './replicate.js';
 import { DEFAULT_SIDE_TEST_MODE, busFeedback, feedbackLine, findingsToNotes, runSideTest, sentinelScan, splitSideArgs, textFindings, type SentinelAlert, type SideTestDeps, type SideTestPlan, type SideTestResult, type WatchedPosition } from './side-test.js';
 import type { CommandName } from './commands.js';
@@ -701,6 +701,10 @@ export function useAssist() {
     const profiles = buildProfiles(secs, mapped, familiarRef.current, framesRef.current[0]);
     return [...scopeLines(secs, scopeRef.current), ...mapContext(mapped), ...sectionMemoryLines(profiles)];
   };
+  /** True when a point lies inside the goal scope (always true with no scope). */
+  const pointInScope = (p: { x: number; y: number }) => inScope(sectionsRef.current, scopeRef.current, p);
+  /** The known elements inside the goal scope, as planner context lines. */
+  const knownInScope = () => knownRef.current.filter(pointInScope).map(elementLine);
 
   /**
    * The AI grounding pass run-step uses: confirm on a zoomed crop, re-ask the planner once.
@@ -708,6 +712,7 @@ export function useAssist() {
    */
   const grounding: Grounding = {
     confirm: async (live, step, p) => {
+      if (!pointInScope(p)) return { visible: false, reason: `${at(p.x, p.y)} is outside the goal scope (${scopeRef.current.join(', ')})`, thinking: null };
       const crop = await zoomFrame(live, p);
       const check = await thought(step.name, () => confirmTarget(askFor('grounding'), live, crop, step), checkSummary(step, p));
       if (check.visible) forwardElement('drift', { name: step.target ?? step.name, x: p.x, y: p.y });
@@ -717,7 +722,7 @@ export function useAssist() {
       const { point } = await thought(step.name, async () => {
         const crop = await zoomFrame(live, step).catch(() => undefined);
         const next = await relocateTarget(askFor('grounding'), live, step, feedback, sectionContext(), crop);
-        return { point: next, thinking: next?.thinking ?? null };
+        return { point: next && pointInScope(next) ? next : null, thinking: next?.thinking ?? null };
       }, (r) => (r.point ? `Re-planned "${step.target ?? step.name}" at ${at(r.point.x, r.point.y)}` : `Re-planned: "${step.target ?? step.name}" is not visible`));
       return point;
     },
@@ -2394,7 +2399,7 @@ export function useAssist() {
     planningRef.current = true;
     await withAi(async () => {
       try {
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...sectionContext(), ...applied.map(habitLine)], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownInScope(), ...sectionContext(), ...applied.map(habitLine)], patternsRef.current), planSummary);
         if (planGuardRef.current.after(plan.steps) === 'duplicate') {
           addLog('Planner', `Re-plan guard: the plan for "${text.trim()}" is identical to the previous one — kept the current steps and will not ask the model again until the screen or a step changes`, 'warn');
           return;
@@ -2463,7 +2468,7 @@ export function useAssist() {
     const label = `Subagent ${task.index + 1}`;
     const base = { dry: dryRun, shots: [] as Frame[], thinking: [] as string[] };
     const stopped = () => abortRef.current || abortedRef.current;
-    const plan = await thought(`${label}: ${task.label}`, () => planFromGoal(task.goal, [], framesRef.current[0] ?? null, askFor('planner'), knownRef.current.map(elementLine), patternsRef.current), planSummary);
+    const plan = await thought(`${label}: ${task.label}`, () => planFromGoal(task.goal, [], framesRef.current[0] ?? null, askFor('planner'), [...knownInScope(), ...sectionContext()], patternsRef.current), planSummary);
     if (plan.thinking) base.thinking.push(plan.thinking);
     const budget = createBudget(task.budget);
     let last: { x: number; y: number } | undefined;
@@ -2820,6 +2825,9 @@ export function useAssist() {
       onAlert: (a: SentinelAlert) => {
         addLog('Side tester', `Sentinel: ${a.text}`, 'warn');
         forwardElement('sidetest', { name: a.text, x: 0.5, y: 0.5 }, ['popup', 'supervisor']);
+        // An urgent sentinel alert hands the live frame to Auto Act (popup handling / next step) when it is on.
+        const frame = framesRef.current[0];
+        if (frame && settingsRef.current.autoAct) void autoAct(frame);
       },
       log: (m, tone) => addLog('Side tester', m, tone),
     };

@@ -7,6 +7,7 @@ describe('side-test command helpers', () => {
   it('splits "/sidetest" arguments on colons and drops empty parts', () => {
     expect(splitSideArgs('Game : move left :  : go to door')).toEqual({ target: 'Game', rest: ['move left', 'go to door'] });
     expect(splitSideArgs('just a query')).toEqual({ target: 'just a query', rest: [] });
+    expect(splitSideArgs('https://example.com:8080/wiki : dragon weakness')).toEqual({ target: 'https://example.com:8080/wiki', rest: ['dragon weakness'] });
   });
   it('keeps only page sentences naming a query word, without markup or scripts', () => {
     const html = '<html><script>var jump = 1;</script><p>The hero can jump twice.</p><p>Weather is fine.</p><p>Press A to jump.</p></html>';

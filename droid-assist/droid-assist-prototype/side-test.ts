@@ -251,8 +251,11 @@ export function textFindings(html: string, query: string): string[] {
     .slice(0, FINDING_LIMIT).map((s) => s.slice(0, 200));
 }
 
-/** A "/sidetest" or "/research" argument split on ':' into trimmed parts: target, then the rest; empty parts are dropped. */
+/**
+ * A "/sidetest" or "/research" argument split on ':' into trimmed parts: target, then the rest; empty parts are dropped.
+ * A URL's scheme colon ("https://") and a port colon ("host:8080") are not separators.
+ */
 export function splitSideArgs(text: string): { target: string; rest: string[] } {
-  const [target = '', ...rest] = text.split(':').map((p) => p.trim());
+  const [target = '', ...rest] = text.split(/:(?!\/\/|\d)/).map((p) => p.trim());
   return { target, rest: rest.filter(Boolean) };
 }
