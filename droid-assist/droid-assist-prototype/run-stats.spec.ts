@@ -59,15 +59,18 @@ describe('aggregation', () => {
     expect(top.map((t) => [t.name, t.failures, t.attempts])).toEqual([['Close', 5, 6], ['Save', 1, 5]]);
   });
 
-  it('ranks the most-failed steps from per-step run log lines only', () => {
+  it('ranks the most-failed steps from per-step run log lines naming known steps only', () => {
     const log = [
       line(1, 'Replay', 'Open menu: target not found', 'error'),
       line(2, 'Auto-Actor', 'Open menu: clicked', 'ok'),
       line(3, 'Self-test', 'Open menu: drift too large', 'error'),
       line(4, 'Replay', 'Type name: failed', 'error'),
       line(5, 'Safety', 'Panic: aborted', 'error'),
+      line(6, 'Replay', 'AI unavailable — nothing executed: timeout', 'error'),
+      line(7, 'Auto-Actor', 'Bridge unreachable: ECONNREFUSED', 'error'),
+      line(8, 'Replay', 'Verification has no final screenshot: skipped', 'error'),
     ];
-    expect(mostFailedSteps(log).map((s) => [s.name, s.failures, s.attempts])).toEqual([['Open menu', 2, 3], ['Type name', 1, 1]]);
+    expect(mostFailedSteps(log, ['Open menu', 'Type name', 'Panic']).map((s) => [s.name, s.failures, s.attempts])).toEqual([['Open menu', 2, 3], ['Type name', 1, 1]]);
   });
 
   it('reports runs, successes, average steps and duration per saved flow', () => {
@@ -91,9 +94,10 @@ describe('aggregation', () => {
   });
 
   it('runStats combines every view from the stores', () => {
-    const stats = runStats({ runs: [run(0, 'success'), run(1, 'failed')], habits: [habit('X', 2, 1)], log: [], cards: [] }, 'day', T0);
+    const stats = runStats({ runs: [run(0, 'success'), run(1, 'failed')], habits: [habit('X', 2, 1)], log: [line(1, 'Replay', 'a: no', 'error')], cards: [], steps: [step('a', 'failed')] }, 'day', T0);
     expect(stats.totals).toEqual({ runs: 2, successes: 1, failures: 1, rate: 0.5 });
     expect(stats.failedTargets).toHaveLength(1);
+    expect(stats.failedSteps.map((s) => s.name)).toEqual(['a']);
     expect(stats.streaks.current).toEqual({ outcome: 'failed', length: 1 });
   });
 });

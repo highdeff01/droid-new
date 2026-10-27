@@ -133,18 +133,23 @@ export function mostFailedTargets(habits: Habit[], limit = TOP_FAILED): FailureC
 /** Log sources that write one "<step name>: <message>" line per executed step. */
 export const STEP_LOG_SOURCES: readonly string[] = ['Replay', 'Self-test', 'Auto-Actor', 'Auto-Actor (dry run)'];
 
-/** The step name of a per-step run log line, or null for any other line. */
-function stepName(l: LogEntry): string | null {
+/** The known step name a per-step run log line ("<step name>: <message>") starts with, or null for any other line. */
+function stepName(l: LogEntry, names: ReadonlySet<string>): string | null {
   if (!STEP_LOG_SOURCES.includes(l.source)) return null;
   const cut = l.message.indexOf(': ');
-  return cut > 0 ? l.message.slice(0, cut).trim() : null;
+  const name = cut > 0 ? l.message.slice(0, cut).trim() : '';
+  return names.has(name) ? name : null;
 }
 
-/** The steps the run log records failing most often, worst first; attempts counts every logged try. */
-export function mostFailedSteps(log: LogEntry[], limit = TOP_FAILED): FailureCount[] {
+/**
+ * The steps the run log records failing most often, worst first; attempts counts every logged try.
+ * Only lines naming one of `stepNames` count, so AI, bridge and verification errors are not steps.
+ */
+export function mostFailedSteps(log: LogEntry[], stepNames: string[], limit = TOP_FAILED): FailureCount[] {
+  const names = new Set(stepNames.map((n) => n.trim()).filter(Boolean));
   const counts = new Map<string, FailureCount>();
   for (const l of log) {
-    const name = stepName(l);
+    const name = stepName(l, names);
     if (!name) continue;
     const c = counts.get(name) ?? { name, context: '', failures: 0, attempts: 0 };
     c.attempts += 1;
@@ -249,15 +254,18 @@ export interface StatsSources {
   habits: Habit[];
   log: LogEntry[];
   cards: SavedCard[];
+  /** The current plan's steps (with the saved cards' steps, the step names the log is matched against). */
+  steps: WorkflowStep[];
 }
 
 /** Everything the Stats panel shows, derived from the persisted stores. */
-export function runStats({ runs, habits, log, cards }: StatsSources, by: BucketBy, now = Date.now()) {
+export function runStats({ runs, habits, log, cards, steps }: StatsSources, by: BucketBy, now = Date.now()) {
+  const stepNames = [...steps, ...cards.flatMap((c) => c.steps)].map((s) => s.name);
   return {
     totals: runTotals(runs),
     overTime: successOverTime(runs, by),
     failedTargets: mostFailedTargets(habits),
-    failedSteps: mostFailedSteps(log),
+    failedSteps: mostFailedSteps(log, stepNames),
     flows: flowStats(cards, runs),
     streaks: streaks(runs, now),
   };

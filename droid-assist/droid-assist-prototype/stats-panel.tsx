@@ -62,8 +62,8 @@ function StreakLine({ s }: { s: Streaks }) {
 /** Read-only run statistics from the persisted run summaries, habits, log and saved cards. */
 export function StatsPanel({ engine }: { engine: AssistEngine }) {
   const [by, setBy] = useState<BucketBy>('day');
-  const { runs, habits, log, cards } = engine;
-  const stats = useMemo(() => runStats({ runs, habits, log, cards }, by), [runs, habits, log, cards, by]);
+  const { runs, habits, log, cards, steps } = engine;
+  const stats = useMemo(() => runStats({ runs, habits, log, cards, steps }, by), [runs, habits, log, cards, steps, by]);
   return (
     <section className={styles.panel} aria-label="Stats">
       <h3>Stats <small>{stats.totals.runs} run(s) · {pct(stats.totals.rate)} success</small></h3>
