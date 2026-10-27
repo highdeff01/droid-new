@@ -104,7 +104,7 @@ export function parseExpectations(reply: string): Expectation[] {
 }
 
 /** Converts one model step into a WorkflowStep; throws AiError when it breaks the contract. */
-function toStep(raw: unknown, frame: Frame | null, view: ViewSize): WorkflowStep {
+export function toStep(raw: unknown, frame: Frame | null, view: ViewSize): WorkflowStep {
   const s = (raw ?? {}) as Record<string, unknown>;
   const action = s.action as StepAction;
   if (!ACTIONS.has(action)) throw new AiError(`AI proposed an unknown action "${String(s.action)}"`);
