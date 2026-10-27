@@ -2255,9 +2255,11 @@ export function useAssist() {
       const what = dryRun ? 'verified on screen (not dispatched)' : 'executed';
       addLog('Goal reviewer', ok === total ? `All ${total} steps ${what}${goal ? ` for "${goal}"` : ''}` : `${ok}/${total} ${what} — re-plan the failed steps or let AI help clear blockers`, ok === total ? 'ok' : 'warn');
     }
-    await learnFromRun(ran, { dryRun, stopped: abortRef.current });
+    // ■ Stop or a spent action budget both end the run as stopped (callers hold, never retry, a stopped run).
+    const stopped = abortRef.current || (!dryRun && budget.used >= budget.limit && ok < ran.length);
+    await learnFromRun(ran, { dryRun, stopped });
     await superviseRun();
-    return { ok, total: ran.length, dryRun, stopped: abortRef.current };
+    return { ok, total: ran.length, dryRun, stopped };
   };
 
   /** One pass over the current steps in order, checking abortRef between steps. */
