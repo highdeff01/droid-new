@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import { CAPTURE_CHANNELS, type NativeCaptureApi, type NativeFrame } from './capture-api.js';
+import { MAIN_BRIDGE_CHANNELS, type MainBridgeNativeApi } from './main-bridge-api.js';
 
 let frameListener: ((event: IpcRendererEvent, frame: NativeFrame) => void) | null = null;
 let errorListener: ((event: IpcRendererEvent, message: string) => void) | null = null;
@@ -37,3 +38,38 @@ const api: NativeCaptureApi = {
 };
 
 contextBridge.exposeInMainWorld('droidNative', api);
+
+type TextListener = (event: IpcRendererEvent, value: string) => void;
+const bridgeListeners = new Map<string, TextListener>();
+
+function dropBridgeListeners() {
+  for (const [channel, listener] of bridgeListeners) ipcRenderer.removeListener(channel, listener);
+  bridgeListeners.clear();
+}
+
+function onBridge(channel: string, handler: (value: string) => void) {
+  const listener: TextListener = (_event, value) => handler(value);
+  bridgeListeners.set(channel, listener);
+  ipcRenderer.on(channel, listener);
+}
+
+/** The main-app bridge listener the renderer sees as `window.droidMainBridge`. */
+const mainBridge: MainBridgeNativeApi = {
+  async listen(options, handlers) {
+    dropBridgeListeners();
+    onBridge(MAIN_BRIDGE_CHANNELS.open, handlers.onOpen);
+    onBridge(MAIN_BRIDGE_CHANNELS.message, handlers.onMessage);
+    onBridge(MAIN_BRIDGE_CHANNELS.close, handlers.onClose);
+    onBridge(MAIN_BRIDGE_CHANNELS.error, handlers.onError);
+    await ipcRenderer.invoke(MAIN_BRIDGE_CHANNELS.listen, options);
+  },
+  send(text) {
+    return ipcRenderer.invoke(MAIN_BRIDGE_CHANNELS.send, text);
+  },
+  stop() {
+    dropBridgeListeners();
+    ipcRenderer.send(MAIN_BRIDGE_CHANNELS.stop);
+  },
+};
+
+contextBridge.exposeInMainWorld('droidMainBridge', mainBridge);
