@@ -213,6 +213,10 @@ export interface LogEntry {
   tone: 'info' | 'ok' | 'warn' | 'error';
   /** Screenshot evidence (data URLs), e.g. a moved element before and after; never persisted. */
   shots?: string[];
+  /** The operation (goal) the entry belongs to, tagged by the Logging agent for recall. */
+  op?: string;
+  /** How many identical entries in a row the Logging agent folded into this one (absent = 1). */
+  repeat?: number;
 }
 
 /** A saved, named workflow card for later comparison and selection. */

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { blacklistLine, type OperationGroup } from './operation-memory.js';
+import { opsAgent } from './operations.js';
 import styles from './droid-assist.module.css';
 
 const when = (t: number) => new Date(t).toLocaleString();
@@ -49,6 +50,30 @@ function FailureList({ group, engine }: { group: OperationGroup; engine: AssistE
   );
 }
 
+/** What the Operations agents did for one operation: their reports, the evidence trail and the tagged log. */
+function OpsSection({ group, engine }: { group: OperationGroup; engine: AssistEngine }) {
+  const { reports, evidence, log } = engine.opsFor(group.operation);
+  if (!reports.length && !evidence.length && !log.length) return null;
+  return (
+    <>
+      <h4>Operations agents <small>{reports.length} report(s) · {evidence.length} evidence · {log.length} log entr{log.length === 1 ? 'y' : 'ies'}</small></h4>
+      <ul className={styles.log} aria-label={`Operations reports for ${group.operation}`}>
+        {reports.map((r) => <li key={r.id} data-tone={r.ok ? 'ok' : 'warn'}><b>{opsAgent(r.agent).name}</b> on "{r.task}": {r.found}</li>)}
+        {evidence.map((e) => (
+          <li key={e.id} data-tone={e.verdict === 'no-effect' ? 'error' : 'info'}>
+            Evidence: {e.action} "{e.step}" · {e.verdict ?? 'not rechecked'}
+            {e.before && <img src={e.before} alt={`Before ${e.step}`} width={120} />}
+            {e.after && <img src={e.after} alt={`After ${e.step}`} width={120} />}
+          </li>
+        ))}
+      </ul>
+      <ul className={styles.log} aria-label={`Tagged log for ${group.operation}`}>
+        {log.map((l) => <li key={l.id} data-tone={l.tone}>[{l.source}] {l.message}{l.repeat ? ` ×${l.repeat}` : ''}</li>)}
+      </ul>
+    </>
+  );
+}
+
 /** One operation's notes, failures, blacklist and successful runs. */
 function OperationBlock({ group, engine }: { group: OperationGroup; engine: AssistEngine }) {
   return (
@@ -56,6 +81,7 @@ function OperationBlock({ group, engine }: { group: OperationGroup; engine: Assi
       <h3>{group.operation}</h3>
       <NoteList group={group} engine={engine} />
       <FailureList group={group} engine={engine} />
+      <OpsSection group={group} engine={engine} />
       <h4>Blacklist <small>{group.blacklist.length}</small></h4>
       <ul className={styles.log} aria-label={`Blacklist for ${group.operation}`}>
         {group.blacklist.map((e) => <li key={`${e.source}|${e.text}`} data-tone="warn">{blacklistLine(e)}</li>)}

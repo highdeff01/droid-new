@@ -9,6 +9,7 @@ const COMMANDS = {
   measure: 'Usage: /measure <a> to <b> [to <c>…], e.g. /measure files icon to game icon, /measure files icon to left edge, /measure 100,200 to 400,200',
   arrange: 'Usage: /arrange <how to move or reorder elements>, e.g. /arrange move the Files icon below Game',
   crew: 'Usage: /crew <goal>, e.g. /crew find the Save button and the Files icon — the main AI commands a crew of agents',
+  ops: 'Usage: /ops <goal> — the main AI commands the Operations agents · /ops <agent>: <task>, e.g. /ops apply: click Save, /ops loopControl: disable Reflect',
 } as const;
 
 /** The name of a slash command. */
@@ -26,7 +27,7 @@ export function parseCommand(input: string): AssistCommand | null {
   if (!text.startsWith('/')) return null;
   const match = /^\/([a-z]+)(?:\s+(.*))?$/.exec(text);
   const name = match?.[1] ?? '';
-  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal> or /crew <goal>` };
+  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal>, /crew <goal> or /ops <goal>` };
   const target = (match[2] ?? '').trim();
   return target ? { kind: name, target } : { kind: 'error', message: COMMANDS[name] };
 }

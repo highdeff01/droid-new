@@ -16,6 +16,7 @@ import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
 import { EMPTY_MEMORY, FAILURE_LIMIT, OPERATION_NOTE_LIMIT, isFailureRecord, isOperationNote, type OperationMemory } from './operation-memory.js';
+import { readOpsState, type OpsState } from './operations.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -24,7 +25,7 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', memory: 'droid-assist.memory' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', memory: 'droid-assist.memory', ops: 'droid-assist.ops' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -114,7 +115,8 @@ export function saveSettings(settings: AssistSettings) {
 
 function isLogEntry(v: unknown): v is LogEntry {
   return isObject(v) && typeof v.id === 'string' && isNum(v.time) && typeof v.source === 'string'
-    && typeof v.message === 'string' && TONES.includes(v.tone as LogEntry['tone']);
+    && typeof v.message === 'string' && TONES.includes(v.tone as LogEntry['tone'])
+    && (v.op === undefined || typeof v.op === 'string') && (v.repeat === undefined || isNum(v.repeat));
 }
 
 /** The stored action log (newest first, at most LOG_LIMIT); invalid entries are dropped. */
@@ -355,6 +357,14 @@ export const loadTriggers = (): Trigger[] => listOf(readJson(KEYS.triggers), isT
 /** Persists the triggers, capped at TRIGGER_LIMIT. */
 export function saveTriggers(triggers: Trigger[]) {
   writeJson(KEYS.triggers, triggers.slice(0, TRIGGER_LIMIT));
+}
+
+/** The stored Operations agents' state (statuses, reports, evidence); invalid entries are dropped. */
+export const loadOpsState = (): OpsState => readOpsState(readJson(KEYS.ops));
+
+/** Persists the Operations state; when it does not fit, retries without the evidence screenshots. */
+export function saveOpsState(state: OpsState) {
+  if (!writeJson(KEYS.ops, state)) writeJson(KEYS.ops, { ...state, evidence: state.evidence.map((e) => ({ ...e, before: null, after: null })) });
 }
 
 /** The stored operation memory (failure reminders and notes); invalid entries are dropped. */

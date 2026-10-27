@@ -1,7 +1,7 @@
 import { uid } from './planner.js';
 
 /** Every participant of the inter-agent bus: the background agents plus the habit system. */
-export type BusAgentId = 'popup' | 'drift' | 'progress' | 'goal' | 'screen' | 'coords' | 'supervisor' | 'habits';
+export type BusAgentId = 'popup' | 'drift' | 'progress' | 'goal' | 'screen' | 'coords' | 'supervisor' | 'habits' | 'operations';
 
 /** Display name of each bus participant. */
 export const BUS_AGENTS: Readonly<Record<BusAgentId, string>> = {
@@ -13,6 +13,7 @@ export const BUS_AGENTS: Readonly<Record<BusAgentId, string>> = {
   coords: 'Coordinate learner',
   supervisor: 'Supervisor',
   habits: 'Habit system',
+  operations: 'Operations agents',
 };
 
 /** Every bus participant, in panel order. */

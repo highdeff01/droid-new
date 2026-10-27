@@ -7,6 +7,7 @@ import { AgentBusPanel, CrewPanel, SubagentReportPanel } from './bus-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
 import { StatsPanel } from './stats-panel.js';
 import { OperationMemoryPanel } from './memory-panel.js';
+import { OperationsPanel } from './ops-panel.js';
 import styles from './droid-assist.module.css';
 
 /** The Droid Assist workspace: live screen + overlay, HUDs, workflow, gallery, agents and log. */
@@ -54,6 +55,7 @@ function AssistScreen() {
           <SettingsPanel engine={engine} />
           <AgentBusPanel engine={engine} />
           <CrewPanel engine={engine} />
+          <OperationsPanel engine={engine} />
           <SubagentReportPanel engine={engine} />
           <LogPanel engine={engine} />
           <ErrorsPanel engine={engine} />

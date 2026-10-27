@@ -762,7 +762,7 @@ describe('useAssist auto-continue and AI stop', () => {
 });
 
 describe('useAssist loop control', () => {
-  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'crew', 'dragTrackers'] as const;
+  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'crew', 'dragTrackers', 'opsMonitor', 'opsLogging', 'opsTesting', 'opsApply', 'opsRecheck', 'opsReapply', 'opsLoopControl', 'opsPlacement', 'opsScreenshots'] as const;
 
   /** A model whose reflection call hangs until cancelled; every other prompt gets a plain answer. */
   function hangingReflect() {
@@ -1031,7 +1031,7 @@ describe('useAssist agent forwarding and subagent link tests', () => {
   it('forwards an element from any agent into every other inbox', () => {
     const { result } = renderHook(() => useAssist());
     act(() => result.current.forwardElement('drift', { name: 'Search box', x: 0.5, y: 0.1 }));
-    expect(new Set(result.current.bus.map((m) => m.to)).size).toBe(7);
+    expect(new Set(result.current.bus.map((m) => m.to)).size).toBe(8);
     expect(result.current.bus.every((m) => m.status === 'handled')).toBe(true);
     expect(result.current.knownElements[0].name).toBe('Search box');
     expect(result.current.patterns[0]).toMatchObject({ kind: 'add' });
