@@ -36,9 +36,9 @@ function TriggerItem({ engine, t }: { engine: AssistEngine; t: Trigger }) {
   const flow = t.target.kind === 'draft' ? 'draft card' : engine.cards.find((c) => c.id === (t.target as { cardId: string }).cardId)?.name ?? 'deleted flow';
   return (
     <li data-tone={t.enabled ? 'ok' : 'info'}>
-      <label><input type="checkbox" checked={t.enabled} onChange={() => engine.toggleTrigger(t.id)} aria-label={`Enable ${t.name}`} /> <b>{t.name}</b></label>
+      <label><input type="checkbox" checked={t.enabled} onChange={() => void engine.invoke('trigger.toggle', { id: t.id })} aria-label={`Enable ${t.name}`} /> <b>{t.name}</b></label>
       <small> · {conditionText(t, engine.elementMap)} → {flow} · cooldown {t.cooldownSec} s · runs {t.runs}{t.maxRuns ? `/${t.maxRuns}` : ''}{t.lastFired ? ` · last ${new Date(t.lastFired).toLocaleTimeString()}` : ''}</small>
-      <button type="button" onClick={() => void engine.fireTrigger(t.id, 'run now from the Triggers panel')} title="Fires it now through the same gates (cooldown, run limit, abort, arm/disarm)">Run now</button>
+      <button type="button" onClick={() => void engine.invoke('trigger.fire', { id: t.id })} title="Fires it now through the same gates (cooldown, run limit, abort, arm/disarm)">Run now</button>
       <button type="button" aria-label={`Delete ${t.name}`} onClick={() => engine.deleteTrigger(t.id)}>✕</button>
     </li>
   );
