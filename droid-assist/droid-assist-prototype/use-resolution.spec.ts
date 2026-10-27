@@ -27,6 +27,7 @@ const centerLog = (result: { current: ReturnType<typeof useAssist> }) => result.
 
 describe('resolution center in the engine', () => {
   it('detects the main plan and a bus agent disagreeing, settles it by a test and feeds the outcome back', async () => {
+    localStorage.setItem('droid-assist.familiar', JSON.stringify([{ id: 'el1', name: 'Notes tab', x: 0.71, y: 0.4, lastSeen: 1 }]));
     const result = await offlineEngine();
     act(() => result.current.setSteps([{ id: 's1', name: 'Click Notes', action: 'click', target: 'Notes tab', x: 0.1, y: 0.1, status: 'pending' }]));
     act(() => result.current.forwardElement('screen', { name: 'notes  TAB', x: 0.7, y: 0.4 }));
@@ -42,6 +43,16 @@ describe('resolution center in the engine', () => {
     expect(result.current.patterns.some((p) => p.kind === 'add' && p.pattern.includes('Notes tab'))).toBe(true);
     expect(result.current.habits.some((h) => h.target === 'Notes tab' && h.successes === 1)).toBe(true);
     expect(result.current.history).toHaveLength(0);
+  });
+
+  it('a test that confirms no report (off-screen point, nothing known) leaves it unresolved and the plan untouched', async () => {
+    const result = await offlineEngine();
+    act(() => result.current.setSteps([{ id: 's1', name: 'Click Notes', action: 'click', target: 'Notes tab', x: 0.5, y: 0.5, status: 'pending' }]));
+    act(() => result.current.forwardElement('screen', { name: 'Notes tab', x: 2.5, y: -3 }));
+    await act(() => result.current.resolution.resolveAll());
+    expect(result.current.resolution.resolutions[0]).toMatchObject({ via: 'unresolved', winner: null });
+    expect(result.current.steps[0]).toMatchObject({ x: 0.5, y: 0.5 });
+    expect(result.current.patterns.some((p) => p.kind === 'avoid' && p.pattern.includes('Notes tab'))).toBe(true);
   });
 
   it('agreeing reports are no disagreement', async () => {

@@ -34,6 +34,8 @@ export interface ResolutionDeps {
   newBudget: () => ActionBudget;
   /** Records the proposal and runs the step through the gated pipeline (abort, arm, executor, budget). */
   perform: (step: WorkflowStep, actor: string, why: string, budget: ActionBudget) => Promise<OpResult>;
+  /** Whether the named element is really at the point on the live screen (off-screen points never are). */
+  confirm: (name: string, point: { x: number; y: number }) => Promise<boolean>;
   /** One re-location of a named element on the live screen. */
   locate: (name: string) => Promise<{ x: number; y: number } | null>;
   forwardElement: (from: BusAgentId, element: ForwardedElement) => void;
@@ -96,11 +98,11 @@ export function useResolution(deps: ResolutionDeps) {
     return { ok: true, message: done.join('; ') };
   };
 
-  /** Tests one report: a cursor move to its point through the gated pipeline (a dry-run verify unless armed). */
+  /** Tests one report: the element must be confirmed at its point on the live screen. */
   const testReport = (d: Disagreement) => async (r: Report) => {
-    const step: WorkflowStep = { id: uid('step'), name: `Test "${d.element}" from ${reporterName(r.reporter)}`, action: 'move', x: r.element.x, y: r.element.y, status: 'pending' };
-    const out = await runSteps([step], `the reports of "${d.element}" disagree; testing ${reporterName(r.reporter)}'s position settles it`);
-    return out.ok;
+    const ok = await depsRef.current.confirm(d.element, { x: r.element.x, y: r.element.y });
+    depsRef.current.addLog(RESOLUTION_SOURCE, `Test of "${d.element}" at ${reporterName(r.reporter)}'s position: ${ok ? 'PASS' : 'FAIL'}`, ok ? 'ok' : 'warn');
+    return ok;
   };
 
   /** The winning position replaces the plan's position of the element. */

@@ -30,7 +30,7 @@ bit run droid-assist-prototype
 The **Resolution center** panel (`ResolutionPanel`, driven by `use-resolution.ts`) settles judgment differences between AIs:
 
 - A **disagreement** is two or more distinct reporters, the main AI's plan or the agents forwarding on the bus, placing the same element (case and spacing ignored) more than 0.05 apart. Agreeing reports are not listed.
-- **Resolve disagreements** asks the model for a ruling `{winner, workflow, info, needs_test}`. The winning position is applied to the plan, and the main AI is told the edit, the workflow and the info that go with it. When the AI is offline, unsure or asks for a test, each report is tested in turn by a cursor move through the gated pipeline (a dry run unless armed). The first report that passes wins, and if none passes the disagreement stays unresolved.
+- **Resolve disagreements** asks the model for a ruling `{winner, workflow, info, needs_test}`. The winning position is applied to the plan, and the main AI is told the edit, the workflow and the info that go with it. When the AI is offline, unsure or asks for a test, each report is tested in turn: an off-screen point fails, and otherwise the element must be confirmed at the reported point (by the AI on a zoomed crop of the live screen when it is online, or by the coordinate learner's memory of it when it is not). The first report that passes wins, and if none passes the disagreement stays unresolved.
 - **Recovery operations**:
   - main retry and main test (replay and self-test)
   - error fix (supervisor review)
