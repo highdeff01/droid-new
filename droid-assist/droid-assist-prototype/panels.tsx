@@ -17,7 +17,7 @@ import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js
 import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
 import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
-import { AI_VIEWS, type AiView } from './ai.js';
+import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, type AiView } from './ai.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import styles from './droid-assist.module.css';
@@ -329,6 +329,10 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>Max AI calls in flight <b>{settings.aiMaxInFlight}</b>
         <small>Further calls wait in a shared queue: executor/grounding first, planner/verdict next, background agents last.</small>
         <input type="range" min={AI_MAX_IN_FLIGHT_MIN} max={AI_MAX_IN_FLIGHT_MAX} value={settings.aiMaxInFlight} onChange={(e) => setSettings({ ...settings, aiMaxInFlight: +e.target.value })} aria-label="Max AI calls in flight" />
+      </label>
+      <label className={styles.setting}>AI request timeout <b>{settings.aiTimeoutMs / 1000} s</b>
+        <small>A model call with no reply by then fails; queued calls start their clock when they leave the queue. Stop still cancels at once.</small>
+        <input type="range" min={AI_TIMEOUT_MS_MIN} max={AI_TIMEOUT_MS_MAX} step={5000} value={settings.aiTimeoutMs} onChange={(e) => setSettings({ ...settings, aiTimeoutMs: +e.target.value })} aria-label="AI request timeout" />
       </label>
       <label className={styles.setting}>Emergency-stop hotkey <b>{settings.abortHotkey}</b>
         <input

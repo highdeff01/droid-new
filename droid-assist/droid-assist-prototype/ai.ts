@@ -10,7 +10,14 @@ export interface AiConfig {
   model: string;
   /** Size each screenshot is rendered at for the model; absent means SAMPLE_VIEW. */
   view?: ViewSize;
+  /** Per-request timeout in ms; absent means DEFAULT_AI_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
+
+/** Default per-request AI timeout, and the Settings range it is validated against. */
+export const DEFAULT_AI_TIMEOUT_MS = 90_000;
+export const AI_TIMEOUT_MS_MIN = 10_000;
+export const AI_TIMEOUT_MS_MAX = 300_000;
 
 /** Live reachability of the model endpoint. */
 export interface AiStatus {
@@ -162,7 +169,7 @@ async function fetchReply(cfg: AiConfig, messages: ChatMessage[], json: boolean,
  * @param json ask the server for a JSON-formatted reply
  * @param cancel aborts the request (alongside the per-request timeout)
  */
-export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = 90_000, cancel?: AbortSignal): Promise<AiReply> {
+export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = DEFAULT_AI_TIMEOUT_MS, cancel?: AbortSignal): Promise<AiReply> {
   const first = await post(cfg, messages, json, timeoutMs, cancel);
   if (first.content) return first;
   if (!first.thinking) throw new AiError('AI endpoint returned no message content and no thinking');
@@ -323,7 +330,7 @@ export async function screenshots(frames: Frame[], view: ViewSize | undefined, r
  * A per-session conversation: every ask sends system + history + the new user turn
  * (with the frame rendered at cfg.view by `render`), and on success appends the text of both turns
  * (content only, no thinking) to the persisted history. The reply carries the view its screenshots
- * were sent at. `cancel()` aborts every request in flight (they reject with AiError).
+ * were sent at. Each request times out after cfg.timeoutMs. `cancel()` aborts every request in flight (they reject with AiError).
  */
 export function createAiSession(store: HistoryStore | null, render?: RenderFn) {
   let history = loadHistory(store);
@@ -336,7 +343,7 @@ export function createAiSession(store: HistoryStore | null, render?: RenderFn) {
     const images = [...shots.urls, ...(req.crops ?? []).map((c) => c.url)].map(toBase64);
     const user: ChatMessage = { role: 'user', content, ...(images.length ? { images } : {}) };
     const system = systemText(req.system, shots.view);
-    const reply = await chat(cfg, [{ role: 'system', content: system }, ...history, user], req.json, undefined, signal);
+    const reply = await chat(cfg, [{ role: 'system', content: system }, ...history, user], req.json, cfg.timeoutMs, signal);
     history = [...history, { role: 'user' as const, content }, { role: 'assistant' as const, content: reply.content }].slice(-HISTORY_MAX);
     store?.setItem(HISTORY_KEY, JSON.stringify(history));
     return { ...reply, view: shots.view };
