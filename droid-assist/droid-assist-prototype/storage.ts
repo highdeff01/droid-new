@@ -15,6 +15,7 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
+import { PERSONA_LIMIT, PORTFOLIO_KINDS, PORTFOLIO_LIMIT, type Persona, type PortfolioEntry, type PortfolioKind } from './persona.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -23,7 +24,7 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', personas: 'droid-assist.personas' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -350,6 +351,27 @@ export function saveWatcher(state: WatcherState) {
 
 /** The stored triggers; invalid entries are dropped. */
 export const loadTriggers = (): Trigger[] => listOf(readJson(KEYS.triggers), isTrigger, TRIGGER_LIMIT);
+
+function isPortfolioEntry(v: unknown): v is PortfolioEntry {
+  return isObject(v) && PORTFOLIO_KINDS.includes(v.kind as PortfolioKind) && isStr(v.text) && isNum(v.time);
+}
+
+/** A valid stored persona (invalid portfolio entries dropped), or null. */
+function parsePersona(v: unknown): Persona | null {
+  if (!isObject(v) || !isStr(v.id) || !isStr(v.name) || typeof v.character !== 'string' || !isNum(v.createdAt)) return null;
+  return { id: v.id, name: v.name, character: v.character, createdAt: v.createdAt, entries: listOf(v.entries, isPortfolioEntry, PORTFOLIO_LIMIT) };
+}
+
+/** The stored persona portfolios (at most PERSONA_LIMIT); invalid personas are dropped. */
+export function loadPersonas(): Persona[] {
+  const stored = readJson(KEYS.personas);
+  return Array.isArray(stored) ? stored.map(parsePersona).filter((p): p is Persona => p !== null).slice(0, PERSONA_LIMIT) : [];
+}
+
+/** Persists the persona portfolios, capped at PERSONA_LIMIT. */
+export function savePersonas(personas: Persona[]) {
+  writeJson(KEYS.personas, personas.slice(0, PERSONA_LIMIT));
+}
 
 /** Persists the triggers, capped at TRIGGER_LIMIT. */
 export function saveTriggers(triggers: Trigger[]) {
