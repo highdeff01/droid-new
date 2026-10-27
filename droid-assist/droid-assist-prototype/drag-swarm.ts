@@ -78,8 +78,8 @@ export type DragIntervention = { kind: 'aim'; point: Point } | { kind: 'release'
 export interface LiveDragDeps {
   start: Point;
   end: Point;
-  /** The frame the path was planned on (drift buffer). */
-  ref: ImageData;
+  /** The frame the path was planned on (drift buffer); null runs the planned path without live tracking. */
+  ref: ImageData | null;
   agents?: number;
   drift?: DriftThresholds;
   /** Sends one input at a normalized point; resolves whether the PC performed it. */
@@ -99,6 +99,8 @@ export interface LiveDragDeps {
 /** How a live drag ended. */
 export interface LiveDragResult {
   ok: boolean;
+  /** The button went down on the PC (false only when the press itself failed). */
+  pressed: boolean;
   /** The pointer was released before the drop point (halt, intervention, failed move). */
   halted: boolean;
   message: string;
@@ -122,7 +124,7 @@ async function release(deps: LiveDragDeps, run: DragRun, ok: boolean, halted: bo
   const here = run.path[run.path.length - 1];
   const up = await deps.send('mouse_up', here);
   const text = up.ok ? message : `${message}; release FAILED: ${up.message}`;
-  return { ok: ok && up.ok, halted, message: text, path: run.path, releasedAt: here };
+  return { ok: ok && up.ok, pressed: true, halted, message: text, path: run.path, releasedAt: here };
 }
 
 /** Applies the user's intervention; returns 'release' when the user asked to let go now. */
@@ -138,7 +140,7 @@ function intervene(deps: LiveDragDeps, run: DragRun, i: number): 'release' | nul
 /** Re-tracks every waypoint on the live frame; asks the main AI once when the drop point is lost. */
 async function track(deps: LiveDragDeps, run: DragRun, i: number) {
   const live = deps.live();
-  if (!live) return;
+  if (!live || !deps.ref) return;
   const out = trackWaypoints(deps.ref, live, run.agents, deps.drift);
   run.agents = out.agents;
   if (!out.lost || run.asked || !deps.relocate) return;
@@ -158,7 +160,7 @@ async function track(deps: LiveDragDeps, run: DragRun, i: number) {
 export async function runLiveDrag(deps: LiveDragDeps): Promise<LiveDragResult> {
   const run: DragRun = { agents: planSegments(deps.start, deps.end, deps.agents ?? SWARM_SIZE), path: [deps.start], asked: false };
   const down = await deps.send('mouse_down', deps.start);
-  if (!down.ok) return { ok: false, halted: true, message: `Press failed: ${down.message}`, path: run.path, releasedAt: deps.start };
+  if (!down.ok) return { ok: false, pressed: false, halted: true, message: `Press failed: ${down.message}`, path: run.path, releasedAt: deps.start };
   for (let i = 0; i < run.agents.length; i++) {
     const reason = deps.halt();
     if (reason) return release(deps, run, false, true, `${reason} — released after ${i} of ${run.agents.length} segment(s)`);

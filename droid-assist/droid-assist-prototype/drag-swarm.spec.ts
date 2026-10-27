@@ -156,7 +156,7 @@ describe('runLiveDrag', () => {
     expect(moveFail.sent.map((s) => s.input)).toEqual(['mouse_down', 'move', 'mouse_up']);
     const downFail = sender('mouse_down');
     const pressed = await runLiveDrag({ ...drag().deps, send: downFail.send });
-    expect(pressed.ok).toBe(false);
+    expect(pressed).toMatchObject({ ok: false, pressed: false });
     expect(downFail.sent.map((s) => s.input)).toEqual(['mouse_down']);
   });
 });

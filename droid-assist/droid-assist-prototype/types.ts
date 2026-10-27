@@ -270,6 +270,8 @@ export interface AssistSettings {
   aiView: AiView;
   /** After a replay, verify the goal on the live screen and keep planning/running until it is done. */
   autoContinue: boolean;
+  /** Armed bridge drags run as live parallel drags: segment by segment, corrected by the coordinate-agent swarm. */
+  liveDrag: boolean;
   /** Max auto-continue rounds (verify → re-plan → run) after the first run. */
   maxIterations: number;
   /** Retries of a failed step (re-verify, re-correct, retry) before the planner re-plans it once. */
