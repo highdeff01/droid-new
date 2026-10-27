@@ -17,10 +17,10 @@ export const CLASS_LABEL: Record<OperationClass, string> = {
 
 /** Classification rules, most privileged first; text matching none is plain screen input. */
 const CLASS_RULES: ReadonlyArray<[OperationClass, RegExp]> = [
-  ['admin_cmd', /\b(cmd(\.exe)?|command prompt|powershell|pwsh|sudo|runas|regedit|run as administrator|administrator|diskpart|bcdedit|net user|chmod|chown|rm -rf|win\+r)\b/i],
-  ['system_file', /(system32|\\windows\\|\/etc\/|\bhosts file\b|\bregistry\b|\.sys\b|\.dll\b|\.ini\b|\/usr\/|program files|\bsystem file)/i],
+  ['admin_cmd', /(\b(cmd(\.exe)?|command prompt|terminal|console|shell|bash|zsh|powershell|pwsh|sudo|su|runas|regedit|run as administrator|administrator|admin|elevated|diskpart|bcdedit|net (user|stop|start|localgroup)|sc (stop|delete|config)|chmod|chown|shutdown|restart-computer|stop-computer|format [a-z]:|taskkill|rmdir \/s|rd \/s|del \/[sfq]|rm -r[f]?|reg (add|delete|import)|set-executionpolicy|icacls|takeown|mkfs|dd if=|systemctl|win\+r)\b|\bformat [a-z]:)/i],
+  ['system_file', /(system32|syswow64|\\windows\\|\/etc\/|\bhosts\b|\bregistry\b|\bhk(lm|cu|ey_)\w*|\.sys\b|\.dll\b|\.ini\b|\.reg\b|\/usr\/|\/boot\/|program files|programdata|\bsystem files?\b|\bboot\.ini\b|\bfstab\b|\bsudoers\b)/i],
   ['important_doc', /(\.docx?\b|\.xlsx?\b|\.pptx?\b|\.pdf\b|\bcontract\b|\binvoice\b|\btax\b|\blegal\b|\bimportant doc)/i],
-  ['email', /(\be-?mail\b|\boutlook\b|\bgmail\b|\bsend (the |a |this )?(message|mail|email)\b|\bmail to\b|\breply all\b)/i],
+  ['email', /(\be-?mails?\b|\boutlook\b|\bgmail\b|\bthunderbird\b|\binbox\b|\bsend\b|\bmail to\b|\bmailto:|\breply( all)?\b|\bforward (the |this )?message\b|\bcompose\b)/i],
 ];
 
 /** The class of free text (a proposal, a summary). */

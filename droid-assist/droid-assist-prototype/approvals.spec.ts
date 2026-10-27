@@ -70,6 +70,22 @@ describe('classifyStep', () => {
     expect(classifyStep(step({ name: 'click the Play button' }))).toBe('input');
   });
 
+  it('destructive shell commands typed into any terminal are admin_cmd', () => {
+    for (const text of ['shutdown /s /t 0', 'format C:', 'del /s /q C:\\Users', 'reg add HKLM\\Software\\X', 'Set-ExecutionPolicy Unrestricted']) {
+      expect(classifyStep(step({ name: 'Type command', target: 'Windows Terminal', text }))).toBe('admin_cmd');
+    }
+    expect(classifyStep(step({ name: 'Type ls', target: 'Bash', text: 'ls' }))).toBe('admin_cmd');
+  });
+
+  it('saving the hosts file in an editor is system_file', () => {
+    expect(classifyStep(step({ name: 'Save', target: 'Notepad - hosts', text: 'ctrl+s' }))).toBe('system_file');
+  });
+
+  it('clicking Send or composing a message is the email class', () => {
+    expect(classifyStep(step({ name: 'Click Send' }))).toBe('email');
+    expect(classifyStep(step({ name: 'compose message and hit Send' }))).toBe('email');
+  });
+
   it('needsApproval is true for every class except input', () => {
     for (const cls of OPERATION_CLASSES) expect(needsApproval(cls)).toBe(cls !== 'input');
   });
