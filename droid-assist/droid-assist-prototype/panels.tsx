@@ -402,6 +402,7 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         <input type="checkbox" checked={settings.aiThink} onChange={(e) => setSettings({ ...settings, aiThink: e.target.checked })} aria-label="Model thinking" />
         Model thinking (may slow replies / empty answers)
         <small>Off sends think:false; small models can spend the whole reply thinking and return an empty answer.</small>
+        <small>Escalation (when on): a thinking-only reply is retried 3 times with the thinking added to the conversation, then a similar question, then a re-ask with fresh app context (screenshot, elements, log, goal, habits), then two overlapping calls. If none answers, the thinking is shown as the response and a next workflow is proposed in the Screen watcher.</small>
       </label>
       <span className={styles.row}>
         <button type="button" onClick={() => void engine.connectAi()} disabled={engine.aiStatus.state === 'checking' || !settings.aiUrl} aria-label="Connect AI">Connect</button>

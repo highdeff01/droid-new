@@ -26,8 +26,9 @@ export interface WatchNote {
  * What a proposal changes: add a popup to the close list (a learned "add" pattern), save a
  * stable element as familiar, save a learned pattern, or reorder the current workflow steps.
  */
-export type ProposalKind = 'close_popup' | 'familiar' | 'pattern' | 'reorder';
-export const PROPOSAL_KINDS: readonly ProposalKind[] = ['close_popup', 'familiar', 'pattern', 'reorder'];
+export type ProposalKind = 'close_popup' | 'familiar' | 'pattern' | 'reorder' | 'workflow';
+/** `workflow` is proposed by the app (a thinking-only AI reply), never by the watcher's model. */
+export const PROPOSAL_KINDS: readonly ProposalKind[] = ['close_popup', 'familiar', 'pattern', 'reorder', 'workflow'];
 
 export type ProposalStatus = 'pending' | 'accepted' | 'dismissed';
 export const PROPOSAL_STATUSES: readonly ProposalStatus[] = ['pending', 'accepted', 'dismissed'];
