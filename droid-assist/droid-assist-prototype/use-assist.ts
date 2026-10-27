@@ -127,6 +127,8 @@ import { usePresentations } from './use-presentations.js';
 import { askResearch } from './presentation-caps.js';
 import type { Got } from './presentation-sources.js';
 import { drawWorldScreen, worldImageAt } from './presentation-project.js';
+import { DEFAULT_EXECUTION_MODE, EXECUTION_MODES, modeCaptureMs, modeChangeText, modeStatus, resolveAiDirective, type ExecutionMode, type ModeActor, type ModeDirective } from './execution-mode.js';
+import { DEFAULT_AUTO_APPLY, autoApplyDecision, bestGrounding, groundGoal, groundedStep, groundingShift, judgeCandidate, judgmentText, type KnownGrounding, type HeldCandidate, type Judgment } from './aggressive.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -256,6 +258,8 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   driftMatched: MATCHED,
   driftRadius: SEARCH_RADIUS,
   monitorMode: 'app',
+  executionMode: DEFAULT_EXECUTION_MODE,
+  autoApply: DEFAULT_AUTO_APPLY,
   displayId: null,
   watchMs: 5000,
   wakeMs: DEFAULT_WAKE_MS,
@@ -431,6 +435,16 @@ export function useAssist() {
   const [userNotes, setUserNotes] = useState<UserNote[]>(() => loadKnowledge());
   /** Key frames the main AI and the agents marked as preferred, newest first. */
   const [preferred, setPreferred] = useState<PreferredShot[]>([]);
+  /** The last execution-mode change as logged, shown in every briefing; null before the first. */
+  const [modeChange, setModeChange] = useState<string | null>(null);
+  const modeChangeRef = useRef<string | null>(null);
+  /** Aggressive-mode candidates held for the user's Apply, newest first. */
+  const [candidates, setCandidates] = useState<HeldCandidate[]>([]);
+  const candidatesRef = useRef<HeldCandidate[]>([]);
+  /** Candidates auto-applied since the plan started (bounded by autoApply.maxPerRun). */
+  const autoAppliedRef = useRef(0);
+  /** Steps whose aggressive candidate the user dismissed: they get the normal proposal. */
+  const dismissedGroundingRef = useRef(new Set<string>());
   const [captureLost, setCaptureLost] = useState<string | null>(null);
   const [supervisor, setSupervisor] = useState<SupervisorState>({ status: 'idle', detail: 'No review yet', review: null, applied: false });
   /** The full-screen reading of the newest frame: every detected element. */
@@ -661,6 +675,7 @@ export function useAssist() {
   scopeRef.current = scope;
 
   const intervalMs = relaxInterval(monitorInterval(settings.monitorMode, settings.captureMs), settings.relaxMode);
+  const intervalMs = monitorInterval(settings.monitorMode, modeCaptureMs(settings.executionMode, settings.captureMs));
 
   // Persistence: settings, log and cards.
   useEffect(() => saveSettings(settings), [settings]);
@@ -1309,6 +1324,31 @@ export function useAssist() {
   /** Coordinate learner: records one observation in the familiar memory and the target's dossier, and logs a target that moved. */
   const learnCoords = (obs: CoordObservation, by: Mover = 'user') => {
     commitDossiers(recordSighting(dossiersRef.current, { name: obs.name, x: obs.x, y: obs.y, time: obs.time, by }));
+  /**
+   * Switches the execution mode (user from the HUD, or the AI contextually) and logs who changed it,
+   * from what, to what and why. Re-selecting the current mode logs nothing. Never touches arming,
+   * the budget or the auto-apply bounds.
+   */
+  const setMode = (mode: ExecutionMode, reason: string, by: ModeActor) => {
+    const from = settingsRef.current.executionMode;
+    if (mode === from) return;
+    settingsRef.current = { ...settingsRef.current, executionMode: mode };
+    setSettings((s) => ({ ...s, executionMode: mode }));
+    const text = modeChangeText(from, mode, reason, by);
+    modeChangeRef.current = text;
+    setModeChange(text);
+    addLog('Mode', text, 'info');
+  };
+
+  /** Applies the AI's mode directive when it may set that mode; a refused one is logged as rejected. */
+  const applyAiMode = (d: ModeDirective) => {
+    const r = resolveAiDirective(settingsRef.current.executionMode, d);
+    if (r.kind === 'accepted') setMode(r.mode, r.reason, 'ai');
+    else if (r.kind === 'rejected') addLog('Mode', r.text, 'warn');
+  };
+
+  /** Coordinate learner: records one observation in the familiar memory and logs a target that moved. */
+  const learnCoords = (obs: CoordObservation) => {
     const { list, moved } = learnCoordinate(familiarRef.current, obs);
     familiarRef.current = list;
     setFamiliar((latest) => learnCoordinate(latest, obs).list);
@@ -2701,13 +2741,57 @@ export function useAssist() {
     return { kind: 'go', step: adopt(step, p, true), proposal: p };
   };
 
+  /** Replaces the held aggressive candidates. */
+  const putCandidates = (list: HeldCandidate[]) => {
+    candidatesRef.current = list;
+    setCandidates(list);
+  };
+
+  /** Asks the AI to judge a grounded candidate; an unreachable AI or unusable reply is null (the candidate is held). */
+  const judge = async (step: WorkflowStep, g: KnownGrounding): Promise<Judgment | null> => {
+    if (!aiOnline()) return null;
+    try {
+      return await thought(step.name, () => judgeCandidate(askFor('executor'), framesRef.current[0] ?? null, step, g, goalRef.current), judgmentText);
+    } catch (error) {
+      addLog('Aggressive', aiFailure(`AI judgment of "${step.name}" failed — held for your Apply`, error), 'warn');
+      return null;
+    }
+  };
+
+  /**
+   * Aggressive mode, no thinking first: a pointer step whose target is already known is aimed at
+   * the best grounding at once, then sent to the AI for one judgment. It runs now only when the AI
+   * judges it fair and in scope within the user's auto-apply bounds; otherwise it is held for Apply.
+   * Null when nothing grounds the target (the normal proposal runs).
+   */
+  const justifyAggressive = async (actor: string, step: WorkflowStep): Promise<Justified | null> => {
+    if (EXECUTION_MODES[settingsRef.current.executionMode].grounding !== 'immediate' || !POINTER_ACTIONS.has(step.action) || dismissedGroundingRef.current.has(step.id)) return null;
+    if (candidatesRef.current.some((c) => c.stepId === step.id)) return { kind: 'wait', reason: `a candidate for "${step.name}" is held for your Apply` };
+    const g = bestGrounding(step.target ?? step.name, knowledge());
+    if (!g) return null;
+    const candidate = groundedStep(step, g);
+    const proposal = recordLocal(actor, candidate, `aggressive mode — grounded at once on the ${g.source} element "${g.name}", no planning first`);
+    const j = await judge(candidate, g);
+    const d = j ? autoApplyDecision(j, groundingShift(step, g), autoAppliedRef.current, settingsRef.current.autoApply) : { apply: false, reason: 'held for your Apply — no AI judgment' };
+    addLog('Aggressive', `"${step.name}": ${d.reason}`, d.apply ? 'ok' : 'warn');
+    if (d.apply) {
+      autoAppliedRef.current += 1;
+      return { kind: 'go', step: candidate, proposal };
+    }
+    putCandidates([{ id: uid('cand'), time: Date.now(), stepId: step.id, step: candidate, proposal, reason: d.reason }, ...candidatesRef.current]);
+    return { kind: 'wait', reason: `"${step.name}" ${d.reason}` };
+  };
+
   /**
    * Intent before action: waits for an in-flight change assessment, then records a what/why proposal
    * for `step`. Drift red or a stale plan goes straight to the one re-proposal; a not-ready first
    * proposal waits when `canWait` (Auto Act), otherwise gets the re-proposal. Offline, a local proposal is recorded.
+   * Aggressive mode first tries the known grounding without a proposal call.
    */
   const justifyProposal = async (actor: string, step: WorkflowStep, canWait: boolean): Promise<Justified> => {
     await changeBusyRef.current;
+    const aggressive = await justifyAggressive(actor, step);
+    if (aggressive) return aggressive;
     const reason = redoReason(step);
     if (reason) return repropose(actor, step, reason);
     if (!aiOnline()) {
@@ -2727,6 +2811,8 @@ export function useAssist() {
   const buildBriefingFor = (step: WorkflowStep, proposal: Proposal) => buildBriefing({
     goal: goalRef.current, steps: stepsRef.current, step, proposal, live: framesRef.current[0] ?? null,
     knowledge: knowledge(), thresholds: driftThresholds(), online: aiOnline(), goalProgress: tracer.briefingLine(),
+    knowledge: knowledge(), thresholds: driftThresholds(), online: aiOnline(),
+    mode: modeStatus(settingsRef.current.executionMode, modeChangeRef.current),
   });
 
   /** Records a briefing (newest first) with zoomed crops of the planned point on the live and reference frames. */
@@ -2828,6 +2914,9 @@ export function useAssist() {
     planAtRef.current = Date.now();
     reproposedRef.current = new Set();
     staleHandledRef.current = null;
+    autoAppliedRef.current = 0;
+    dismissedGroundingRef.current = new Set();
+    putCandidates([]);
   };
 
   /** Auto-Actor popup handling: the model rules once per flagged region; a close is a grounded click. */
@@ -2844,6 +2933,17 @@ export function useAssist() {
     const out = await perform(close, 'Auto-Actor', autoBudgetRef.current, dry, proposal);
     addLog('Auto-Actor', `Close popup (${d.reason}): ${out.message}`, out.ok ? 'ok' : 'error');
     if (out.halt) setSettings((s) => ({ ...s, autoAct: false }));
+  };
+
+  /**
+   * A step whose aggressive candidate waits for the user's Apply: it stays pending and the run halts
+   * there, never recorded as a failure (no lesson, no failed flow).
+   */
+  const holdForApply = (idx: number, actor: string, reason: string): Performed => {
+    const step = stepsRef.current[idx];
+    updateStep(idx, { status: 'pending' });
+    addLog(actor, `Paused — ${reason}`, 'warn');
+    return { ok: false, executed: false, halt: true, message: `Paused for your Apply — ${reason}`, target: { x: step.x, y: step.y } };
   };
 
   /** Marks a step that could not be justified as failed, with the reason in the log. */
@@ -2932,6 +3032,8 @@ export function useAssist() {
     const { autoAct: on } = settingsRef.current;
     if (!on || abortedRef.current || autoBusyRef.current || watchBusyRef.current || replayingRef.current || recordingRef.current || supervisorMovingRef.current || subRunningRef.current || wake.waiting() || !stageOn('screenResponder')) return;
     if (!aiOnline() || Date.now() - lastStepAt.current < 1500) return;
+    if (!on || abortedRef.current || autoBusyRef.current || watchBusyRef.current || replayingRef.current || recordingRef.current || supervisorMovingRef.current || subRunningRef.current || !stageOn('screenResponder')) return;
+    if (!aiOnline() || Date.now() - lastStepAt.current < EXECUTION_MODES[settingsRef.current.executionMode].stepGapMs) return;
     autoBusyRef.current = true;
     try {
       const dry = !armedRef.current;
@@ -3193,6 +3295,7 @@ export function useAssist() {
     } catch (error) {
       return failUnjustified(i, label, `No proposal for "${planned.name}" — AI unavailable: ${errorText(error)} — not executed`);
     }
+    if (j.kind === 'wait') return holdForApply(i, label, j.reason);
     if (j.kind !== 'go') return failUnjustified(i, label, j.reason);
     if (abortRef.current) {
       updateStep(i, { status: 'pending' });
@@ -3275,6 +3378,10 @@ export function useAssist() {
     if (picks.length) setPinned(picks);
     picks.forEach((f) => preferFrame(f, MAIN_AI, 'most informative change of the run'));
     if (!dryRun && runGoal.trim()) setGoals((g) => settleGoal(g, runGoal, ok === ran.length && ran.length > 0));
+    if (candidatesRef.current.length) {
+      addLog(label, `Run paused — ${candidatesRef.current.length} aggressive candidate(s) wait for your Apply; not reviewed or learned from as a failure`, 'info');
+      return { ok, total: ran.length, dryRun, stopped: abortRef.current };
+    }
     if (stageOn('goal')) {
       const total = ran.length;
       const what = dryRun ? 'verified on screen (not dispatched)' : 'executed';
@@ -3631,6 +3738,11 @@ export function useAssist() {
       addLog('Planner', `Re-plan guard: a plan for "${text.trim()}" is still being thought out — not starting another`, 'warn');
       return false;
     }
+    const grounded = EXECUTION_MODES[settingsRef.current.executionMode].grounding === 'immediate' ? groundGoal(text, knowledge()) : null;
+    if (grounded) {
+      applyPlan(text, [grounded], 'Aggressive mode: grounded on a known element at once, no planner call');
+      return true;
+    }
     const gate = planGuardRef.current.before(text, screenState());
     if (!gate.run) {
       if (gate.log) addLog('Planner', `Re-plan guard: ${gate.log}`, 'warn');
@@ -3654,6 +3766,7 @@ export function useAssist() {
         const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...inventoryLines(inventoryRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
         const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownInScope(), ...sectionContext(), ...applied.map(habitLine)], patternsRef.current), planSummary);
         const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine), ...tracer.memory(text)], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [EXECUTION_MODES[settingsRef.current.executionMode].hint, ...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
         if (planGuardRef.current.after(plan.steps) === 'duplicate') {
           addLog('Planner', `Re-plan guard: the plan for "${text.trim()}" is identical to the previous one — kept the current steps and will not ask the model again until the screen or a step changes`, 'warn');
           return;
@@ -3956,7 +4069,8 @@ export function useAssist() {
         const tasks = planSubagents(req.kind, items, settingsRef.current.actionBudget);
         addLog('Supervisor', `${tasks.length} subagent(s) for "${req.goal}" — budget slices ${tasks.map((t) => t.budget).join('/')}${dryRun ? ' (real input disarmed: dry run)' : ''}`, 'info');
         setSubReport(report([], false));
-        const results = await runSubagents(tasks, (t) => runSubagent(t, dryRun), () => abortRef.current || abortedRef.current, (r) => setSubReport(report(r, false)));
+        const crew = EXECUTION_MODES[settingsRef.current.executionMode].crew;
+        const results = await runSubagents(tasks, (t) => runSubagent(t, dryRun), () => abortRef.current || abortedRef.current, (r) => setSubReport(report(r, false)), crew);
         setSubReport(report(results, true));
         addPatterns(reportPatterns(results, req.goal));
         results.forEach((r) => {
@@ -4068,7 +4182,7 @@ export function useAssist() {
     const capture = createScreenCapture();
     capture.selectDisplay(settingsRef.current.displayId);
     try {
-      await capture.start(monitorInterval(settingsRef.current.monitorMode, settingsRef.current.captureMs), { onImage: onScreenImage, onLost: onCaptureLost });
+      await capture.start(monitorInterval(settingsRef.current.monitorMode, modeCaptureMs(settingsRef.current.executionMode, settingsRef.current.captureMs)), { onImage: onScreenImage, onLost: onCaptureLost });
     } catch (error) {
       capture.stop();
       addLog('Screen', `Screen capture failed to start: ${errorText(error)}`, 'error');
@@ -4656,6 +4770,8 @@ export function useAssist() {
     });
     notes.added.filter((n) => n.kind === 'unusual').forEach((n) => notify({ source: 'Screen watcher', category: 'agents', severity: 'warning', title: `Unusual on screen: ${n.text}` }));
     proposals.added.forEach((p) => addLog('Screen watcher', `Proposal: ${p.text}`, 'info'));
+    if (obs.mode) applyAiMode(obs.mode);
+    if (EXECUTION_MODES[settingsRef.current.executionMode].trackElements) proposals.added.filter((p) => p.kind === 'familiar').forEach((p) => acceptProposal(p.id));
   };
 
   /** One watcher round: observe the live frame, record notes/proposals, then background-test one untested proposal. */
@@ -4794,6 +4910,32 @@ export function useAssist() {
 
   /** Updates the user's operation conditions. */
   const setOperationPolicy = (change: Partial<OperationPolicy>) => setSettings((s) => ({ ...s, operationPolicy: { ...s.operationPolicy, ...change } }));
+
+  /**
+   * Apply on a held aggressive candidate: runs it through the gated pipeline (a dry run unless armed;
+   * refused when aborted, over budget or with the executor stage unchecked) and records the outcome on its step.
+   */
+  const applyCandidate = async (id: string) => {
+    const c = candidatesRef.current.find((x) => x.id === id);
+    const idx = c ? stepsRef.current.findIndex((s) => s.id === c.stepId && s.status !== 'done' && s.status !== 'running') : -1;
+    if (!c) return;
+    putCandidates(candidatesRef.current.filter((x) => x.id !== id));
+    if (idx < 0) return addLog('Aggressive', `"${c.step.name}" is no longer waiting to run — not applied`, 'warn');
+    const dry = !armedRef.current;
+    updateStep(idx, { status: 'running' });
+    const out = await perform(c.step, 'Aggressive', createBudget(settingsRef.current.actionBudget), dry, c.proposal);
+    applyOutcome(idx, out, dry, framesRef.current[0] ?? null);
+    addLog(dry ? 'Aggressive (dry run)' : 'Aggressive', `Applied "${c.step.name}": ${out.message}`, out.ok ? 'ok' : 'error');
+  };
+
+  /** Dismiss on a held aggressive candidate: dropped, and its step falls back to the normal proposal. */
+  const dismissCandidate = (id: string) => {
+    const c = candidatesRef.current.find((x) => x.id === id);
+    if (!c) return;
+    putCandidates(candidatesRef.current.filter((x) => x.id !== id));
+    dismissedGroundingRef.current.add(c.stepId);
+    addLog('Aggressive', `Dismissed the candidate for "${c.step.name}" — it gets the normal proposal`, 'info');
+  };
 
   /** The Test button: a background test of one proposal, refused while the executor or watcher is busy. */
   const testProposal = async (id: string) => {
@@ -5231,6 +5373,7 @@ export function useAssist() {
     capabilities: caps.registry, invokeCapability: caps.invoke, presentations: caps.presentations, scripts: caps.scripts, knowledge: caps.knowledge,
     /** The presentation studio: slideshows, movies, projects, composition approvals, rich notifications and the in-world embed. */
     studio,
+    setMode, modeChange, candidates, applyCandidate, dismissCandidate,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
     notifications: notifier.notifications, markRead: notifier.markRead, markAllRead: notifier.markAllRead, clearNotifications: notifier.clearNotifications,
     actOnNotification, refreshSuggestions: () => refreshSuggestions(false),

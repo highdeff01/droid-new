@@ -4,6 +4,7 @@ import type { AskFn, ViewSize } from './ai.js';
 import { gridPrompt, replyPoint } from './grid.js';
 import { uid } from './planner.js';
 import type { Thought } from './assist-ai.js';
+import { AI_MODES, type ModeDirective } from './execution-mode.js';
 
 /** Most notes, proposals and test results the watcher keeps. */
 export const NOTE_LIMIT = 100;
@@ -101,14 +102,17 @@ export type ProposalDraft = Omit<WatchProposal, 'id' | 'time' | 'status' | 'test
 export interface Observation extends Thought {
   notes: NoteDraft[];
   proposals: ProposalDraft[];
+  /** The execution mode the watcher says fits what the user is doing, when it asked for one. */
+  mode?: ModeDirective;
 }
 
 /** System prompt of the screen watcher for a `view`-sized screenshot. */
 export const watchSystem = (view: ViewSize) => `You are Droid Assist's screen watcher. You observe the user's screen in the background and take short structured notes.
 ${gridPrompt(view)}
-Reply ONLY with JSON {"notes":[{"kind":"element"|"change"|"unusual"|"opportunity","text":string}],"proposals":[{"kind":"close_popup"|"familiar"|"pattern"|"reorder","text":string,"target":string,"cell":string,"cx":number,"cy":number,"from":number,"to":number}]}.
+Reply ONLY with JSON {"notes":[{"kind":"element"|"change"|"unusual"|"opportunity","text":string}],"proposals":[{"kind":"close_popup"|"familiar"|"pattern"|"reorder","text":string,"target":string,"cell":string,"cx":number,"cy":number,"from":number,"to":number}],"mode"?:{"mode":${AI_MODES.map((m) => `"${m}"`).join('|')},"reason":string}}.
 Notes: at most 4, each under 15 words: notable UI elements, what changed since the previous notes, anything unusual, opportunities to help. Do not repeat a previous note.
-Proposals (optional, at most 2): close_popup = a popup keeps returning, give its close control as target + cell; familiar = an element sits at a stable position, give its name as target + cell; pattern = a lesson to remember ("avoid ..." or "add ..." in text); reorder = the workflow keeps failing at a step, move step "from" to position "to" (1-based).`;
+Proposals (optional, at most 2): close_popup = a popup keeps returning, give its close control as target + cell; familiar = an element sits at a stable position, give its name as target + cell; pattern = a lesson to remember ("avoid ..." or "add ..." in text); reorder = the workflow keeps failing at a step, move step "from" to position "to" (1-based).
+Mode (optional): only when what the user is doing calls for a different execution mode — watching = a movie or video plays (low cadence, notes); reacting = the user is working through a workflow to react to; tracking = elements should be tracked into the project while working; parallel = many independent quick operations; thoughtful = deliberate work. Give the reason in a few words.`;
 
 /** The watcher's system prompt for a sample-space (480x270) screenshot. */
 export const WATCH_SYSTEM = watchSystem(SAMPLE_VIEW);
@@ -165,7 +169,15 @@ export async function observeScreen(ask: AskFn, frame: Frame, recent: WatchNote[
   const r = parseJsonReply(content);
   const notes = Array.isArray(r.notes) ? r.notes.flatMap(toNote) : [];
   const proposals = Array.isArray(r.proposals) ? r.proposals.flatMap((p) => toProposal(p, view)) : [];
-  return { notes, proposals, thinking };
+  const mode = toDirective(r.mode);
+  return { notes, proposals, thinking, ...(mode ? { mode } : {}) };
+}
+
+/** The reply's mode directive, kept as given (the caller rules on it); null when absent or without a mode name. */
+function toDirective(raw: unknown): ModeDirective | null {
+  const m = (raw ?? {}) as Record<string, unknown>;
+  const mode = str(m.mode);
+  return mode ? { mode, reason: str(m.reason) } : null;
 }
 
 const norm = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();

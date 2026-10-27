@@ -44,6 +44,8 @@ import { SYSTEM_REFRESH_SEC_RANGE } from './system-info.js';
 
 /** Most folders the System panel reports on. */
 export const SYSTEM_FOLDER_LIMIT = 10;
+import { isExecutionMode } from './execution-mode.js';
+import { sanitizeAutoApply } from './aggressive.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -160,6 +162,8 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   if (typeof stored.aiView === 'string' && Object.hasOwn(AI_VIEWS, stored.aiView)) out.aiView = stored.aiView as AiView;
   if (typeof stored.trainMode === 'string' && TRAIN_MODES.includes(stored.trainMode as TrainMode)) out.trainMode = stored.trainMode as TrainMode;
   if (typeof stored.monitorMode === 'string' && MODES.includes(stored.monitorMode as MonitorMode)) out.monitorMode = stored.monitorMode as MonitorMode;
+  out.executionMode = isExecutionMode(stored.executionMode) ? stored.executionMode : defaults.executionMode;
+  out.autoApply = sanitizeAutoApply(stored.autoApply ?? defaults.autoApply);
   if (stored.displayId === null || (typeof stored.displayId === 'string' && stored.displayId)) out.displayId = stored.displayId;
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
   out.stages = sanitizeStages(stored.stages ?? defaults.stages);

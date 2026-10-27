@@ -5,6 +5,8 @@ import { MONITOR_MODES } from './capture.js';
 import { insecureBridgeUrl } from './bridge.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { DisplayPicker } from './display-picker.js';
+import { EXECUTION_MODES, MODE_IDS, type ExecutionMode } from './execution-mode.js';
+import { MAX_SHIFT_LIMIT, sanitizeAutoApply, type AutoApplyBounds } from './aggressive.js';
 import styles from './droid-assist.module.css';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
@@ -147,6 +149,35 @@ export function CrewNotices({ engine }: { engine: AssistEngine }) {
     <ul className={styles.hud2} role="status" aria-label="Crew notifications">
       {latest.map((n) => <li key={n.id}>ℹ <b>{n.agentId}</b> {n.text}</li>)}
     </ul>
+/** Execution mode selector, the last mode change, and the auto-apply bounds aggressive mode stays within. */
+export function ModeControls({ engine }: { engine: AssistEngine }) {
+  const { settings, setSettings, modeChange } = engine;
+  const bounds = settings.autoApply;
+  const setBounds = (patch: Partial<AutoApplyBounds>) => setSettings({ ...settings, autoApply: sanitizeAutoApply({ ...bounds, ...patch }) });
+  return (
+    <div className={styles.hud2} aria-label="Execution mode">
+      <label title={EXECUTION_MODES[settings.executionMode].description}>Mode
+        <select value={settings.executionMode} onChange={(e) => engine.setMode(e.target.value as ExecutionMode, 'selected in the HUD', 'user')} aria-label="Execution mode">
+          {MODE_IDS.map((m) => <option key={m} value={m}>{EXECUTION_MODES[m].label}</option>)}
+        </select>
+      </label>
+      {modeChange && <span aria-label="Last mode change">{modeChange}</span>}
+      {settings.executionMode === 'aggressive' && (
+        <>
+          <label title="Off: every aggressive candidate waits for your Apply"><input type="checkbox" checked={bounds.enabled} onChange={(e) => setBounds({ enabled: e.target.checked })} aria-label="Auto-apply" /> Auto-apply</label>
+          <label>Min confidence <input type="number" min={0} max={1} step={0.05} value={bounds.minConfidence} onChange={(e) => setBounds({ minConfidence: e.target.valueAsNumber })} aria-label="Auto-apply min confidence" /></label>
+          <label>Max shift <input type="number" min={0} max={MAX_SHIFT_LIMIT} step={0.01} value={bounds.maxShift} onChange={(e) => setBounds({ maxShift: e.target.valueAsNumber })} aria-label="Auto-apply max shift" /></label>
+          <label>Max per run <input type="number" min={1} step={1} value={bounds.maxPerRun} onChange={(e) => setBounds({ maxPerRun: e.target.valueAsNumber })} aria-label="Auto-apply max per run" /></label>
+        </>
+      )}
+      {engine.candidates.map((c) => (
+        <span key={c.id} aria-label={`Candidate ${c.step.name}`}>
+          ⚡ {c.step.name} <small>{c.reason}</small>
+          <button type="button" onClick={() => void engine.applyCandidate(c.id)} title={engine.armed ? 'Real input (armed, budgeted)' : 'Dry run — nothing is sent'}>Apply</button>
+          <button type="button" onClick={() => engine.dismissCandidate(c.id)}>Dismiss</button>
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -201,6 +232,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
         </form>
       </div>
       <MonitorStatus engine={engine} />
+      <ModeControls engine={engine} />
       <InsecureBridgeWarning bridgeUrl={settings.bridgeUrl} />
       <CrewNotices engine={engine} />
       <div className={styles.hud2}>

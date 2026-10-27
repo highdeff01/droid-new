@@ -121,26 +121,34 @@ export function planSubagents(kind: SubagentKind, items: string[], totalBudget: 
 const ended = (status: SubagentStatus, message: string): SubagentOutcome => ({ status, message, dry: false, shots: [], thinking: [] });
 
 /**
- * Runs the subagents strictly one after another so they never fight over the screen. A slice
- * with no budget is skipped; once `shouldStop` is true the remaining slices are aborted without
- * running. A run that throws fails with its error. `onResult` sees each row as it lands.
+ * Runs the subagents `crew` at a time (default one after another, so they never fight over the
+ * screen). A slice with no budget is skipped; once `shouldStop` is true the remaining slices are
+ * aborted without running. A run that throws fails with its error. `onResult` sees the rows landed
+ * so far, in task order. The returned rows are in task order.
  */
 export async function runSubagents(
   tasks: SubagentTask[],
   run: (task: SubagentTask) => Promise<SubagentOutcome>,
   shouldStop: () => boolean,
   onResult: (results: SubagentResult[]) => void = () => undefined,
+  crew = 1,
 ): Promise<SubagentResult[]> {
-  const results: SubagentResult[] = [];
-  for (const task of tasks) {
-    let out: SubagentOutcome;
-    if (shouldStop()) out = ended('aborted', 'Stopped before it started — nothing sent');
-    else if (task.budget < 1) out = ended('skipped', 'No action budget left for this slice — not run');
-    else out = await run(task).catch((error: unknown) => ended('fail', `Subagent failed: ${error instanceof Error ? error.message : String(error)}`));
-    results.push({ ...task, ...out });
-    onResult([...results]);
-  }
-  return results;
+  const rows: Array<SubagentResult | undefined> = tasks.map(() => undefined);
+  let next = 0;
+  const one = async (task: SubagentTask): Promise<SubagentOutcome> => {
+    if (shouldStop()) return ended('aborted', 'Stopped before it started — nothing sent');
+    if (task.budget < 1) return ended('skipped', 'No action budget left for this slice — not run');
+    return run(task).catch((error: unknown) => ended('fail', `Subagent failed: ${error instanceof Error ? error.message : String(error)}`));
+  };
+  const worker = async () => {
+    while (next < tasks.length) {
+      const i = next++;
+      rows[i] = { ...tasks[i], ...(await one(tasks[i])) };
+      onResult(rows.filter((r): r is SubagentResult => !!r));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(crew, tasks.length)) }, worker));
+  return rows.filter((r): r is SubagentResult => !!r);
 }
 
 /** Count of each status. */

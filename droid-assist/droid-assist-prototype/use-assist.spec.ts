@@ -1529,5 +1529,90 @@ describe('useAssist element auto-mapping, perform and training', () => {
     expect(result.current.training?.status).not.toBe('running');
     expect(result.current.training?.entries.length).toBeGreaterThan(0);
     expect(result.current.log.some((l) => l.source === 'Trainer' && /dry run/.test(l.message))).toBe(true);
+describe('useAssistExecutionModes', () => {
+  it('defaults to thoughtful, with the capture interval unmodified', () => {
+    const { result } = renderHook(() => useAssist());
+    expect(result.current.settings.executionMode).toBe('thoughtful');
+    expect(result.current.intervalMs).toBe(result.current.settings.captureMs);
+  });
+
+  it('user switches mode from the HUD: logged once, persisted, re-selecting logs nothing, guardrails untouched', () => {
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.setMode('parallel', 'selected in the HUD', 'user'));
+    expect(result.current.settings.executionMode).toBe('parallel');
+    const modeLogs = result.current.log.filter((l) => l.source === 'Mode');
+    expect(modeLogs).toHaveLength(1);
+    expect(modeLogs[0].message).toMatch(/User/);
+    expect(modeLogs[0].message).toMatch(/Thoughtful/);
+    expect(modeLogs[0].message).toMatch(/Parallel/);
+    expect(JSON.parse(localStorage.getItem('droid-assist.settings')!).executionMode).toBe('parallel');
+    act(() => result.current.setMode('parallel', 'selected in the HUD', 'user'));
+    expect(result.current.log.filter((l) => l.source === 'Mode')).toHaveLength(1);
+    expect(result.current.armed).toBe(false);
+    expect(result.current.settings.autoApply).toEqual({ enabled: false, minConfidence: 0.8, maxShift: 0.05, maxPerRun: 5 });
+  });
+
+  it('AI switches to a low-cadence mode: capture interval clamped, change announced', () => {
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.setMode('watching', 'movie', 'ai'));
+    expect(result.current.intervalMs).toBe(2000);
+    expect(result.current.modeChange).toMatch(/AI/);
+    expect(result.current.modeChange).toMatch(/movie/);
+  });
+
+  it('loads a stored execution mode, and falls back to thoughtful for an unknown one', () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ executionMode: 'tracking' }));
+    expect(renderHook(() => useAssist()).result.current.settings.executionMode).toBe('tracking');
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ executionMode: 'bogus' }));
+    expect(renderHook(() => useAssist()).result.current.settings.executionMode).toBe('thoughtful');
+  });
+
+  describe('AI mode switching via the screen watcher', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    });
+
+    /** A fake model whose screen-watcher observation asks for `mode`, with everything else idle. */
+    const modelWithMode = (mode: string, reason: string) => vi.fn(async (_url: string, init: RequestInit) => {
+      const body = String(init.body);
+      const content = body.includes('screen watcher') ? JSON.stringify({ notes: [], proposals: [], mode: { mode, reason } })
+        : body.includes('final verdict') ? '{"success":false,"pattern_avoid":null,"pattern_add":null}'
+          : body.includes('reviewing a step') ? 'It did not run.' : 'OK';
+      return new Response(JSON.stringify({ message: { role: 'assistant', content, thinking: 'watching' } }), { status: 200 });
+    });
+
+    it('accepts a watching directive and announces why', async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal('fetch', modelWithMode('watching', 'a movie is playing'));
+      const { hooks } = installNative();
+      const { result } = renderHook(() => useAssist());
+      await act(() => vi.advanceTimersByTimeAsync(10));
+      await act(() => result.current.shareScreen());
+      act(() => hooks.onFrame!(frame()));
+      act(() => result.current.toggleStage('screenWatcher', true));
+      await act(() => vi.advanceTimersByTimeAsync(5100));
+      expect(result.current.settings.executionMode).toBe('watching');
+      const modeLog = result.current.log.find((l) => l.source === 'Mode');
+      expect(modeLog?.message).toMatch(/AI/);
+      expect(modeLog?.message).toMatch(/Watching/);
+      expect(modeLog?.message).toMatch(/a movie is playing/);
+    });
+
+    it('rejects a mode the AI may not set, leaving it and the guardrails untouched', async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal('fetch', modelWithMode('aggressive', 'acting fast'));
+      const { hooks } = installNative();
+      const { result } = renderHook(() => useAssist());
+      await act(() => vi.advanceTimersByTimeAsync(10));
+      await act(() => result.current.shareScreen());
+      act(() => hooks.onFrame!(frame()));
+      act(() => result.current.toggleStage('screenWatcher', true));
+      await act(() => vi.advanceTimersByTimeAsync(5100));
+      expect(result.current.settings.executionMode).toBe('thoughtful');
+      const modeLog = result.current.log.find((l) => l.source === 'Mode');
+      expect(modeLog?.message).toMatch(/rejected/);
+      expect(result.current.armed).toBe(false);
+    });
   });
 });

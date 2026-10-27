@@ -885,6 +885,7 @@ function BriefingItem({ b }: { b: Briefing }) {
     <li data-tone={b.outcome === 'unresolved' ? 'warn' : 'ok'}>
       <small>{clock(b.time)}</small> <b>{b.stepName}</b> <small>· {b.outcome}</small>
       {b.aiNote && <p role="alert">{b.aiNote}</p>}
+      {b.mode && <p><b>Mode:</b> {b.mode}</p>}
       <h4>Objectives</h4>
       <p><b>Goal:</b> {o.goal || '(none)'}</p>
       {o.progress && <p><b>Traced:</b> {o.progress}</p>}

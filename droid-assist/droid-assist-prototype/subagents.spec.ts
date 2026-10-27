@@ -91,3 +91,41 @@ describe('report', () => {
     await expect(listSections(empty, null, { kind: 'link', items: [], goal: 'x' })).rejects.toThrow(AiError);
   });
 });
+
+describe('runSubagentsCrew', () => {
+  const tasks: SubagentTask[] = planSubagents('link', ['A', 'B', 'C'], 3);
+
+  it('runs up to crew tasks at once and returns results in task order', async () => {
+    let live = 0;
+    let peak = 0;
+    const deferred: Array<() => void> = [];
+    const run = (task: SubagentTask) => new Promise<SubagentOutcome>((resolve) => {
+      live++;
+      peak = Math.max(peak, live);
+      deferred.push(() => {
+        live--;
+        resolve(outcome('pass', { message: task.label }));
+      });
+    });
+    const resultsPromise = runSubagents(tasks, run, () => false, undefined, 3);
+    while (deferred.length < tasks.length) await Promise.resolve();
+    deferred.forEach((release) => release());
+    const results = await resultsPromise;
+    expect(peak).toBe(3);
+    expect(results.map((r) => r.label)).toEqual(['A', 'B', 'C']);
+  });
+
+  it('defaults to running one task at a time', async () => {
+    let live = 0;
+    let peak = 0;
+    const run = async () => {
+      live++;
+      peak = Math.max(peak, live);
+      await new Promise((r) => setTimeout(r, 5));
+      live--;
+      return outcome('pass');
+    };
+    await runSubagents(tasks, run, () => false);
+    expect(peak).toBe(1);
+  });
+});

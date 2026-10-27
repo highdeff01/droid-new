@@ -82,6 +82,8 @@ export interface Briefing {
   aiNote: string | null;
   revisions: Revision[];
   outcome: BriefingOutcome;
+  /** The execution mode the step runs in, with the last mode change (absent on briefings made before modes). */
+  mode?: string;
   /** Zoomed crops around the planned point on the live and reference frames, when rendered. */
   liveCrop?: Frame;
   referenceCrop?: Frame;
@@ -99,6 +101,8 @@ export interface BriefingInput {
   online: boolean;
   /** The traced goal progress line; omitted or null when no goal is traced. */
   goalProgress?: string | null;
+  /** The execution mode line (current mode and last change). */
+  mode?: string;
 }
 
 /** Most briefings kept (newest first, in memory). */
@@ -180,6 +184,7 @@ export function buildBriefing(input: BriefingInput): Briefing {
     aiNote: input.online ? null : AI_DOWN_NOTE,
     revisions: [],
     outcome: 'clear',
+    ...(input.mode ? { mode: input.mode } : {}),
   };
 }
 
@@ -196,5 +201,5 @@ export const addBriefing = (list: Briefing[], b: Briefing) => [b, ...list.filter
 export function briefingText(b: Briefing): string {
   const conflicts = conflictsOf(b.crossRef).length;
   const fixes = b.revisions.length ? `; ${b.revisions.map((r) => r.kind).join(' → ')}` : '';
-  return `${b.outcome.toUpperCase()} — ${b.objectives.what}; ${b.comparison.verdict}; ${b.crossRef.length - conflicts} consistent, ${conflicts} conflicting${fixes}${b.aiNote ? ' (AI down)' : ''}`;
+  return `${b.outcome.toUpperCase()} — ${b.objectives.what}; ${b.comparison.verdict}; ${b.crossRef.length - conflicts} consistent, ${conflicts} conflicting${fixes}${b.aiNote ? ' (AI down)' : ''}${b.mode ? `; mode: ${b.mode}` : ''}`;
 }
