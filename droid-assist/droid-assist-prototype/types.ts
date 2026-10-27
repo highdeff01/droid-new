@@ -278,6 +278,8 @@ export interface AssistSettings {
   aiMaxInFlight: number;
   /** Per-request AI timeout in ms; queued calls get it when they start. Cancelling still aborts at once. */
   aiTimeoutMs: number;
+  /** Goal tracer: failed steps / no-progress checks in a row that count as a stalled goal. */
+  goalStall: number;
   /** Loop control: on/off per automation stage and agent (guardrails are never in it). */
   stages: StageMap;
   /** Error forwarding: the error-fix app's HTTP endpoint captured errors are POSTed to. */

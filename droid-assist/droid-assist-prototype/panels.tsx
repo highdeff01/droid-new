@@ -18,7 +18,7 @@ import { segmentLine } from './ruler.js';
 import type { ElementSource, ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
 import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js';
-import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
+import { GOAL_STALL_MAX, GOAL_STALL_MIN, WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
 import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
 import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, type AiView } from './ai.js';
@@ -295,7 +295,7 @@ export function AgentsPanel({ engine }: { engine: AssistEngine }) {
       {agents.map((a) => (
         <label key={a.id} className={styles.agent}>
           <input type="checkbox" checked={a.on} onChange={(e) => setAgents(agents.map((x) => (x.id === a.id ? { ...x, on: e.target.checked } : x)))} />
-          <span><strong>{a.name}</strong><small>{a.description}</small></span>
+          <span><strong>{a.name}</strong><small>{a.description}</small>{a.id === 'goalTracer' && <small aria-label="Goal tracer status">Live: {engine.tracerStatus}</small>}</span>
         </label>
       ))}
     </section>
@@ -330,6 +330,10 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       </label>
       <label className={styles.setting}>Screen-change threshold <b>{settings.changeCells} cells</b>
         <input type="range" min={2} max={40} value={settings.changeCells} onChange={(e) => setSettings({ ...settings, changeCells: +e.target.value })} aria-label="Screen-change threshold" />
+      </label>
+      <label className={styles.setting}>Goal tracer: stalled after <b>{settings.goalStall} setback(s)</b>
+        <small>Failed steps or goal checks without progress in a row before the tracer reports a stall.</small>
+        <input type="range" min={GOAL_STALL_MIN} max={GOAL_STALL_MAX} value={settings.goalStall} onChange={(e) => setSettings({ ...settings, goalStall: +e.target.value })} aria-label="Goal tracer stall threshold" />
       </label>
       <label className={styles.setting}>Retries per failed step <b>{settings.stepRetries}</b>
         <small>Each retry re-verifies and re-corrects the target and spends budget; then the planner re-plans the step once.</small>
@@ -687,6 +691,7 @@ function BriefingItem({ b }: { b: Briefing }) {
       {b.aiNote && <p role="alert">{b.aiNote}</p>}
       <h4>Objectives</h4>
       <p><b>Goal:</b> {o.goal || '(none)'}</p>
+      {o.progress && <p><b>Traced:</b> {o.progress}</p>}
       <ol>{o.sequence.map((s) => <li key={s.id}>{s.current ? <b>{s.action} "{s.target}" ← now</b> : `${s.action} "${s.target}" · ${s.status}`}</li>)}</ol>
       <p><b>What:</b> {o.what} — {o.action} "{o.target}" at ({(o.x * 100).toFixed(1)}%, {(o.y * 100).toFixed(1)}%)</p>
       <p><b>Why:</b> {o.why} <small>({o.source === 'ai' ? 'AI proposal' : 'local, AI not consulted'})</small></p>

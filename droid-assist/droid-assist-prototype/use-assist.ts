@@ -53,6 +53,8 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
+import { DEFAULT_GOAL_STALL, type GoalSource } from './goal-tracer.js';
+import { useGoalTracer } from './use-goal-tracer.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -172,6 +174,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   stepRetries: DEFAULT_STEP_RETRIES,
   aiMaxInFlight: DEFAULT_AI_MAX_IN_FLIGHT,
   aiTimeoutMs: DEFAULT_AI_TIMEOUT_MS,
+  goalStall: DEFAULT_GOAL_STALL,
   stages: DEFAULT_STAGES,
   errorUrl: '',
   errorForwarding: false,
@@ -180,7 +183,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
 
 /** A background agent the user can toggle; each also has an inbox on the inter-agent bus. */
 export interface Agent {
-  id: Exclude<BusAgentId, 'habits'> | 'identify';
+  id: Exclude<BusAgentId, 'habits'> | 'identify' | 'goalTracer';
   name: string;
   description: string;
   on: boolean;
@@ -250,6 +253,7 @@ export function useAssist() {
     { id: 'screen', name: BUS_AGENTS.screen, description: 'Observes forwarded elements on the live screen', on: true },
     { id: 'coords', name: 'Coordinate learner', description: 'Learns target coordinates from cursor dwell and verified actions; seeds grounding with them', on: true },
     { id: 'supervisor', name: 'Supervisor', description: 'Reviews all agents, screenshots and thinking; applies confident fixes, performs them if the executor does not, and splits link/route tests into subagents', on: true },
+    { id: 'goalTracer', name: 'Goal tracer', description: 'Traces the active goal live from step outcomes, screenshot verdicts and agent reports; flags off-path runs, stalls and completion', on: true },
   ]);
   /** The inter-agent message bus: every forwarded element in each recipient's inbox, newest first. */
   const [bus, setBus] = useState<BusMessage[]>([]);
@@ -396,8 +400,10 @@ export function useAssist() {
   const staleHandledRef = useRef<ChangeAssessment | null>(null);
   /** Steps that already used their one re-proposal. */
   const reproposedRef = useRef(new Set<string>());
+  const agentsListRef = useRef(agents);
 
   supervisorRef.current = supervisor;
+  agentsListRef.current = agents;
   timelineRef.current = timeline;
   syncRef.current = sync;
   progressRef.current = progress;
@@ -519,6 +525,19 @@ export function useAssist() {
 
   /** Whether a loop-control stage is checked; read live so a toggle applies mid-run. */
   const stageOn = (id: StageId) => settingsRef.current.stages[id];
+
+  /** The Goal tracer agent's checkbox, read live (the agents list is declared with the state above). */
+  const tracerAgentOn = () => agentsListRef.current.some((a) => a.id === 'goalTracer' && a.on);
+  /** The live Goal tracer: on while both its loop-control stage and its agent are checked. */
+  const { goals, tracer } = useGoalTracer({
+    enabled: () => stageOn('goalTracer') && tracerAgentOn(),
+    stallLimit: () => settingsRef.current.goalStall,
+    notify: (message, tone) => addLog('Goal tracer', message, tone),
+  });
+  /** Where a run's goal came from: the typed goal is the user's, anything the engine derived is the AI's. */
+  const goalSource = (text: string): GoalSource => (text.trim() && text.trim() === goalRef.current.trim() ? 'user' : 'ai');
+  /** Starts tracing a run that has no active goal (a recorded or edited plan). */
+  const traceRun = (runGoal: string) => tracer.ensure({ goal: runGoal, source: goalSource(runGoal), steps: stepsRef.current, workflowId: flowRef.current });
 
   /** The drift thresholds and search radius from Settings; read live so a change applies mid-run. */
   const driftThresholds = (): DriftThresholds => {
@@ -709,7 +728,8 @@ export function useAssist() {
     runStartRef.current = null;
     const summary = runSummary({ goal: runGoal, steps: runSteps, startedAt, ...opts, session: sessionRef.current, flowId: flowRef.current });
     setRuns((r) => appendSummary(r, summary));
-  }, []);
+    tracer.emit({ kind: 'run', runId: summary.id, outcome: summary.outcome, flowId: flowRef.current });
+  }, [tracer]);
 
   /**
    * Run memory: a successful real run is saved as a flow; a failed one records its failure
@@ -1111,7 +1131,10 @@ export function useAssist() {
     if (!out.ok && !out.bridgeFailed) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
     if (out.halt || !aiOnline()) return out;
     const verdict = await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
-    if (verdict && !dryRun) learnHabit(step, verdict);
+    if (verdict && !dryRun) {
+      learnHabit(step, verdict);
+      tracer.emit({ kind: 'verdict', stepId: step.id, name: step.name, success: verdict.success });
+    }
     return { ...out, verdict };
   };
 
@@ -1168,6 +1191,7 @@ export function useAssist() {
       log: (m, tone) => addLog(actor, m, tone),
     });
     const replanned = attempts.some((a) => a.kind === 'replan');
+    tracer.emit({ kind: 'retries', count: attempts.length - 1 });
     if (!exhausted) return { ...out, replanned };
     addLog(actor, `"${step.name}": failed after ${attempts.length} attempt(s) — marked failed, avoid pattern recorded`, 'error');
     learnFailure(step, attempts);
@@ -1493,6 +1517,8 @@ export function useAssist() {
     }
     const evidence = out.executed ? { beforeFrame: before ?? undefined, afterFrame: out.shot ?? framesRef.current[0] } : {};
     updateStep(index, { status: out.executed ? 'done' : 'failed', ...measured, ...(out.shot ? { shot: out.shot } : {}), ...evidence });
+    const step = stepsRef.current[index];
+    if (step) tracer.emit({ kind: 'step', stepId: step.id, name: step.name, ok: out.ok, executed: out.executed, detail: out.message });
     if (!out.executed) return;
     if (stageOn('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
   };
@@ -1532,6 +1558,7 @@ export function useAssist() {
       const review = await reviewRun(askFor('supervisor'), input);
       const applied = isConfident(review);
       if (applied) applyReview(review);
+      if (!review.planOk) tracer.emit({ kind: 'deviation', cause: 'review', text: `supervisor says the plan needs updates — ${review.assessment}` });
       const text = reviewText(review, applied);
       note({ step: 'Supervisor', kind: 'review', text, thinking: review.thinking });
       superviseReport({ status: 'done', detail: text, review, applied }, review.planOk ? 'ok' : 'warn');
@@ -1740,7 +1767,7 @@ export function useAssist() {
   /** A fresh briefing of `step` with `proposal` on the live frame. */
   const buildBriefingFor = (step: WorkflowStep, proposal: Proposal) => buildBriefing({
     goal: goalRef.current, steps: stepsRef.current, step, proposal, live: framesRef.current[0] ?? null,
-    knowledge: knowledge(), thresholds: driftThresholds(), online: aiOnline(),
+    knowledge: knowledge(), thresholds: driftThresholds(), online: aiOnline(), goalProgress: tracer.briefingLine(),
   });
 
   /** Records a briefing (newest first) with zoomed crops of the planned point on the live and reference frames. */
@@ -1803,6 +1830,7 @@ export function useAssist() {
   const markPlan = () => {
     autoLoopRef.current = null;
     flowRef.current = null;
+    tracer.release();
     planAtRef.current = Date.now();
     reproposedRef.current = new Set();
     staleHandledRef.current = null;
@@ -1883,6 +1911,7 @@ export function useAssist() {
     }
     if (j.kind === 'fail') failUnjustified(idx, 'Auto-Actor', j.reason);
     else {
+      if (runStartRef.current === null) traceRun(runGoalOf());
       runStartRef.current ??= Date.now();
       updateStep(idx, { status: 'running' });
       const out = await perform(j.step, 'Auto-Actor', autoBudgetRef.current, dry, j.proposal);
@@ -1939,7 +1968,10 @@ export function useAssist() {
     if (next?.refFrame && stageOn('drift')) {
       const { r, level } = driftCheck(next, frame);
       setSync({ level, detail: `"${next.name}": region ${r.regionDistance.toFixed(3)}, best ${r.matchDistance.toFixed(3)}${level === 'yellow' ? `, drift (${(r.dx * 100).toFixed(1)}%, ${(r.dy * 100).toFixed(1)}%)` : ''}` });
-      if (level === 'red') captureError({ kind: 'drift', message: `Drift red: target of "${next.name}" not found on the live screen`, goal: goalRef.current, step: next.name });
+      if (level === 'red') {
+        captureError({ kind: 'drift', message: `Drift red: target of "${next.name}" not found on the live screen`, goal: goalRef.current, step: next.name });
+        tracer.emit({ kind: 'deviation', cause: 'drift', text: `drift monitor: target of "${next.name}" not found on the live screen` });
+      }
     } else if (!next) {
       setSync({ level: 'idle', detail: 'No active step' });
     }
@@ -2136,6 +2168,7 @@ export function useAssist() {
       updateStep(i, { status: 'drift' });
       addLog(label, out.message, 'error');
       captureError({ kind: 'drift', message: out.message, goal: goalRef.current, step: planned.name });
+      tracer.emit({ kind: 'deviation', cause: 'popup', text: `popup watcher: "${planned.name}" is covered by a popup` });
       return out;
     }
     let j: Justified;
@@ -2192,6 +2225,7 @@ export function useAssist() {
     if (dryRun && !selfTest) addLog('Safety', `Real input disarmed — ${label} runs as a ${DRY_RUN}`, 'warn');
     const budget = createBudget(settingsRef.current.actionBudget);
     abortRef.current = false;
+    traceRun(runGoal);
     runStartRef.current = Date.now();
     reproposedRef.current = new Set();
     replayingRef.current = true;
@@ -2209,6 +2243,7 @@ export function useAssist() {
       const what = dryRun ? 'verified on screen (not dispatched)' : 'executed';
       addLog('Goal reviewer', ok === total ? `All ${total} steps ${what}${goal ? ` for "${goal}"` : ''}` : `${ok}/${total} ${what} — re-plan the failed steps or let AI help clear blockers`, ok === total ? 'ok' : 'warn');
     }
+    if (!abortRef.current) await confirmGoal(runGoal, ran, dryRun);
     await learnFromRun(ran, { dryRun, stopped: abortRef.current });
     await superviseRun();
     return { ok, total: ran.length, dryRun, stopped: abortRef.current };
@@ -2244,7 +2279,21 @@ export function useAssist() {
   const checkGoal = async (runGoal: string, ran: WorkflowStep[], n: number): Promise<GoalCheck> => {
     const check = await thought(`Verify goal #${n + 1}: ${runGoal}`, () => verifyGoal(askFor('autoContinue'), framesRef.current[0] ?? null, runGoal, ran), goalSummary);
     addLog('Auto-continue', `Iteration ${n + 1} check: ${goalSummary(check)}`, check.complete ? 'ok' : 'info');
-    return check;
+    return tracer.check(check);
+  };
+
+  /**
+   * The Goal tracer's completion check at a run's end: when every traced step is verified and no goal check
+   * was made, it confirms the goal on the live screen (its own stage, so unchecking it cancels the call).
+   */
+  const confirmGoal = async (runGoal: string, ran: WorkflowStep[], dryRun: boolean) => {
+    const g = tracer.active();
+    if (!g || dryRun || g.progress < 100 || g.lastCheck || !aiOnline()) return;
+    try {
+      tracer.check(await verifyGoal(askFor('goalTracer'), framesRef.current[0] ?? null, runGoal, ran));
+    } catch (error) {
+      addLog('Goal tracer', aiFailure(`AI unavailable — completion of "${runGoal}" not confirmed on screen`, error), 'warn');
+    }
   };
 
   /** Auto-continue re-plan: the model plans the remaining steps, which become the next run; timeline + log. */
@@ -2252,6 +2301,7 @@ export function useAssist() {
     const plan = await thought(`Continue #${n}: ${runGoal}`, () => planRemaining(askFor('planner'), runGoal, framesRef.current[0] ?? null, ran, check.reason, patternsRef.current), (r) => `${r.steps.length} step(s): ${stepsText(r.steps)}`);
     stepsRef.current = plan.steps;
     setSteps(plan.steps);
+    tracer.emit({ kind: 'plan', steps: plan.steps, append: true });
     addLog('Auto-continue', `Iteration ${n} plan: ${plan.steps.length} step(s) — ${stepsText(plan.steps)}`, 'info');
   };
 
@@ -2314,6 +2364,7 @@ export function useAssist() {
     stepsRef.current = planned;
     setSteps(planned);
     markPlan();
+    tracer.begin({ goal: text, source: goalSource(text), steps: planned });
     setDraftCard(generateCard(planned, text));
     addLog('Planner', `${why}: ${planned.length} step(s) — ${planned.map((s) => `${s.action} "${s.target ?? s.name}"`).join(' → ')}${arrangement}${armedRef.current ? '' : ' (real input disarmed: replay / Auto Act run it as a dry run)'}`, 'ok');
   };
@@ -2348,7 +2399,7 @@ export function useAssist() {
     planningRef.current = true;
     await withAi(async () => {
       try {
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine), ...tracer.memory(text)], patternsRef.current), planSummary);
         if (planGuardRef.current.after(plan.steps) === 'duplicate') {
           addLog('Planner', `Re-plan guard: the plan for "${text.trim()}" is identical to the previous one — kept the current steps and will not ask the model again until the screen or a step changes`, 'warn');
           return;
@@ -2818,6 +2869,7 @@ export function useAssist() {
     setSteps(stepsRef.current);
     markPlan();
     flowRef.current = card.id;
+    tracer.begin({ goal: card.description.trim() || card.name, source: 'workflow', steps: stepsRef.current, workflowId: card.id });
     addLog('Library', `Loaded "${card.name}"`);
   };
 
@@ -2944,6 +2996,8 @@ export function useAssist() {
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
     armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
     ruler, continuing, habits, deleteHabit, pinHabit, runs,
+    /** Every operation's traced goal (newest first) and the Goal tracer's live status. */
+    goals, tracerStatus: tracer.status(),
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     watcher, acceptProposal, dismissProposal, testProposal,
