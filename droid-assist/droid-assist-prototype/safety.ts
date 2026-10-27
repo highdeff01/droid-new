@@ -55,3 +55,27 @@ export function spendAction(budget: ActionBudget): boolean {
   budget.used += 1;
   return true;
 }
+
+/** The guardrail facts the real-input dispatch state is made of. */
+export interface DispatchInputs {
+  armed: boolean;
+  bridgeOnline: boolean;
+  executorOn: boolean;
+  aborted: boolean;
+}
+
+/** Whether input steps really reach the PC right now, with the HUD label and the reason. */
+export interface DispatchState {
+  real: boolean;
+  label: 'Real input ACTIVE' | 'Dry run';
+  reason: string;
+}
+
+/**
+ * The true dispatch state: real input only when not aborted, armed, the executor stage is on and
+ * the bridge is connected; otherwise a dry run with the first guardrail that stops it.
+ */
+export function dispatchState({ armed, bridgeOnline, executorOn, aborted }: DispatchInputs): DispatchState {
+  const blocker = aborted ? 'aborted' : !armed ? 'disarmed' : !executorOn ? 'executor stage off' : !bridgeOnline ? 'bridge not connected' : null;
+  return blocker ? { real: false, label: 'Dry run', reason: `${blocker} — not dispatched` } : { real: true, label: 'Real input ACTIVE', reason: 'armed, executor on, bridge connected — every input goes to the PC' };
+}

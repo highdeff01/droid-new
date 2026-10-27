@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AiCancelled } from './ai.js';
+import { AiCancelled, DEFAULT_AI_TIMEOUT_MS } from './ai.js';
 import { DEFAULT_AI_MAX_IN_FLIGHT, createAiQueue, drainedText, stagePriority } from './ai-queue.js';
 import type { StageId } from './loop-control.js';
 
@@ -137,5 +137,43 @@ describe('createAiQueue', () => {
     a.release();
     b.release();
     await expect(Promise.all([ra, rb])).resolves.toEqual(['a', 'b']);
+  });
+
+  it('hands each task the AI timeout, defaulting to 90 s', async () => {
+    const seen: number[] = [];
+    await createAiQueue(2).run('planner', async (ms) => seen.push(ms));
+    await createAiQueue(2, undefined, 15_000).run('planner', async (ms) => seen.push(ms));
+    expect(seen).toEqual([DEFAULT_AI_TIMEOUT_MS, 15_000]);
+  });
+
+  it('a queued call gets the timeout current when it leaves the queue', async () => {
+    const started: string[] = [];
+    const q = createAiQueue(1, undefined, 20_000);
+    const a = gate(started, 'a');
+    const seen: number[] = [];
+    const ra = q.run('executor', a.task);
+    const rb = q.run('supervisor', async (ms) => {
+      seen.push(ms);
+      return 'b';
+    });
+    q.setTimeoutMs(45_000);
+    a.release();
+    await expect(Promise.all([ra, rb])).resolves.toEqual(['a', 'b']);
+    expect(seen).toEqual([45_000]);
+  });
+
+  it('a queued call with a long timeout is still dropped at once when its signal aborts', async () => {
+    const q = createAiQueue(1, undefined, 300_000);
+    const started: string[] = [];
+    const a = gate(started, 'a');
+    const ra = q.run('executor', a.task);
+    const ctrl = new AbortController();
+    const task = vi.fn(async () => 'never');
+    const queued = q.run('planner', task, ctrl.signal);
+    ctrl.abort();
+    await expect(queued).rejects.toBeInstanceOf(AiCancelled);
+    a.release();
+    await ra;
+    expect(task).not.toHaveBeenCalled();
   });
 });
