@@ -9,7 +9,7 @@ import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, 
 import type { AiReply, AiStatus, AskFn, AskRequest } from './ai.js';
 import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type StageId } from './loop-control.js';
 import { DEFAULT_AI_MAX_IN_FLIGHT, createAiQueue, type AiQueue, type AiQueueStats } from './ai-queue.js';
-import { confirmTarget, decidePopup, decideStep, describeScreen, judgeStep, reflectOn, reflectStep, verifyGoal, type GoalCheck, type PopupDecision, type StepDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
+import { confirmTarget, decidePopup, describeScreen, judgeStep, reflectOn, verifyGoal, type GoalCheck, type PopupDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
 import { DEFAULT_GRID_OPACITY } from './grid-overlay.js';
 import { MARKER_OF, createCursorAnimator, type CursorAnimator } from './cursor-path.js';
 import { DEFAULT_MAX_ITERATIONS, autoContinue, judgeCheck, type ContinueStop, type RunReport } from './auto-continue.js';
