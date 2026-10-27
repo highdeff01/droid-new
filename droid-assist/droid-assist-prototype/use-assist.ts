@@ -26,7 +26,7 @@ import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, fullJpeg, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, dispatchState, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
 import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './recorder.js';
-import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
+import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, loadAccessPaths, saveAccessPaths, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
 import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
 import { appendSummary, runSummary, type RunSummary } from './run-stats.js';
 import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, reorderSteps, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
@@ -53,6 +53,7 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
+import { applyReach, currentPath, deletePath, editPath, isHopAction, learnPaths, parseHops, pathLine, pathOutcome, pathSteps, reachTarget, relevantPaths, runPath, usablePath, type AccessProfile, type Reach } from './access-paths.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -237,6 +238,9 @@ export function useAssist() {
   /** The Screen watcher's notes, proposals and test results (persisted). */
   const [watcher, setWatcher] = useState<WatcherState>(loadWatcher);
   const [triggers, setTriggers] = useState<Trigger[]>(loadTriggers);
+  /** Per-target, per-app access paths (versioned), tried before fresh grounding. */
+  const [accessPaths, setAccessPaths] = useState<AccessProfile[]>(loadAccessPaths);
+  const accessPathsRef = useRef<AccessProfile[]>(accessPaths);
   const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
@@ -430,6 +434,7 @@ export function useAssist() {
   useEffect(() => saveRunSummaries(runs), [runs]);
   useEffect(() => saveWatcher(watcher), [watcher]);
   useEffect(() => saveTriggers(triggers), [triggers]);
+  useEffect(() => saveAccessPaths(accessPaths), [accessPaths]);
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
   }, [cards]);
@@ -662,6 +667,24 @@ export function useAssist() {
   const deleteHabit = (id: string) => commitHabits(habitsRef.current.filter((h) => h.id !== id));
   const pinHabit = (id: string) => commitHabits(togglePin(habitsRef.current, id));
 
+  /** Replaces the access-path profiles (persisted by the effect above). */
+  const commitAccessPaths = useCallback((next: AccessProfile[]) => {
+    accessPathsRef.current = next;
+    setAccessPaths(next);
+  }, []);
+  /** A hand edit of a profile's path (one hop per line); false when the text is not a valid path. */
+  const editAccessPath = (id: string, text: string) => {
+    const hops = parseHops(text);
+    if (hops) commitAccessPaths(editPath(accessPathsRef.current, id, hops));
+    return hops !== null;
+  };
+  const deleteAccessPath = (id: string) => commitAccessPaths(deletePath(accessPathsRef.current, id));
+  /** A real path run counts toward the profile (a repaired path becomes its new version) and feeds the target's habit. */
+  const countPath = (profile: AccessProfile, reach: Reach<Performed>) => {
+    commitAccessPaths(applyReach(accessPathsRef.current, profile, reach));
+    if (stageOn('coords')) commitHabits(recordOutcome(habitsRef.current, pathOutcome(profile, reach.via === 'path' && reach.out.ok, reach.failedHop)));
+  };
+
   /**
    * The AI grounding pass run-step uses: confirm on a zoomed crop, re-ask the planner once.
    * Each check and the re-ask record their thinking on the step's timeline.
@@ -720,6 +743,7 @@ export function useAssist() {
     const verdict = runVerdict(runSteps, opts);
     const runGoal = goalRef.current.trim();
     if (verdict === 'success' && stageOn('supervisor')) autoSaveFlow(runGoal, runSteps);
+    if (verdict === 'success' && stageOn('coords')) commitAccessPaths(learnPaths(accessPathsRef.current, runSteps, habitContext()));
     recordRun(runGoal, runSteps, opts);
     if (verdict === 'ignored' || !stageOn('supervisor')) return;
     if (verdict === 'failed') {
@@ -734,7 +758,7 @@ export function useAssist() {
     } catch (error) {
       addLog('Patterns', `AI unavailable — no patterns learned from this run: ${errorText(error)}`, 'warn');
     }
-  }, [addLog, addPatterns, askFor, autoSaveFlow, recordRun]);
+  }, [addLog, addPatterns, askFor, autoSaveFlow, commitAccessPaths, recordRun]);
 
   const triggerAbort = useCallback((reason: string) => {
     abortRef.current = true;
@@ -1097,6 +1121,20 @@ export function useAssist() {
   const forgetFamiliar = (id: string) => setFamiliar((list) => forgetElement(list, id));
 
   /**
+   * Reaches a click step's target by its saved access path first (no re-planning); a failed hop
+   * falls back to `fresh` grounding. A real run counts the path's use, saves a repaired path and
+   * feeds the path's success or failure back into the target's habit.
+   */
+  const reachByPath = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, fresh: () => Promise<Performed>): Promise<Performed> => {
+    const profile = isHopAction(step.action) && step.target ? usablePath(accessPathsRef.current, step.target, habitContext()) : null;
+    const reached = stepsRef.current.filter((s) => s.status === 'done' && s.target).map((s) => s.target!);
+    const reach = await reachTarget(step, profile, { runHop: (s) => performStep(s, actor, budget, dryRun), fallback: fresh, reached, log: (m, tone) => addLog(actor, m, tone) });
+    if (!profile || dryRun || reach.via === 'fresh' || reach.out.halt) return reach.out;
+    countPath(profile, reach);
+    return reach.out;
+  };
+
+  /**
    * performStep (with element identification on a miss), then reflect-after-step: every step the
    * pipeline ran gets the model's reflection and verdict, and the verdict of a step that really
    * ran (not a dry run) updates its habit. No step is dispatched without a recorded proposal for
@@ -1105,7 +1143,8 @@ export function useAssist() {
   const perform = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null, ladder = true): Promise<Performed & { verdict?: StepVerdict | null }> => {
     if (!proposal?.ready) return refused(step, `No recorded proposal for "${step.name}" — not executed`);
     const before = framesRef.current[0] ?? null;
-    const out = ladder ? await performWithRetries(step, actor, budget, dryRun) : await performIdentified(step, actor, budget, dryRun);
+    const fresh = () => (ladder ? performWithRetries(step, actor, budget, dryRun) : performIdentified(step, actor, budget, dryRun));
+    const out = await reachByPath(step, actor, budget, dryRun, fresh);
     learnFromOutcome(step, out, before);
     void rememberTarget(step, out);
     if (!out.ok && !out.bridgeFailed) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
@@ -1436,6 +1475,28 @@ export function useAssist() {
     learnFromOutcome({ ...step, target: el.name }, out, before);
     if (out.executed) void rememberTarget({ ...step, target: el.name }, out);
     addLog('Test click', `"${el.name}" at ${where}: ${out.message}`, out.ok ? 'ok' : 'error');
+  };
+
+  /**
+   * Test-runs a saved access path as the Path tester agent through the same gated pipeline as
+   * Test click (abort, arm, subagents stage, a fresh budget); disarmed it is a dry run. A real
+   * test-run counts toward the path and its target's habit.
+   */
+  const testAccessPath = async (id: string) => {
+    const profile = accessPathsRef.current.find((p) => p.id === id);
+    if (!profile) return;
+    const actor = 'Path tester';
+    const dryRun = !armedRef.current;
+    if (!dryRun && !abortedRef.current && !stageOn('subagents')) {
+      addLog(actor, `"${profile.target}" — ${stageOff('subagents')}, nothing sent`, 'warn');
+      return;
+    }
+    const budget = createBudget(settingsRef.current.actionBudget);
+    const run = await runPath(pathSteps(profile, []), (s) => performStep(s, actor, budget, dryRun));
+    const ok = run.ok && !!run.last;
+    addLog(actor, `"${profile.target}" path v${currentPath(profile).version}: ${ok ? 'reached' : `failed at hop ${(run.failedHop ?? 0) + 1}`} — ${run.last?.message ?? 'no hop ran'}`, ok ? 'ok' : 'error');
+    if (dryRun || run.last?.halt) return;
+    countPath(profile, { via: 'path', out: run.last!, failedHop: run.failedHop });
   };
 
   const elements = listElements(steps, annotations, familiar);
@@ -2344,11 +2405,13 @@ export function useAssist() {
     }
     const applied = relevantHabits(text, habitContext(), habitsRef.current);
     if (applied.length) addLog('Habits', `Applying ${applied.length} habit(s) to planning: ${applied.map(habitLine).join(' | ')}`, 'info');
+    const paths = relevantPaths(text, habitContext(), accessPathsRef.current);
+    if (paths.length) addLog('Access paths', `Applying ${paths.length} saved path(s) to planning: ${paths.map(pathLine).join(' | ')}`, 'info');
     let planned = false;
     planningRef.current = true;
     await withAi(async () => {
       try {
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...applied.map(habitLine), ...paths.map(pathLine)], patternsRef.current), planSummary);
         if (planGuardRef.current.after(plan.steps) === 'duplicate') {
           addLog('Planner', `Re-plan guard: the plan for "${text.trim()}" is identical to the previous one — kept the current steps and will not ask the model again until the screen or a step changes`, 'warn');
           return;
@@ -2948,6 +3011,7 @@ export function useAssist() {
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     watcher, acceptProposal, dismissProposal, testProposal,
     triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger,
+    accessPaths, editAccessPath, deleteAccessPath, testAccessPath,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
     aiHistory, trimAiHistory, resetAiSession,
     /** The AI is planning, reflecting, deciding or verifying right now. */
