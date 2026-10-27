@@ -11,6 +11,9 @@ const COMMANDS = {
   scenario: 'Usage: /scenario <dragon|wedding> — resets the test world and plans that persona goal',
   do: 'Usage: /do <capability id> {json params} · /do <request for the main AI>, e.g. /do script.run {"name":"login"}',
   snip: 'Usage: /snip x,y,w,h [WxH] [display <id>], e.g. /snip 0.1,0.2,0.3,0.25 800x',
+  crew: 'Usage: /crew locate <element> · /crew test <element or reason>',
+  intercept: 'Usage: /intercept [bridge:|agent:|app:|ai:] <what changed> [at x,y], e.g. /intercept app: popup opened at 40%,50%',
+  backtrack: 'Usage: /backtrack <number of recent steps>, e.g. /backtrack 3',
 } as const;
 
 /** The name of a slash command. */
@@ -32,6 +35,7 @@ export function parseCommand(input: string): AssistCommand | null {
   if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal> or /scenario <dragon|wedding>` };
   if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal> or /do <capability>` };
   if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal> or /snip x,y,w,h` };
+  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal>, /crew <locate|test ...>, /intercept <text> or /backtrack <n>` };
   const target = (match[2] ?? '').trim();
   return target ? { kind: name, target } : { kind: 'error', message: COMMANDS[name] };
 }

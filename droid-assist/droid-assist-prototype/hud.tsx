@@ -139,6 +139,17 @@ export function SafetyControls({ engine }: { engine: AssistEngine }) {
   );
 }
 
+/** The newest crew notifications (off-position targets, wrong path, intercepts, tests), so none is silent. */
+export function CrewNotices({ engine }: { engine: AssistEngine }) {
+  const latest = engine.crew.notices.slice(0, 3);
+  if (!latest.length) return null;
+  return (
+    <ul className={styles.hud2} role="status" aria-label="Crew notifications">
+      {latest.map((n) => <li key={n.id}>ℹ <b>{n.agentId}</b> {n.text}</li>)}
+    </ul>
+  );
+}
+
 /** Primary HUD: screen source, record / replay / self-test, goal + AI plan. */
 export function Hud({ engine }: { engine: AssistEngine }) {
   const { source, recording, replaying, goal, setGoal, settings, setSettings, steps, progress, plays, aiStatus, aiBusy } = engine;
@@ -191,6 +202,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
       </div>
       <MonitorStatus engine={engine} />
       <InsecureBridgeWarning bridgeUrl={settings.bridgeUrl} />
+      <CrewNotices engine={engine} />
       <div className={styles.hud2}>
         <SafetyControls engine={engine} />
         <ReverseControl engine={engine} />

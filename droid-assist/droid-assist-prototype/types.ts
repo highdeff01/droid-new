@@ -234,6 +234,8 @@ export interface SavedCard {
 
 /** User-tunable settings for capture, drift and automation. */
 export interface AssistSettings {
+  /** Worker agents in the coordinated crew (5–50, default 25). */
+  crewSize: number;
   /** Frames kept in the comparison gallery. */
   gallerySize: number;
   /** Drift checkpoints sampled per cursor move, start to finish. */

@@ -21,7 +21,7 @@ import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, selfTestBridge, 
 import { DRY_RUN, dragEndError, runStep, type Grounding, type StepOutcome } from './run-step.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
-import { parseCommand } from './commands.js';
+import { parseCommand, type CommandName } from './commands.js';
 import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, fullJpeg, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, dispatchState, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
@@ -46,9 +46,11 @@ import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
 import { REVERSE_ACTOR, reverseOffer } from './reverse.js';
+import { CREW_SIZE_DEFAULT, parseIntercept } from './crew.js';
+import { useCrew } from './use-crew.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, newPattern, runVerdict, upsertCard } from './flow-memory.js';
 import { SUPERVISOR_INTERVAL_MS, SUPERVISOR_TICK_MS, applyFixes, executorBusy as supervisorExecutorBusy, habitPatterns, isConfident, reviewRun, reviewText, staleFixes, type PendingFix, type SupervisorReview, type SupervisorState } from './supervisor.js';
-import { BUS_AGENTS, elementLine, forward, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
+import { BUS_AGENTS, BUS_AGENT_IDS, elementLine, forward, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
 import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
 import { useApprovals } from './use-approvals.js';
@@ -207,6 +209,7 @@ const scanSummary = (r: ScanMerge): string | null => {
 
 /** Default settings. */
 export const DEFAULT_SETTINGS: AssistSettings = {
+  crewSize: CREW_SIZE_DEFAULT,
   gallerySize: 10,
   checkpoints: 6,
   captureMs: 500,
@@ -475,6 +478,8 @@ export function useAssist() {
   const lastReviewAt = useRef(Date.now());
   const supervisorRef = useRef(supervisor);
   const busRef = useRef<BusMessage[]>([]);
+  /** The crew's API, for callbacks defined before the crew hook runs. */
+  const crewApiRef = useRef<ReturnType<typeof useCrew> | null>(null);
   const knownRef = useRef<ForwardedElement[]>([]);
   /** True while link/route subagents hold the screen; Auto Act pauses meanwhile. */
   const subRunningRef = useRef(false);
@@ -1151,6 +1156,7 @@ export function useAssist() {
     setBus(updated);
     const shot = framesRef.current[0];
     if (shot) preferFrame(shot, BUS_AGENTS[from], `found "${element.name}"`);
+    crewApiRef.current?.observeElement(element);
     addLog('Agent bus', `${BUS_AGENTS[from]} forwarded "${element.name}" at ${at(element.x, element.y)} to ${queued.length} agent(s)`, 'info');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addLog, preferFrame]);
@@ -3122,6 +3128,30 @@ export function useAssist() {
   /** AI Stop: the emergency-stop path, which also cancels the in-flight model call. */
   const stopAi = () => triggerAbort('AI stop button');
 
+  /** The coordinated crew the main AI commands: sentinels, path checkers, adjusters, test runners and monitors. */
+  const crew = useCrew({
+    crewSize: settings.crewSize,
+    goal,
+    steps,
+    history,
+    addLog,
+    performStep,
+    newBudget: () => createBudget(settingsRef.current.actionBudget),
+    isArmed: () => armedRef.current,
+    hasFrames: () => framesRef.current.length > 0,
+    knowledge,
+    stopRun: stop,
+    sendResult: (requester, element, report) => {
+      const to: BusAgentId = (BUS_AGENT_IDS as string[]).includes(requester) && requester !== 'supervisor' ? (requester as BusAgentId) : 'goal';
+      const { bus: next, queued } = forward(busRef.current, 'supervisor', element, [to]);
+      busRef.current = queued.reduce((b, m) => markHandled(b, m.id, `Crew test result for ${requester}: ${report}`), next);
+      setBus(busRef.current);
+    },
+  });
+  useEffect(() => {
+    crewApiRef.current = crew;
+  });
+
   /** Runs `fn` with the AI busy flag set. */
   const withAi = async (fn: () => Promise<void>) => {
     setAiBusy(true);
@@ -3701,6 +3731,38 @@ export function useAssist() {
   const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'scenario' | 'do', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, scenario: scenarioCommand, do: caps.doCommand };
 
   /** Submits the assist input: /use, /move, /measure, /arrange and /do run, anything else is planned as a goal. */
+  /** /crew locate <element> asks its sentinel; /crew test <what> runs a background-then-main test. */
+  const crewCommand = async (text: string) => {
+    const [, verb = '', rest = ''] = /^(\S+)\s*(.*)$/.exec(text.trim()) ?? [];
+    if (verb.toLowerCase() === 'locate' && rest) {
+      crew.locateElement(rest);
+      return;
+    }
+    if (verb.toLowerCase() === 'test' && rest) {
+      await crew.runTest(crew.detectTest('main AI', `run a test "${rest}"`) ?? { from: 'main AI', reason: 'requested', text: rest });
+      return;
+    }
+    addLog('/crew', 'Usage: /crew locate <element> · /crew test <element or reason>', 'warn');
+  };
+
+  /** /intercept routes an intercept to the crew: it pauses, factors it in and proposes. */
+  const interceptCommand = async (text: string) => {
+    crew.intercept(parseIntercept(text));
+  };
+
+  /** /backtrack <n> moves the cursor back along the last n steps. */
+  const backtrackCommand = async (text: string) => {
+    const n = Number.parseInt(text, 10);
+    if (!Number.isFinite(n) || n < 1) return addLog('/backtrack', 'Usage: /backtrack <number of recent steps>, e.g. /backtrack 3', 'warn');
+    await crew.backtrack(n);
+  };
+
+  /** Each slash command's runner. */
+  const COMMAND_RUNNERS: Record<Exclude<CommandName, 'test'>, (target: string) => Promise<void>> = {
+    use: attachTarget, move: moveTo, measure: measureCommand, arrange, crew: crewCommand, intercept: interceptCommand, backtrack: backtrackCommand,
+  };
+
+  /** Submits the assist input: slash commands run, anything else is planned as a goal. */
   const submitInput = async () => {
     const command = parseCommand(goal);
     if (!command) {
@@ -4291,6 +4353,7 @@ export function useAssist() {
     /** The capability registry: the single dispatch surface for buttons, the AI, agents and the main app. */
     capabilities: capabilities.registry.list, invocations: capabilities.invocations, invoke: capabilities.invoke, requestCapability, relaxed: !!relaxedRef.current,
     inventory, routes, routeProfiles, plotRoute, runRoute, fixMethods, pendingFix, runFixScript, dismissFix, retest, retestFlow,
+    crew,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
   };
 }

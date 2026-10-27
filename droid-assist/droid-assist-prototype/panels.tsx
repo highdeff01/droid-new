@@ -30,6 +30,7 @@ import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS } from './ai.js';
 import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-history.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
+import { CREW_SIZE_MAX, CREW_SIZE_MIN, clampCrewSize } from './crew.js';
 import { BackupSettings } from './backup-panel.js';
 import { FixScriptReview } from './screen-ai-panels.js';
 import styles from './droid-assist.module.css';
@@ -364,6 +365,10 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>Retries per failed step <b>{settings.stepRetries}</b>
         <small>Each retry re-verifies and re-corrects the target and spends budget; then the planner re-plans the step once.</small>
         <input type="range" min={STEP_RETRIES_MIN} max={STEP_RETRIES_MAX} value={settings.stepRetries} onChange={(e) => void engine.invoke('setting.stepRetries', { value: +e.target.value })} aria-label="Retries per failed step" />
+      </label>
+      <label className={styles.setting}>Crew size <b>{settings.crewSize} agents</b>
+        <small>Worker agents the main AI assigns to coordinate sentinels, path checkers, adjusters, test runners and monitors.</small>
+        <input type="range" min={CREW_SIZE_MIN} max={CREW_SIZE_MAX} value={settings.crewSize} onChange={(e) => setSettings({ ...settings, crewSize: clampCrewSize(+e.target.value) })} aria-label="Crew size" />
       </label>
       <label className={styles.setting}>Max real input actions per run <b>{settings.actionBudget}</b>
         <input type="number" min={1} value={settings.actionBudget} onChange={(e) => void engine.invoke('guard.budget', { limit: sanitizeBudget(e.target.valueAsNumber) })} />
