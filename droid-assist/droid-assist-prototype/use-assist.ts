@@ -1909,6 +1909,17 @@ export function useAssist() {
     if (out.halt) setSettings((s) => ({ ...s, autoAct: false }));
   };
 
+  /**
+   * A step whose aggressive candidate waits for the user's Apply: it stays pending and the run halts
+   * there, never recorded as a failure (no lesson, no failed flow).
+   */
+  const holdForApply = (idx: number, actor: string, reason: string): Performed => {
+    const step = stepsRef.current[idx];
+    updateStep(idx, { status: 'pending' });
+    addLog(actor, `Paused — ${reason}`, 'warn');
+    return { ok: false, executed: false, halt: true, message: `Paused for your Apply — ${reason}`, target: { x: step.x, y: step.y } };
+  };
+
   /** Marks a step that could not be justified as failed, with the reason in the log. */
   const failUnjustified = (idx: number, actor: string, reason: string): Performed => {
     const step = stepsRef.current[idx];
@@ -2229,6 +2240,7 @@ export function useAssist() {
     } catch (error) {
       return failUnjustified(i, label, `No proposal for "${planned.name}" — AI unavailable: ${errorText(error)} — not executed`);
     }
+    if (j.kind === 'wait') return holdForApply(i, label, j.reason);
     if (j.kind !== 'go') return failUnjustified(i, label, j.reason);
     if (abortRef.current) {
       updateStep(i, { status: 'pending' });
