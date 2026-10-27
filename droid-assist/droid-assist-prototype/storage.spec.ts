@@ -3,6 +3,7 @@ import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, 
 import { LOG_LIMIT, PATTERN_LIMIT, loadApprovals, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadProjects, loadRunSummaries, loadSettings, loadWatcher, saveApprovals, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveProjects, saveSettings, saveWatcher } from './storage.js';
 import { PROJECT_LIMIT, createProject, type PlannedStep, type Project } from './project.js';
 import { EMPTY_APPROVALS, decide, enqueue } from './approval-queue.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadAccessPaths, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveAccessPaths, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { HABIT_STALE_MS } from './habits.js';
 import { DEFAULT_STAGES } from './loop-control.js';
@@ -10,6 +11,7 @@ import type { WatchNote, WatchProposal, WatchTest } from './watcher.js';
 import { DEFAULT_SETTINGS } from './use-assist.js';
 import { DEFAULT_GRID_OPACITY } from './grid-overlay.js';
 import { RUN_SUMMARY_LIMIT, type RunSummary } from './run-stats.js';
+import { ACCESS_PATH_LIMIT, type AccessProfile } from './access-paths.js';
 
 const DEFAULTS: AssistSettings = { ...DEFAULT_SETTINGS, aiUrl: 'https://ai.example/api/chat', autoContinue: false };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
@@ -439,3 +441,30 @@ describe('approvals', () => {
   });
 });
 
+describe('loadAccessPaths', () => {
+  beforeEach(() => localStorage.clear());
+
+  const profile = (n: number): AccessProfile => ({
+    id: `path_${n}`, target: `Target ${n}`, context: 'ctx',
+    versions: [{ version: 1, hops: [{ label: 'Games', action: 'click', x: 0.2, y: 0.3 }], uses: 2, successes: 2, savedAt: n, lastUsed: n }],
+  });
+
+  it('round-trips saved profiles', () => {
+    savePatterns([]);
+    saveAccessPaths([profile(1), profile(2)]);
+    expect(localStorage.getItem('droid-assist.access-paths')).not.toBeNull();
+    expect(loadAccessPaths()).toEqual([profile(1), profile(2)]);
+  });
+
+  it('drops invalid entries and tolerates corrupt data', () => {
+    localStorage.setItem('droid-assist.access-paths', JSON.stringify([profile(1), null, { ...profile(2), versions: [] }, { ...profile(3), target: ' ' }]));
+    expect(loadAccessPaths()).toEqual([profile(1)]);
+    localStorage.setItem('droid-assist.access-paths', '{bad');
+    expect(loadAccessPaths()).toEqual([]);
+  });
+
+  it('keeps at most ACCESS_PATH_LIMIT entries', () => {
+    saveAccessPaths(Array.from({ length: ACCESS_PATH_LIMIT + 5 }, (_, i) => profile(i)));
+    expect(loadAccessPaths()).toHaveLength(ACCESS_PATH_LIMIT);
+  });
+});
