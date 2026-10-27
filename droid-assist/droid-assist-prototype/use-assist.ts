@@ -2301,6 +2301,10 @@ export function useAssist() {
     setReplaying(false);
     const picks = shots.map((f, i) => ({ f, score: i === 0 ? 1 : frameDistance(shots[i - 1].data, f.data) })).sort((a, b) => b.score - a.score).slice(0, 3).map((p) => p.f);
     if (picks.length) setPinned(picks);
+    if (candidatesRef.current.length) {
+      addLog(label, `Run paused — ${candidatesRef.current.length} aggressive candidate(s) wait for your Apply; not reviewed or learned from as a failure`, 'info');
+      return { ok, total: ran.length, dryRun, stopped: abortRef.current };
+    }
     if (stageOn('goal')) {
       const total = ran.length;
       const what = dryRun ? 'verified on screen (not dispatched)' : 'executed';
