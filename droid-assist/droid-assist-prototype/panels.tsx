@@ -119,7 +119,7 @@ export function ComparisonGallery({ engine }: { engine: AssistEngine }) {
         {frames.map((f, i) => {
           const d = frames[i + 1] ? frameDistance(frames[i + 1].data, f.data) : 0;
           return (
-            <figure key={f.id} className={d > 0.04 ? styles.changed : ''}>
+            <figure key={f.id} id={`frame-${f.id}`} className={d > 0.04 ? styles.changed : ''}>
               <img src={f.url} alt={`Frame ${f.id}`} />
               <figcaption>#{f.id} · Δ {d.toFixed(3)} <button type="button" onClick={() => engine.ruler.measureFrame(f.id)} aria-label={`Measure frame ${f.id}`} title="Measure this frame with the ruler">📏</button></figcaption>
             </figure>
@@ -131,7 +131,7 @@ export function ComparisonGallery({ engine }: { engine: AssistEngine }) {
           <h4>AI-selected screenshots <small>most informative state changes from the last run</small></h4>
           <div className={styles.gallery}>
             {pinned.map((f) => (
-              <figure key={f.id} className={styles.pinned}>
+              <figure key={f.id} id={`pinned-frame-${f.id}`} className={styles.pinned}>
                 <img src={f.url} alt={`Selected frame ${f.id}`} />
                 <figcaption>#{f.id}</figcaption>
               </figure>
@@ -659,7 +659,7 @@ function entryTone(e: ThinkingEntry): LogEntry['tone'] {
 /** One timeline entry: what the model answered and the thinking it returned — or plainly that there was none. */
 function ThinkingItem({ entry }: { entry: ThinkingEntry }) {
   return (
-    <li data-tone={entryTone(entry)}>
+    <li id={`think-${entry.id}`} data-tone={entryTone(entry)}>
       <time>{new Date(entry.time).toLocaleTimeString()}</time> <b>{entry.step}</b> · {KIND_LABEL[entry.kind]}
       {entry.error ? (
         <p role="alert">AI call failed — {entry.error}</p>
@@ -799,7 +799,7 @@ export function LogPanel({ engine }: { engine: AssistEngine }) {
       <h3>Activity log</h3>
       <ul className={styles.log}>
         {engine.log.map((l) => (
-          <li key={l.id} data-tone={l.tone}>
+          <li key={l.id} id={`log-${l.id}`} data-tone={l.tone}>
             <time>{new Date(l.time).toLocaleTimeString()}</time> <b>{l.source}</b> {l.message}
             {l.shots && (
               <span>

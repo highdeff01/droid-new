@@ -53,6 +53,9 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
+import { dropGoal, loadGoals, projectId, queueGoal, saveGoals, settleGoal, startGoal, type GoalRecord } from './goal-tracer.js';
+import { ALL_PROJECTS, addUserNote, loadKnowledge, markInjected, noteLine, pendingNotesFor, saveKnowledge, type UserNote } from './knowledge-store.js';
+import { MAIN_AI, markPreferred, type PreferredShot } from './live-briefing.js';
 import { LIVE_SETTINGS, applyLiveSetting, capabilityPrompt, permission, requesterName, type AgentId, type CapabilityRequest, type LiveSetting, type Params, type Requester } from './capabilities.js';
 import { useCapabilities } from './use-capabilities.js';
 import type { AssistStatus } from './main-app-bridge.js';
@@ -286,6 +289,12 @@ export function useAssist() {
   const [timeline, setTimeline] = useState<ThinkingEntry[]>([]);
   /** Pre-action briefings, newest first (in memory, BRIEFING_LIMIT), one per dispatched step. */
   const [briefings, setBriefings] = useState<Briefing[]>([]);
+  /** Goal-tracer records (persisted): the current objective, next goals and settled ones. */
+  const [goals, setGoals] = useState<GoalRecord[]>(() => loadGoals());
+  /** User notes in the knowledge store (persisted), injected once into each targeted project's next AI call. */
+  const [userNotes, setUserNotes] = useState<UserNote[]>(() => loadKnowledge());
+  /** Key frames the main AI and the agents marked as preferred, newest first. */
+  const [preferred, setPreferred] = useState<PreferredShot[]>([]);
   const [captureLost, setCaptureLost] = useState<string | null>(null);
   const [supervisor, setSupervisor] = useState<SupervisorState>({ status: 'idle', detail: 'No review yet', review: null, applied: false });
 
@@ -335,6 +344,7 @@ export function useAssist() {
   const aiStatusRef = useRef(aiStatus);
   const logRef = useRef(log);
   const goalRef = useRef(goal);
+  const userNotesRef = useRef(userNotes);
   const replayingRef = useRef(false);
   const recordingRef = useRef(false);
   /** Time of the last recorded input (or of recording start), for each recorded step's measured human pause. */
@@ -422,6 +432,7 @@ export function useAssist() {
   aiStatusRef.current = aiStatus;
   logRef.current = log;
   goalRef.current = goal;
+  userNotesRef.current = userNotes;
   stepsRef.current = steps;
   armedRef.current = armed;
   abortedRef.current = aborted;
@@ -444,6 +455,8 @@ export function useAssist() {
   useEffect(() => saveFamiliar(familiar), [familiar]);
   useEffect(() => saveHabits(habits), [habits]);
   useEffect(() => saveRunSummaries(runs), [runs]);
+  useEffect(() => void saveGoals(goals), [goals]);
+  useEffect(() => void saveKnowledge(userNotes), [userNotes]);
   useEffect(() => saveWatcher(watcher), [watcher]);
   useEffect(() => saveTriggers(triggers), [triggers]);
   useEffect(() => {
@@ -480,7 +493,8 @@ export function useAssist() {
   }, []);
 
   const addLog = useCallback((from: string, message: string, tone: LogEntry['tone'] = 'info', shots?: string[]) => {
-    setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}) }, ...l].slice(0, LOG_LIMIT));
+    const project = projectId(goalRef.current);
+    setLog((l) => [{ id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}), ...(project ? { project } : {}) }, ...l].slice(0, LOG_LIMIT));
   }, []);
 
   /** Every trim or reset of the AI conversation history is logged and shown. */
@@ -546,6 +560,30 @@ export function useAssist() {
     return checkAi(s.aiUrl, s.aiModel);
   }, [checkAi]);
 
+  /** Marks user notes as received by `project`'s AI call and logs the injection. */
+  const injectNotes = useCallback((notes: UserNote[], project: string) => {
+    const ids = notes.map((n) => n.id);
+    userNotesRef.current = markInjected(userNotesRef.current, ids, project);
+    setUserNotes(userNotesRef.current);
+    addLog('Knowledge', `Injected ${notes.length} user note(s) into ${project ? `"${project}"` : 'the next AI call'}`, 'info');
+  }, [addLog]);
+
+  /** Adds a user note to the knowledge store for `project` (ALL_PROJECTS for every running project). */
+  const addNote = useCallback((text: string, project: string) => {
+    if (!text.trim()) return;
+    userNotesRef.current = addUserNote(userNotesRef.current, text, project);
+    setUserNotes(userNotesRef.current);
+    const target = userNotesRef.current[0].project;
+    addLog('Dashboard', `Note for ${target === ALL_PROJECTS ? 'all projects' : `"${target}"`}: ${text.trim()}`, 'info');
+  }, [addLog]);
+
+  /** Queues a next goal on the goal tracer. */
+  const queueNextGoal = useCallback((text: string) => setGoals((g) => queueGoal(g, text)), []);
+  /** Drops a goal record from the goal tracer. */
+  const removeGoal = useCallback((id: string) => setGoals((g) => dropGoal(g, id)), []);
+  /** Marks a frame as a preferred key frame on behalf of `by`. */
+  const preferFrame = useCallback((frame: Frame, by: string, reason: string) => setPreferred((p) => markPreferred(p, frame, by, reason)), []);
+
   /** Whether a loop-control stage is checked; read live so a toggle applies mid-run. */
   const stageOn = (id: StageId) => settingsRef.current.stages[id];
 
@@ -568,7 +606,9 @@ export function useAssist() {
    */
   const askAi = useCallback(async (req: AskRequest, stage: StageId): Promise<AiReply> => {
     if (!settingsRef.current.stages[stage]) throw new AiCancelled(stageOff(stage));
-    const context = req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
+    const project = projectId(goalRef.current);
+    const injected = pendingNotesFor(userNotesRef.current, project);
+    const context = [...injected.map(noteLine), ...(req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`))];
     const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage), req.signal);
     setAiCalls((n) => n + 1);
     try {
@@ -577,6 +617,7 @@ export function useAssist() {
         return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs }, { ...req, context, signal });
       }, signal);
       setAiHistory(aiSessionRef.current.history());
+      if (injected.length) injectNotes(injected, project);
       const { aiModel } = settingsRef.current;
       if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${aiModel}` });
       return reply;
@@ -589,7 +630,7 @@ export function useAssist() {
     } finally {
       setAiCalls((n) => n - 1);
     }
-  }, [captureError]);
+  }, [captureError, injectNotes]);
 
   /** The AskFn of one loop-control stage. */
   const askFor = useCallback((stage: StageId): AskFn => (req) => askAi(req, stage), [askAi]);
@@ -603,7 +644,10 @@ export function useAssist() {
 
   const aiOnline = () => aiStatusRef.current.state === 'online';
 
-  const note = useCallback((entry: Omit<ThinkingEntry, 'id' | 'time'>) => setTimeline((t) => addEntry(t, entry)), []);
+  const note = useCallback((entry: Omit<ThinkingEntry, 'id' | 'time'>) => {
+    const project = projectId(goalRef.current);
+    setTimeline((t) => addEntry(t, project ? { ...entry, project } : entry));
+  }, []);
 
   /**
    * A reply that held no JSON is logged as an AI parse failure with its truncated raw text — never shown as an answer —
@@ -909,9 +953,11 @@ export function useAssist() {
     });
     busRef.current = updated;
     setBus(updated);
+    const shot = framesRef.current[0];
+    if (shot) preferFrame(shot, BUS_AGENTS[from], `found "${element.name}"`);
     addLog('Agent bus', `${BUS_AGENTS[from]} forwarded "${element.name}" at ${at(element.x, element.y)} to ${queued.length} agent(s)`, 'info');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addLog]);
+  }, [addLog, preferFrame]);
 
   const adDismissed = () => Math.floor(tickRef.current / AD_CYCLE) === dismissedCycleRef.current;
 
@@ -922,7 +968,7 @@ export function useAssist() {
     const end = kind === 'drag' ? dragEnd(step, srcW, srcH) : null;
     const px = (p: { x: number; y: number }) => ({ x: Math.round(p.x * srcW), y: Math.round(p.y * srcH) });
     const prev = lastPointerRef.current ? px(lastPointerRef.current) : null;
-    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message: out.message };
+    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message: out.message, ...(via === 'bridge' && out.check && !out.check.changed ? { dispatched: true } : {}) };
     if (POINTER_ACTIONS.has(step.action)) lastPointerRef.current = out.end ?? out.target;
     setHistory((h) => appendHistory(h, rec));
   }, []);
@@ -2249,6 +2295,8 @@ export function useAssist() {
     setReplaying(false);
     const picks = shots.map((f, i) => ({ f, score: i === 0 ? 1 : frameDistance(shots[i - 1].data, f.data) })).sort((a, b) => b.score - a.score).slice(0, 3).map((p) => p.f);
     if (picks.length) setPinned(picks);
+    picks.forEach((f) => preferFrame(f, MAIN_AI, 'most informative change of the run'));
+    if (!dryRun && runGoal.trim()) setGoals((g) => settleGoal(g, runGoal, ok === ran.length && ran.length > 0));
     if (stageOn('goal')) {
       const total = ran.length;
       const what = dryRun ? 'verified on screen (not dispatched)' : 'executed';
@@ -2395,6 +2443,7 @@ export function useAssist() {
     }
     const applied = relevantHabits(text, habitContext(), habitsRef.current);
     if (applied.length) addLog('Habits', `Applying ${applied.length} habit(s) to planning: ${applied.map(habitLine).join(' | ')}`, 'info');
+    setGoals((g) => startGoal(g, text));
     let planned = false;
     let requested: CapabilityRequest[] = [];
     planningRef.current = true;
@@ -3188,6 +3237,7 @@ export function useAssist() {
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
     dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
     reverse, reverseLast, reversing, briefings,
+    goals, queueNextGoal, removeGoal, userNotes, addNote, preferred, preferFrame,
     /** The capability registry and its artifacts; `invokeCapability` is the one permission-checked path for the main AI, the user and agents. */
     capabilities: caps.registry, invokeCapability: caps.invoke, presentations: caps.presentations, scripts: caps.scripts, knowledge: caps.knowledge,
     /** The capability registry: the single dispatch surface for buttons, the AI, agents and the main app. */
