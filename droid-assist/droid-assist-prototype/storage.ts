@@ -17,6 +17,7 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
+import { EMPTY_MEMORY, FAILURE_LIMIT, OPERATION_NOTE_LIMIT, isFailureRecord, isOperationNote, type OperationMemory } from './operation-memory.js';
 import { ACCESS_PATH_LIMIT, isAccessProfile, type AccessProfile } from './access-paths.js';
 import { APPROVAL_LIMIT, isApprovalItem, sanitizePolicy, type ApprovalItem } from './approvals.js';
 import { PORTFOLIO_LIMIT, isPortfolioEntry, type PortfolioEntry } from './portfolio.js';
@@ -469,6 +470,17 @@ export function saveTriggers(triggers: Trigger[]) {
   writeJson(KEYS.triggers, triggers.slice(0, TRIGGER_LIMIT));
 }
 
+/** The stored operation memory (failure reminders and notes); invalid entries are dropped. */
+export function loadOperationMemory(): OperationMemory {
+  const stored = readJson(KEYS.memory);
+  if (!isObject(stored)) return EMPTY_MEMORY;
+  return { failures: listOf(stored.failures, isFailureRecord, FAILURE_LIMIT), notes: listOf(stored.notes, isOperationNote, OPERATION_NOTE_LIMIT) };
+}
+
+/** Persists the operation memory, capped per list; when it does not fit, retries without the failure screenshots. */
+export function saveOperationMemory(memory: OperationMemory) {
+  const kept = { failures: memory.failures.slice(0, FAILURE_LIMIT), notes: memory.notes.slice(0, OPERATION_NOTE_LIMIT) };
+  if (!writeJson(KEYS.memory, kept)) writeJson(KEYS.memory, { ...kept, failures: kept.failures.map((f) => ({ ...f, shots: [] })) });
 /** The stored access-path profiles; invalid entries are dropped. */
 export const loadAccessPaths = (): AccessProfile[] => listOf(readJson(KEYS.accessPaths), isAccessProfile, ACCESS_PATH_LIMIT);
 

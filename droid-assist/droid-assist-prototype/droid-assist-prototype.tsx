@@ -8,6 +8,7 @@ import { TriggersPanel } from './triggers-panel.js';
 import { AccessPathsPanel } from './access-paths-panel.js';
 import { ApprovalsPanel } from './approvals-panel.js';
 import { StatsPanel } from './stats-panel.js';
+import { OperationMemoryPanel } from './memory-panel.js';
 import { LiveBriefingPanel } from './live-briefing-panel.js';
 import { ArtifactsPanel } from './capabilities-panel.js';
 import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
@@ -43,6 +44,7 @@ function AssistScreen() {
             <LearnedCoordsPanel engine={engine} />
             <LibraryPanel engine={engine} />
             <PatternsPanel engine={engine} />
+            <OperationMemoryPanel engine={engine} />
             <KnowledgePanel engine={engine} />
             <ProfilePanel engine={engine} />
             <StatsPanel engine={engine} />

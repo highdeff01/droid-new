@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard } from './types.js';
+import { LOG_LIMIT, PATTERN_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveOperationMemory, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { LOG_LIMIT, PATTERN_LIMIT, loadAccessPaths, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveAccessPaths, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { HABIT_STALE_MS } from './habits.js';
@@ -8,6 +9,7 @@ import type { WatchNote, WatchProposal, WatchTest } from './watcher.js';
 import { DEFAULT_SETTINGS } from './use-assist.js';
 import { DEFAULT_GRID_OPACITY } from './grid-overlay.js';
 import { RUN_SUMMARY_LIMIT, type RunSummary } from './run-stats.js';
+import { EMPTY_MEMORY, addFailure, addNote, newFailure } from './operation-memory.js';
 import { ACCESS_PATH_LIMIT, type AccessProfile } from './access-paths.js';
 
 const DEFAULTS: AssistSettings = { ...DEFAULT_SETTINGS, aiUrl: 'https://ai.example/api/chat', autoContinue: false };
@@ -298,6 +300,32 @@ describe('familiar elements', () => {
     spy.mockRestore();
     expect(loadFamiliar()).toEqual([fam(1)]);
     expect(loadPatterns()).toHaveLength(1);
+  });
+});
+
+describe('operation memory', () => {
+  beforeEach(() => localStorage.clear());
+  const failure = newFailure({ operation: 'Send invoice', actor: 'Replay', what: 'Step "Send" did not complete', steps: ['"Send" (click)'], targets: ['Send'], shots: ['data:image/jpeg;base64,QQ'] }, 5);
+
+  it('round-trips failures and notes and drops invalid entries', () => {
+    const memory = addNote(addFailure(EMPTY_MEMORY, failure), 'Send invoice', 'Check the recipient', 6);
+    saveOperationMemory(memory);
+    expect(loadOperationMemory()).toEqual(memory);
+    localStorage.setItem('droid-assist.memory', JSON.stringify({ failures: [null, { ...failure, steps: 'x' }, failure], notes: [{ id: 'n', time: 1, operation: 'op', text: ' ' }] }));
+    expect(loadOperationMemory()).toEqual({ failures: [failure], notes: [] });
+    localStorage.setItem('droid-assist.memory', 'nope');
+    expect(loadOperationMemory()).toEqual(EMPTY_MEMORY);
+  });
+
+  it('retries without the failure screenshots when storage is full', () => {
+    const real = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (v.includes('data:image')) throw new Error('QuotaExceededError');
+      real.call(this, k, v);
+    });
+    saveOperationMemory(addFailure(EMPTY_MEMORY, failure));
+    spy.mockRestore();
+    expect(loadOperationMemory().failures).toEqual([{ ...failure, shots: [] }]);
   });
 });
 

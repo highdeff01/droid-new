@@ -289,6 +289,8 @@ export interface AskRequest {
   crops?: Frame[];
   /** Recent log / action lines sent as context. */
   context?: string[];
+  /** The operation memory block (goal, objective, blacklist, failures); sent with this turn, never kept in the history. */
+  memory?: string[];
   json?: boolean;
   /** Cancels the call (AI stop / emergency stop). */
   signal?: AbortSignal;
@@ -352,9 +354,10 @@ export function createAiSession(store: HistoryStore | null, render?: RenderFn, o
     const signal = linkSignals(controller.signal, req.signal);
     const context = req.context?.length ? `\n\nRecent activity (newest first):\n${req.context.join('\n')}` : '';
     const content = `${req.prompt}${context}`;
+    const memory = req.memory?.length ? `\n\n${req.memory.join('\n')}` : '';
     const shots = await screenshots([...(req.frame ? [req.frame] : []), ...(req.frames ?? [])], cfg.view, render);
     const images = [...shots.urls, ...(req.crops ?? []).map((c) => c.url)].map(toBase64);
-    const user: ChatMessage = { role: 'user', content, ...(images.length ? { images } : {}) };
+    const user: ChatMessage = { role: 'user', content: `${content}${memory}`, ...(images.length ? { images } : {}) };
     const system = systemText(req.system, shots.view);
     const turns = history.map(({ role, content: text }) => ({ role, content: text }));
     const reply = await chat(cfg, [{ role: 'system', content: system }, ...turns, user], req.json, cfg.timeoutMs, signal);
