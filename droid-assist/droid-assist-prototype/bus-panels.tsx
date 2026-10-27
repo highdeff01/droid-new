@@ -32,6 +32,34 @@ export function AgentBusPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
+/** The agent crew: each agent's status, its last command and report; plus the live drag swarm and its controls. */
+export function CrewPanel({ engine }: { engine: AssistEngine }) {
+  const { crew, crewRunning, swarm, liveDragging, stopPlan, interveneDrag } = engine;
+  return (
+    <section className={styles.panel} aria-label="Agent crew">
+      <h3>Agent crew <small>{crewRunning ? 'running' : 'idle'} · {crew.filter((a) => a.status === 'working').length} working</small></h3>
+      {crewRunning && <button type="button" onClick={stopPlan}>Stop plan</button>}
+      {!crewRunning && !crew.some((a) => a.task) && <p className={styles.muted}>Try "/crew find the Save button and the Files icon" — the main AI commands the agents.</p>}
+      <ul className={styles.log}>
+        {crew.map((a) => (
+          <li key={a.id} data-tone={a.status === 'working' ? 'info' : a.status === 'parked' ? 'warn' : 'ok'}>
+            <b>{a.id}</b> {a.status}{a.task ? ` — "${a.task}"` : ''}{a.lastReport ? ` → ${a.lastReport}` : ''}
+          </li>
+        ))}
+      </ul>
+      {swarm.length > 0 && (
+        <details open={liveDragging}>
+          <summary>Live drag swarm <small>{swarm.length} coordinate agents{liveDragging ? ' · dragging' : ''}</small></summary>
+          {liveDragging && <button type="button" onClick={() => interveneDrag(null)}>Release now</button>}
+          <ol className={styles.log}>
+            {swarm.map((a) => <li key={a.index}>({(a.point.x * 100).toFixed(1)}%, {(a.point.y * 100).toFixed(1)}%) <small>match {a.match.toFixed(3)}</small></li>)}
+          </ol>
+        </details>
+      )}
+    </section>
+  );
+}
+
 /** The latest link/route test: one row per subagent with pass/fail, screenshots and thinking. */
 export function SubagentReportPanel({ engine }: { engine: AssistEngine }) {
   const { subReport, subRunning, stop } = engine;
