@@ -46,6 +46,9 @@ import type { Calibration } from './calibration.js';
 import { remapStep, useMeasure } from './use-measure.js';
 import { anchoredHabit, habitLine, recordOutcome, relevantHabits, seedFromAnchor, strengthenHabit, togglePin } from './habits.js';
 import type { StepVerdict } from './assist-ai.js';
+import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
+import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
+import type { Knowledge } from './cross-reference.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -257,6 +260,8 @@ export function useAssist() {
   const [continuing, setContinuing] = useState(false);
   /** Per-step Qwen thinking timeline, newest first: thought, reflection and verdict of every AI call. */
   const [timeline, setTimeline] = useState<ThinkingEntry[]>([]);
+  /** Pre-action briefings, newest first (in memory, BRIEFING_LIMIT), one per dispatched step. */
+  const [briefings, setBriefings] = useState<Briefing[]>([]);
   const [captureLost, setCaptureLost] = useState<string | null>(null);
   const [supervisor, setSupervisor] = useState<SupervisorState>({ status: 'idle', detail: 'No review yet', review: null, applied: false });
 
@@ -1594,7 +1599,7 @@ export function useAssist() {
    * for `step`. Drift red or a stale plan goes straight to the one re-proposal; a not-ready first
    * proposal waits when `canWait` (Auto Act), otherwise gets the re-proposal. Offline, a local proposal is recorded.
    */
-  const justify = async (actor: string, step: WorkflowStep, canWait: boolean): Promise<Justified> => {
+  const justifyProposal = async (actor: string, step: WorkflowStep, canWait: boolean): Promise<Justified> => {
     await changeBusyRef.current;
     const reason = redoReason(step);
     if (reason) return repropose(actor, step, reason);
@@ -1605,6 +1610,71 @@ export function useAssist() {
     const p = await proposeNow(actor, step);
     if (p.ready) return { kind: 'go', step: adopt(step, p, false), proposal: p };
     return canWait ? { kind: 'wait', reason: p.why } : repropose(actor, step, `the first proposal was not ready: ${p.why}`);
+  };
+
+  /** What the briefing cross-references the plan against. */
+  const knowledge = (): Knowledge => ({ map: elementMapRef.current, familiar: familiarRef.current, habits: habitsRef.current, patterns: patternsRef.current, context: habitContext() });
+
+  /** A fresh briefing of `step` with `proposal` on the live frame. */
+  const buildBriefingFor = (step: WorkflowStep, proposal: Proposal) => buildBriefing({
+    goal: goalRef.current, steps: stepsRef.current, step, proposal, live: framesRef.current[0] ?? null,
+    knowledge: knowledge(), thresholds: driftThresholds(), online: aiOnline(),
+  });
+
+  /** Records a briefing (newest first) with zoomed crops of the planned point on the live and reference frames. */
+  const publishBriefing = async (b: Briefing) => {
+    setBriefings((list) => addBriefing(list, b));
+    const p = { x: b.objectives.x, y: b.objectives.y };
+    const { live, reference } = b.comparison;
+    const [liveCrop, referenceCrop] = await Promise.all([live, reference].map((f) => (f ? zoomFrame(f, p).catch(() => undefined) : undefined)));
+    setBriefings((list) => list.map((x) => (x.id === b.id && x.revisions.length === b.revisions.length ? { ...x, liveCrop, referenceCrop } : x)));
+  };
+
+  /** The routes the review takes: the ruler, the grounding agent on a zoomed crop, and the executor's re-plan. */
+  const reviewDeps = (actor: string): ReviewDeps => ({
+    online: aiOnline(),
+    groundingOn: stageOn('grounding'),
+    hasBaseline: ruler.baseline !== null,
+    recalibrate: (reason, step) => {
+      const cal = ruler.recalibrateNow(reason);
+      return cal && { drift: cal.drift, detail: cal.detail, step: cal.drift ? remapStep(cal, step) : step };
+    },
+    reground: async (step, feedback) => {
+      const live = framesRef.current[0];
+      return live ? grounding.relocate(live, step, `pre-action briefing: ${feedback}`) : null;
+    },
+    replan: async (step, reason) => {
+      const p = await proposeNow(actor, step, reason);
+      return p.ready ? { step: adopt(step, p, true), proposal: p } : null;
+    },
+    rebuild: buildBriefingFor,
+    publish: publishBriefing,
+  });
+
+  /**
+   * Pre-action briefing of a step that is about to run: objectives, screenshot comparison and
+   * cross-reference are recorded, then reviewed and updated (recalibrate → re-ground → re-plan)
+   * before it dispatches. Skipped when the Briefing stage is unchecked; a failed review runs the plan as it stood.
+   */
+  const brief = async (actor: string, go: Extract<Justified, { kind: 'go' }>): Promise<Justified> => {
+    if (!stageOn('briefing')) return go;
+    const first = buildBriefingFor(go.step, go.proposal);
+    await publishBriefing(first);
+    try {
+      const r = await reviewBriefing({ briefing: first, step: go.step, proposal: go.proposal }, reviewDeps(actor));
+      if (r.briefing.outcome !== 'clear') await publishBriefing(r.briefing);
+      addLog(actor, `Briefing for "${go.step.name}": ${briefingText(r.briefing)}`, r.briefing.outcome === 'unresolved' ? 'warn' : 'info');
+      return { kind: 'go', step: r.step, proposal: r.proposal };
+    } catch (error) {
+      addLog(actor, aiFailure(`Briefing review for "${go.step.name}" failed — running the plan as briefed`, error), 'error');
+      return go;
+    }
+  };
+
+  /** Intent before action, then the pre-action briefing of a step that will run. */
+  const justify = async (actor: string, step: WorkflowStep, canWait: boolean): Promise<Justified> => {
+    const j = await justifyProposal(actor, step, canWait);
+    return j.kind === 'go' ? brief(actor, j) : j;
   };
 
   /** Starts a new plan: a fresh baseline for "changed since the plan" and fresh re-proposal allowances. */
@@ -2576,7 +2646,7 @@ export function useAssist() {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
-    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
+    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, briefings, patterns, deletePattern, supervisor, superviseRun,
     ruler, continuing, habits, deleteHabit, pinHabit,
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,

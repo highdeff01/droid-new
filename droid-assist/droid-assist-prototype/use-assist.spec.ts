@@ -623,7 +623,7 @@ describe('useAssist auto-continue and AI stop', () => {
 });
 
 describe('useAssist loop control', () => {
-  const ALL_STAGES = ['planner', 'grounding', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents'] as const;
+  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents'] as const;
 
   /** A model whose reflection call hangs until cancelled; every other prompt gets a plain answer. */
   function hangingReflect() {

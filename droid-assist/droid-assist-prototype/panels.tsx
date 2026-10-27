@@ -5,7 +5,9 @@ import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import { AiStatusBadge, InsecureBridgeWarning } from './hud.js';
 import { ModelPicker } from './model-picker.js';
-import type { FamiliarElement, Habit, LogEntry } from './types.js';
+import type { FamiliarElement, Frame, Habit, LogEntry } from './types.js';
+import type { Box } from './assist-ai.js';
+import type { Briefing } from './briefing.js';
 import { isReliable, successRate } from './habits.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
 import type { StepFix } from './supervisor.js';
@@ -594,6 +596,78 @@ function ThinkingItem({ entry }: { entry: ThinkingEntry }) {
         </>
       )}
     </li>
+  );
+}
+
+/** A frame with the given normalised boxes drawn over it in red. */
+function BoxedFrame({ frame, boxes, label }: { frame: Frame; boxes: Box[]; label: string }) {
+  return (
+    <figure>
+      <div style={{ position: 'relative' }}>
+        <img src={frame.url} alt={label} style={{ display: 'block', width: '100%' }} />
+        {boxes.map((b, i) => (
+          <span key={i} style={{ position: 'absolute', left: `${b.x * 100}%`, top: `${b.y * 100}%`, width: `${b.w * 100}%`, height: `${b.h * 100}%`, border: '2px solid red', boxSizing: 'border-box' }} />
+        ))}
+      </div>
+      <figcaption>{label}</figcaption>
+    </figure>
+  );
+}
+
+/** The live frame beside the reference frame (changed regions boxed) and zoomed crops of the planned point. */
+function BriefingComparison({ b }: { b: Briefing }) {
+  const c = b.comparison;
+  return (
+    <>
+      <h4>Screenshot comparison {b.aiNote && <small>local pixel check</small>}</h4>
+      <div className={styles.gallery}>
+        {c.live && <BoxedFrame frame={c.live} boxes={c.regions} label={`Live #${c.live.id}`} />}
+        {c.reference && <BoxedFrame frame={c.reference} boxes={c.regions} label={`Reference: ${c.referenceLabel}`} />}
+        {b.liveCrop && <figure><img src={b.liveCrop.url} alt="Zoomed live crop" /><figcaption>Live, zoomed on the plan</figcaption></figure>}
+        {b.referenceCrop && <figure><img src={b.referenceCrop.url} alt="Zoomed reference crop" /><figcaption>Reference, zoomed on the plan</figcaption></figure>}
+      </div>
+      <p data-tone={c.failed ? 'error' : c.level === 'yellow' ? 'warn' : 'ok'}><b>Verdict:</b> {c.verdict}</p>
+    </>
+  );
+}
+
+/** One recorded briefing: objectives, comparison, cross-reference and the review that updated it. */
+function BriefingItem({ b }: { b: Briefing }) {
+  const o = b.objectives;
+  return (
+    <li data-tone={b.outcome === 'unresolved' ? 'warn' : 'ok'}>
+      <small>{clock(b.time)}</small> <b>{b.stepName}</b> <small>· {b.outcome}</small>
+      {b.aiNote && <p role="alert">{b.aiNote}</p>}
+      <h4>Objectives</h4>
+      <p><b>Goal:</b> {o.goal || '(none)'}</p>
+      <ol>{o.sequence.map((s) => <li key={s.id}>{s.current ? <b>{s.action} "{s.target}" ← now</b> : `${s.action} "${s.target}" · ${s.status}`}</li>)}</ol>
+      <p><b>What:</b> {o.what} — {o.action} "{o.target}" at ({(o.x * 100).toFixed(1)}%, {(o.y * 100).toFixed(1)}%)</p>
+      <p><b>Why:</b> {o.why} <small>({o.source === 'ai' ? 'AI proposal' : 'local, AI not consulted'})</small></p>
+      <BriefingComparison b={b} />
+      <h4>Cross-reference {b.aiNote && <small>local memory check</small>}</h4>
+      {!b.crossRef.length && <p className={styles.muted}>Nothing known about this target yet.</p>}
+      <ul>{b.crossRef.map((c, i) => <li key={i} data-tone={c.status === 'consistent' ? 'ok' : 'error'}><b>{c.status}</b> [{c.source}] {c.text}</li>)}</ul>
+      {b.revisions.length > 0 && (
+        <>
+          <h4>Review and update</h4>
+          <ol>{b.revisions.map((r, i) => <li key={i}><small>{clock(r.time)}</small> <b>{r.kind}</b> {r.text}</li>)}</ol>
+        </>
+      )}
+    </li>
+  );
+}
+
+/** Pre-action briefing: the reasoning and evidence for each step, recorded before it dispatches. */
+export function BriefingPanel({ engine }: { engine: AssistEngine }) {
+  const { briefings, settings } = engine;
+  return (
+    <section className={styles.panel} aria-label="Pre-action briefing">
+      <h3>Pre-action briefing <small>{settings.stages.briefing ? `${briefings.length} recorded` : 'stage unchecked in Loop control'}</small></h3>
+      {!briefings.length && <p className={styles.muted}>No step briefed yet.</p>}
+      <ul className={styles.log}>
+        {briefings.map((b) => <BriefingItem key={`${b.id}:${b.revisions.length}`} b={b} />)}
+      </ul>
+    </section>
   );
 }
 
