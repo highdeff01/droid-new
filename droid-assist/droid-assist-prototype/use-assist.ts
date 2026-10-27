@@ -36,6 +36,7 @@ import type { Box } from './assist-ai.js';
 import { decodeFrames, toStoredFrame } from './frame-codec.js';
 import { loadStoredFrames, putStoredFrame } from './frame-store.js';
 import { appendHistory, clearHistory, downloadText, historyToCsv, historyToJson, loadHistory } from './action-history.js';
+import { REVERSE_ACTOR, reverseOffer } from './reverse.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, newPattern, runVerdict, upsertCard } from './flow-memory.js';
 import { SUPERVISOR_INTERVAL_MS, SUPERVISOR_TICK_MS, applyFixes, executorBusy as supervisorExecutorBusy, habitPatterns, isConfident, reviewRun, reviewText, staleFixes, type PendingFix, type SupervisorReview, type SupervisorState } from './supervisor.js';
 import { BUS_AGENTS, elementLine, forward, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
@@ -188,6 +189,9 @@ export function useAssist() {
   /** The app the assistant is attached to via /use. */
   const [target, setTarget] = useState<string | null>(null);
   const [history, setHistory] = useState<ActionRecord[]>(() => loadHistory());
+  /** Normalized point the last executed pointer action left the cursor at: the previously-focused point of the next action. */
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const [reversing, setReversing] = useState(false);
   const [shotCount, setShotCount] = useState(0);
   const [frames, setFrames] = useState<Frame[]>([]);
   const [pinned, setPinned] = useState<Frame[]>([]);
@@ -809,12 +813,15 @@ export function useAssist() {
 
   const adDismissed = () => Math.floor(tickRef.current / AD_CYCLE) === dismissedCycleRef.current;
 
-  /** Appends one performed mouse/keyboard action to the persistent history. */
+  /** Appends one performed mouse/keyboard action to the persistent history, with the pointer's prior point, screen size and prior text for reversal. */
   const recordAction = useCallback((step: WorkflowStep, out: StepOutcome, actor: string, via: ActionRecord['via'], srcW: number, srcH: number) => {
     const kind = INPUT_ACTIONS[step.action];
     if (!kind) return;
     const end = kind === 'drag' ? dragEnd(step, srcW, srcH) : null;
-    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, x: Math.round(out.target.x * srcW), y: Math.round(out.target.y * srcH), ...(end ? { endX: end.x, endY: end.y } : {}), text: step.text, source: actor, via, ok: out.ok, message: out.message };
+    const px = (p: { x: number; y: number }) => ({ x: Math.round(p.x * srcW), y: Math.round(p.y * srcH) });
+    const prev = lastPointerRef.current ? px(lastPointerRef.current) : null;
+    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message: out.message };
+    if (POINTER_ACTIONS.has(step.action)) lastPointerRef.current = out.end ?? out.target;
     setHistory((h) => appendHistory(h, rec));
   }, []);
 
@@ -1347,6 +1354,41 @@ export function useAssist() {
   };
 
   const elements = listElements(steps, annotations, familiar);
+  /** The newest real action and how it reverses; null when there is none or the newest is itself a reversal. */
+  const reverse = reverseOffer(history);
+
+  /**
+   * Reverses the most recent real action: its inverse steps run through performStep (abort,
+   * executor stage, arm and a fresh budget), as a dry run unless armed. Before and after
+   * screenshots go into the log; a non-invertible action is reported as "cannot reverse".
+   */
+  const reverseLast = async () => {
+    const offer = reverseOffer(history);
+    if (!offer) return addLog(REVERSE_ACTOR, 'Nothing to reverse — no real action since the last reversal', 'warn');
+    const { record, reversal } = offer;
+    if (!reversal.ok) return addLog(REVERSE_ACTOR, `Cannot reverse ${record.action} at (${record.x}, ${record.y})px — ${reversal.reason}`, 'warn');
+    if ((record.via === 'demo') !== (sourceRef.current === 'demo')) return addLog(REVERSE_ACTOR, `Cannot reverse — the ${record.action} ran on the ${record.via === 'demo' ? 'demo desktop' : 'desktop bridge'}, which is not the current screen source`, 'error');
+    const dryRun = !armedRef.current;
+    setReversing(true);
+    try {
+      const before = await finalFrame(REVERSE_ACTOR);
+      const budget = createBudget(settingsRef.current.actionBudget);
+      const results: string[] = [];
+      let ok = true;
+      for (const step of reversal.steps) {
+        const out = await performStep(step, REVERSE_ACTOR, budget, dryRun);
+        results.push(out.message);
+        ok = out.ok;
+        if (!out.ok) break;
+      }
+      const after = await finalFrame(REVERSE_ACTOR);
+      const mode = dryRun ? 'dry run (real input disarmed), nothing sent' : ok ? 'reversed' : 'reversal failed';
+      const shots = [before?.url, after?.url].filter((u): u is string => !!u);
+      addLog(REVERSE_ACTOR, `${mode}: ${record.action} at (${record.x}, ${record.y})px — ${reversal.summary} — ${results.join('; ')}`, ok ? (dryRun ? 'info' : 'ok') : 'error', shots);
+    } finally {
+      setReversing(false);
+    }
+  };
   /** Targets the coordinate learner has observed, newest first. */
   const learned = learnedTargets(familiar);
 
@@ -2586,6 +2628,7 @@ export function useAssist() {
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
+    reverse, reverseLast, reversing,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
   };
 }

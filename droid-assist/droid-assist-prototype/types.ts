@@ -62,6 +62,14 @@ export interface ActionRecord {
   endX?: number;
   endY?: number;
   text?: string;
+  /** Native screen pixels the pointer rested at before this action (the previously-focused point), when known. */
+  prevX?: number;
+  prevY?: number;
+  /** Native size of the screen the action ran on, for converting its pixels back to normalized coordinates. */
+  srcW?: number;
+  srcH?: number;
+  /** The field's content before a `type` action, when known; reversal retypes it. */
+  priorText?: string;
   /** Who performed it: Replay, Auto-Actor, AI help, ... */
   source: string;
   /** Where it was dispatched: the desktop bridge or the demo desktop. */
@@ -144,6 +152,10 @@ export interface WorkflowStep {
   x: number;
   y: number;
   text?: string;
+  /** A `type` step's field content before typing, when known (lets the action be reversed exactly). */
+  priorText?: string;
+  /** A `key` step's press count (default 1), e.g. one backspace per character to erase. */
+  repeat?: number;
   /** The on-screen thing a pointer step acts on ("files icon"); its coordinates are confirmed against it before dispatch. */
   target?: string;
   /** Set when the planner gave no point for this pointer step's target (it ran at a default). */

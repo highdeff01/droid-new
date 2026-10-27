@@ -62,7 +62,7 @@ const NATIVE: Record<StepAction, (step: WorkflowStep, p: Point, end: Point | nul
   drag: (_s, p, end) => (end ? [drag(p, end)] : []),
   scroll: (s, p) => [at(p, 'scroll', { keyPayload: scrollDir(s) })],
   type: (s, p) => [write(p, s.text ?? '')],
-  key: (s, p) => [keys(p, s.text ?? 'enter')],
+  key: (s, p) => Array.from({ length: Math.max(1, s.repeat ?? 1) }, () => keys(p, s.text ?? 'enter')),
   open_app: (s, p) => [keys(p, 'win'), at(p, 'wait', { delayMs: 600 }), write(p, appName(s)), keys(p, 'enter')],
   search: (s, p) => [keys(p, 'ctrl+l'), write(p, s.text ?? ''), keys(p, 'enter')],
   calc: (s, p) => [keys(p, 'win'), at(p, 'wait', { delayMs: 600 }), write(p, 'calculator'), keys(p, 'enter'), at(p, 'wait', { delayMs: 1200 }), write(p, s.text ?? ''), keys(p, 'enter')],
