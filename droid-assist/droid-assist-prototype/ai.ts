@@ -13,6 +13,8 @@ export interface AiConfig {
   view?: ViewSize;
   /** Per-request timeout in ms; absent means DEFAULT_AI_TIMEOUT_MS. */
   timeoutMs?: number;
+  /** Ask the model to think before answering (Ollama `think`); absent means false. */
+  think?: boolean;
 }
 
 /** Default per-request AI timeout, and the Settings range it is validated against. */
@@ -148,7 +150,7 @@ async function fetchReply(cfg: AiConfig, messages: ChatMessage[], json: boolean,
     res = await fetch(cfg.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: cfg.model, messages, stream: false, think: true, ...(json ? { format: 'json' } : {}) }),
+      body: JSON.stringify({ model: cfg.model, messages, stream: false, think: cfg.think === true, ...(json ? { format: 'json' } : {}) }),
       signal,
     });
   } catch (error) {
@@ -161,7 +163,7 @@ async function fetchReply(cfg: AiConfig, messages: ChatMessage[], json: boolean,
 }
 
 /**
- * One non-streaming chat with thinking enabled; resolves with message.content and message.thinking.
+ * One non-streaming chat, thinking as `cfg.think` asks; resolves with message.content and message.thinking.
  * A reply whose content is empty but whose thinking is not is retried once with an instruction to
  * answer in content; a still-empty answer, or one with neither content nor thinking, rejects with an
  * AiError naming the cause. HTTP errors, network errors and the timeout reject with AiError;

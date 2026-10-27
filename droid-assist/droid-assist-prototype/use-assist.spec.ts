@@ -249,6 +249,23 @@ describe('useAssist Qwen thinking timeline', () => {
     expect(result.current.timeline[0]).toMatchObject({ kind: 'thought', text: 'Top bar', thinking: null });
   });
 
+  const thinkSent = (fetchImpl: ReturnType<typeof vi.fn>) => fetchImpl.mock.calls.map((c) => JSON.parse((c as unknown as [string, RequestInit])[1].body as string).think);
+
+  it('sends think:false on every AI request by default', async () => {
+    const fetchImpl = chatReply({ content: '{"answer":"Top bar","items":[]}' });
+    await askWith(fetchImpl);
+    expect(fetchImpl).toHaveBeenCalled();
+    expect(new Set(thinkSent(fetchImpl))).toEqual(new Set([false]));
+  });
+
+  it('sends think:true on every AI request when model thinking is on in Settings', async () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ aiThink: true }));
+    const fetchImpl = chatReply({ content: '{"answer":"Top bar","items":[]}', thinking: 'top' });
+    const result = await askWith(fetchImpl);
+    expect(new Set(thinkSent(fetchImpl))).toEqual(new Set([true]));
+    expect(result.current.timeline[0]).toMatchObject({ text: 'Top bar', thinking: 'top' });
+  });
+
   it('records the plan thought, reflection and verdict of a /move step run through the pipeline', async () => {
     const replies: Record<string, Record<string, unknown>> = {
       plan: { content: '{"steps":[{"name":"Hover Files","action":"move","target":"files icon","x":0.1,"y":0.9}]}', thinking: 'Files sits bottom-left.' },

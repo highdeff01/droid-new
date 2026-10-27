@@ -167,6 +167,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   aiUrl: DEFAULT_AI_URL,
   aiModel: DEFAULT_AI_MODEL,
   aiView: DEFAULT_AI_VIEW,
+  aiThink: false,
   autoContinue: true,
   maxIterations: DEFAULT_MAX_ITERATIONS,
   stepRetries: DEFAULT_STEP_RETRIES,
@@ -504,10 +505,10 @@ export function useAssist() {
 
   const aiCheckSeqRef = useRef(0);
   /** Pings `url`+`model` with the health check and shows the result; a result overtaken by a newer check is dropped. */
-  const checkAi = useCallback(async (url: string, model: string): Promise<AiStatus> => {
+  const checkAi = useCallback(async (url: string, model: string, think: boolean): Promise<AiStatus> => {
     const seq = ++aiCheckSeqRef.current;
     setAiStatus({ state: 'checking', detail: `Connecting to ${url}…` });
-    const status = await pingAi({ url, model });
+    const status = await pingAi({ url, model, think });
     if (seq !== aiCheckSeqRef.current) return status;
     setAiStatus(status);
     addLog('AI', status.detail, status.state === 'online' ? 'ok' : 'error');
@@ -517,17 +518,17 @@ export function useAssist() {
 
   // AI endpoint health: at startup and whenever the endpoint or model changes.
   useEffect(() => {
-    void checkAi(settings.aiUrl, settings.aiModel);
+    void checkAi(settings.aiUrl, settings.aiModel, settings.aiThink);
     return () => {
       aiCheckSeqRef.current++;
     };
-  }, [settings.aiUrl, settings.aiModel, checkAi]);
+  }, [settings.aiUrl, settings.aiModel, settings.aiThink, checkAi]);
 
   /** One-click Connect: saves the settings as they stand and pings their endpoint+model. */
   const connectAi = useCallback(() => {
     const s = settingsRef.current;
     saveSettings(s);
-    return checkAi(s.aiUrl, s.aiModel);
+    return checkAi(s.aiUrl, s.aiModel, s.aiThink);
   }, [checkAi]);
 
   /** Whether a loop-control stage is checked; read live so a toggle applies mid-run. */
@@ -557,8 +558,8 @@ export function useAssist() {
     setAiCalls((n) => n + 1);
     try {
       const reply = await aiQueueRef.current.run(stage, (timeoutMs) => {
-        const { aiUrl, aiModel, aiView } = settingsRef.current;
-        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs }, { ...req, context, signal });
+        const { aiUrl, aiModel, aiView, aiThink } = settingsRef.current;
+        return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs, think: aiThink }, { ...req, context, signal });
       }, signal);
       setAiHistory(aiSessionRef.current.history());
       const { aiModel } = settingsRef.current;
