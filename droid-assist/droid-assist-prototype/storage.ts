@@ -1,4 +1,4 @@
-import type { AssistSettings, FamiliarElement, Habit, HabitAnchor, HabitLesson, LearnedPattern, LogEntry, MonitorMode, SavedCard, StepAction, WorkflowStep } from './types.js';
+import type { AssistSettings, FamiliarElement, Habit, HabitAnchor, HabitLesson, LearnedPattern, LogEntry, MonitorMode, SavedCard, StepAction, StepStatus, WorkflowStep } from './types.js';
 import { STEP_ACTIONS } from './types.js';
 import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 import { sanitizeBudget } from './safety.js';
@@ -18,6 +18,7 @@ import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } fro
 import { PORTFOLIO_LIMIT, isPortfolioEntry, type PortfolioEntry } from './portfolio.js';
 import { PROFILE_LIMIT, isProfileEvent, type ProfileEvent } from './user-profile.js';
 import { SECTION_LIMIT, isKnowledgeSection, type KnowledgeSection } from './knowledge-sections.js';
+import { VARIATION_LIMIT, VARIATION_STATUSES, type Variation, type VariationStatus } from './variations.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -26,7 +27,8 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', portfolios: 'droid-assist.portfolios', profile: 'droid-assist.user-profile', sections: 'droid-assist.knowledge-sections' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', portfolios: 'droid-assist.portfolios', profile: 'droid-assist.user-profile', sections: 'droid-assist.knowledge-sections', variations: 'droid-assist.variations' } as const;
+const STEP_STATUSES: readonly StepStatus[] = ['pending', 'running', 'done', 'drift', 'failed'];
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -365,6 +367,31 @@ export const loadPortfolios = (): PortfolioEntry[] => listOf(readJson(KEYS.portf
 /** Persists the portfolio entries, capped at PORTFOLIO_LIMIT. */
 export function savePortfolios(entries: PortfolioEntry[]) {
   writeJson(KEYS.portfolios, entries.slice(0, PORTFOLIO_LIMIT));
+}
+
+/** A stored variation with its valid steps (their run status kept), or null. */
+function parseVariation(v: unknown): Variation | null {
+  if (!isObject(v) || typeof v.id !== 'string' || typeof v.goal !== 'string' || !VARIATION_STATUSES.includes(v.status as VariationStatus)
+    || typeof v.reason !== 'string' || !isNum(v.created) || !isNum(v.updated) || !Array.isArray(v.steps)) return null;
+  const steps = v.steps.flatMap((raw: unknown) => {
+    const step = parseStep(raw);
+    if (!step) return [];
+    const { refFrame: _frame, ...s } = step;
+    const status = isObject(raw) && STEP_STATUSES.includes(raw.status as StepStatus) && raw.status !== 'running' ? raw.status as StepStatus : 'pending';
+    return [{ ...s, status }];
+  });
+  return { id: v.id, goal: v.goal, steps, status: v.status as VariationStatus, reason: v.reason, created: v.created, updated: v.updated };
+}
+
+/** The stored background variations (newest first); invalid entries are dropped. */
+export function loadVariations(): Variation[] {
+  const stored = readJson(KEYS.variations);
+  return Array.isArray(stored) ? stored.map(parseVariation).filter((v): v is Variation => v !== null).slice(0, VARIATION_LIMIT) : [];
+}
+
+/** Persists the background variations, capped at VARIATION_LIMIT. */
+export function saveVariations(variations: Variation[]) {
+  writeJson(KEYS.variations, variations.slice(0, VARIATION_LIMIT));
 }
 
 /** The stored user-profile events; invalid entries are dropped. */

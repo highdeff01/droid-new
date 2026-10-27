@@ -54,6 +54,7 @@ import { addBriefing, briefingText, buildBriefing, type Briefing } from './brief
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
 import { useKnowledge } from './use-knowledge.js';
+import { useVariations } from './use-variations.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -403,6 +404,26 @@ export function useAssist() {
     model: () => settingsRef.current.aiModel,
   });
   const { recordAi, recordFor } = kb;
+  /** The goal the current steps were planned for; a plan for another goal supersedes it. */
+  const plannedGoalRef = useRef('');
+  /** Background variations: superseded goals keep running, inside every guardrail, while the main executor is idle. */
+  const variations = useVariations({
+    main: () => ({ goal: goalRef.current, steps: stepsRef.current }),
+    setMain: (nextGoal, nextSteps) => {
+      goalRef.current = nextGoal;
+      setGoal(nextGoal);
+      stepsRef.current = nextSteps;
+      setSteps(nextSteps);
+      plannedGoalRef.current = nextGoal.trim();
+    },
+    blocked: () => variationHold(),
+    runStep: (step, actor, budget) => performStep(step, actor, budget, !armedRef.current),
+    budgetLimit: () => settingsRef.current.actionBudget,
+    log: (message, tone) => addLog('Variations', message, tone),
+    record: kb.recordWith,
+    mergeRecords: kb.reattributeVariation,
+    forgetRecords: kb.forgetVariation,
+  });
 
   supervisorRef.current = supervisor;
   timelineRef.current = timeline;
@@ -828,6 +849,14 @@ export function useAssist() {
 
   /** The executor is running (Auto Act, replay, a running step, or an AI command): the learner pauses. */
   const executorBusy = () => autoBusyRef.current || replayingRef.current || aiBusyRef.current || stepsRef.current.some((s) => s.status === 'running');
+
+  /** Why background variations must hold their real-input work now (abort, unchecked stages, main executor busy), or null. */
+  const variationHold = (): string | null => {
+    if (abortedRef.current) return 'Aborted — background variations hold';
+    if (!stageOn('variations')) return stageOff('variations');
+    if (!stageOn('executor')) return stageOff('executor');
+    return executorBusy() ? 'Main executor needs the screen — background variations paused' : null;
+  };
 
   /** Dwell learning on a new frame: the cursor resting over a learned target re-observes it there. */
   const learnFromDwell = (frame: Frame) => {
@@ -2339,6 +2368,8 @@ export function useAssist() {
 
   /** Applies a plan's steps as the current workflow and logs them (with the arrangement, when the goal asked for one). */
   const applyPlan = (text: string, planned: WorkflowStep[], why: string, arrangement = '') => {
+    if (plannedGoalRef.current !== text.trim()) variations.supersede(plannedGoalRef.current, stepsRef.current, text);
+    plannedGoalRef.current = text.trim();
     stepsRef.current = planned;
     setSteps(planned);
     markPlan();
@@ -2996,7 +3027,7 @@ export function useAssist() {
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
-    knowledge: kb, removeStep,
+    knowledge: kb, removeStep, variations,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
     bridgeOnline, verifyRealInput,
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */

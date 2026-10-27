@@ -3,6 +3,7 @@ import { addPortfolioEntry, aiActor, type PortfolioEntry, type PortfolioKind, ty
 import { profileLines, profileSuggestions, recordSignal, summarizeProfile, type ProfileEvent, type ProfileSignal } from './user-profile.js';
 import { addSectionNote, createSection, deleteSection, matchSections, removeSectionNote, renameSection, sectionLines, type Agents, type KnowledgeSection, type NoteTag, type SectionScope } from './knowledge-sections.js';
 import { loadPortfolios, loadProfile, loadSections, savePortfolios, saveProfile, saveSections } from './storage.js';
+import { forgetPortfolio, reattributePortfolio } from './variations.js';
 
 /** What the knowledge hook reads from the assist engine at the moment of a record. */
 export interface KnowledgeDeps {
@@ -42,6 +43,17 @@ export function useKnowledge(deps: KnowledgeDeps) {
   /** Adds an entry to the portfolio of the AI model answering now. */
   const recordAi = useCallback((kind: PortfolioKind, text: string, ok?: boolean) => recordFor(aiActor(depsRef.current.model()), kind, text, ok), [recordFor]);
 
+  /** Adds an entry to `actor`'s portfolio under an explicit `source` (a background variation's own operation). */
+  const recordWith = useCallback((actor: string, kind: PortfolioKind, text: string, source: PortfolioSource, ok?: boolean) => {
+    setPortfolios((list) => addPortfolioEntry(list, { actor, kind, text, source, ...(ok === undefined ? {} : { ok }) }));
+  }, []);
+
+  /** Moves variation `id`'s records under `source`; every other entry is untouched. */
+  const reattributeVariation = useCallback((id: string, source: PortfolioSource) => setPortfolios((list) => reattributePortfolio(list, id, source)), []);
+
+  /** Drops variation `id`'s records only. */
+  const forgetVariation = useCallback((id: string) => setPortfolios((list) => forgetPortfolio(list, id)), []);
+
   /** Records an approved command, a saved operation or a correction in the user profile. */
   const noteSignal = useCallback((signal: ProfileSignal, text: string) => {
     const { operation } = depsRef.current.source();
@@ -57,7 +69,7 @@ export function useKnowledge(deps: KnowledgeDeps) {
   return {
     portfolios, profile, profileSummary, sections,
     suggestions: (current: string) => profileSuggestions(profileSummary, current),
-    recordFor, recordAi, noteSignal, contextFor, matchedSections,
+    recordFor, recordAi, recordWith, reattributeVariation, forgetVariation, noteSignal, contextFor, matchedSections,
     createSection: (name: string, scope: SectionScope) => setSections((l) => createSection(l, name, scope)),
     renameSection: (id: string, name: string) => setSections((l) => renameSection(l, id, name)),
     deleteSection: (id: string) => setSections((l) => deleteSection(l, id)),
