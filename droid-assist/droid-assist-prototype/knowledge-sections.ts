@@ -73,16 +73,20 @@ export const removeSectionNote = (list: KnowledgeSection[], id: string, noteId: 
 /** Whether `note` applies to `operation`: unscoped, or scoped to that same operation. */
 const appliesTo = (note: SectionNote, operation: string) => note.operation === null || norm(note.operation) === norm(operation);
 
+/** The agent(s) taking part in an operation: one id or label, several, or '' for none. */
+export type Agents = string | readonly string[];
+const agentList = (agent: Agents): string[] => (typeof agent === 'string' ? [agent] : [...agent]).map(norm).filter(Boolean);
+
 /** Whether `section` is cross-referenced for `operation` run by `agent`. */
-function matches(section: KnowledgeSection, operation: string, agent: string): boolean {
+function matches(section: KnowledgeSection, operation: string, agent: Agents): boolean {
   const name = norm(section.name);
-  if (section.scope === 'agent') return !!agent && name === norm(agent);
+  if (section.scope === 'agent') return agentList(agent).includes(name);
   const op = norm(operation);
   return (!!op && op.includes(name)) || (!!op && section.notes.some((n) => n.operation !== null && norm(n.operation) === op));
 }
 
 /** The sections cross-referenced for `operation` run by `agent` ('' for none). */
-export const matchSections = (list: KnowledgeSection[], operation: string, agent = ''): KnowledgeSection[] =>
+export const matchSections = (list: KnowledgeSection[], operation: string, agent: Agents = ''): KnowledgeSection[] =>
   list.filter((s) => matches(s, operation, agent));
 
 const TAG_LINE: Record<NoteTag, (section: string, text: string) => string> = {
@@ -99,7 +103,7 @@ function sectionNoteLines(section: KnowledgeSection, operation: string): string[
 }
 
 /** The context lines every matched section injects into `operation` run by `agent`. */
-export const sectionLines = (list: KnowledgeSection[], operation: string, agent = ''): string[] =>
+export const sectionLines = (list: KnowledgeSection[], operation: string, agent: Agents = ''): string[] =>
   matchSections(list, operation, agent).flatMap((s) => sectionNoteLines(s, operation));
 
 const isStr = (v: unknown): v is string => typeof v === 'string';

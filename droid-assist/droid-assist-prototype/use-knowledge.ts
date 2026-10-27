@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { addPortfolioEntry, aiActor, type PortfolioEntry, type PortfolioKind, type PortfolioSource } from './portfolio.js';
 import { profileLines, profileSuggestions, recordSignal, summarizeProfile, type ProfileEvent, type ProfileSignal } from './user-profile.js';
-import { addSectionNote, createSection, deleteSection, matchSections, removeSectionNote, renameSection, sectionLines, type KnowledgeSection, type NoteTag, type SectionScope } from './knowledge-sections.js';
+import { addSectionNote, createSection, deleteSection, matchSections, removeSectionNote, renameSection, sectionLines, type Agents, type KnowledgeSection, type NoteTag, type SectionScope } from './knowledge-sections.js';
 import { loadPortfolios, loadProfile, loadSections, savePortfolios, saveProfile, saveSections } from './storage.js';
 
 /** What the knowledge hook reads from the assist engine at the moment of a record. */
@@ -49,10 +49,10 @@ export function useKnowledge(deps: KnowledgeDeps) {
   }, []);
 
   /** The lines cross-referenced into `operation` run by `agent`: matched sections, then the user profile. */
-  const contextFor = useCallback((operation: string, agent = ''): string[] => [...sectionLines(sectionsRef.current, operation, agent), ...profileLines(summaryRef.current)], []);
+  const contextFor = useCallback((operation: string, agent: Agents = ''): string[] => [...sectionLines(sectionsRef.current, operation, agent), ...profileLines(summaryRef.current)], []);
 
   /** The names of the sections cross-referenced for `operation` run by `agent`. */
-  const matchedSections = useCallback((operation: string, agent = '') => matchSections(sectionsRef.current, operation, agent).map((s) => s.name), []);
+  const matchedSections = useCallback((operation: string, agent: Agents = '') => matchSections(sectionsRef.current, operation, agent).map((s) => s.name), []);
 
   return {
     portfolios, profile, profileSummary, sections,

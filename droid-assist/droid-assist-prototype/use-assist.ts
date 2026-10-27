@@ -1685,11 +1685,15 @@ export function useAssist() {
     redo,
   });
 
-  /** The knowledge sections and user profile cross-referenced before `actor` runs `operation`; the matched sections are logged. */
+  /**
+   * The knowledge sections and user profile cross-referenced before `actor` runs `operation`, with
+   * the agent sections of every enabled agent taking part; the matched sections are logged.
+   */
   const crossReference = (actor: string, operation: string): string[] => {
-    const matched = kb.matchedSections(operation, actor);
+    const party = [actor, ...agents.filter((a) => a.on).map((a) => a.id)];
+    const matched = kb.matchedSections(operation, party);
     if (matched.length) addLog(actor, `Cross-referenced knowledge section(s) before "${operation}": ${matched.join(', ')}`, 'info');
-    return kb.contextFor(operation, actor);
+    return kb.contextFor(operation, party);
   };
 
   /** Writes a proposal to the activity log (the timeline entry is recorded where the proposal is made). */
@@ -2228,7 +2232,10 @@ export function useAssist() {
       const what = dryRun ? 'verified on screen (not dispatched)' : 'executed';
       addLog('Goal reviewer', ok === total ? `All ${total} steps ${what}${goal ? ` for "${goal}"` : ''}` : `${ok}/${total} ${what} — re-plan the failed steps or let AI help clear blockers`, ok === total ? 'ok' : 'warn');
       kb.recordFor('goal', 'result', `${ok}/${total} step(s) ${what}`, ok === total);
-      for (const s of kb.suggestions(goalRef.current)) addLog('Goal reviewer', `Suggestion: ${s}`, 'info');
+      for (const s of kb.suggestions(goalRef.current)) {
+        addLog('Goal reviewer', `Suggestion: ${s}`, 'info');
+        kb.recordFor('goal', 'note', `Suggestion: ${s}`);
+      }
     }
     await learnFromRun(ran, { dryRun, stopped: abortRef.current });
     await superviseRun();
@@ -2380,6 +2387,7 @@ export function useAssist() {
         applyPlan(text, next, why, arrangement);
         planned = next.length > 0;
         kb.recordAi('work', `Planned ${next.length} step(s) for "${text.trim()}" (${why})`);
+        for (const a of agents.filter((x) => x.on)) kb.recordFor(a.id, 'work', `Assigned to "${text.trim()}": ${a.description}`);
       } catch (error) {
         addLog('Planner', aiFailure('AI plan failed — no steps created', error), 'error');
       } finally {

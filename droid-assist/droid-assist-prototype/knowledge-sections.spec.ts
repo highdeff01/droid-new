@@ -67,6 +67,12 @@ describe('section injection', () => {
     expect(sectionLines(list, 'anything', 'supervisor')).toEqual([]);
   });
 
+  it('cross-references an agent section when that agent is one of the operation\'s agents', () => {
+    const list = seeded();
+    expect(matchSections(list, 'play music', ['Planner', 'goal', 'coords']).map((s) => s.name)).toContain('coords');
+    expect(matchSections(list, 'play music', ['Planner', 'goal']).map((s) => s.name)).not.toContain('coords');
+  });
+
   it('injects nothing when no section matches', () => {
     expect(sectionLines(seeded(), 'open the calculator')).toEqual([]);
   });

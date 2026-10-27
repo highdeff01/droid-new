@@ -91,6 +91,12 @@ export function PortfoliosPanel({ engine }: { engine: AssistEngine }) {
   const actor = actors.includes(picked) ? picked : actors[0] ?? '';
   const names = Object.fromEntries(engine.agents.map((a) => [a.id, a.name]));
   const label = (a: string) => actorLabel(a, names, engine.settings.aiModel);
+  const [note, setNote] = useState('');
+  const addNote = () => {
+    if (!actor || !note.trim()) return;
+    engine.knowledge.recordFor(actor, 'note', note.trim());
+    setNote('');
+  };
   return (
     <section className={styles.panel}>
       <h3>Portfolios <small>{actors.length} actor(s)</small></h3>
@@ -99,6 +105,12 @@ export function PortfoliosPanel({ engine }: { engine: AssistEngine }) {
         <select value={actor} onChange={(e) => setPicked(e.target.value)} aria-label="Portfolio actor">
           {actors.map((a) => <option key={a} value={a}>{label(a)}</option>)}
         </select>
+      )}
+      {actors.length > 0 && (
+        <div className={styles.row}>
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note for this portfolio" aria-label="New portfolio note" />
+          <button type="button" onClick={addNote} disabled={!note.trim()}>Add note</button>
+        </div>
       )}
       <ul className={styles.log} aria-label="Portfolio entries">
         {queryPortfolio(portfolios, { actor }).map((e) => (
