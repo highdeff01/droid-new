@@ -26,6 +26,8 @@ import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, fullJpeg, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, dispatchState, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
 import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './recorder.js';
+import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveSettings, saveTriggers, saveWatcher } from './storage.js';
+import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveWatcher } from './storage.js';
 import { appendSummary, runSummary, type RunSummary } from './run-stats.js';
 import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, reorderSteps, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
@@ -232,6 +234,7 @@ export function useAssist() {
   const [runs, setRuns] = useState<RunSummary[]>(loadRunSummaries);
   /** The Screen watcher's notes, proposals and test results (persisted). */
   const [watcher, setWatcher] = useState<WatcherState>(loadWatcher);
+  const [triggers, setTriggers] = useState<Trigger[]>(loadTriggers);
   const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
@@ -365,6 +368,12 @@ export function useAssist() {
   const identifySentRef = useRef<Array<{ box: Box; time: number }>>([]);
   const identifyBusyRef = useRef(false);
   const watcherRef = useRef(watcher);
+  const triggersRef = useRef(triggers);
+  /** A triggered run is in flight; no other trigger fires until it finishes. */
+  const triggerBusyRef = useRef(false);
+  /** The frame id element triggers last evaluated, and each watched element's state on it. */
+  const triggerFrameRef = useRef<number | null>(null);
+  const elementSnapsRef = useRef(new Map<string, ElementSnapshot>());
   const aiBusyRef = useRef(aiBusy);
   aiBusyRef.current = aiBusy;
   /** A watcher observation or test is in flight; ticks never overlap and Auto Act waits for it. */
@@ -416,6 +425,7 @@ export function useAssist() {
   useEffect(() => saveHabits(habits), [habits]);
   useEffect(() => saveRunSummaries(runs), [runs]);
   useEffect(() => saveWatcher(watcher), [watcher]);
+  useEffect(() => saveTriggers(triggers), [triggers]);
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
   }, [cards]);
@@ -1099,7 +1109,6 @@ export function useAssist() {
     const verdict = await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
     if (verdict && !dryRun) learnHabit(step, verdict);
     return { ...out, verdict };
-    return out;
   };
 
   /** Why the retry ladder may not climb another rung (abort, kill-switch, executor unchecked); null when it may. */
@@ -2083,14 +2092,22 @@ export function useAssist() {
    * dispatch, re-verify). Self-test, or any run while disarmed, verifies but sends nothing.
    */
   const replay = async (selfTest = false) => {
-    const label = selfTest ? 'Self-test' : 'Replay';
+    await runReplay(selfTest, { label: selfTest ? 'Self-test' : 'Replay', goal: runGoalOf() });
+  };
+
+  /**
+   * The replay pipeline shared by the Replay buttons and triggered runs. `label` names the run in the
+   * log and `goal` is what auto-continue verifies. Resolves the steps verified or executed, or null
+   * when the run was refused before any step (nothing to run, ABORTED, bridge down).
+   */
+  const runReplay = async (selfTest: boolean, { label, goal: runGoal }: { label: string; goal: string }): Promise<RunOutcome | null> => {
     if (!stepsRef.current.length) {
       addLog(label, 'Nothing to replay — record or plan a workflow first', 'warn');
-      return;
+      return null;
     }
     if (abortedRef.current) {
-      addLog('Safety', 'Replay refused — ABORTED is active; clear the abort first', 'error');
-      return;
+      addLog('Safety', `${label} refused — ABORTED is active; clear the abort first`, 'error');
+      return null;
     }
     const viaBridge = sourceRef.current !== 'demo' || (!selfTest && armedRef.current && !!settingsRef.current.bridgeUrl);
     if (viaBridge) {
@@ -2099,7 +2116,7 @@ export function useAssist() {
       if (!health.ok) {
         addLog(label, `${health.message} — no step was executed`, 'error');
         captureError({ kind: 'bridge', message: health.message, goal: goalRef.current });
-        return;
+        return null;
       }
     }
     const dryRun = selfTest || !armedRef.current;
@@ -2108,12 +2125,13 @@ export function useAssist() {
     abortRef.current = false;
     runStartRef.current = Date.now();
     reproposedRef.current = new Set();
+    replayingRef.current = true;
     setReplaying(true);
     const shots: Frame[] = [];
-    const runGoal = runGoalOf();
     const looping = continueEnabled() && !selfTest;
     const { ran, ok } = looping ? await continueToGoal(runGoal, budget, dryRun, label, shots) : await runSteps(budget, dryRun, label, shots);
     setActiveIndex(null);
+    replayingRef.current = false;
     setReplaying(false);
     const picks = shots.map((f, i) => ({ f, score: i === 0 ? 1 : frameDistance(shots[i - 1].data, f.data) })).sort((a, b) => b.score - a.score).slice(0, 3).map((p) => p.f);
     if (picks.length) setPinned(picks);
@@ -2124,6 +2142,7 @@ export function useAssist() {
     }
     await learnFromRun(ran, { dryRun, stopped: abortRef.current });
     await superviseRun();
+    return { ok, total: ran.length, dryRun, stopped: abortRef.current };
   };
 
   /** One pass over the current steps in order, checking abortRef between steps. */
@@ -2724,11 +2743,129 @@ export function useAssist() {
 
   const loadCard = (card: SavedCard) => {
     expectRef.current = [];
-    setSteps(card.steps.map((s) => ({ ...s, status: 'pending' as const })));
+    stepsRef.current = card.steps.map((s) => ({ ...s, status: 'pending' as const }));
+    setSteps(stepsRef.current);
     markPlan();
     flowRef.current = card.id;
     addLog('Library', `Loaded "${card.name}"`);
   };
+
+  const setTriggerList = (next: Trigger[]) => {
+    triggersRef.current = next;
+    setTriggers(next);
+  };
+  const patchTrigger = (id: string, fn: (t: Trigger) => Trigger) => setTriggerList(triggersRef.current.map((t) => (t.id === id ? fn(t) : t)));
+  const targetLabel = (t: Trigger) => (t.target.kind === 'draft' ? 'the draft card' : `flow "${cardsRef.current.find((c) => c.id === (t.target as { cardId: string }).cardId)?.name ?? 'deleted flow'}"`);
+
+  /** Creates a trigger from the Triggers panel; appear/disappear need an element mapped with its template frame. */
+  const addTrigger = (draft: TriggerDraft) => {
+    if (!draft.name.trim()) return addLog('Triggers', 'Name the trigger first', 'warn');
+    if (draft.kind === 'schedule' && !(Number.isFinite(draft.at) && draft.at >= 0)) return addLog('Triggers', `"${draft.name.trim()}" not created — set a valid run time`, 'warn');
+    if (draft.kind === 'element') {
+      const el = elementMapRef.current.find((e) => e.id === draft.elementId);
+      if (!el) return addLog('Triggers', `"${draft.name.trim()}" not created — pick a mapped element`, 'warn');
+      if (draft.event !== 'change' && !el.frame) return addLog('Triggers', `"${draft.name.trim()}" not created — "${el.name}" was mapped without a live frame, so its presence cannot be judged; re-map it on the live screen`, 'warn');
+    }
+    const t = createTrigger(draft, uid('trigger'));
+    setTriggerList([t, ...triggersRef.current].slice(0, TRIGGER_LIMIT));
+    addLog('Triggers', `Created "${t.name}": run ${targetLabel(t)} ${conditionText(t, elementMapRef.current)} (cooldown ${t.cooldownSec} s, ${t.maxRuns ? `at most ${t.maxRuns} run(s)` : 'no run limit'})`, 'ok');
+  };
+
+  const toggleTrigger = (id: string) => {
+    const t = triggersRef.current.find((x) => x.id === id);
+    if (!t) return;
+    // Re-enabling a trigger that hit its run limit starts a fresh count.
+    patchTrigger(id, (x) => (x.enabled ? { ...x, enabled: false } : { ...x, enabled: true, runs: x.maxRuns && x.runs >= x.maxRuns ? 0 : x.runs }));
+    addLog('Triggers', `"${t.name}" ${t.enabled ? 'disabled' : 'enabled'}`, t.enabled ? 'info' : 'ok');
+  };
+
+  const deleteTrigger = (id: string) => {
+    const t = triggersRef.current.find((x) => x.id === id);
+    if (!t) return;
+    setTriggerList(triggersRef.current.filter((x) => x.id !== id));
+    addLog('Triggers', `Deleted "${t.name}"`, 'info');
+  };
+
+  /** The goal a triggered run verifies: the flow's description or name, else the draft card's goal. */
+  const triggeredGoal = (card?: SavedCard) => (card ? card.description.trim() || card.name : runGoalOf());
+
+  /**
+   * Fires trigger `id` through the same replay pipeline as the Replay button (grounding, execution,
+   * reflect, verdict, auto-continue, retry ladder, arm/disarm, budget, abort, loop-control stages).
+   * A cooldown, run limit, ABORTED or a missing target skips it (logged; a schedule moves on).
+   */
+  const fireTrigger = async (id: string, why: string) => {
+    const t = triggersRef.current.find((x) => x.id === id);
+    if (!t) return;
+    if (triggerBusyRef.current || executorBusy()) {
+      addLog('Triggers', `"${t.name}" skipped (${why}) — a run is in progress`, 'warn');
+      return;
+    }
+    const now = Date.now();
+    const skip = fireGate(t, now);
+    const target = resolveTarget(t.target, cardsRef.current, draftCard);
+    const refusal = skip ? skip.detail : abortedRef.current ? 'ABORTED is active; clear the abort first' : 'error' in target ? `cannot run — ${target.error}` : null;
+    if (refusal !== null || 'error' in target) {
+      addLog(!skip && abortedRef.current ? 'Safety' : 'Triggers', `"${t.name}" skipped (${why}): ${refusal}`, skip?.reason === 'cooldown' ? 'info' : 'warn');
+      patchTrigger(id, (x) => afterSkip(x, now));
+      return;
+    }
+    const fired = afterFire(t, now);
+    patchTrigger(id, () => fired);
+    addLog('Triggers', `Fired "${t.name}" (${why}) — running ${target.name}, run ${fired.runs}${fired.maxRuns ? ` of ${fired.maxRuns}` : ''}`, 'info');
+    if (!fired.enabled && t.enabled) addLog('Triggers', `"${t.name}" ${fired.kind === 'schedule' && fired.everySec === 0 ? 'was a one-time schedule' : `reached its run limit (${fired.maxRuns})`} — disabled`, 'info');
+    if (target.card) loadCard(target.card);
+    triggerBusyRef.current = true;
+    try {
+      const result = outcomeText(await runReplay(false, { label: `Trigger "${t.name}"`, goal: triggeredGoal(target.card) }));
+      addLog('Triggers', `"${t.name}" result: ${result.text}`, result.tone);
+    } finally {
+      triggerBusyRef.current = false;
+    }
+  };
+
+  /** The element triggers whose event the newest frame shows; each frame is evaluated once, the first as a baseline. */
+  const elementEvents = (): Array<{ id: string; why: string }> => {
+    const frame = framesRef.current[0];
+    if (!frame || frame.id === triggerFrameRef.current) return [];
+    triggerFrameRef.current = frame.id;
+    const watching = triggersRef.current.filter((t): t is ElementTrigger => t.kind === 'element' && t.enabled);
+    const snaps = elementSnapsRef.current;
+    [...snaps.keys()].filter((id) => !watching.some((t) => t.elementId === id)).forEach((id) => snaps.delete(id));
+    const out: Array<{ id: string; why: string }> = [];
+    for (const el of elementMapRef.current.filter((e) => watching.some((t) => t.elementId === e.id))) {
+      const { snapshot, events } = observeElement(el, snaps.get(el.id), frame);
+      snaps.set(el.id, snapshot);
+      watching.filter((t) => t.elementId === el.id && events.includes(t.event)).forEach((t) => out.push({ id: t.id, why: `"${el.name}" ${t.event === 'change' ? 'changed' : `${t.event}ed`} on screen` }));
+    }
+    return out;
+  };
+
+  /**
+   * One trigger round: element triggers against the live frame (only while the Screen watcher stage
+   * is on and a capture is live), then due schedules. During a run, element events are logged as
+   * skipped and due schedules wait until the executor is free.
+   */
+  const triggerTick = async () => {
+    const events = stageOn('screenWatcher') && captureLive() && !pausedWhileHidden() ? elementEvents() : [];
+    if (triggerBusyRef.current || executorBusy()) {
+      events.forEach((e) => addLog('Triggers', `"${triggersRef.current.find((t) => t.id === e.id)?.name}" skipped (${e.why}) — a run is in progress`, 'warn'));
+      return;
+    }
+    const now = Date.now();
+    const due = triggersRef.current.filter((t): t is ScheduleTrigger => t.kind === 'schedule' && scheduleDue(t, now)).map((t) => ({ id: t.id, why: `scheduled for ${new Date(t.at).toLocaleTimeString()}` }));
+    for (const d of [...events, ...due]) await fireTrigger(d.id, d.why);
+  };
+  const triggerTickRef = useRef(triggerTick);
+  triggerTickRef.current = triggerTick;
+
+  // Trigger loop while any trigger is enabled.
+  const anyTriggerOn = triggers.some((t) => t.enabled);
+  useEffect(() => {
+    if (!anyTriggerOn) return undefined;
+    const id = setInterval(() => void triggerTickRef.current(), TRIGGER_TICK_MS);
+    return () => clearInterval(id);
+  }, [anyTriggerOn]);
 
   return {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
@@ -2739,6 +2876,7 @@ export function useAssist() {
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     watcher, acceptProposal, dismissProposal, testProposal,
+    triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
     aiHistory, trimAiHistory, resetAiSession,
     /** The AI is planning, reflecting, deciding or verifying right now. */

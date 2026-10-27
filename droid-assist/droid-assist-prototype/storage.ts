@@ -13,6 +13,7 @@ import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, type AiView } from './a
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
+import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
@@ -22,6 +23,7 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers' } as const;
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', runs: 'droid-assist.runs' } as const;
 
 /** Most learned patterns kept. */
@@ -345,4 +347,12 @@ export function saveRunSummaries(summaries: RunSummary[]) {
 /** Persists the Screen watcher state, capped per list. */
 export function saveWatcher(state: WatcherState) {
   writeJson(KEYS.watcher, { notes: state.notes.slice(0, NOTE_LIMIT), proposals: state.proposals.slice(0, PROPOSAL_LIMIT), tests: state.tests.slice(0, TEST_LIMIT) });
+}
+
+/** The stored triggers; invalid entries are dropped. */
+export const loadTriggers = (): Trigger[] => listOf(readJson(KEYS.triggers), isTrigger, TRIGGER_LIMIT);
+
+/** Persists the triggers, capped at TRIGGER_LIMIT. */
+export function saveTriggers(triggers: Trigger[]) {
+  writeJson(KEYS.triggers, triggers.slice(0, TRIGGER_LIMIT));
 }
