@@ -15,6 +15,8 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
+import { PACK_TEST_LIMIT, type GoalSource, type PackKind, type PackTestResult, type WorkflowPack } from './packs.js';
+import type { SubagentStatus } from './subagents.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -23,7 +25,7 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', packs: 'droid-assist.packs' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -176,6 +178,48 @@ export function saveCards(cards: SavedCard[]) {
     steps: c.steps.map(({ refFrame, ...s }) => (keepFrames && refFrame ? { ...s, refFrame: toStoredFrame(refFrame) } : s)),
   }));
   if (!writeJson(KEYS.cards, toStored(true))) writeJson(KEYS.cards, toStored(false));
+}
+
+const PACK_KINDS: ReadonlyArray<PackKind> = ['recorded', 'combined'];
+const GOAL_SOURCES: ReadonlyArray<GoalSource> = ['input', 'ai', 'user', null];
+const TEST_STATUSES: ReadonlyArray<SubagentStatus> = ['pass', 'fail', 'aborted', 'skipped'];
+type StoredPack = Omit<WorkflowPack, 'steps'> & { steps: StoredStep[] };
+
+function isPackTest(v: unknown): v is PackTestResult {
+  return isObject(v) && typeof v.id === 'string' && isNum(v.time) && TEST_STATUSES.includes(v.status as SubagentStatus) && typeof v.message === 'string' && typeof v.dry === 'boolean';
+}
+
+/** A valid stored pack with its valid steps and test results, or null. */
+function parsePack(v: unknown): StoredPack | null {
+  if (!isObject(v) || typeof v.id !== 'string' || typeof v.name !== 'string' || !Array.isArray(v.steps)) return null;
+  const goal = typeof v.goal === 'string' ? v.goal : '';
+  return {
+    id: v.id,
+    name: v.name,
+    kind: PACK_KINDS.includes(v.kind as PackKind) ? (v.kind as PackKind) : 'recorded',
+    goal,
+    goalSource: goal && GOAL_SOURCES.includes(v.goalSource as GoalSource) ? (v.goalSource as GoalSource) : null,
+    steps: v.steps.map(parseStep).filter((s): s is StoredStep => s !== null),
+    tests: Array.isArray(v.tests) ? v.tests.filter(isPackTest).slice(0, PACK_TEST_LIMIT) : [],
+    savedAt: isNum(v.savedAt) ? v.savedAt : 0,
+  };
+}
+
+/** The stored workflow packs with their step screenshots decoded; invalid packs are dropped. */
+export async function loadPacks(): Promise<WorkflowPack[]> {
+  const stored = readJson(KEYS.packs);
+  if (!Array.isArray(stored)) return [];
+  const packs = stored.map(parsePack).filter((p): p is StoredPack => p !== null);
+  return Promise.all(packs.map(async (p) => ({ ...p, steps: await Promise.all(p.steps.map(restoreStep)) })));
+}
+
+/** Persists the packs; when they do not fit, retries without step screenshots. */
+export function savePacks(packs: WorkflowPack[]) {
+  const toStored = (keepFrames: boolean): StoredPack[] => packs.map((p) => ({
+    ...p,
+    steps: p.steps.map(({ refFrame, shot: _shot, beforeFrame: _before, afterFrame: _after, ...s }) => (keepFrames && refFrame ? { ...s, refFrame: toStoredFrame(refFrame) } : s)),
+  }));
+  if (!writeJson(KEYS.packs, toStored(true))) writeJson(KEYS.packs, toStored(false));
 }
 
 function isPattern(v: unknown): v is LearnedPattern {
