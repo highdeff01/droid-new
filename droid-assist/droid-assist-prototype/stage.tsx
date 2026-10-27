@@ -88,7 +88,7 @@ function drawHighlight(ctx: CanvasRenderingContext2D, x: number, y: number, labe
  * step markers (recorded vs drift-corrected), AI annotations and the AI cursor.
  */
 export function Stage({ engine }: { engine: AssistEngine }) {
-  const { source, demoCanvasRef, frames, captureLost, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex, ruler, highlight, mapMode, elementMap, mapDraft } = engine;
+  const { source, demoCanvasRef, frames, captureLost, DEMO_W, DEMO_H, trail, steps, annotations, cursor, settings, recording, replaying, activeIndex, ruler, highlight, mapMode, elementMap, mapDraft, mirror } = engine;
   const galleryFrame = ruler.on && ruler.frameId !== null ? ruler.frame : null;
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -217,7 +217,7 @@ export function Stage({ engine }: { engine: AssistEngine }) {
         tabIndex={0}
         aria-label="Screen stage"
         onKeyDown={(e) => {
-          if (!recording) return;
+          if (!recording && !mirror.interactive) return;
           e.preventDefault();
           engine.onStageKey(e);
         }}
@@ -263,8 +263,14 @@ export function Stage({ engine }: { engine: AssistEngine }) {
         {recording && <span className={styles.recBadge}>● LIVE RECORDING</span>}
         {replaying && <span className={styles.replayBadge}>▶ REPLAYING</span>}
         {mapMode && <span className={styles.recBadge}>▦ ELEMENT MAP — drag to draw a boundary</span>}
+        {mirror.interactive && !recording && !mapMode && !ruler.on && <span className={mirror.real ? styles.recBadge : styles.replayBadge} role="status">🖱 {mirror.label}</span>}
       </div>
-      {recording && (
+      <div className={styles.liveWrite}>
+        <label>
+          <input type="checkbox" checked={engine.mirrorOn} onChange={engine.toggleMirror} aria-label="Mirror input" /> Mirror input — {mirror.label}
+        </label>
+      </div>
+      {(recording || mirror.interactive) && (
         <form
           className={styles.liveWrite}
           onSubmit={(e) => {
@@ -273,7 +279,7 @@ export function Stage({ engine }: { engine: AssistEngine }) {
             setTyped('');
           }}
         >
-          <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Live write: type text to record a typing step, press Enter" aria-label="Live write text" />
+          <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={recording ? 'Live write: type text to record a typing step, press Enter' : 'Mirror type: text to type on the PC, press Enter'} aria-label="Live write text" />
         </form>
       )}
     </div>
