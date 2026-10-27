@@ -49,6 +49,8 @@ export interface WatchProposal {
   status: ProposalStatus;
   /** Whether a background test already ran for it. */
   tested?: boolean;
+  /** Prior operations/elements/errors cross-referenced from the operation database when it was proposed. */
+  related?: string[];
 }
 
 /** The result of one background test of a proposal. */
@@ -129,14 +131,16 @@ function toProposal(raw: unknown, view: ViewSize): ProposalDraft[] {
 
 /**
  * Asks the model (through the shared gateway) to observe `frame` and return notes and
- * proposals. Malformed entries are dropped; a non-JSON reply throws AiError.
+ * proposals. Malformed entries are dropped; a non-JSON reply throws AiError. `related` are prior
+ * operations/elements/errors from the operation database, so new ideas build on what was already tried.
  */
-export async function observeScreen(ask: AskFn, frame: Frame, recent: WatchNote[], steps: WorkflowStep[], goal: string): Promise<Observation> {
+export async function observeScreen(ask: AskFn, frame: Frame, recent: WatchNote[], steps: WorkflowStep[], goal: string, related: string[] = []): Promise<Observation> {
   const previous = recent.slice(0, 8).map((n) => `- [${n.kind}] ${n.text}`).join('\n') || '(none)';
   const flow = steps.map((s, i) => `${i + 1}. ${s.name} [${s.action}] → ${s.status}`).join('\n') || '(none)';
+  const prior = related.length ? `\nPrior operations (from the operation database):\n${related.join('\n')}` : '';
   const { content, thinking, view = SAMPLE_VIEW } = await ask({
     system: watchSystem,
-    prompt: `Goal: ${goal || '(none)'}\nPrevious notes:\n${previous}\nCurrent workflow steps:\n${flow}`,
+    prompt: `Goal: ${goal || '(none)'}\nPrevious notes:\n${previous}\nCurrent workflow steps:\n${flow}${prior}`,
     frame,
     json: true,
   });

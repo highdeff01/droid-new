@@ -53,6 +53,9 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
+import type { CaptureInput } from './error-forwarding.js';
+import { captureDraft, elementDraft, errorDraft, errorSection, ideaDraft, projectOf, trackDraft, type OperationDraft } from './operation-log.js';
+import { useOperations } from './use-operations.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -485,7 +488,20 @@ export function useAssist() {
 
   /** Error forwarding: reports carry the recent log and the current frame. */
   const errorForwarding = useErrorForwarding(settings, addLog, () => ({ log: logRef.current, frame: framesRef.current[0] ?? null }));
-  const captureError = errorForwarding.capture;
+  /** The operation database: every element, track, capture, error and idea operation with its input and output. */
+  const operationDb = useOperations();
+  const recordRaw = operationDb.record;
+  /** Records an operation by `agent` in `section`, scoped to the loaded flow (else the goal). */
+  const recordOp = useCallback((agent: string, section: string, draft: OperationDraft) => {
+    const flow = cardsRef.current.find((c) => c.id === flowRef.current)?.name;
+    recordRaw({ project: projectOf(flow, goalRef.current), agent, section }, draft);
+  }, [recordRaw]);
+  const forwardError = errorForwarding.capture;
+  /** Captures an error for forwarding and records it in the operation database. */
+  const captureError = useCallback((input: CaptureInput) => {
+    forwardError(input);
+    recordOp('Errors', errorSection(input.kind), errorDraft(input));
+  }, [forwardError, recordOp]);
 
   const annotationsRef = useRef(annotations);
   annotationsRef.current = annotations;
@@ -892,7 +908,8 @@ export function useAssist() {
     const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message: out.message };
     if (POINTER_ACTIONS.has(step.action)) lastPointerRef.current = out.end ?? out.target;
     setHistory((h) => appendHistory(h, rec));
-  }, []);
+    recordOp(actor, 'executor', trackDraft(step, out));
+  }, [recordOp]);
 
   /** Applies a click to the demo desktop (dismiss the ad, press Play). */
   const demoClick = useCallback((x: number, y: number): string => {
@@ -1082,6 +1099,7 @@ export function useAssist() {
     const patch = frame ? await patchAt(frame, p).catch(() => undefined) : undefined;
     familiarRef.current = rememberElement(familiarRef.current, { id: uid('el'), name, x: p.x, y: p.y, patch, lastSeen: Date.now() });
     setFamiliar(familiarRef.current);
+    recordOp('Familiar elements', 'elementMap', elementDraft('remember', name, `point ${gridRef(p)}`, patch ? 'remembered with a screen patch' : 'remembered'));
   };
 
   /**
@@ -1094,7 +1112,11 @@ export function useAssist() {
     await rememberAt(step.target ?? step.name, out.target, out.shot ?? framesRef.current[0]);
   };
 
-  const forgetFamiliar = (id: string) => setFamiliar((list) => forgetElement(list, id));
+  const forgetFamiliar = (id: string) => {
+    const el = familiarRef.current.find((f) => f.id === id);
+    setFamiliar((list) => forgetElement(list, id));
+    if (el) recordOp('Familiar elements', 'elementMap', elementDraft('forget', el.name, `id ${id}`, 'forgotten'));
+  };
 
   /**
    * performStep (with element identification on a miss), then reflect-after-step: every step the
@@ -1304,9 +1326,14 @@ export function useAssist() {
     const patch = frame ? await patchAt(frame, boxCenter(el.box)).catch(() => undefined) : undefined;
     setFamiliar((list) => rememberElement(list, toFamiliar(el, Date.now(), patch)));
     addLog('Element map', `Mapped "${el.name}" at ${gridRef(boxCenter(el.box))} (${pct(el.box.w)} x ${pct(el.box.h)} of the screen)`, 'ok');
+    recordOp('Element map', 'elementMap', elementDraft('map', el.name, `box ${pct(el.box.x)}, ${pct(el.box.y)} ${pct(el.box.w)} x ${pct(el.box.h)}`, `mapped at ${gridRef(boxCenter(el.box))}`));
   };
 
-  const deleteMapped = (id: string) => setMap(unmapElement(elementMapRef.current, id));
+  const deleteMapped = (id: string) => {
+    const el = elementMapRef.current.find((m) => m.id === id);
+    setMap(unmapElement(elementMapRef.current, id));
+    if (el) recordOp('Element map', 'elementMap', elementDraft('unmap', el.name, `id ${id}`, 'unmapped'));
+  };
 
   /**
    * Where the element map puts `name`: the live layout on the demo desktop (sidebar icons, the
@@ -1665,11 +1692,12 @@ export function useAssist() {
     });
   };
 
-  /** The planning context a proposal is justified against; `redo` marks a re-proposal. */
-  const proposalContext = (redo?: string): ProposalContext => ({
+  /** The planning context a proposal for `step` is justified against; `redo` marks a re-proposal. */
+  const proposalContext = (step: WorkflowStep, redo?: string): ProposalContext => ({
     goal: goalRef.current,
     change: currentChange(),
     patterns: relevantPatterns(goalRef.current, patternsRef.current).map(patternLine),
+    related: operationDb.related(`${step.name} ${step.target ?? ''}`, goalRef.current),
     redo,
   });
 
@@ -1688,7 +1716,7 @@ export function useAssist() {
   /** The model's what/why for `step` on the live screen, recorded on the timeline and in the log. */
   const proposeNow = async (actor: string, step: WorkflowStep, redo?: string): Promise<Proposal> => {
     const frame = framesRef.current[0] ?? null;
-    const p = await thought(step.name, () => proposeStep(askFor('executor'), frame, step, proposalContext(redo)), proposalText, 'proposal');
+    const p = await thought(step.name, () => proposeStep(askFor('executor'), frame, step, proposalContext(step, redo)), proposalText, 'proposal');
     logProposal(actor, step, p, !!redo);
     return p;
   };
@@ -2522,10 +2550,12 @@ export function useAssist() {
     abortRef.current = true;
     setCaptureLost(reason);
     addLog('Screen', `CAPTURE LOST: ${reason} — monitoring halted. Restart capture or switch to the demo desktop.`, 'error');
+    recordOp('Screen', 'capture', captureDraft('lost', sourceRef.current, reason, false));
   };
 
   /** Switches to a source: stops any running capture and resets the gallery. */
   const attachSource = (next: ScreenSource) => {
+    recordOp('Screen', 'capture', captureDraft('source', next, `switched from ${sourceRef.current} to ${next}`));
     captureRef.current?.stop();
     captureRef.current = null;
     demoChosenRef.current = next === 'demo';
@@ -2545,10 +2575,12 @@ export function useAssist() {
     } catch (error) {
       capture.stop();
       addLog('Screen', `Screen capture failed to start: ${errorText(error)}`, 'error');
+      recordOp('Screen', 'capture', captureDraft('start', 'screen', errorText(error), false));
       return false;
     }
     attachSource('screen');
     captureRef.current = capture;
+    recordOp('Screen', 'capture', captureDraft('start', 'screen', `${capture.kind} capture started`));
     addLog('Screen', capture.kind === 'native' ? 'Capturing your screen natively — monitoring continues while minimized' : 'Sharing your screen — the AI now sees it', 'ok');
     return true;
   };
@@ -2700,17 +2732,26 @@ export function useAssist() {
     const verdict = out.ok ? 'passed' : 'failed';
     updateWatcher((w) => ({ ...w, tests: addTest(w.tests, { proposalId: p.id, tried, happened: out.message, verdict, dryRun }), proposals: patchProposal(w.proposals, p.id, { tested: true }) }));
     addLog('Screen watcher', `Test ${verdict}: ${tried} — ${out.message}`, out.ok ? 'ok' : 'warn');
+    recordOp(actor, 'screenWatcher', ideaDraft('tested', p, `${tried} — ${out.message}`, out.ok));
     if (out.ok) return;
     addPatterns([newPattern('avoid', `${tried} failed — ${out.message}`, p.text)]);
     addLog('Patterns', `Watcher test failed — learned: avoid ${tried}`, 'warn');
   };
 
-  /** Stores an observation: deduplicated notes and proposals, each new proposal logged. */
+  /** A new proposal with the prior operations relevant to it, recorded as a proposed idea. */
+  const crossReferenced = (p: WatchProposal): WatchProposal => {
+    const related = operationDb.related(`${p.text} ${p.target ?? ''}`);
+    recordOp('Screen watcher', 'screenWatcher', ideaDraft('proposed', p, related.length ? `${related.length} related prior operation(s)` : 'no related prior operations'));
+    return related.length ? { ...p, related } : p;
+  };
+
+  /** Stores an observation: deduplicated notes and proposals, each new proposal cross-referenced and logged. */
   const recordObservation = (obs: Observation) => {
     const time = Date.now();
     const notes = mergeNotes(watcherRef.current.notes, obs.notes, time);
     const proposals = mergeProposals(watcherRef.current.proposals, obs.proposals, time);
-    updateWatcher((w) => ({ ...w, notes: notes.notes, proposals: proposals.proposals }));
+    const added = new Map(proposals.added.map((p) => [p.id, crossReferenced(p)]));
+    updateWatcher((w) => ({ ...w, notes: notes.notes, proposals: proposals.proposals.map((p) => added.get(p.id) ?? p) }));
     if (notes.added.length) addLog('Screen watcher', `${notes.added.length} new note(s): ${notes.added.map((n) => n.text).join('; ')}`, 'info');
     proposals.added.forEach((p) => addLog('Screen watcher', `Proposal: ${p.text}`, 'info'));
   };
@@ -2722,7 +2763,8 @@ export function useAssist() {
     if (!frame) return;
     watchBusyRef.current = true;
     try {
-      recordObservation(await thought('Screen watcher', () => observeScreen(askFor('screenWatcher'), frame, watcherRef.current.notes, stepsRef.current, goalRef.current), observationSummary));
+      const related = operationDb.related(goalRef.current, ...stepsRef.current.map((s) => s.target ?? s.name));
+      recordObservation(await thought('Screen watcher', () => observeScreen(askFor('screenWatcher'), frame, watcherRef.current.notes, stepsRef.current, goalRef.current, related), observationSummary));
       const untested = watcherRef.current.proposals.find((p) => p.status === 'pending' && !p.tested && proposalStep(p));
       if (untested && !executorBusy() && !abortedRef.current) await runWatchTest(untested);
     } catch (error) {
@@ -2774,10 +2816,12 @@ export function useAssist() {
     const done = applyProposal[p.kind](p);
     if (done === null) {
       addLog('Screen watcher', `Cannot apply "${p.text}" — it does not match the current screen or steps`, 'warn');
+      recordOp('Screen watcher', 'screenWatcher', ideaDraft('accepted', p, 'does not match the current screen or steps', false));
       return;
     }
     updateWatcher((w) => ({ ...w, proposals: patchProposal(w.proposals, id, { status: 'accepted' }) }));
     addLog('Screen watcher', `Accepted "${p.text}": ${done}`, 'ok');
+    recordOp('Screen watcher', 'screenWatcher', ideaDraft('accepted', p, done));
   };
 
   const dismissProposal = (id: string) => {
@@ -2785,6 +2829,7 @@ export function useAssist() {
     if (!p) return;
     updateWatcher((w) => ({ ...w, proposals: patchProposal(w.proposals, id, { status: 'dismissed' }) }));
     addLog('Screen watcher', `Dismissed "${p.text}"`, 'info');
+    recordOp('Screen watcher', 'screenWatcher', ideaDraft('dismissed', p, 'dismissed by the user'));
   };
 
   /** The Test button: a background test of one proposal, refused while the executor or watcher is busy. */
@@ -2950,6 +2995,7 @@ export function useAssist() {
     triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
     aiHistory, trimAiHistory, resetAiSession,
+    operations: operationDb.operations, exportOperations: operationDb.exportOperations, clearOperations: operationDb.clearOperations,
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
