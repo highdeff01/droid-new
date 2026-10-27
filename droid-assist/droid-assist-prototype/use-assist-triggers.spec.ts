@@ -112,6 +112,27 @@ describe('useAssist triggers', () => {
     expect(triggerLog(result).some((m) => /skipped .*cannot run — no draft card/.test(m))).toBe(true);
   });
 
+  it('Run now during a manual replay is skipped — never two runs at once', async () => {
+    const result = await mount();
+    act(() => result.current.loadCard(card));
+    act(() => result.current.addTrigger(schedule({ at: Date.now() + 3_600_000 })));
+    let replaying: Promise<void> = Promise.resolve();
+    await act(async () => {
+      replaying = result.current.replay();
+      await result.current.fireTrigger(result.current.triggers[0].id, 'run now');
+    });
+    await act(() => replaying);
+    expect(triggerLog(result).some((m) => /"Every second" skipped \(run now\) — a run is in progress/.test(m))).toBe(true);
+    expect(result.current.triggers[0].runs).toBe(0);
+  });
+
+  it('refuses a schedule with an invalid run time', async () => {
+    const result = await mount();
+    act(() => result.current.addTrigger(schedule({ at: Number.NaN })));
+    expect(result.current.triggers).toHaveLength(0);
+    expect(triggerLog(result)[0]).toMatch(/not created — set a valid run time/);
+  });
+
   it('refuses an element trigger on an unknown element', async () => {
     const result = await mount();
     act(() => result.current.addTrigger({ kind: 'element', name: 'Ad shows', target: { kind: 'draft' }, cooldownSec: 0, maxRuns: 0, elementId: 'nope', event: 'appear' }));

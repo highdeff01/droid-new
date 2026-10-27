@@ -2601,6 +2601,7 @@ export function useAssist() {
   /** Creates a trigger from the Triggers panel; appear/disappear need an element mapped with its template frame. */
   const addTrigger = (draft: TriggerDraft) => {
     if (!draft.name.trim()) return addLog('Triggers', 'Name the trigger first', 'warn');
+    if (draft.kind === 'schedule' && !(Number.isFinite(draft.at) && draft.at >= 0)) return addLog('Triggers', `"${draft.name.trim()}" not created — set a valid run time`, 'warn');
     if (draft.kind === 'element') {
       const el = elementMapRef.current.find((e) => e.id === draft.elementId);
       if (!el) return addLog('Triggers', `"${draft.name.trim()}" not created — pick a mapped element`, 'warn');
@@ -2637,6 +2638,10 @@ export function useAssist() {
   const fireTrigger = async (id: string, why: string) => {
     const t = triggersRef.current.find((x) => x.id === id);
     if (!t) return;
+    if (triggerBusyRef.current || executorBusy()) {
+      addLog('Triggers', `"${t.name}" skipped (${why}) — a run is in progress`, 'warn');
+      return;
+    }
     const now = Date.now();
     const skip = fireGate(t, now);
     const target = resolveTarget(t.target, cardsRef.current, draftCard);
