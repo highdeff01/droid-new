@@ -235,3 +235,24 @@ export function feedbackLine(r: SideTestResult): string {
 
 /** The result as an element forwarded on the agent bus, so every agent and the main AI get the feedback. */
 export const busFeedback = (r: SideTestResult): ForwardedElement => ({ name: feedbackLine(r), x: r.at.x, y: r.at.y });
+
+/** Most findings a fetched page yields. */
+export const FINDING_LIMIT = 5;
+
+/**
+ * Research findings from a fetched page: its text without scripts, styles and tags, split into sentences;
+ * those naming a word (3+ letters) of the query, at most FINDING_LIMIT, each cut to 200 characters.
+ */
+export function textFindings(html: string, query: string): string[] {
+  const text = html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ');
+  const words = query.toLowerCase().split(/\W+/).filter((w) => w.length >= 3);
+  return text.split(/(?<=[.!?])\s+/).map((s) => s.trim())
+    .filter((s) => s && words.some((w) => s.toLowerCase().includes(w)))
+    .slice(0, FINDING_LIMIT).map((s) => s.slice(0, 200));
+}
+
+/** A "/sidetest" or "/research" argument split on ':' into trimmed parts: target, then the rest; empty parts are dropped. */
+export function splitSideArgs(text: string): { target: string; rest: string[] } {
+  const [target = '', ...rest] = text.split(':').map((p) => p.trim());
+  return { target, rest: rest.filter(Boolean) };
+}

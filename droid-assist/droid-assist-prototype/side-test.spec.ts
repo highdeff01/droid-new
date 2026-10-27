@@ -1,7 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ActionRecord, WorkflowStep } from './types.js';
 import { createBudget } from './safety.js';
-import { busFeedback, findingsToNotes, guardCheck, runSideTest, sentinelScan, type GuardState, type SentinelAlert, type SideTestDeps, type SideTestPlan } from './side-test.js';
+import { busFeedback, findingsToNotes, guardCheck, runSideTest, sentinelScan, splitSideArgs, textFindings, type GuardState, type SentinelAlert, type SideTestDeps, type SideTestPlan } from './side-test.js';
+
+describe('side-test command helpers', () => {
+  it('splits "/sidetest" arguments on colons and drops empty parts', () => {
+    expect(splitSideArgs('Game : move left :  : go to door')).toEqual({ target: 'Game', rest: ['move left', 'go to door'] });
+    expect(splitSideArgs('just a query')).toEqual({ target: 'just a query', rest: [] });
+  });
+  it('keeps only page sentences naming a query word, without markup or scripts', () => {
+    const html = '<html><script>var jump = 1;</script><p>The hero can jump twice.</p><p>Weather is fine.</p><p>Press A to jump.</p></html>';
+    expect(textFindings(html, 'how to jump')).toEqual(['The hero can jump twice.', 'Press A to jump.']);
+  });
+});
 
 const step = (name: string, x: number, y: number, extra: Partial<WorkflowStep> = {}): WorkflowStep => ({ id: name, name, action: 'drag', x, y, status: 'pending', ...extra });
 const experiment = step('nudge character', 0.4, 0.5, { endX: 0.5, endY: 0.5 });

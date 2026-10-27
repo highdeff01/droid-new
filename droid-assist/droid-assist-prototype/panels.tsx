@@ -26,6 +26,9 @@ import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-hist
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { BackupSettings } from './backup-panel.js';
+import { sectionMemoryLines } from './sections.js';
+import { replicaLine } from './replicate.js';
+import { SIDE_TEST_MODES, feedbackLine, type SideTestMode } from './side-test.js';
 import styles from './droid-assist.module.css';
 
 const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity' };
@@ -389,6 +392,12 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         </select>
         <small>Size of the screenshot the model sees; replies are scaled back to the 480x270 sample space.</small>
       </label>
+      <label className={styles.setting}>Side tests run in
+        <select value={settings.sideTestMode} onChange={(e) => setSettings({ ...settings, sideTestMode: e.target.value as SideTestMode })} aria-label="Side test mode">
+          {SIDE_TEST_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <small>Background keeps the main capture and acts via the bridge; foreground switches to the side window first.</small>
+      </label>
       <ModelPicker url={settings.aiUrl} model={settings.aiModel} onSelect={(aiModel) => setSettings({ ...settings, aiModel })} />
       <AiStatusBadge status={engine.aiStatus} />
       <ErrorForwardingSettings engine={engine} />
@@ -706,13 +715,62 @@ function BriefingItem({ b }: { b: Briefing }) {
 
 /** Pre-action briefing: the reasoning and evidence for each step, recorded before it dispatches. */
 export function BriefingPanel({ engine }: { engine: AssistEngine }) {
-  const { briefings, settings } = engine;
+  const { briefings, settings, replicas } = engine;
   return (
     <section className={styles.panel} aria-label="Pre-action briefing">
       <h3>Pre-action briefing <small>{settings.stages.briefing ? `${briefings.length} recorded` : 'stage unchecked in Loop control'}</small></h3>
       {!briefings.length && <p className={styles.muted}>No step briefed yet.</p>}
       <ul className={styles.log}>
         {briefings.map((b) => <BriefingItem key={`${b.id}:${b.revisions.length}`} b={b} />)}
+      </ul>
+      {replicas.length > 0 && <h4>Replicated by the AI <small>{replicas.length}</small></h4>}
+      <ul className={styles.log} aria-label="Replicated elements">
+        {replicas.map((r) => (
+          <li key={r.id} data-tone="ok">
+            <img src={r.crop} alt={`Snip of ${r.name}`} width={48} /> {replicaLine(r)}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Screen sections: profiles drawn in the element map or proposed by the AI, the goal scope, cross-section memory and side tests. */
+export function SectionsPanel({ engine }: { engine: AssistEngine }) {
+  const { sectionProfiles, scope, mapDraft, sideResults } = engine;
+  const [name, setName] = useState('');
+  return (
+    <section className={styles.panel} aria-label="Screen sections">
+      <h3>Screen sections <small>{sectionProfiles.length} · scope {scope.length ? scope.join(', ') : 'whole screen'}</small></h3>
+      <button type="button" onClick={() => void engine.proposeSections()}>AI propose sections</button>
+      {mapDraft && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            engine.saveSection(name);
+            setName('');
+          }}
+        >
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Section name" aria-label="Section name" />
+          <button type="submit" disabled={!name.trim()}>Save drawn box as section</button>
+        </form>
+      )}
+      <ul className={styles.log}>
+        {sectionProfiles.map(({ section, elements, log, changes }) => (
+          <li key={section.id} data-tone={scope.includes(section.name) ? 'ok' : 'info'}>
+            <b>{section.name}</b> <small>· {section.source} · {mapCells(section.box)} · {elements.length} element(s) · {log.length} log · {changes.length} change(s)</small>
+            <button type="button" aria-label={`Delete section ${section.name}`} onClick={() => engine.deleteSection(section.id)}>✕</button>
+            <ul>{elements.map((el) => <li key={el.name}><small>{el.dossier}</small></li>)}</ul>
+          </li>
+        ))}
+      </ul>
+      <h4>Section memory</h4>
+      <ul className={styles.log} aria-label="Section memory">
+        {sectionMemoryLines(sectionProfiles).map((line) => <li key={line} data-tone="info"><small>{line}</small></li>)}
+      </ul>
+      <h4>Side tests <small>{sideResults.length}</small></h4>
+      <ul className={styles.log} aria-label="Side tests">
+        {sideResults.map((r) => <li key={r.id} data-tone={r.status === 'passed' ? 'ok' : 'warn'}><small>{feedbackLine(r)}</small></li>)}
       </ul>
     </section>
   );

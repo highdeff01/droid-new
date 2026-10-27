@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { FamiliarElement } from './types.js';
 import type { MappedElement } from './element-map-studio.js';
-import { addSection, buildProfiles, changeInScope, createSection, inScope, inSection, parseSectionProposals, recordEvent, scopeLines, scopedMapped, sectionMemoryLines, type ScreenSection } from './sections.js';
+import { addSection, buildProfiles, changeInScope, createSection, inScope, inSection, parseBoxArg, parseSectionProposals, recordEvent, scopeLines, scopedMapped, sectionMemoryLines, type ScreenSection } from './sections.js';
+
+describe('parseBoxArg', () => {
+  it('reads a multi-word name and a box, clamping it to the screen', () => {
+    expect(parseBoxArg('preview area 0.6, 0.2, 0.6, 0.9')).toEqual({ name: 'preview area', box: { x: 0.6, y: 0.2, w: 0.4, h: 0.8 } });
+  });
+  it('rejects a missing name, a missing box or a zero-area box', () => {
+    expect(parseBoxArg('0.1,0.1,0.2,0.2')).toBeNull();
+    expect(parseBoxArg('sidebar')).toBeNull();
+    expect(parseBoxArg('sidebar 0.1,0.1,0,0.2')).toBeNull();
+  });
+});
 
 const section = (name: string, x: number, y: number, w: number, h: number): ScreenSection => createSection(name, { x, y, w, h }, 'drawn')!;
 const sidebar = section('Sidebar', 0, 0, 0.2, 1);

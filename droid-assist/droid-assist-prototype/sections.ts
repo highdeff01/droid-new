@@ -142,6 +142,21 @@ export function scopeLines(sections: ScreenSection[], scope: string[]): string[]
   return [`[Goal scope] Act ONLY inside these screen sections and ignore everything outside them: ${boxes}`];
 }
 
+/** "<name> x,y,w,h": a name followed by four comma-separated numbers. */
+const BOX_ARG = /^(.*?)\s+(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)$/;
+
+/**
+ * A "<name> x,y,w,h" command argument (fractions 0..1, clamped to the screen); null when the name is
+ * blank, the box is missing or it has no area.
+ */
+export function parseBoxArg(text: string): { name: string; box: Box } | null {
+  const m = BOX_ARG.exec(text.trim());
+  if (!m) return null;
+  const [x, y, w, h] = m.slice(2).map((v) => unit(Number(v)));
+  if (!m[1].trim() || x === null || y === null || !w || !h) return null;
+  return { name: m[1].trim(), box: { x, y, w: Math.min(w, 1 - x), h: Math.min(h, 1 - y) } };
+}
+
 /** System prompt of the section-proposal request. */
 export const SECTIONS_SYSTEM = `You are Droid Assist's screen sectioner. Split the user's main app screen into its distinct named regions (e.g. sidebar, toolbar, main content, preview area) using the screenshot and the element inventory.
 Reply ONLY with JSON {"sections":[{"name":string,"x":number,"y":number,"w":number,"h":number}]} where x,y,w,h are fractions 0..1 of the screen.`;

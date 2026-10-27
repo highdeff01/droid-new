@@ -36,6 +36,7 @@ export const STAGES = [
   { id: 'supervisor', group: 'agent', name: 'Supervisor', description: 'Reviews finished runs: saves flows and learns patterns', verifies: false },
   { id: 'elementMap', group: 'agent', name: 'Element-mapping intercept', description: 'Remembers used targets as familiar elements', verifies: false },
   { id: 'subagents', group: 'agent', name: 'Subagent testing', description: 'Test-clicks single elements from the Elements panel', verifies: false },
+  { id: 'sideTests', group: 'agent', name: 'Side tests', description: 'Side research and experiment → capture → backtrack → main tests on other windows, with sentinels watching', verifies: false },
 ] as const satisfies ReadonlyArray<Omit<Stage, 'id'> & { id: string }>;
 
 /** The id of a stage or agent. */

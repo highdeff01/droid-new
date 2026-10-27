@@ -762,7 +762,7 @@ describe('useAssist auto-continue and AI stop', () => {
 });
 
 describe('useAssist loop control', () => {
-  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents'] as const;
+  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'sideTests'] as const;
 
   /** A model whose reflection call hangs until cancelled; every other prompt gets a plain answer. */
   function hangingReflect() {
@@ -1031,11 +1031,26 @@ describe('useAssist agent forwarding and subagent link tests', () => {
   it('forwards an element from any agent into every other inbox', () => {
     const { result } = renderHook(() => useAssist());
     act(() => result.current.forwardElement('drift', { name: 'Search box', x: 0.5, y: 0.1 }));
-    expect(new Set(result.current.bus.map((m) => m.to)).size).toBe(7);
+    expect(new Set(result.current.bus.map((m) => m.to)).size).toBe(8);
     expect(result.current.bus.every((m) => m.status === 'handled')).toBe(true);
     expect(result.current.knownElements[0].name).toBe('Search box');
     expect(result.current.patterns[0]).toMatchObject({ kind: 'add' });
     expect(result.current.annotations.some((a) => a.label === 'Watching: Search box')).toBe(true);
+  });
+
+  it('/section and /scope seclude the goal to named sections; /scope all lifts it', async () => {
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    for (const cmd of ['/section Sidebar 0,0,0.2,1', '/section Toolbar 0.2,0,0.8,0.1', '/scope sidebar, nowhere']) {
+      act(() => result.current.setGoal(cmd));
+      await act(() => result.current.submitInput());
+    }
+    expect(result.current.sections.map((s) => s.name)).toEqual(['Toolbar', 'Sidebar']);
+    expect(result.current.scope).toEqual(['Sidebar']);
+    expect(result.current.log[0].message).toMatch(/secluded to Sidebar.*unknown: nowhere/);
+    act(() => result.current.setGoal('/scope all'));
+    await act(() => result.current.submitInput());
+    expect(result.current.scope).toEqual([]);
   });
 });
 

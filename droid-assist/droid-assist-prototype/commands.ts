@@ -8,6 +8,11 @@ const COMMANDS = {
   test: 'Usage: /test links Files, Notes · /test route Cart > Checkout > Pay · /test <what to verify>',
   measure: 'Usage: /measure <a> to <b> [to <c>…], e.g. /measure files icon to game icon, /measure files icon to left edge, /measure 100,200 to 400,200',
   arrange: 'Usage: /arrange <how to move or reorder elements>, e.g. /arrange move the Files icon below Game',
+  section: 'Usage: /section <name> x,y,w,h · /section auto · /section remove <name>',
+  scope: 'Usage: /scope <section>[, <section>…] · /scope all',
+  replicate: 'Usage: /replicate <name> x,y,w,h, e.g. /replicate save button 0.8,0.05,0.1,0.06',
+  sidetest: 'Usage: /sidetest <target window> : <experimental action> [: <main action>], e.g. /sidetest Game : move character left : move character to the door',
+  research: 'Usage: /research <window or URL> : <what to find>',
 } as const;
 
 /** The name of a slash command. */
@@ -25,7 +30,7 @@ export function parseCommand(input: string): AssistCommand | null {
   if (!text.startsWith('/')) return null;
   const match = /^\/([a-z]+)(?:\s+(.*))?$/.exec(text);
   const name = match?.[1] ?? '';
-  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b> or /arrange <goal>` };
+  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal>, /section <name> x,y,w,h, /scope <sections>, /replicate <name> x,y,w,h, /sidetest <target> : <action> or /research <target> : <query>` };
   const target = (match[2] ?? '').trim();
   return target ? { kind: name, target } : { kind: 'error', message: COMMANDS[name] };
 }

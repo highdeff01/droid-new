@@ -15,6 +15,8 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
+import { SIDE_TEST_MODES, type SideTestMode } from './side-test.js';
+import { SECTION_EVENT_LIMIT, SECTION_LIMIT, type ScreenSection, type SectionEvent } from './sections.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -23,7 +25,7 @@ export const WATCH_MS_MAX = 30000;
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', sections: 'droid-assist.sections' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -103,6 +105,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   if (stored.displayId === null || (typeof stored.displayId === 'string' && stored.displayId)) out.displayId = stored.displayId;
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
   out.stages = sanitizeStages(stored.stages ?? defaults.stages);
+  if (SIDE_TEST_MODES.includes(stored.sideTestMode as SideTestMode)) out.sideTestMode = stored.sideTestMode as SideTestMode;
   return out;
 }
 
@@ -354,4 +357,23 @@ export const loadTriggers = (): Trigger[] => listOf(readJson(KEYS.triggers), isT
 /** Persists the triggers, capped at TRIGGER_LIMIT. */
 export function saveTriggers(triggers: Trigger[]) {
   writeJson(KEYS.triggers, triggers.slice(0, TRIGGER_LIMIT));
+}
+
+const isBox = (v: unknown) => isObject(v) && isNum(v.x) && isNum(v.y) && isNum(v.w) && isNum(v.h);
+
+function isSectionEvent(v: unknown): v is SectionEvent {
+  return isObject(v) && isNum(v.time) && (v.kind === 'log' || v.kind === 'change') && typeof v.text === 'string' && (v.box === undefined || isBox(v.box));
+}
+
+function isSection(v: unknown): v is ScreenSection {
+  return isObject(v) && isStr(v.id) && isStr(v.name) && isBox(v.box) && (v.source === 'drawn' || v.source === 'ai') && Array.isArray(v.events);
+}
+
+/** The stored screen sections with their histories; invalid sections and events are dropped. */
+export const loadSections = (): ScreenSection[] =>
+  listOf(readJson(KEYS.sections), isSection, SECTION_LIMIT).map((s) => ({ ...s, events: listOf(s.events, isSectionEvent, SECTION_EVENT_LIMIT) }));
+
+/** Persists the screen sections, capped at SECTION_LIMIT. */
+export function saveSections(sections: ScreenSection[]) {
+  writeJson(KEYS.sections, sections.slice(0, SECTION_LIMIT));
 }
