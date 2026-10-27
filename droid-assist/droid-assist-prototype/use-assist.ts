@@ -16,14 +16,14 @@ import { DEFAULT_MAX_ITERATIONS, autoContinue, judgeCheck, type ContinueStop, ty
 import { DEFAULT_CHANGE_CELLS, assessChange, changeText, detectChange, type ChangeAssessment, type ScreenChange } from './screen-change.js';
 import { localProposal, proposalText, proposeStep, type Proposal, type ProposalContext } from './proposal.js';
 import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './thinking-timeline.js';
-import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd } from './bridge.js';
-import { dragEndError, runStep, type Grounding, type StepOutcome } from './run-step.js';
+import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, selfTestBridge, type BridgeResult } from './bridge.js';
+import { DRY_RUN, dragEndError, runStep, type Grounding, type StepOutcome } from './run-step.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
 import { parseCommand } from './commands.js';
 import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, fullJpeg, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
-import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
+import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, dispatchState, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent } from './safety.js';
 import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay } from './recorder.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadSettings, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveSettings, saveWatcher } from './storage.js';
 import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, reorderSteps, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
@@ -245,6 +245,8 @@ export function useAssist() {
   const [subRunning, setSubRunning] = useState(false);
   const [plays, setPlays] = useState(0);
   const [armed, setArmed] = useState(false);
+  /** The last health check or bridge call reached the PC (and the PC did not fail it). */
+  const [bridgeOnline, setBridgeOnline] = useState(false);
   const [aborted, setAborted] = useState(false);
   const [aiStatus, setAiStatus] = useState<AiStatus>({ state: 'checking', detail: 'Connecting to the AI endpoint…' });
   const [aiAnswer, setAiAnswer] = useState('');
@@ -894,7 +896,7 @@ export function useAssist() {
       aim(p);
       await animator().idle();
     }
-    if (dryRun) return { ok: true, executed: false, message: 'verified on the demo screen — dry run, not dispatched', target: p, ...(step.action === 'drag' ? { end: { x: step.endX!, y: step.endY! } } : {}) };
+    if (dryRun) return { ok: true, executed: false, message: `verified on the demo screen — ${DRY_RUN}`, target: p, ...(step.action === 'drag' ? { end: { x: step.endX!, y: step.endY! } } : {}) };
     if (step.action === 'drag') return demoDragStep(step, p, live);
     const message = demoEffect(step, p);
     const ok = !/blocked|nothing/.test(message);
@@ -948,14 +950,18 @@ export function useAssist() {
     }
   };
 
-  /** A real-input step on the demo desktop or through the bridge. */
+  /**
+   * A real-input step on the demo desktop or through the bridge. Armed with a bridge URL, every
+   * step goes to the bridge whatever the screen source; the demo simulates only dry runs or when
+   * no bridge is configured. A bridge failure fails the step loudly, never a simulated success.
+   */
   const performInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
-    if (sourceRef.current === 'demo') {
+    const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
+    if (sourceRef.current === 'demo' && (dryRun || !bridgeUrl)) {
       const out = await performOnDemo(step, dryRun);
       if (out.executed) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
       return out;
     }
-    const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
     if (!bridgeUrl) return refused(step, BRIDGE_REQUIRED);
     const gate = dryRun ? null : gateRealInput(budget);
     if (gate) return refused(step, gate);
@@ -981,7 +987,17 @@ export function useAssist() {
       gateRetry: dryRun ? undefined : () => gateRealInput(budget),
     });
     if (out.executed) recordAction(step, out, actor, 'bridge', size.w, size.h);
+    noteBridge(step, out, actor);
     return out;
+  };
+
+  /** Tracks the bridge's reachability from a bridge step; a bridge failure is logged and forwarded as a bridge error. */
+  const noteBridge = (step: WorkflowStep, out: Performed, actor: string) => {
+    if (out.executed) setBridgeOnline(true);
+    if (!out.bridgeFailed) return;
+    setBridgeOnline(false);
+    addLog(actor, `Bridge error — "${step.name}" FAILED, nothing was simulated: ${out.message}`, 'error');
+    captureError({ kind: 'bridge', message: out.message, goal: goalRef.current, step: step.name });
   };
 
   /** Remembers the element `name` at `p` in the familiar-elements memory, with a patch of `frame` around it. */
@@ -1015,7 +1031,7 @@ export function useAssist() {
     const out = ladder ? await performWithRetries(step, actor, budget, dryRun) : await performIdentified(step, actor, budget, dryRun);
     learnFromOutcome(step, out, before);
     void rememberTarget(step, out);
-    if (!out.ok) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
+    if (!out.ok && !out.bridgeFailed) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
     if (out.halt || !aiOnline()) return out;
     const verdict = await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
     if (verdict && !dryRun) learnHabit(step, verdict);
@@ -1330,7 +1346,7 @@ export function useAssist() {
     setTimeout(() => setHighlight((h) => (h && h.x === el.x && h.y === el.y ? null : h)), 3000);
     const where = `${gridRef(el)} (${pct(el.x)}, ${pct(el.y)})`;
     if (!armedRef.current) {
-      addLog('Test click', `"${el.name}" highlighted at ${where} — real input disarmed, dry run (nothing sent)`, 'info');
+      addLog('Test click', `"${el.name}" highlighted at ${where} — real input disarmed, ${DRY_RUN}`, 'info');
       return;
     }
     // Guardrails first: an aborted engine reports the abort from performStep, never the stage.
@@ -1971,8 +1987,10 @@ export function useAssist() {
       addLog('Safety', 'Replay refused — ABORTED is active; clear the abort first', 'error');
       return;
     }
-    if (sourceRef.current !== 'demo') {
+    const viaBridge = sourceRef.current !== 'demo' || (!selfTest && armedRef.current && !!settingsRef.current.bridgeUrl);
+    if (viaBridge) {
       const health = await checkBridge(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken);
+      setBridgeOnline(health.ok);
       if (!health.ok) {
         addLog(label, `${health.message} — no step was executed`, 'error');
         captureError({ kind: 'bridge', message: health.message, goal: goalRef.current });
@@ -1980,7 +1998,7 @@ export function useAssist() {
       }
     }
     const dryRun = selfTest || !armedRef.current;
-    if (dryRun && !selfTest) addLog('Safety', 'Real input disarmed — replay runs as a dry run (nothing is sent)', 'warn');
+    if (dryRun && !selfTest) addLog('Safety', `Real input disarmed — replay runs as a ${DRY_RUN}`, 'warn');
     const budget = createBudget(settingsRef.current.actionBudget);
     abortRef.current = false;
     reproposedRef.current = new Set();
@@ -2222,7 +2240,7 @@ export function useAssist() {
       if (!verdict) return { ...base, status: 'fail', message: `${step.name}: no AI verdict — not counted as a pass`, point: last };
       if (!verdict.success) return { ...base, status: 'fail', message: `${step.name}: AI verdict FAILED`, avoid: verdict.pattern_avoid, add: verdict.pattern_add, point: last };
     }
-    return { ...base, status: 'pass', message: `${plan.steps.length} step(s) ${dryRun ? 'verified (dry run, nothing sent)' : 'executed'} and verified`, avoid: verdict?.pattern_avoid, add: verdict?.pattern_add, point: last };
+    return { ...base, status: 'pass', message: `${plan.steps.length} step(s) ${dryRun ? `verified (${DRY_RUN})` : 'executed'} and verified`, avoid: verdict?.pattern_avoid, add: verdict?.pattern_add, point: last };
   };
 
   /** The links or route stops of a request: as given, or listed by the model on the live frame. */
@@ -2341,6 +2359,7 @@ export function useAssist() {
   /** Switches the monitor to real desktop screenshots from the bridge, after a health check. */
   const connectBridge = async (): Promise<boolean> => {
     const health = await checkBridge(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken);
+    setBridgeOnline(health.ok);
     if (!health.ok) {
       addLog('Bridge', health.message, 'error');
       captureError({ kind: 'bridge', message: health.message });
@@ -2351,13 +2370,39 @@ export function useAssist() {
     return true;
   };
 
+  /**
+   * Verify real input: one harmless cursor move to the screen centre through the bridge, gated
+   * like every real action (abort, arm, executor stage, a one-action budget). Disarmed it is a
+   * dry run and sends nothing. Reports and returns the bridge's confirmation or its error.
+   */
+  const verifyRealInput = async (): Promise<BridgeResult> => {
+    const report = (r: BridgeResult, tone: LogEntry['tone'] = r.ok ? 'ok' : 'error') => {
+      addLog('Verify real input', r.message, tone);
+      return r;
+    };
+    if (abortedRef.current) return report({ ok: false, message: 'Aborted — real input not sent' });
+    if (!armedRef.current) return report({ ok: false, message: `Real input disarmed — ${DRY_RUN}` }, 'warn');
+    if (!stageOn('executor')) return report({ ok: false, message: `${stageOff('executor')} — not sent` });
+    const gate = gateRealInput(createBudget(1));
+    if (gate) return report({ ok: false, message: gate });
+    const { bridgeUrl, bridgeToken } = settingsRef.current;
+    const shot = await captureDesktop(bridgeUrl, bridgeToken);
+    const out = shot.ok ? await selfTestBridge(bridgeUrl, bridgeToken, shot.frame.width || 1920, shot.frame.height || 1080) : { ok: false, message: `Real input NOT verified — ${shot.message}` };
+    setBridgeOnline(out.ok);
+    if (!out.ok) captureError({ kind: 'bridge', message: out.message });
+    return report(out);
+  };
+
   // Bridge takeover: when a configured bridge answers, frames come from the real desktop unless the user chose the demo.
   useEffect(() => {
     const url = settings.bridgeUrl;
+    setBridgeOnline(false);
     if (!url) return undefined;
     let cancelled = false;
     void checkBridge(url, settings.bridgeToken).then((r) => {
-      if (cancelled || !r.ok || demoChosenRef.current || sourceRef.current !== 'demo') return;
+      if (cancelled) return;
+      setBridgeOnline(r.ok);
+      if (!r.ok || demoChosenRef.current || sourceRef.current !== 'demo') return;
       attachSource('bridge');
       addLog('Monitor', 'Desktop bridge online — screenshots now come from the real screen', 'ok');
     });
@@ -2586,6 +2631,9 @@ export function useAssist() {
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
     shareScreen, connectBridge, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
+    bridgeOnline, verifyRealInput,
+    /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
+    dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
   };
 }

@@ -163,6 +163,16 @@ export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: 
   }
 }
 
+/**
+ * End-to-end real-input self-test: one harmless cursor move to the centre of a srcW×srcH
+ * screen through the bridge's /api/replay. Reports the bridge's confirmation (its run id) or its error.
+ */
+export async function selfTestBridge(bridgeUrl: string, token: string, srcW: number, srcH: number): Promise<BridgeResult> {
+  const probe: WorkflowStep = { id: `verify-${Date.now()}`, name: 'Verify real input', action: 'move', x: 0.5, y: 0.5, status: 'pending' };
+  const sent = await sendToBridge(bridgeUrl, probe, srcW, srcH, { token });
+  return sent.ok ? { ok: true, message: `Real input verified — the PC confirmed: ${sent.message}` } : { ...sent, message: `Real input NOT verified — ${sent.message}` };
+}
+
 /** Takes a real desktop screenshot through the bridge (POST /api/replay/capture). */
 export async function captureDesktop(bridgeUrl: string, token: string): Promise<{ ok: true; frame: BridgeFrame } | { ok: false; message: string }> {
   if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };

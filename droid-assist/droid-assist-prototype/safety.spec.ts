@@ -5,6 +5,7 @@ import {
   sanitizeBudget,
   createBudget,
   spendAction,
+  dispatchState,
   DEFAULT_ACTION_BUDGET,
   type HotkeyEvent,
 } from './safety.js';
@@ -90,5 +91,20 @@ describe('spendAction', () => {
 
   it('never leaves a run unlimited when created with an invalid limit', () => {
     expect(createBudget(NaN).limit).toBe(50);
+  });
+});
+
+describe('dispatchState', () => {
+  const live = { armed: true, bridgeOnline: true, executorOn: true, aborted: false };
+
+  it('is Real input ACTIVE only when armed, executor on, bridge connected and not aborted', () => {
+    expect(dispatchState(live)).toMatchObject({ real: true, label: 'Real input ACTIVE' });
+  });
+
+  it('is a dry run naming the first guardrail that stops dispatch', () => {
+    expect(dispatchState({ ...live, armed: false })).toMatchObject({ real: false, label: 'Dry run', reason: 'disarmed — not dispatched' });
+    expect(dispatchState({ ...live, bridgeOnline: false })).toMatchObject({ real: false, label: 'Dry run', reason: 'bridge not connected — not dispatched' });
+    expect(dispatchState({ ...live, executorOn: false })).toMatchObject({ real: false, reason: 'executor stage off — not dispatched' });
+    expect(dispatchState({ ...live, aborted: true, armed: false })).toMatchObject({ real: false, reason: 'aborted — not dispatched' });
   });
 });

@@ -101,6 +101,86 @@ describe('useAssist elements and Test click', () => {
   });
 });
 
+describe('useAssist guaranteed real input', () => {
+  const el = { id: 'el1', name: 'Files icon', x: 0.42, y: 0.97, source: 'familiar' as const };
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  const withBridge = () => localStorage.setItem('droid-assist.settings', JSON.stringify({ bridgeUrl: 'http://pc', errorForwarding: true, errorUrl: 'http://fix' }));
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** A PC bridge that is up: health ok, a 1000×800 desktop shot, and every replay run completed. */
+  function bridgeUp() {
+    const calls: { url: string; body: unknown }[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (url.endsWith('/api/health')) return json({ ok: true });
+      if (url.endsWith('/api/replay/capture')) return json({ success: true, frame: { image: 'data:image/png;base64,AA', width: 1000, height: 800 } });
+      if (url.endsWith('/api/replay')) return json({ success: true, run: { id: 'run-7', status: 'running' } });
+      if (url.includes('/api/replay/run-7')) return json({ success: true, run: { id: 'run-7', status: 'completed' } });
+      throw new TypeError('Failed to fetch');
+    }));
+    return calls;
+  }
+
+  it('shows Dry run until armed with a connected bridge, then Real input ACTIVE', async () => {
+    withBridge();
+    bridgeUp();
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    expect(result.current.bridgeOnline).toBe(true);
+    expect(result.current.dispatch).toMatchObject({ real: false, label: 'Dry run', reason: 'disarmed — not dispatched' });
+    act(() => result.current.toggleArmed());
+    expect(result.current.dispatch).toMatchObject({ real: true, label: 'Real input ACTIVE' });
+    act(() => result.current.toggleStage('executor', false));
+    expect(result.current.dispatch).toMatchObject({ real: false, reason: 'executor stage off — not dispatched' });
+  });
+
+  it('Verify real input: armed and connected, sends one real move through /api/replay and reports the run id', async () => {
+    withBridge();
+    const calls = bridgeUp();
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.toggleArmed());
+    const out = await act(() => result.current.verifyRealInput());
+    expect(out.ok).toBe(true);
+    const sent = calls.filter((c) => c.url === 'http://pc/api/replay');
+    expect(sent).toHaveLength(1);
+    expect((sent[0].body as { steps: unknown[] }).steps).toEqual([expect.objectContaining({ action: 'move', x: 500, y: 400 })]);
+    expect(result.current.log.find((l) => l.source === 'Verify real input')?.message).toMatch(/Real input verified.*run run-7/);
+  });
+
+  it('Verify real input: disarmed is a labeled dry run and sends nothing; aborted refuses', async () => {
+    withBridge();
+    const calls = bridgeUp();
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    const dry = await act(() => result.current.verifyRealInput());
+    expect(dry).toMatchObject({ ok: false, message: 'Real input disarmed — dry run — not dispatched' });
+    act(() => result.current.toggleArmed());
+    act(() => result.current.triggerAbort('test'));
+    const stopped = await act(() => result.current.verifyRealInput());
+    expect(stopped.message).toMatch(/Aborted/);
+    expect(calls.some((c) => c.url.startsWith('http://pc/api/replay'))).toBe(false);
+  });
+
+  it('armed with an unreachable bridge: a click fails loudly with the bridge error, nothing simulated, forwarded as a bridge error', async () => {
+    withBridge();
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.toggleArmed());
+    await act(() => result.current.testClick(el));
+    const message = result.current.log.find((l) => l.source === 'Test click')?.message ?? '';
+    expect(message).toMatch(/unreachable: Failed to fetch/);
+    expect(message).not.toMatch(/hit nothing interactive/);
+    expect(result.current.history).toHaveLength(0);
+    expect(result.current.log.some((l) => l.tone === 'error' && /Bridge error — .*FAILED, nothing was simulated/.test(l.message))).toBe(true);
+    expect(result.current.errors.find((e) => e.report.kind === 'bridge')?.report.message).toMatch(/unreachable/);
+    expect(result.current.bridgeOnline).toBe(false);
+    expect(result.current.dispatch.real).toBe(false);
+  });
+});
+
 describe('useAssist coordinate learner', () => {
   it('is a loop-control stage, on by default, and lists learned targets only', () => {
     localStorage.setItem('droid-assist.familiar', JSON.stringify([
@@ -1132,7 +1212,7 @@ describe('useAssist Screen watcher', () => {
     const { result } = renderHook(() => useAssist());
     await act(() => result.current.testProposal('p1'));
     expect(result.current.watcher.tests[0]).toMatchObject({ proposalId: 'p1', verdict: 'passed', dryRun: true });
-    expect(result.current.watcher.tests[0].happened).toMatch(/dry run, not dispatched/);
+    expect(result.current.watcher.tests[0].happened).toMatch(/dry run — not dispatched/);
     expect(result.current.log.some((l) => l.source === 'Screen watcher' && /Test passed: Dry-run click/.test(l.message))).toBe(true);
     expect(result.current.history).toHaveLength(0);
     // A dry run shows the same visuals as a real one: the AI cursor travels to the verified target.

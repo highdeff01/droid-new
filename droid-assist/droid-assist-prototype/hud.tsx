@@ -72,11 +72,31 @@ export function AiStopButton({ engine }: { engine: AssistEngine }) {
   );
 }
 
+/**
+ * Persistent real-input indicator: "Real input ACTIVE" only while armed, the bridge is connected
+ * and the executor stage is on; otherwise "Dry run" with the reason. Plus the end-to-end
+ * "Verify real input" self-test (one harmless cursor move through the bridge).
+ */
+export function RealInputIndicator({ engine }: { engine: AssistEngine }) {
+  const { dispatch } = engine;
+  return (
+    <>
+      <strong className={styles.realInput} data-real={dispatch.real} aria-live="polite" title={dispatch.reason}>
+        {dispatch.real ? '⚡ Real input ACTIVE' : '🧪 Dry run'} <small>{dispatch.reason}</small>
+      </strong>
+      <button type="button" onClick={() => void engine.verifyRealInput()} title="Sends one harmless cursor move through the bridge and reports the PC's confirmation">
+        ✓ Verify real input
+      </button>
+    </>
+  );
+}
+
 /** Safety controls: one-click arm/disarm of real input, emergency stop and the ABORTED state. */
 export function SafetyControls({ engine }: { engine: AssistEngine }) {
   const { armed, aborted, settings } = engine;
   return (
     <div className={styles.safety} data-armed={armed} data-aborted={aborted} aria-live="assertive">
+      <RealInputIndicator engine={engine} />
       <button type="button" className={armed ? styles.danger : ''} onClick={engine.toggleArmed} aria-pressed={armed} title="Real input is only sent to the PC while armed; disarmed runs are dry runs">
         {armed ? '🔴 Real input ARMED — click to disarm' : '🟢 Dry run (disarmed) — click to arm real input'}
       </button>
