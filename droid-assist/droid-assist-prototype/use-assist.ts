@@ -53,6 +53,7 @@ import type { StepVerdict } from './assist-ai.js';
 import { addBriefing, briefingText, buildBriefing, type Briefing } from './briefing.js';
 import { reviewBriefing, type ReviewDeps } from './briefing-review.js';
 import type { Knowledge } from './cross-reference.js';
+import { useResolution } from './use-resolution.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -2593,6 +2594,58 @@ export function useAssist() {
     return report(out);
   };
 
+  /** Element recovery: one re-location of a named element on the live frame (learned anchor first, then the AI). */
+  const locateElement = async (name: string): Promise<{ x: number; y: number } | null> => {
+    const live = framesRef.current[0];
+    if (!live) return null;
+    const step: WorkflowStep = { id: uid('step'), name: `Find ${name}`, action: 'move', target: name, x: 0.5, y: 0.5, status: 'pending' };
+    const seed = learnedPoint(live, step) ?? habitSeed(live, step);
+    if (seed) return { x: seed.x, y: seed.y };
+    if (!aiOnline()) return null;
+    return grounding.relocate(live, step, `"${name}" was lost; find it on the current screen`).catch(() => null);
+  };
+
+  /** A replay (or self-test) as a recovery result. */
+  const replayOutcome = async (selfTest: boolean, label: string) => {
+    const out = await runReplay(selfTest, { label, goal: runGoalOf() });
+    return out ? { ok: out.ok === out.total && !out.stopped, message: `${out.ok}/${out.total} step(s) ${out.dryRun ? 'verified (dry run)' : 'executed'}` } : { ok: false, message: `${label} refused — see the log` };
+  };
+
+  /** The AI resolution center and recovery operations, on the engine's gated pipeline and memories. */
+  const resolution = useResolution({
+    steps,
+    bus,
+    context: habitContext,
+    goal: () => goalRef.current,
+    addLog,
+    ask: askFor('supervisor'),
+    aiOnline,
+    frame: () => framesRef.current[0] ?? null,
+    currentSteps: () => stepsRef.current,
+    setPlan: (next) => {
+      stepsRef.current = next;
+      setSteps(next);
+    },
+    newBudget: () => createBudget(settingsRef.current.actionBudget),
+    perform: async (step, actor, why, budget) => {
+      const out = await perform(step, actor, budget, !armedRef.current, recordLocal(actor, step, why), false);
+      return { ok: out.ok, message: out.message };
+    },
+    locate: locateElement,
+    forwardElement,
+    addPatterns,
+    recordHabit: (o) => {
+      if (stageOn('coords')) commitHabits(recordOutcome(habitsRef.current, o));
+    },
+    retry: () => replayOutcome(false, 'Main retry'),
+    selfTest: () => replayOutcome(true, 'Main test'),
+    fix: async () => {
+      await superviseRun();
+      return { ok: supervisorRef.current.status === 'done', message: supervisorRef.current.detail };
+    },
+    connect: () => connectBridge(),
+  });
+
   // Bridge takeover: when a configured bridge answers, frames come from the real desktop unless the user chose the demo.
   useEffect(() => {
     const url = settings.bridgeUrl;
@@ -2958,6 +3011,8 @@ export function useAssist() {
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
     dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
     reverse, reverseLast, reversing, briefings,
+    /** The AI resolution center: disagreements, resolutions, recovery operations and the approval queue. */
+    resolution,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
   };
 }

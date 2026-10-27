@@ -25,6 +25,24 @@ bit run droid-assist-prototype
 - Typing a goal that resembles a saved flow (synonyms, plurals and verb forms are folded, e.g. "launch the calculator" ≈ "Open calculator app") reuses it without calling the model, and the log says `Reused saved workflow "<name>"`.
 - After each real run the AI adds lessons (`avoid` / `add`) to the **Learned patterns** panel (`PatternsPanel`). A failed run is never saved as a flow; its failure is recorded as an `avoid` pattern. Patterns persist in `localStorage` and can be deleted with ✕, and the ones relevant to a new goal are sent as planning context.
 
+## Resolution center and recovery operations
+
+The **Resolution center** panel (`ResolutionPanel`, driven by `use-resolution.ts`) settles judgment differences between AIs:
+
+- A **disagreement** is two or more distinct reporters, the main AI's plan or the agents forwarding on the bus, placing the same element (case and spacing ignored) more than 0.05 apart. Agreeing reports are not listed.
+- **Resolve disagreements** asks the model for a ruling `{winner, workflow, info, needs_test}`. The winning position is applied to the plan, and the main AI is told the edit, the workflow and the info that go with it. When the AI is offline, unsure or asks for a test, each report is tested in turn by a cursor move through the gated pipeline (a dry run unless armed). The first report that passes wins, and if none passes the disagreement stays unresolved.
+- **Recovery operations**:
+  - main retry and main test (replay and self-test)
+  - error fix (supervisor review)
+  - app recovery
+  - element recovery and hard tracking (repeated re-acquisition; the found point is forwarded to the agents)
+  - app creation (a scaffold of `main.js` and `README.md`, refused when the script breaks the sandboxed script rules: destructive commands, power or registry changes, network or registry writes, privilege escalation, or more than 8000 characters)
+  - computer maintenance (`repair`, `backup` or `cleanup` via computer control)
+  - re-chat (`Program: message` in another AI's program)
+  - reconnect (the bridge, retried with exponential backoff)
+- Every real-input step goes through the real-input guarantee: a recorded proposal, abort, arm, the executor stage and the action budget. Maintenance is admin-class and only queues until it is approved in the panel.
+- Every resolution and recovery result is logged under `Resolution center` and saved as a learned pattern and a habit outcome.
+
 ## Error forwarding
 
 Errors can be forwarded to any error-fix app with an HTTP API. Set this up under **Agents → Error forwarding**:
