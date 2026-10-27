@@ -4,6 +4,7 @@ import type { AiStatus } from './ai.js';
 import { MONITOR_MODES } from './capture.js';
 import { insecureBridgeUrl } from './bridge.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
+import { DisplayPicker } from './display-picker.js';
 import styles from './droid-assist.module.css';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
@@ -42,6 +43,7 @@ export function MonitorStatus({ engine }: { engine: AssistEngine }) {
           {(Object.keys(MONITOR_MODES) as MonitorMode[]).map((m) => <option key={m} value={m}>{MONITOR_MODES[m].label}</option>)}
         </select>
       </label>
+      <DisplayPicker engine={engine} compact />
       <span>⏱ every <b>{intervalMs} ms</b></span>
       <span>📸 <b>{shotCount}</b> screenshots</span>
       <span>Source: <b>{SOURCE_LABEL[source]}</b></span>
@@ -88,6 +90,21 @@ export function RealInputIndicator({ engine }: { engine: AssistEngine }) {
         ✓ Verify real input
       </button>
     </>
+ * Reverse: offered right after a real action; a dry run unless real input is armed. A
+ * non-invertible action says "cannot reverse" with the reason instead of a button.
+ */
+export function ReverseControl({ engine }: { engine: AssistEngine }) {
+  const { reverse, armed, reversing } = engine;
+  if (!reverse) return null;
+  const { record, reversal } = reverse;
+  const what = `${record.action} at (${record.x}, ${record.y})px`;
+  if (!reversal.ok) {
+    return <span className={styles.syncDetail} aria-label="Reverse last action" title={reversal.reason}>↶ Last {what}: cannot reverse — {reversal.reason}</span>;
+  }
+  return (
+    <button type="button" aria-label="Reverse last action" onClick={() => void engine.reverseLast()} disabled={reversing} title={reversal.summary}>
+      ↶ Reverse {what}{armed ? '' : ' (dry run)'}
+    </button>
   );
 }
 
@@ -164,6 +181,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
       <InsecureBridgeWarning bridgeUrl={settings.bridgeUrl} />
       <div className={styles.hud2}>
         <SafetyControls engine={engine} />
+        <ReverseControl engine={engine} />
         <AiStatusBadge status={aiStatus} />
         <SyncStatus level={engine.sync.level} detail={engine.sync.detail} />
         <label><input type="checkbox" checked={settings.autoAct} onChange={(e) => setSettings({ ...settings, autoAct: e.target.checked })} disabled={aiOff} /> Auto act{aiOff && ' (AI unavailable)'}</label>

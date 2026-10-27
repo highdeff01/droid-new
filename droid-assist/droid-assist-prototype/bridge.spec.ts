@@ -12,6 +12,11 @@ describe('nativeActions', () => {
     expect(nativeActions(step({ correctedX: 0.25, correctedY: 0.5 }), 1920, 1080)).toEqual([{ action: 'click', x: 480, y: 540, delayMs: 200 }]);
   });
 
+  it('presses a key step `repeat` times (one backspace per character to erase)', () => {
+    const presses = nativeActions(step({ action: 'key', text: 'backspace', repeat: 3 }), 100, 100);
+    expect(presses.map((a) => [a.action, a.keyPayload])).toEqual([['press_key', 'backspace'], ['press_key', 'backspace'], ['press_key', 'backspace']]);
+  });
+
   it('maps every action to real keyboard or mouse input', () => {
     const kinds = (s: WorkflowStep) => nativeActions(s, 100, 100).map((a) => a.keyPayload ?? a.text ?? a.action);
     expect(kinds(step({ action: 'type', text: 'hello' }))).toEqual(['hello']);

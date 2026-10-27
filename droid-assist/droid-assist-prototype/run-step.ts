@@ -135,6 +135,9 @@ async function verifyAfter(step: WorkflowStep, before: Frame, target: { x: numbe
 /** A point as native pixels on `live`, for messages. */
 const px = (p: Point, live: Frame) => `(${Math.round(p.x * live.srcW)}, ${Math.round(p.y * live.srcH)})px`;
 
+/** Where a frame's display sits on the virtual desktop, for input on a secondary monitor. */
+const frameOrigin = (f: Frame): Point => ({ x: f.originX ?? 0, y: f.originY ?? 0 });
+
 /**
  * The AI grounding pass for a named pointer target: confirm the target is at the proposed
  * point on a zoomed crop; if not, re-ask the planner once with why and confirm its new point.
@@ -237,6 +240,9 @@ export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepO
   if (!deps.dispatch) return { ok: true, executed: false, message: `verified on the live screen — ${DRY_RUN}`, target, end, correction, live };
   const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, { token: deps.bridgeToken });
   if (!sent.ok) return { ok: false, executed: false, bridgeFailed: true, message: sent.message, target, end, correction, live };
+  if (!deps.dispatch) return { ok: true, executed: false, message: 'verified on the live screen — self-test, not dispatched', target, end, correction, live };
+  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, { token: deps.bridgeToken, origin: frameOrigin(live) });
+  if (!sent.ok) return { ok: false, executed: false, message: sent.message, target, end, correction, live };
   const after = await verifyAfter(step, live, target, deps);
   const done: StepOutcome = { ok: true, executed: true, message: sent.message, target, end, correction, live, ...after };
   return retryMissed(step, done, deps);

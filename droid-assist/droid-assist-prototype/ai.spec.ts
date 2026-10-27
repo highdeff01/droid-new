@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AiCancelled, AiError, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_URL, RAW_REPLY_MAX, chat, createAiSession, parseJsonReply, pingAi, toUnit } from './ai.js';
+import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AiCancelled, AiError, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, RAW_REPLY_MAX, chat, createAiSession, parseJsonReply, pingAi, toUnit } from './ai.js';
 import type { Frame } from './types.js';
 
 const cfg = { url: 'http://model.test/api/chat', model: 'test-model' };
@@ -24,6 +24,12 @@ describe('ai defaults', () => {
   it('targets the quantumclaw endpoint with qwen3.5:2b', () => {
     expect(DEFAULT_AI_URL).toBe('https://quantumclaw.net/ollama/api/chat');
     expect(DEFAULT_AI_MODEL).toBe('qwen3.5:2b');
+  });
+
+  it('times out after 90 s by default, within a 10 s – 5 min range', () => {
+    expect(DEFAULT_AI_TIMEOUT_MS).toBe(90_000);
+    expect(AI_TIMEOUT_MS_MIN).toBe(10_000);
+    expect(AI_TIMEOUT_MS_MAX).toBe(300_000);
   });
 });
 
@@ -135,6 +141,31 @@ describe('chat cancellation', () => {
     expect(error).not.toBeInstanceOf(AiCancelled);
     expect(String(error)).toMatch(/no reply within 30 ms/);
     expect(seen[0].aborted).toBe(true);
+  });
+
+  it('a session ask times out after cfg.timeoutMs', async () => {
+    const seen = hangingFetch();
+    const error = await createAiSession(null).ask({ ...cfg, timeoutMs: 40 }, { system: 's', prompt: 'p' }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AiError);
+    expect(error).not.toBeInstanceOf(AiCancelled);
+    expect(String(error)).toMatch(/no reply within 40 ms/);
+    expect(seen[0].aborted).toBe(true);
+  });
+
+  it('a session ask with the longest timeout is still cancelled at once by its signal and by cancel()', async () => {
+    hangingFetch();
+    const session = createAiSession(null);
+    const ctrl = new AbortController();
+    const started = Date.now();
+    const bySignal = session.ask({ ...cfg, timeoutMs: AI_TIMEOUT_MS_MAX }, { system: 's', prompt: 'p', signal: ctrl.signal });
+    const byCancel = session.ask({ ...cfg, timeoutMs: AI_TIMEOUT_MS_MAX }, { system: 's', prompt: 'p' });
+    setTimeout(() => {
+      ctrl.abort();
+      session.cancel();
+    }, 20);
+    await expect(bySignal).rejects.toBeInstanceOf(AiCancelled);
+    await expect(byCancel).rejects.toBeInstanceOf(AiCancelled);
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 
   it('a session ask passes the request signal through', async () => {
