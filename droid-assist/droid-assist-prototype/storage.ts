@@ -30,6 +30,8 @@ import type { SubagentStatus } from './subagents.js';
 import { PROFILE_LIMIT, type RouteHop, type RouteProfile } from './route-plot.js';
 import { FIX_ACTIONS, FIX_METHOD_LIMIT, type FixMethod } from './fix-script.js';
 import { DOSSIER_LIMIT, pruneDossiers, type PositionDossier } from './position-dossier.js';
+import { SIDE_TEST_MODES, type SideTestMode } from './side-test.js';
+import { SECTION_EVENT_LIMIT, SECTION_LIMIT, type ScreenSection, type SectionEvent } from './sections.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -43,6 +45,7 @@ const STEP_STATUSES: readonly StepStatus[] = ['pending', 'running', 'done', 'dri
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', packs: 'droid-assist.packs' } as const;
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', routes: 'droid-assist.routes', fixMethods: 'droid-assist.fix-methods' } as const;
 const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', dossiers: 'droid-assist.dossiers' } as const;
+const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', sections: 'droid-assist.sections' } as const;
 
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
@@ -129,6 +132,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
   out.stages = sanitizeStages(stored.stages ?? defaults.stages);
   out.operationPolicy = sanitizePolicy(stored.operationPolicy, defaults.operationPolicy);
+  if (SIDE_TEST_MODES.includes(stored.sideTestMode as SideTestMode)) out.sideTestMode = stored.sideTestMode as SideTestMode;
   return out;
 }
 
@@ -618,5 +622,21 @@ export const loadSections = (): KnowledgeSection[] => listOf(readJson(KEYS.secti
 
 /** Persists the knowledge sections, capped at SECTION_LIMIT. */
 export function saveSections(sections: KnowledgeSection[]) {
+const isBox = (v: unknown) => isObject(v) && isNum(v.x) && isNum(v.y) && isNum(v.w) && isNum(v.h);
+
+function isSectionEvent(v: unknown): v is SectionEvent {
+  return isObject(v) && isNum(v.time) && (v.kind === 'log' || v.kind === 'change') && typeof v.text === 'string' && (v.box === undefined || isBox(v.box));
+}
+
+function isSection(v: unknown): v is ScreenSection {
+  return isObject(v) && isStr(v.id) && isStr(v.name) && isBox(v.box) && (v.source === 'drawn' || v.source === 'ai') && Array.isArray(v.events);
+}
+
+/** The stored screen sections with their histories; invalid sections and events are dropped. */
+export const loadSections = (): ScreenSection[] =>
+  listOf(readJson(KEYS.sections), isSection, SECTION_LIMIT).map((s) => ({ ...s, events: listOf(s.events, isSectionEvent, SECTION_EVENT_LIMIT) }));
+
+/** Persists the screen sections, capped at SECTION_LIMIT. */
+export function saveSections(sections: ScreenSection[]) {
   writeJson(KEYS.sections, sections.slice(0, SECTION_LIMIT));
 }

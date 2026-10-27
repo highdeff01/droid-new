@@ -30,6 +30,7 @@ import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, loadAccessPaths, saveAccessPaths, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, loadRouteProfiles, loadFixMethods, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher, saveRouteProfiles, saveFixMethods } from './storage.js';
 import { LOG_LIMIT, loadCards, loadDossiers, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveDossiers, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher } from './storage.js';
+import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSections, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, savePatterns, saveRunSummaries, saveSections, saveSettings, saveTriggers, saveWatcher } from './storage.js';
 import { TRIGGER_LIMIT, TRIGGER_TICK_MS, afterFire, afterSkip, conditionText, createTrigger, fireGate, observeElement, outcomeText, resolveTarget, scheduleDue, type ElementSnapshot, type ElementTrigger, type RunOutcome, type ScheduleTrigger, type Trigger, type TriggerDraft } from './triggers.js';
 import { appendSummary, runSummary, type RunSummary } from './run-stats.js';
 import { addTest, mergeNotes, mergeProposals, observeScreen, patchProposal, proposalStep, reorderSteps, type Observation, type ProposalKind, type WatchProposal, type WatcherState } from './watcher.js';
@@ -95,6 +96,10 @@ import { refreshStep, retestSummary, retestText, retestedSteps, runRetest, selec
 import { findDossier, recordObservation as recordSighting, recordOutcome as recordPositionOutcome, recordTest, setMove, setPreferred, type Mover, type PositionDossier } from './position-dossier.js';
 import { compensate, seedPoint } from './position-compensation.js';
 import { buildMemory, memoryLines } from './enhanced-memory.js';
+import { addSection, buildProfiles, changeInScope, createSection, inScope, findSection, parseBoxArg, parseSectionProposals, recordEvent, removeSection, scopeLines, scopeSections, scopedMapped, sectionMemoryLines, sectionsRequest, type ScreenSection, type SectionEvent } from './sections.js';
+import { extractReplica, parseReplicaNaming, replicaLine, replicaToFamiliar, replicaToMapped, replicateRequest, type Replica } from './replicate.js';
+import { DEFAULT_SIDE_TEST_MODE, busFeedback, feedbackLine, findingsToNotes, runSideTest, sentinelScan, splitSideArgs, textFindings, type SentinelAlert, type SideTestDeps, type SideTestPlan, type SideTestResult, type WatchedPosition } from './side-test.js';
+import type { CommandName } from './commands.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -249,6 +254,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   operationPolicy: DEFAULT_OPERATION_POLICY,
   autoScan: true,
   trainMode: 'background',
+  sideTestMode: DEFAULT_SIDE_TEST_MODE,
 };
 
 /** A background agent the user can toggle; each also has an inbox on the inter-agent bus. */
@@ -272,6 +278,8 @@ export function useAssist() {
   const [history, setHistory] = useState<ActionRecord[]>(() => loadHistory());
   /** Normalized point the last executed pointer action left the cursor at: the previously-focused point of the next action. */
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  /** The last action written to the history, so a side test can backtrack exactly what it did. */
+  const lastRecordRef = useRef<ActionRecord | null>(null);
   const [reversing, setReversing] = useState(false);
   const [shotCount, setShotCount] = useState(0);
   const [frames, setFrames] = useState<Frame[]>([]);
@@ -323,6 +331,12 @@ export function useAssist() {
   const accessPathsRef = useRef<AccessProfile[]>(accessPaths);
   /** Targets whose saved path was already counted during the current run (not re-counted when the run is learned). */
   const pathCountedRef = useRef(new Set<string>());
+  /** Named screen sections with their per-section histories (persisted), and the sections the goal is secluded to. */
+  const [sections, setSections] = useState<ScreenSection[]>(loadSections);
+  const [scope, setScope] = useState<string[]>([]);
+  /** Elements the AI replicated by itself, newest first; side-test results, newest first. */
+  const [replicas, setReplicas] = useState<Replica[]>([]);
+  const [sideResults, setSideResults] = useState<SideTestResult[]>([]);
   const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
@@ -336,6 +350,7 @@ export function useAssist() {
     { id: 'screen', name: BUS_AGENTS.screen, description: 'Observes forwarded elements on the live screen', on: true },
     { id: 'coords', name: 'Coordinate learner', description: 'Learns target coordinates from cursor dwell and verified actions; seeds grounding with them', on: true },
     { id: 'supervisor', name: 'Supervisor', description: 'Reviews all agents, screenshots and thinking; applies confident fixes, performs them if the executor does not, and splits link/route tests into subagents', on: true },
+    { id: 'sidetest', name: BUS_AGENTS.sidetest, description: 'Runs side research and experiment → backtrack → main tests on other windows; reports results on the bus', on: true },
   ]);
   /** The inter-agent message bus: every forwarded element in each recipient's inbox, newest first. */
   const [bus, setBus] = useState<BusMessage[]>([]);
@@ -466,6 +481,8 @@ export function useAssist() {
   /** Start time of the last dwell the coordinate learner handled, so each rest is observed once. */
   const dwellSeenRef = useRef(-1);
   const targetRef = useRef(target);
+  const sectionsRef = useRef<ScreenSection[]>(sections);
+  const scopeRef = useRef<string[]>(scope);
   /** Whether any step of the current Auto Act run was only a dry run (such a run is never saved). */
   const autoDryRef = useRef(false);
   /** This app session (one page load), stamped on every run summary. */
@@ -592,6 +609,7 @@ export function useAssist() {
   memoryRef.current = memory;
   familiarRef.current = familiar;
   targetRef.current = target;
+  scopeRef.current = scope;
 
   const intervalMs = monitorInterval(settings.monitorMode, settings.captureMs);
 
@@ -613,6 +631,7 @@ export function useAssist() {
   useEffect(() => saveAccessPaths(accessPaths), [accessPaths]);
   useEffect(() => saveRouteProfiles(routeProfiles), [routeProfiles]);
   useEffect(() => saveFixMethods(fixMethods), [fixMethods]);
+  useEffect(() => saveSections(sections), [sections]);
   useEffect(() => {
     if (cardsHydratedRef.current) saveCards(cards);
   }, [cards]);
@@ -943,12 +962,39 @@ export function useAssist() {
     if (stageOn('coords')) commitHabits(recordOutcome(habitsRef.current, pathOutcome(profile, reach.via === 'path' && reach.out.ok, reach.failedHop)));
   };
 
+  /** Replaces the sections (ref and state together). */
+  const commitSections = (next: ScreenSection[]) => {
+    sectionsRef.current = next;
+    setSections(next);
+  };
+
+  /** Appends a log or change event to the sections it concerns (every section when it has no box). */
+  const sectionEvent = (event: SectionEvent) => {
+    if (sectionsRef.current.length) commitSections(recordEvent(sectionsRef.current, event));
+  };
+
+  /**
+   * The planning/grounding context under goal seclusion: the goal scope, the mapped elements inside it
+   * and the cross-referenced section memory (profiles, logs, shared patterns).
+   */
+  const sectionContext = (): string[] => {
+    const secs = sectionsRef.current;
+    const mapped = scopedMapped(secs, scopeRef.current, elementMapRef.current);
+    const profiles = buildProfiles(secs, mapped, familiarRef.current, framesRef.current[0]);
+    return [...scopeLines(secs, scopeRef.current), ...mapContext(mapped), ...sectionMemoryLines(profiles)];
+  };
+  /** True when a point lies inside the goal scope (always true with no scope). */
+  const pointInScope = (p: { x: number; y: number }) => inScope(sectionsRef.current, scopeRef.current, p);
+  /** The known elements inside the goal scope, as planner context lines. */
+  const knownInScope = () => knownRef.current.filter(pointInScope).map(elementLine);
+
   /**
    * The AI grounding pass run-step uses: confirm on a zoomed crop, re-ask the planner once.
    * Each check and the re-ask record their thinking on the step's timeline.
    */
   const grounding: Grounding = {
     confirm: async (live, step, p) => {
+      if (!pointInScope(p)) return { visible: false, reason: `${at(p.x, p.y)} is outside the goal scope (${scopeRef.current.join(', ')})`, thinking: null };
       const crop = await zoomFrame(live, p);
       const check = await thought(step.name, () => confirmTarget(askFor('grounding'), live, crop, step), checkSummary(step, p));
       if (check.visible) forwardElement('drift', { name: step.target ?? step.name, x: p.x, y: p.y });
@@ -959,6 +1005,8 @@ export function useAssist() {
         const crop = await zoomFrame(live, step).catch(() => undefined);
         const next = await relocateTarget(askFor('grounding'), live, step, feedback, [...mapContext(elementMapRef.current), ...inventoryLines(inventoryRef.current)], crop);
         return { point: next, thinking: next?.thinking ?? null };
+        const next = await relocateTarget(askFor('grounding'), live, step, feedback, sectionContext(), crop);
+        return { point: next && pointInScope(next) ? next : null, thinking: next?.thinking ?? null };
       }, (r) => (r.point ? `Re-planned "${step.target ?? step.name}" at ${at(r.point.x, r.point.y)}` : `Re-planned: "${step.target ?? step.name}" is not visible`));
       return point;
     },
@@ -1180,6 +1228,7 @@ export function useAssist() {
     progress: (e) => `Noted "${e.name}" as reachable`,
     goal: (e) => `Noted "${e.name}" for goal review`,
     supervisor: (e) => `Noted "${e.name}" for link/route tests`,
+    sidetest: (e) => `Noted "${e.name}" for side tests`,
   };
 
   /**
@@ -1220,6 +1269,7 @@ export function useAssist() {
     const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message: out.message, ...(via === 'bridge' && out.check && !out.check.changed ? { dispatched: true } : {}) };
     if (POINTER_ACTIONS.has(step.action)) lastPointerRef.current = out.end ?? out.target;
     if (out.executed) noteInput(out.target, USER_ACTORS.has(actor) ? 'user' : 'ai');
+    lastRecordRef.current = rec;
     setHistory((h) => appendHistory(h, rec));
   }, []);
 
@@ -1691,7 +1741,10 @@ export function useAssist() {
       aborted: () => abortedRef.current,
       log,
     });
-    if (outcome.verified) setFamiliar((list) => rememberElement(list, { id: uid('el'), name: outcome.name, x: outcome.x, y: outcome.y, lastSeen: Date.now() }));
+    if (outcome.verified) {
+      setFamiliar((list) => rememberElement(list, { id: uid('el'), name: outcome.name, x: outcome.x, y: outcome.y, lastSeen: Date.now() }));
+      void replicateRegion(box, outcome.name, 'Element identifier', false);
+    }
     return { ...outcome, live };
   };
 
@@ -1731,7 +1784,7 @@ export function useAssist() {
   const watchChanges = (prev: Frame, cur: Frame) => {
     const cells = largestCluster(diffCells(prev.data, cur.data));
     const box = cells.length >= 6 ? boundingBox(cells) : null;
-    if (!box) return;
+    if (!box || !changeInScope(sectionsRef.current, scopeRef.current, box)) return;
     const now = Date.now();
     const noted = noteChange(changeHitsRef.current, box, now);
     changeHitsRef.current = noted.hits;
@@ -2302,7 +2355,8 @@ export function useAssist() {
     const base = changeBaseRef.current ?? prev;
     changeBaseRef.current = cur;
     const change = detectChange(base.data, cur.data, settingsRef.current.changeCells);
-    if (!change) return;
+    if (!change || !changeInScope(sectionsRef.current, scopeRef.current, change.box)) return;
+    sectionEvent({ time: cur.time, kind: 'change', text: `screen changed (${change.cells} cells) at ${gridRef(boxCenter(change.box))}`, box: change.box });
     if (!stageOn('screenResponder') || !aiOnline()) {
       flagPopup(base, cur, change.box);
       return;
@@ -3289,6 +3343,7 @@ export function useAssist() {
         if (!plan.steps.length) return;
         const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...trackingContext(elementMapRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
         const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...mapContext(elementMapRef.current), ...inventoryLines(inventoryRef.current), ...applied.map(habitLine)], patternsRef.current), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...knownInScope(), ...sectionContext(), ...applied.map(habitLine)], patternsRef.current), planSummary);
         if (planGuardRef.current.after(plan.steps) === 'duplicate') {
           addLog('Planner', `Re-plan guard: the plan for "${text.trim()}" is identical to the previous one — kept the current steps and will not ask the model again until the screen or a step changes`, 'warn');
           return;
@@ -3328,6 +3383,7 @@ export function useAssist() {
     await withAi(async () => {
       try {
         const { steps: planned } = await thought(`/move ${name}`, () => planFromGoal(`Move the mouse cursor onto the ${name} (hover, do not click)`, [], framesRef.current[0] ?? null, askFor('planner'), [...mapContext(elementMapRef.current), ...inventoryLines(inventoryRef.current)]), planSummary);
+        const { steps: planned } = await thought(`/move ${name}`, () => planFromGoal(`Move the mouse cursor onto the ${name} (hover, do not click)`, [], framesRef.current[0] ?? null, askFor('planner'), sectionContext()), planSummary);
         const move = planned.find((s) => s.action === 'move');
         if (!move) {
           addLog('/move', `AI did not plan a mouse move to "${name}" (it proposed ${planned.map((s) => s.action).join(', ')}) — nothing executed`, 'error');
@@ -3540,6 +3596,7 @@ export function useAssist() {
     const base = { dry: dryRun, shots: [] as Frame[], thinking: [] as string[] };
     const stopped = () => abortRef.current || abortedRef.current;
     const plan = await thought(`${label}: ${task.label}`, () => planFromGoal(task.goal, [], framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...inventoryLines(inventoryRef.current)], patternsRef.current), planSummary);
+    const plan = await thought(`${label}: ${task.label}`, () => planFromGoal(task.goal, [], framesRef.current[0] ?? null, askFor('planner'), [...knownInScope(), ...sectionContext()], patternsRef.current), planSummary);
     if (plan.thinking) base.thinking.push(plan.thinking);
     const budget = createBudget(task.budget);
     let last: { x: number; y: number } | undefined;
@@ -3779,6 +3836,191 @@ export function useAssist() {
   };
   /** Each slash command's runner. */
   const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'snip', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, snip: snipCommand };
+  /**
+   * AI replication: snips `box` from the live frame (cropFrame), extracts its crop, size, colours, text and
+   * bounds, optionally asks the model to name and read it, and saves it as a mapped and familiar element for
+   * future grounding. Logged with the crop, kept for the briefing and recorded in the sections it lies in.
+   */
+  const replicateRegion = async (box: Box, hint: string, actor: string, askName: boolean): Promise<Replica | null> => {
+    const frame = framesRef.current[0];
+    if (!frame) {
+      addLog(actor, `Cannot replicate "${hint}" — no captured frame yet`, 'warn');
+      return null;
+    }
+    const crop = await cropFrame(frame, box).catch(() => null);
+    const naming = askName && crop && aiOnline()
+      ? await askFor('identify')(replicateRequest(crop, hint)).then((reply) => parseReplicaNaming(reply, hint)).catch(() => ({ name: hint, text: '' }))
+      : { name: hint, text: '' };
+    const r = extractReplica(frame, box, crop?.url ?? frame.url, naming.name, naming.text);
+    setReplicas((list) => [r, ...list.filter((x) => x.name !== r.name)].slice(0, 50));
+    setMap(mapElement(elementMapRef.current, replicaToMapped(r, frame)));
+    setFamiliar((list) => rememberElement(list, replicaToFamiliar(r)));
+    sectionEvent({ time: r.time, kind: 'log', text: `replicated "${r.name}"`, box });
+    addLog(actor, replicaLine(r), 'ok', [r.crop]);
+    return r;
+  };
+
+  /** "/replicate <name> x,y,w,h" or "/replicate <mapped element>": the AI snips and saves the element itself. */
+  const replicateCommand = async (arg: string) => {
+    const parsed = parseBoxArg(arg);
+    const box = parsed?.box ?? elementMapRef.current.find((m) => sameElement(m.name, arg))?.box;
+    if (!box) {
+      addLog('/replicate', `No region for "${arg}" — give a box: /replicate <name> x,y,w,h`, 'warn');
+      return;
+    }
+    await replicateRegion(box, parsed?.name ?? arg, '/replicate', true);
+  };
+
+  /** Element-map studio: saves the drawn box as a named screen section. */
+  const saveSection = (name: string) => {
+    const section = mapDraft && createSection(name, mapDraft, 'drawn');
+    if (!section) return;
+    commitSections(addSection(sectionsRef.current, section));
+    setMapDraft(null);
+    addLog('Sections', `Section "${section.name}" drawn at ${gridRef(boxCenter(section.box))} (${pct(section.box.w)} x ${pct(section.box.h)} of the screen)`, 'ok');
+  };
+
+  const deleteSection = (id: string) => commitSections(removeSection(sectionsRef.current, id));
+
+  /** Asks the model to split the live screen into named sections from the element inventory. */
+  const proposeSections = async () => {
+    const frame = framesRef.current[0];
+    if (!frame || !aiOnline()) {
+      addLog('Sections', !frame ? 'No captured frame to section yet' : 'AI unavailable — draw sections in the element map instead', 'warn');
+      return;
+    }
+    try {
+      const proposed = parseSectionProposals(await askFor('identify')(sectionsRequest(frame, elementMapRef.current, familiarRef.current)));
+      commitSections(proposed.reduce(addSection, sectionsRef.current));
+      addLog('Sections', proposed.length ? `AI proposed ${proposed.length} section(s): ${proposed.map((s) => s.name).join(', ')}` : 'AI proposed no sections', proposed.length ? 'ok' : 'warn');
+    } catch (error) {
+      addLog('Sections', aiFailure('AI unavailable — no sections proposed', error), 'error');
+    }
+  };
+
+  /** "/section <name> x,y,w,h" draws, "/section auto" asks the AI, "/section remove <name>" deletes. */
+  const sectionCommand = async (arg: string) => {
+    if (arg.trim().toLowerCase() === 'auto') return proposeSections();
+    const removal = /^remove\s+(.+)$/i.exec(arg.trim());
+    const found = removal && findSection(sectionsRef.current, removal[1]);
+    if (removal) {
+      if (found) deleteSection(found.id);
+      addLog('/section', found ? `Removed section "${found.name}"` : `No section named "${removal[1]}"`, found ? 'ok' : 'warn');
+      return;
+    }
+    const parsed = parseBoxArg(arg);
+    const section = parsed && createSection(parsed.name, parsed.box, 'drawn');
+    if (!section) {
+      addLog('/section', 'Usage: /section <name> x,y,w,h · /section auto · /section remove <name>', 'warn');
+      return;
+    }
+    commitSections(addSection(sectionsRef.current, section));
+    addLog('/section', `Section "${section.name}" added`, 'ok');
+  };
+
+  /** "/scope <a>, <b>" secludes the goal to those sections; "/scope all" lifts the seclusion. */
+  const scopeCommand = async (arg: string) => {
+    const names = /^(all|none|clear)$/i.test(arg.trim()) ? [] : arg.split(',').map((n) => n.trim()).filter(Boolean);
+    const matched = scopeSections(sectionsRef.current, names).map((s) => s.name);
+    const unknown = names.filter((n) => !findSection(sectionsRef.current, n));
+    scopeRef.current = matched;
+    setScope(matched);
+    addLog('/scope', matched.length ? `Goal secluded to ${matched.join(', ')} — grounding, agents and change detection ignore the rest${unknown.length ? ` (unknown: ${unknown.join(', ')})` : ''}` : `Goal scope cleared — the whole screen is in play${unknown.length ? ` (unknown: ${unknown.join(', ')})` : ''}`, unknown.length ? 'warn' : 'ok');
+  };
+
+  /** One planned step for a side-test action, from the planner under the goal scope; null without one. */
+  const planOne = async (text: string): Promise<WorkflowStep | null> => {
+    const plan = await planFromGoal(text, [], framesRef.current[0] ?? null, askFor('sideTests'), sectionContext()).catch(() => null);
+    return plan?.steps[0] ?? null;
+  };
+
+  /** Research: "<URL> <query>" fetches the page and keeps its sentences matching the query; otherwise the AI researches on the live (side) screen. */
+  const researchQuery = async (query: string): Promise<string[]> => {
+    try {
+      const [first = '', ...words] = query.split(/\s+/);
+      if (/^https?:\/\//i.test(first)) return textFindings(await (await fetch(first)).text(), words.join(' ') || first);
+      const frame = framesRef.current[0];
+      if (!frame || !aiOnline()) return [`no AI or frame to research "${query}"`];
+      return [(await describeScreen(askFor('sideTests'), frame, `Research: ${query}. Report what the screen shows about it.`, goalRef.current)).answer];
+    } catch (error) {
+      return [`research of "${query}" failed: ${errorText(error)}`];
+    }
+  };
+
+  /** Everything runSideTest touches, routed through the shared guardrails, executor and agent bus. */
+  const sideTestDeps = (started: number): SideTestDeps => {
+    const before: WatchedPosition[] = knownRef.current.map((e) => ({ name: e.name, x: e.x, y: e.y }));
+    const main = targetRef.current ?? '';
+    const step = (name: string): WorkflowStep => ({ id: uid('step'), name: `Open ${name}`, action: 'open_app', text: name, x: 0.5, y: 0.5, status: 'pending' });
+    return {
+      guard: () => ({ aborted: abortedRef.current, armed: armedRef.current, stageOn: stageOn('sideTests') }),
+      budget: createBudget(settingsRef.current.actionBudget),
+      switchTo: async (t) => {
+        const to = t || main;
+        if (!to) return { ok: true, message: 'stayed on the main app' };
+        const out = await performStep(step(to), 'Side tester', createBudget(1), !armedRef.current);
+        return { ok: out.ok, message: out.message };
+      },
+      act: async (s, dryRun) => {
+        lastRecordRef.current = null;
+        const out = await performStep(s, 'Side tester', createBudget(1), dryRun);
+        return { ok: out.ok, message: out.message, record: out.executed ? lastRecordRef.current ?? undefined : undefined };
+      },
+      capture: async () => {
+        const frame = framesRef.current[0];
+        if (!frame || !aiOnline()) return frame ? `frame #${frame.id} captured` : 'no frame captured';
+        return (await describeScreen(askFor('sideTests'), frame, 'Describe the result of the last action briefly.', goalRef.current).catch(() => ({ answer: `frame #${frame.id} captured` }))).answer;
+      },
+      research: researchQuery,
+      sentinels: async () => sentinelScan(before, knownRef.current.map((e) => ({ name: e.name, x: e.x, y: e.y })), logRef.current.filter((l) => l.time >= started && l.tone === 'warn' && l.source === 'Popup watcher').map((l) => l.message)),
+      onAlert: (a: SentinelAlert) => {
+        addLog('Side tester', `Sentinel: ${a.text}`, 'warn');
+        forwardElement('sidetest', { name: a.text, x: 0.5, y: 0.5 }, ['popup', 'supervisor']);
+        // An urgent sentinel alert hands the live frame to Auto Act (popup handling / next step) when it is on.
+        const frame = framesRef.current[0];
+        if (frame && settingsRef.current.autoAct) void autoAct(frame);
+      },
+      log: (m, tone) => addLog('Side tester', m, tone),
+    };
+  };
+
+  /** Runs one side test inside the guardrails and reports it: notes, the agent bus and feedback to the main AI. */
+  const runSide = async (plan: SideTestPlan) => {
+    const r = await runSideTest(plan, sideTestDeps(Date.now()));
+    setSideResults((list) => [r, ...list].slice(0, 50));
+    const notes = mergeNotes(watcherRef.current.notes, findingsToNotes(r));
+    updateWatcher((w) => ({ ...w, notes: notes.notes }));
+    forwardElement('sidetest', busFeedback(r));
+    sectionEvent({ time: Date.now(), kind: 'log', text: feedbackLine(r) });
+    addLog('Side tester', feedbackLine(r), r.status === 'passed' ? 'ok' : 'warn');
+  };
+
+  /** "/sidetest <target> : <experiment> [: <main>]": experiment → capture → backtrack → main, sentinels watching. */
+  const sideTestCommand = async (arg: string) => {
+    const { target: where, rest } = splitSideArgs(arg);
+    const [experimentText, mainText] = rest;
+    const experiment = experimentText ? await planOne(experimentText) : null;
+    const main = mainText ? await planOne(mainText) : null;
+    if (!experiment) {
+      addLog('/sidetest', experimentText ? `Could not plan the experiment "${experimentText}" — AI planner unavailable` : 'Usage: /sidetest <target window> : <experimental action> [: <main action>]', 'warn');
+      return;
+    }
+    await runSide({ name: experimentText, target: where, mode: settingsRef.current.sideTestMode, experiment, ...(main ? { main } : {}) });
+  };
+
+  /** "/research <window or URL> : <query>": a research-only side test whose findings become watcher notes. */
+  const researchCommand = async (arg: string) => {
+    const { target: where, rest } = splitSideArgs(arg);
+    const query = rest.join(' ');
+    const url = /^https?:\/\//i.test(where);
+    await runSide({ name: `Research: ${query || where}`, target: url ? '' : where, mode: settingsRef.current.sideTestMode, research: url ? `${where} ${query}`.trim() : query || where });
+  };
+
+  /** Each slash command's runner. */
+  const COMMAND_RUNNERS: Record<Exclude<CommandName, 'test'>, (target: string) => Promise<void>> = {
+    use: attachTarget, move: moveTo, measure: measureCommand, arrange,
+    section: sectionCommand, scope: scopeCommand, replicate: replicateCommand, sidetest: sideTestCommand, research: researchCommand,
+  };
 
   /** The capability registry: presentations, scripts, simulations, video notes and computer control on the real-input path. */
   const caps = useCapabilities({
@@ -4403,6 +4645,9 @@ export function useAssist() {
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     scanNow, setElementPerform, proposePerform, addNavigateStep, trainMapped, training,
     snips, snip, snipMode, toggleSnipMode, userSnip, snipToMap,
+    sections, scope, saveSection, deleteSection, proposeSections, replicas, sideResults,
+    /** Section profiles (elements with dossiers, logs, changes) and their cross-referenced memory lines. */
+    sectionProfiles: buildProfiles(sections, elementMap, familiar, frames[0]),
     watcher, acceptProposal, dismissProposal, testProposal,
     approvals: approvals.items, approvalTree: approvals.tree, approveItem, editItem, rejectItem, runApprovalCheck, setOperationPolicy,
     triggers, addTrigger, toggleTrigger, deleteTrigger, fireTrigger,

@@ -2,6 +2,7 @@ import type { StageMap } from './loop-control.js';
 import type { AiView } from './ai.js';
 import type { OperationPolicy } from './approvals.js';
 import type { TrainMode } from './element-training.js';
+import type { SideTestMode } from './side-test.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
@@ -302,4 +303,6 @@ export interface AssistSettings {
   autoScan: boolean;
   /** Element training runs exclusively in the foreground (Auto Act pauses) or on its own background task. */
   trainMode: TrainMode;
+  /** Where side tests primarily run: background (bridge, main capture kept) or foreground (capture switched to the target). */
+  sideTestMode: SideTestMode;
 }
