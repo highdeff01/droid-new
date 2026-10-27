@@ -2695,10 +2695,31 @@ export function useAssist() {
     }
   };
 
-  /** Each slash command's runner. */
-  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange };
+  /** The capability registry: presentations, scripts, simulations, video notes and computer control on the real-input path. */
+  const caps = useCapabilities({
+    runBriefed: async (actor, step, budget, dryRun) => {
+      const briefed = await brief(actor, { kind: 'go', step, proposal: recordLocal(actor, step, `capability request${goalRef.current ? ` toward "${goalRef.current}"` : ''}, so "${step.name}" is run`) });
+      if (briefed.kind !== 'go') return { ok: false, executed: false, message: `"${step.name}" not justified by the pre-action briefing` };
+      return execute(briefed.step, actor, budget, dryRun, briefed.proposal);
+    },
+    dryRun: (actor, step) => performStep(step, actor, createBudget(settingsRef.current.actionBudget), true),
+    newBudget: () => createBudget(settingsRef.current.actionBudget),
+    armed: () => armedRef.current,
+    dispatch: () => dispatchState({ armed: armedRef.current, bridgeOnline, executorOn: settingsRef.current.stages.executor, aborted: abortedRef.current }),
+    live: () => framesRef.current[0] ?? null,
+    ask: (stage) => (aiOnline() ? askFor(stage) : null),
+    learn: (outcomes) => commitHabits(outcomes.reduce((list, o) => recordOutcome(list, o), habitsRef.current)),
+    app: habitContext,
+    log: addLog,
+    stageOn,
+    toggleStage,
+    sleep,
+  });
 
-  /** Submits the assist input: /use, /move, /measure and /arrange run, anything else is planned as a goal. */
+  /** Each slash command's runner. */
+  const COMMAND_RUNNERS: Record<'use' | 'move' | 'measure' | 'arrange' | 'do', (target: string) => Promise<void>> = { use: attachTarget, move: moveTo, measure: measureCommand, arrange, do: caps.doCommand };
+
+  /** Submits the assist input: /use, /move, /measure, /arrange and /do run, anything else is planned as a goal. */
   const submitInput = async () => {
     const command = parseCommand(goal);
     if (!command) {
@@ -3167,6 +3188,8 @@ export function useAssist() {
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
     dispatch: dispatchState({ armed, bridgeOnline, executorOn: settings.stages.executor, aborted }),
     reverse, reverseLast, reversing, briefings,
+    /** The capability registry and its artifacts; `invokeCapability` is the one permission-checked path for the main AI, the user and agents. */
+    capabilities: caps.registry, invokeCapability: caps.invoke, presentations: caps.presentations, scripts: caps.scripts, knowledge: caps.knowledge,
     /** The capability registry: the single dispatch surface for buttons, the AI, agents and the main app. */
     capabilities: capabilities.registry.list, invocations: capabilities.invocations, invoke: capabilities.invoke, requestCapability, relaxed: !!relaxedRef.current,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,

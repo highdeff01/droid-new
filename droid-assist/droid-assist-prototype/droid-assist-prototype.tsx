@@ -6,6 +6,7 @@ import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingP
 import { AgentBusPanel, SubagentReportPanel } from './bus-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
 import { StatsPanel } from './stats-panel.js';
+import { CapabilitiesPanel } from './capabilities-panel.js';
 import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
 import styles from './droid-assist.module.css';
 
@@ -41,6 +42,7 @@ function AssistScreen() {
             <StatsPanel engine={engine} />
             <WatcherPanel engine={engine} />
             <TriggersPanel engine={engine} />
+            <CapabilitiesPanel engine={engine} />
           </div>
         </div>
         <div className={styles.bottom}>
