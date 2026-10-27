@@ -2582,7 +2582,7 @@ export function useAssist() {
     }
     await withAi(async () => {
       try {
-        const { steps: planned } = await thought(`/move ${name}`, () => planFromGoal(`Move the mouse cursor onto the ${name} (hover, do not click)`, [], framesRef.current[0] ?? null, askFor('planner'), mapContext(elementMapRef.current)), planSummary);
+        const { steps: planned } = await thought(`/move ${name}`, () => planFromGoal(`Move the mouse cursor onto the ${name} (hover, do not click)`, [], framesRef.current[0] ?? null, askFor('planner'), [...mapContext(elementMapRef.current), ...inventoryLines(inventoryRef.current)]), planSummary);
         const move = planned.find((s) => s.action === 'move');
         if (!move) {
           addLog('/move', `AI did not plan a mouse move to "${name}" (it proposed ${planned.map((s) => s.action).join(', ')}) — nothing executed`, 'error');
@@ -2615,7 +2615,7 @@ export function useAssist() {
     const label = `Subagent ${task.index + 1}`;
     const base = { dry: dryRun, shots: [] as Frame[], thinking: [] as string[] };
     const stopped = () => abortRef.current || abortedRef.current;
-    const plan = await thought(`${label}: ${task.label}`, () => planFromGoal(task.goal, [], framesRef.current[0] ?? null, askFor('planner'), knownRef.current.map(elementLine), patternsRef.current), planSummary);
+    const plan = await thought(`${label}: ${task.label}`, () => planFromGoal(task.goal, [], framesRef.current[0] ?? null, askFor('planner'), [...knownRef.current.map(elementLine), ...inventoryLines(inventoryRef.current)], patternsRef.current), planSummary);
     if (plan.thinking) base.thinking.push(plan.thinking);
     const budget = createBudget(task.budget);
     let last: { x: number; y: number } | undefined;
