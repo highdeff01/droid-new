@@ -26,6 +26,7 @@ import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-hist
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { BackupSettings } from './backup-panel.js';
+import { FixScriptReview } from './screen-ai-panels.js';
 import styles from './droid-assist.module.css';
 
 const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity' };
@@ -711,6 +712,7 @@ export function BriefingPanel({ engine }: { engine: AssistEngine }) {
     <section className={styles.panel} aria-label="Pre-action briefing">
       <h3>Pre-action briefing <small>{settings.stages.briefing ? `${briefings.length} recorded` : 'stage unchecked in Loop control'}</small></h3>
       {!briefings.length && <p className={styles.muted}>No step briefed yet.</p>}
+      <FixScriptReview engine={engine} />
       <ul className={styles.log}>
         {briefings.map((b) => <BriefingItem key={`${b.id}:${b.revisions.length}`} b={b} />)}
       </ul>
