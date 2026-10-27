@@ -12,6 +12,7 @@ import { sanitizeStages } from './loop-control.js';
 import { AI_VIEWS, type AiView } from './ai.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
+import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
@@ -25,14 +26,13 @@ const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', l
 /** Most learned patterns kept. */
 export const PATTERN_LIMIT = 100;
 const PATTERN_KINDS: ReadonlyArray<LearnedPattern['kind']> = ['avoid', 'add'];
-import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 
 const ACTIONS: readonly StepAction[] = STEP_ACTIONS;
 const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries', [number, number]> = {
+const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight', [number, number]> = {
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
@@ -40,6 +40,10 @@ const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | '
   changeCells: [2, 40],
   maxIterations: [1, 20],
   stepRetries: [STEP_RETRIES_MIN, STEP_RETRIES_MAX],
+  driftStable: [0.01, 0.3],
+  driftMatched: [0.02, 0.5],
+  driftRadius: [4, 64],
+  gridOpacity: GRID_OPACITY_RANGE,
   aiMaxInFlight: [AI_MAX_IN_FLIGHT_MIN, AI_MAX_IN_FLIGHT_MAX],
 };
 

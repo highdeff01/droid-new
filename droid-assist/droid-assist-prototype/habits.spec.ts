@@ -3,7 +3,6 @@ import type { Habit } from './types.js';
 import {
   HABIT_LIMIT,
   HABIT_LOW_VALUE_ATTEMPTS,
-  HABIT_LOW_VALUE_RATE,
   HABIT_MIN_ATTEMPTS,
   HABIT_STALE_MS,
   anchoredHabit,

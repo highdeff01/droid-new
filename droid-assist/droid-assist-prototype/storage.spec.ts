@@ -8,7 +8,7 @@ import type { WatchNote, WatchProposal, WatchTest } from './watcher.js';
 import { DEFAULT_SETTINGS } from './use-assist.js';
 import { DEFAULT_GRID_OPACITY } from './grid-overlay.js';
 
-const DEFAULTS: AssistSettings = { gallerySize: 10, checkpoints: 6, captureMs: 500, changeCells: 6, monitorMode: 'app', watchMs: 5000, autoAct: false, aiHelp: true, showTrail: true, showGrid: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b', autoContinue: false, maxIterations: 5, stepRetries: 2, stages: DEFAULT_STAGES, errorUrl: '', errorForwarding: false, errorToken: '' };
+const DEFAULTS: AssistSettings = { ...DEFAULT_SETTINGS, gallerySize: 10, checkpoints: 6, captureMs: 500, changeCells: 6, monitorMode: 'app', watchMs: 5000, autoAct: false, aiHelp: true, showTrail: true, showGrid: true, bridgeUrl: '', abortHotkey: 'Shift+Escape', actionBudget: 50, aiUrl: 'https://ai.example/api/chat', aiModel: 'qwen3.5:2b', autoContinue: false, maxIterations: 5, stepRetries: 2, stages: DEFAULT_STAGES, errorUrl: '', errorForwarding: false, errorToken: '' };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
 
 describe('settings', () => {
