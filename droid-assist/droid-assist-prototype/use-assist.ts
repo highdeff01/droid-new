@@ -138,6 +138,7 @@ import { runLiveDrag, type DragIntervention, type LiveDragResult, type SwarmAgen
 import { OPS_AGENTS, OPS_SYSTEM, addEvidence, addOpsReport, changeKey, changeLine, dedupeLog, enabledOps, loopReport, mapDelta, markEvidence, monitorChange, opsAgent, opsFor, parseOpsTarget, patchOpsAgent, shouldReport, tagLog, type MonitorChange, type OpsAgentId, type OpsState, type TestCandidate } from './operations.js';
 import { createOpsWorkers, type Applied, type OpsWorkResult } from './ops-workers.js';
 import { placeWindow } from './window-placement.js';
+import { AI_RECHECK_MS, BREAKER_IDLE, PAUSE_POLL_MS, conflictDetails, dispatchKey, gateStep, modePauseText, pauseReason, strike, type Breaker, type GateBlock } from './dispatch-gate.js';
 import { CADENCE_MS, CADENCE_TICK_MS, addReports, dueAgents, reportContext, type AgentReport, type CadenceAgent } from './agent-cadence.js';
 import { activityReports } from './agent-activity.js';
 import { IDLE_ATTENTION, focusOn, scopeLines as scopeAttention, type Attention } from './attention.js';
@@ -228,7 +229,7 @@ const LOCAL_ACTIONS: Partial<Record<StepAction, (step: WorkflowStep) => Promise<
 };
 
 /** One step's real result plus whether the run must stop (abort, disarm, budget) and, for a drag, what it grabbed and moved. */
-type Performed = StepOutcome & { halt?: boolean; grabbed?: string; moved?: MovedElement; replanned?: boolean };
+type Performed = StepOutcome & { halt?: boolean; grabbed?: string; moved?: MovedElement; replanned?: boolean; paused?: boolean };
 
 /** Auto Act's continuation state: the goal it verifies, checks in a row without progress, rounds made. */
 type AutoLoop = { goal: string; stalls: number; iteration: number };
@@ -524,6 +525,13 @@ export function useAssist() {
   /** The last execution-mode change as logged, shown in every briefing; null before the first. */
   const [modeChange, setModeChange] = useState<string | null>(null);
   const modeChangeRef = useRef<string | null>(null);
+  /** The AI-down circuit breaker of pack/workflow runs (strikes and why dispatch is paused). */
+  const [breaker, setBreaker] = useState<Breaker>(BREAKER_IDLE);
+  const breakerRef = useRef<Breaker>(BREAKER_IDLE);
+  /** Steps already escalated to the planner for a blocked dispatch this run (once each). */
+  const escalatedRef = useRef<Set<string>>(new Set());
+  /** The goal the current run verifies (the main goal, or one derived for a pack run). */
+  const runGoalRef = useRef('');
   /** Aggressive-mode candidates held for the user's Apply, newest first. */
   const [candidates, setCandidates] = useState<HeldCandidate[]>([]);
   const candidatesRef = useRef<HeldCandidate[]>([]);
@@ -1473,7 +1481,7 @@ export function useAssist() {
     if (mode === from) return;
     settingsRef.current = { ...settingsRef.current, executionMode: mode };
     setSettings((s) => ({ ...s, executionMode: mode }));
-    const text = modeChangeText(from, mode, reason, by);
+    const text = `${modeChangeText(from, mode, reason, by)}${modePauseText(from, mode)}`;
     modeChangeRef.current = text;
     setModeChange(text);
     addLog('Mode', text, 'info');
@@ -1842,6 +1850,12 @@ export function useAssist() {
   const performStep = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     if (abortedRef.current) return refused(step, 'Aborted — real input not sent');
     if (!stageOn('executor')) return refused(step, `${stageOff('executor')} — not executed`);
+    // Avoid entries gate every dispatch, agent tests and trigger hops included; stale-map gating is perform's (it can re-ground).
+    const block = gateStep(step, knowledge(), false);
+    if (block) {
+      addLog(actor, `"${step.name}" not dispatched — ${block.reason}`, 'error');
+      return refused(step, `Blocked — ${block.reason} — not executed`);
+    }
     const attempt = beginAttempt(step, actor);
     const out = await performAction(step, actor, budget, dryRun);
     endAttempt(attempt.id, out.ok);
@@ -2154,6 +2168,96 @@ export function useAssist() {
     });
   };
 
+  /** Why `step` may not dispatch at all (blacklisted target+point, stale coordinates), or null. */
+  const dispatchBlock = (step: WorkflowStep): GateBlock | null => gateStep(step, knowledge(), true);
+
+  /** Why pack/workflow dispatch is paused now (Watching mode, AI-down breaker), or null. */
+  const dispatchPaused = () => pauseReason(settingsRef.current.executionMode, breakerRef.current);
+
+  const commitBreaker = (b: Breaker) => {
+    breakerRef.current = b;
+    setBreaker(b);
+  };
+
+  /** One unresolved iteration with the AI endpoint down; at the limit (or at once when `hard`) the run pauses, with a notification. */
+  const strikeBreaker = (hard: boolean, why: string) => {
+    const next = strike(breakerRef.current, aiOnline(), hard);
+    if (next === breakerRef.current) return;
+    commitBreaker(next);
+    if (!next.paused) return addLog('Runs', `AI endpoint down — unresolved iteration ${next.strikes}: ${why}`, 'warn');
+    addLog('Runs', `${next.paused} — ${why}; resumes when the AI health check succeeds, or on Resume`, 'error');
+    notify({ source: 'Runs', category: 'ai', severity: 'warning', title: `Run ${next.paused}` });
+  };
+
+  /** Clears the breaker; a paused run is announced as resumed. */
+  const resumeRuns = (why: string) => {
+    const was = breakerRef.current;
+    commitBreaker(BREAKER_IDLE);
+    if (!was.paused) return;
+    addLog('Runs', `Resumed — ${why}; dispatch re-opened`, 'ok');
+    notify({ source: 'Runs', category: 'ai', severity: 'info', title: `Runs resumed — ${why}` });
+  };
+
+  /** The user's Resume of a run the AI-down breaker paused. */
+  const resumeRun = () => resumeRuns('resumed by the user');
+
+  // A healthy AI endpoint clears the breaker (resuming a paused run); while it holds a run paused the endpoint is re-checked.
+  useEffect(() => {
+    if (aiStatus.state === 'online') {
+      if (breakerRef.current !== BREAKER_IDLE) resumeRuns('AI endpoint health check succeeded');
+      return undefined;
+    }
+    if (!breaker.paused) return undefined;
+    const id = setInterval(() => void connectAi(), AI_RECHECK_MS);
+    return () => clearInterval(id);
+  }, [breaker.paused, aiStatus.state]);
+
+  /** A blocked step's briefing: rebuilt on the live frame, marked blocked with why, and logged. */
+  const noteBlocked = async (step: WorkflowStep, proposal: Proposal, block: GateBlock, actor: string) => {
+    addLog(actor, `"${step.name}" not dispatched — ${block.reason}`, 'error');
+    if (stageOn('briefing')) await publishBriefing({ ...buildBriefingFor(step, proposal), outcome: 'blocked', blocked: block.reason });
+  };
+
+  /** The planner's one re-plan of a blocked step, told the conflicts; null when already escalated or still blocked. */
+  const escalateBlocked = async (step: WorkflowStep, actor: string, block: GateBlock): Promise<WorkflowStep | null> => {
+    const key = dispatchKey(step);
+    if (escalatedRef.current.has(key)) return null;
+    escalatedRef.current.add(key);
+    const next = await replanFailed(step, `dispatch blocked: ${block.reason}; conflicts: ${conflictDetails(step, knowledge()) || 'none other'}`).catch((error: unknown) => {
+      addLog(actor, aiFailure(`Re-plan of blocked "${step.name}" failed`, error), 'warn');
+      return null;
+    });
+    const still = next && dispatchBlock(next);
+    addLog(actor, next && !still ? `"${step.name}" re-planned after the block — ${next.action} "${next.target ?? next.name}" at ${at(next.x, next.y)}` : `"${step.name}": the re-plan could not verify an unblocked alternative${still ? ` (${still.reason})` : ''}`, next && !still ? 'ok' : 'warn');
+    return next && !still ? next : null;
+  };
+
+  /**
+   * A blocked step with the AI endpoint down: a strike on the breaker (stale coordinates pause the
+   * run at once, nothing can re-ground them); never dispatched.
+   */
+  const holdBlocked = (step: WorkflowStep, block: GateBlock): Performed => {
+    strikeBreaker(block.kind === 'stale', `"${step.name}" ${block.reason}`);
+    const paused = breakerRef.current.paused;
+    const what = block.kind === 'stale' ? 'stale-blocked' : 'blocked';
+    return { ok: false, executed: false, halt: !!paused, paused: !!paused, message: `"${step.name}" ${what} — ${block.reason} — AI endpoint down, no re-grounding or re-plan possible — not executed${paused ? `; run ${paused}` : ''}`, target: { x: step.x, y: step.y } };
+  };
+
+  /**
+   * Dispatch-time gate of `perform`: a blocked step is noted in the log and briefing and escalated
+   * once to the planner when the AI is up (its re-plan dispatches only when unblocked, else the step
+   * fails with why and the run moves on); with the AI down it is held (see holdBlocked).
+   */
+  const gateDispatch = async (step: WorkflowStep, actor: string, proposal: Proposal): Promise<{ step: WorkflowStep } | { out: Performed }> => {
+    const block = dispatchBlock(step);
+    if (!block) return { step };
+    await noteBlocked(step, proposal, block, actor);
+    if (!aiOnline()) return { out: holdBlocked(step, block) };
+    const next = await escalateBlocked(step, actor, block);
+    if (next) return { step: next };
+    return { out: { ok: false, executed: false, message: `"${step.name}" failed — ${block.reason}; the planner's re-plan could not produce a verifiable alternative — not executed`, target: { x: step.x, y: step.y } } };
+  };
+
   /**
    * performStep (with element identification on a miss), then reflect-after-step: every step the
    * pipeline ran gets the model's reflection and verdict, and the verdict of a step that really
@@ -2163,6 +2267,11 @@ export function useAssist() {
   const perform = async (planned: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null, ladder = true): Promise<Performed & { verdict?: StepVerdict | null }> => {
     if (!proposal?.ready) return refused(planned, `No recorded proposal for "${planned.name}" — not executed`);
     await catchOnTime(planned, actor);
+    const resolved = resolveMappedStep(planned, elementMapRef.current);
+    if ('error' in resolved) return refused(planned, `${resolved.error} — not executed`);
+    const gated = await gateDispatch(resolved, actor, proposal);
+    if ('out' in gated) return gated.out;
+    const { step } = gated;
     const step = resolveMappedStep(planned, elementMapRef.current);
     if ('error' in step) return refused(planned, `${step.error} — not executed`);
     if (proposal.why.trim()) intentWhyRef.current.set(step.id, proposal.why);
@@ -3321,7 +3430,7 @@ export function useAssist() {
 
   /** A fresh briefing of `step` with `proposal` on the live frame. */
   const buildBriefingFor = (step: WorkflowStep, proposal: Proposal) => buildBriefing({
-    goal: goalRef.current, steps: stepsRef.current, step, proposal, live: framesRef.current[0] ?? null,
+    goal: goalRef.current.trim() || runGoalRef.current, steps: stepsRef.current, step, proposal, live: framesRef.current[0] ?? null,
     knowledge: knowledge(), thresholds: driftThresholds(), online: aiOnline(), goalProgress: tracer.briefingLine(),
     mode: modeStatus(settingsRef.current.executionMode, modeChangeRef.current),
   });
@@ -3404,6 +3513,8 @@ export function useAssist() {
       const r = await reviewBriefing({ briefing: first, step: go.step, proposal: go.proposal }, reviewDeps(actor));
       if (r.briefing.outcome !== 'clear') await publishBriefing(r.briefing);
       addLog(actor, `Briefing for "${go.step.name}": ${briefingText(r.briefing)}`, r.briefing.outcome === 'unresolved' ? 'warn' : 'info');
+      // A step the dispatch gate will block strikes there; striking here too would count one iteration twice.
+      if (r.briefing.outcome === 'unresolved' && !dispatchBlock(r.step)) strikeBreaker(false, `briefing of "${go.step.name}" unresolved — it needs re-grounding or a re-plan`);
       return { kind: 'go', step: r.step, proposal: r.proposal };
     } catch (error) {
       addLog(actor, aiFailure(`Briefing review for "${go.step.name}" failed — running the plan as briefed`, error), 'error');
@@ -3837,12 +3948,22 @@ export function useAssist() {
     }
     if (j.kind === 'wait') return holdForApply(i, label, j.reason);
     if (j.kind !== 'go') return failUnjustified(i, label, j.reason);
+    const paused = dispatchPaused();
+    if (paused) {
+      updateStep(i, { status: 'pending' });
+      return { ok: false, executed: false, halt: true, paused: true, message: `"${planned.name}" held — run ${paused} — not executed`, target: { x: planned.x, y: planned.y } };
+    }
     if (abortRef.current) {
       updateStep(i, { status: 'pending' });
       return { ok: false, executed: false, halt: true, message: `Stopped before "${planned.name}" — not executed`, target: { x: planned.x, y: planned.y } };
     }
     const before = framesRef.current[0] ?? null;
     const out = await execute(pin ? { ...j.step, ...pin } : j.step, label, budget, dryRun, j.proposal);
+    if (out.paused) {
+      updateStep(i, { status: 'pending' });
+      addLog(label, `${planned.name}: ${out.message}`, 'warn');
+      return out;
+    }
     applyOutcome(i, out, dryRun, before);
     addLog(label, `${planned.name}: ${out.message}`, out.ok ? 'ok' : 'error');
     trackFailure(planned, out);
@@ -3872,6 +3993,7 @@ export function useAssist() {
     abortRef.current = false;
     runStartRef.current = Date.now();
     reproposedRef.current = new Set();
+    escalatedRef.current = new Set();
     replayingRef.current = true;
     setReplaying(true);
   };
@@ -3879,6 +4001,7 @@ export function useAssist() {
   /** Ends a run: no active step, not replaying. */
   const endRun = () => {
     setActiveIndex(null);
+    runGoalRef.current = '';
     replayingRef.current = false;
     setReplaying(false);
   };
@@ -3903,6 +4026,7 @@ export function useAssist() {
     if (dryRun && !selfTest) addLog('Safety', `Real input disarmed — ${label} runs as a ${DRY_RUN}`, 'warn');
     remindFailures(runGoal, label);
     const budget = createBudget(settingsRef.current.actionBudget);
+    runGoalRef.current = runGoal;
     beginRun();
     abortRef.current = false;
     traceRun(runGoal);
@@ -3925,7 +4049,7 @@ export function useAssist() {
     if (stageOn('goal')) {
       const total = ran.length;
       const what = dryRun ? 'verified on screen (not dispatched)' : 'executed';
-      addLog('Goal reviewer', ok === total ? `All ${total} steps ${what}${goal ? ` for "${goal}"` : ''}` : `${ok}/${total} ${what} — re-plan the failed steps or let AI help clear blockers`, ok === total ? 'ok' : 'warn');
+      addLog('Goal reviewer', ok === total ? `All ${total} steps ${what}${runGoal ? ` for "${runGoal}"` : ''}` : `${ok}/${total} ${what} — re-plan the failed steps or let AI help clear blockers`, ok === total ? 'ok' : 'warn');
       kb.recordFor('goal', 'result', `${ok}/${total} step(s) ${what}`, ok === total);
       for (const s of kb.suggestions(goalRef.current)) {
         addLog('Goal reviewer', `Suggestion: ${s}`, 'info');
@@ -3940,6 +4064,22 @@ export function useAssist() {
     return { ok, total: ran.length, dryRun, stopped };
   };
 
+  /**
+   * Holds a pack/workflow run between steps while dispatch is paused (Watching mode, AI-down breaker),
+   * logging each new reason once; false when Stop or ABORTED ended the wait.
+   */
+  const waitWhilePaused = async (label: string): Promise<boolean> => {
+    const ended = () => abortRef.current || abortedRef.current;
+    let logged: string | null = null;
+    for (let why = dispatchPaused(); why && !ended(); why = dispatchPaused()) {
+      if (why !== logged) addLog(label, `Run ${why} — waiting before the next step`, 'warn');
+      logged = why;
+      await sleep(PAUSE_POLL_MS);
+    }
+    if (logged && !ended()) addLog(label, 'Run resumed — dispatching the next step', 'ok');
+    return !ended();
+  };
+
   /** One pass over the current steps in order, checking abortRef between steps. */
   const runSteps = async (budget: ActionBudget, dryRun: boolean, label: string, shots: Frame[]): Promise<RunReport & { ok: number }> => {
     stepsRef.current = stepsRef.current.map((st) => ({ ...st, status: 'pending' as const }));
@@ -3948,7 +4088,12 @@ export function useAssist() {
     let ok = 0;
     addLog(label, dryRun ? `Verifying ${stepsRef.current.length} step(s) on the live screen — no input is sent` : `Performing ${stepsRef.current.length} step(s) as real input`);
     for (let i = 0; i < stepsRef.current.length && !abortRef.current; i++) {
+      if (!(await waitWhilePaused(label))) break;
       const out = await replayStep(i, budget, dryRun, label);
+      if (out.paused) {
+        i--;
+        continue;
+      }
       if (out.ok) ok++;
       if (out.shot) shots.push(out.shot);
       if (out.moved) moved.push(out.moved);
@@ -6144,8 +6289,8 @@ export function useAssist() {
    */
   const triggerTick = async () => {
     const events = stageOn('screenWatcher') && captureLive() && !pausedWhileHidden() ? elementEvents() : [];
-    if (triggerBusyRef.current || executorBusy()) {
-      events.forEach((e) => addLog('Triggers', `"${triggersRef.current.find((t) => t.id === e.id)?.name}" skipped (${e.why}) — a run is in progress`, 'warn'));
+    if (triggerBusyRef.current || executorBusy() || dispatchPaused()) {
+      events.forEach((e) => addLog('Triggers', `"${triggersRef.current.find((t) => t.id === e.id)?.name}" skipped (${e.why}) — ${dispatchPaused() ? `runs ${dispatchPaused()}` : 'a run is in progress'}`, 'warn'));
       return;
     }
     const now = Date.now();
@@ -6322,6 +6467,8 @@ export function useAssist() {
     runStep: async (step, actor, budget, dryRun) => {
       const briefed = await brief(actor, { kind: 'go', step, proposal: recordLocal(actor, step, `workflow pack "${step.name}" is run on the live screen`) });
       if (briefed.kind !== 'go') return { ok: false, message: `not justified by the pre-action briefing — ${briefed.reason}`, target: { x: step.x, y: step.y } };
+      const paused = dispatchPaused();
+      if (paused) return { ok: false, message: `not dispatched — run ${paused}`, target: { x: step.x, y: step.y } };
       const out = await execute(briefed.step, actor, budget, dryRun, briefed.proposal);
       return { ok: out.ok, message: out.message, target: out.target };
     },
@@ -6332,7 +6479,7 @@ export function useAssist() {
     },
     setRecording: setRecordingOn,
     armed: () => armedRef.current,
-    busy: () => executorBusy() || abortedRef.current || subRunningRef.current || triggerBusyRef.current,
+    busy: () => executorBusy() || abortedRef.current || subRunningRef.current || triggerBusyRef.current || !!dispatchPaused(),
     stopped: () => abortRef.current || abortedRef.current,
     resetStop: () => {
       abortRef.current = false;
@@ -6407,6 +6554,8 @@ export function useAssist() {
     /** The presentation studio: slideshows, movies, projects, composition approvals, rich notifications and the in-world embed. */
     studio,
     setMode, modeChange, candidates, applyCandidate, dismissCandidate,
+    /** The AI-down circuit breaker (strikes, paused status) and the user's Resume of a paused run. */
+    breaker, resumeRun,
     errors: errorForwarding.errors, errorEndpoint: errorForwarding.endpoint, sendErrorNow: errorForwarding.sendNow, sendTestError: errorForwarding.sendTest,
     notifications: notifier.notifications, markRead: notifier.markRead, markAllRead: notifier.markAllRead, clearNotifications: notifier.clearNotifications,
     actOnNotification, refreshSuggestions: () => refreshSuggestions(false),

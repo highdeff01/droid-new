@@ -66,8 +66,8 @@ export interface Revision {
   snip?: Frame;
 }
 
-/** How a briefing ended: nothing to fix, fixed, still conflicting, or skipped. */
-export type BriefingOutcome = 'clear' | 'corrected' | 'unresolved';
+/** How a briefing ended: nothing to fix, fixed, still conflicting, or blocked from dispatch. */
+export type BriefingOutcome = 'clear' | 'corrected' | 'unresolved' | 'blocked';
 
 /** The pre-action briefing of one step, recorded before it dispatches. */
 export interface Briefing {
@@ -82,6 +82,8 @@ export interface Briefing {
   aiNote: string | null;
   revisions: Revision[];
   outcome: BriefingOutcome;
+  /** Why dispatch was refused (blacklisted target+point, stale coordinates), when it was. */
+  blocked?: string;
   /** The execution mode the step runs in, with the last mode change (absent on briefings made before modes). */
   mode?: string;
   /** Zoomed crops around the planned point on the live and reference frames, when rendered. */

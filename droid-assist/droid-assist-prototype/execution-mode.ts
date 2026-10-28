@@ -20,6 +20,8 @@ export interface ModeProfile {
   trackElements: boolean;
   /** Whether the AI may switch to this mode by itself. */
   aiSettable: boolean;
+  /** Pack/workflow dispatches pause in this mode (the in-flight step finishes first). */
+  pausesDispatch: boolean;
   /** Context line sent with every plan. */
   hint: string;
 }
@@ -29,37 +31,37 @@ export const EXECUTION_MODES: Record<ExecutionMode, ModeProfile> = {
   parallel: {
     label: 'Parallel / fast',
     description: 'Fast operations; link/route work is split across the agent crew, 3 subagents at a time',
-    stepGapMs: 500, crew: 3, captureFactor: 1, grounding: 'plan', trackElements: false, aiSettable: true,
+    stepGapMs: 500, crew: 3, captureFactor: 1, grounding: 'plan', trackElements: false, aiSettable: true, pausesDispatch: false,
     hint: 'Execution mode: parallel/fast — prefer the fewest, most direct steps; independent work may be split across agents.',
   },
   thoughtful: {
     label: 'Thoughtful',
     description: 'Deliberate planning with a full proposal and briefing before each step, still efficient',
-    stepGapMs: 1500, crew: 1, captureFactor: 1, grounding: 'plan', trackElements: false, aiSettable: true,
+    stepGapMs: 1500, crew: 1, captureFactor: 1, grounding: 'plan', trackElements: false, aiSettable: true, pausesDispatch: false,
     hint: 'Execution mode: thoughtful — plan deliberately, verify each target, but do not add needless steps.',
   },
   aggressive: {
     label: 'Aggressive',
     description: 'Acts on the best known grounding at once, then the AI judges it; auto-applies only within your bounds',
-    stepGapMs: 300, crew: 1, captureFactor: 1, grounding: 'immediate', trackElements: false, aiSettable: false,
+    stepGapMs: 300, crew: 1, captureFactor: 1, grounding: 'immediate', trackElements: false, aiSettable: false, pausesDispatch: false,
     hint: 'Execution mode: aggressive — known elements are acted on immediately; plan only what is not already known.',
   },
   watching: {
     label: 'Watching (low cadence, notes)',
     description: 'Movie-watching: slow capture and pacing; the watcher keeps taking notes',
-    stepGapMs: 3000, crew: 1, captureFactor: 4, grounding: 'plan', trackElements: false, aiSettable: true,
+    stepGapMs: 3000, crew: 1, captureFactor: 4, grounding: 'plan', trackElements: false, aiSettable: true, pausesDispatch: true,
     hint: 'Execution mode: watching — the user is watching; act rarely and only when asked, keep notes.',
   },
   reacting: {
     label: 'Reacting to workflow',
     description: 'Fast capture and pacing to react to the user\'s workflow as it changes',
-    stepGapMs: 800, crew: 1, captureFactor: 0.5, grounding: 'plan', trackElements: false, aiSettable: true,
+    stepGapMs: 800, crew: 1, captureFactor: 0.5, grounding: 'plan', trackElements: false, aiSettable: true, pausesDispatch: false,
     hint: 'Execution mode: reacting — respond to what just changed on screen with short, quick steps.',
   },
   tracking: {
     label: 'Tracking elements',
     description: 'Tracks elements into the project while working: the watcher\'s element proposals are saved at once',
-    stepGapMs: 1500, crew: 1, captureFactor: 1, grounding: 'plan', trackElements: true, aiSettable: true,
+    stepGapMs: 1500, crew: 1, captureFactor: 1, grounding: 'plan', trackElements: true, aiSettable: true, pausesDispatch: false,
     hint: 'Execution mode: tracking — name and remember the elements you work with.',
   },
 };
