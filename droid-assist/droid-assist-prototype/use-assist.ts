@@ -32,6 +32,8 @@ import { createPlanGuard } from './plan-guard.js';
 import { createScreenCapture, fullJpeg, monitorInterval, type CapturedImage, type ScreenCapture } from './capture.js';
 import { DEFAULT_ABORT_HOTKEY, DEFAULT_ACTION_BUDGET, createBudget, dispatchState, matchesHotkey, spendAction, type ActionBudget, type HotkeyEvent, sanitizeBudget } from './safety.js';
 import { continuesScroll, keyCombo, keyStep, scrollStep, stepDelay, SCROLL_MERGE_MS } from './recorder.js';
+import { loadAvoidRules, saveAvoidRules } from './storage.js';
+import { DEFAULT_AVOID_TTL_HOURS, deadlockRules, isBlocking, recordFailure, ruleLine, ruleScope, ttlMs, withoutRules, type AvoidRule } from './blacklist.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, saveOperationMemory, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher, loadAccessPaths, saveAccessPaths, loadRouteProfiles, loadFixMethods, saveRouteProfiles, saveFixMethods, loadDossiers, saveDossiers, loadScreenSections, saveScreenSections, loadPersonas, savePersonas, loadOpsState, saveOpsState } from './storage.js';
 import { DEFAULT_PANEL_LAYOUT } from './panel-layout.js';
 import { mirrorMode, mirrorStep, type MirrorEvent } from './mirror-input.js';
@@ -62,7 +64,7 @@ import { CREW_SIZE_DEFAULT, parseIntercept } from './crew.js';
 import { useCrew } from './use-crew.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, newPattern, runVerdict, upsertCard } from './flow-memory.js';
 import { SUPERVISOR_INTERVAL_MS, SUPERVISOR_REPLAN_LIMIT, SUPERVISOR_TICK_MS, applyFixes, executorBusy as supervisorExecutorBusy, habitPatterns, haltText, isConfident, replanFeedback, reviewDecision, reviewRun, reviewText, staleFixes, type PendingFix, type SupervisorReview, type SupervisorState } from './supervisor.js';
-import { BUS_AGENTS, BUS_AGENT_IDS, elementLine, forward, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
+import { BUS_AGENTS, BUS_AGENT_IDS, elementLine, forward, isGridLabel, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
 import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
 import { useApprovals } from './use-approvals.js';
@@ -333,6 +335,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   liveDrag: false,
   maxIterations: DEFAULT_MAX_ITERATIONS,
   stepRetries: DEFAULT_STEP_RETRIES,
+  avoidTtlHours: DEFAULT_AVOID_TTL_HOURS,
   operationRetries: DEFAULT_OPERATION_RETRIES,
   playbackWindowSec: DEFAULT_PLAYBACK_WINDOW_SEC,
   aiMaxInFlight: DEFAULT_AI_MAX_IN_FLIGHT,
@@ -436,6 +439,7 @@ export function useAssist() {
   const [snipMode, setSnipMode] = useState(false);
   /** Per-target, per-app habits learned from every executed step, applied to planning and grounding. */
   const [habits, setHabits] = useState<Habit[]>(() => loadHabits());
+  const [avoidRules, setAvoidRules] = useState<AvoidRule[]>(loadAvoidRules);
   /** One summary per finished run (newest first), for the Stats panel. */
   const [runs, setRuns] = useState<RunSummary[]>(loadRunSummaries);
   /** Per-element position dossiers (positions, dwell, moves, best/preferred, planned vs actual), persisted. */
@@ -652,6 +656,7 @@ export function useAssist() {
   const planningRef = useRef(false);
   const statusChangesRef = useRef(0);
   const habitsRef = useRef<Habit[]>(habits);
+  const avoidRulesRef = useRef<AvoidRule[]>(avoidRules);
   const familiarRef = useRef<FamiliarElement[]>(familiar);
   const dossiersRef = useRef<PositionDossier[]>(dossiers);
   /** Ids of the steps whose systematic position offset was already applied (once per step). */
@@ -828,6 +833,7 @@ export function useAssist() {
   useEffect(() => savePatterns(patterns), [patterns]);
   useEffect(() => saveFamiliar(familiar), [familiar]);
   useEffect(() => saveHabits(habits), [habits]);
+  useEffect(() => saveAvoidRules(avoidRules), [avoidRules]);
   useEffect(() => saveRunSummaries(runs), [runs]);
   useEffect(() => void saveGoals(objectives), [objectives]);
   useEffect(() => void saveKnowledge(userNotes), [userNotes]);
@@ -904,7 +910,7 @@ export function useAssist() {
     const running = stepsRef.current.find((s) => s.status === 'running');
     const recent = contextIsLog ? [] : scopeAttention(logRef.current.slice(0, RECENT_LINES).map((l) => `[${l.source}] ${l.message}`), stage);
     const targets = stepsRef.current.map((s) => s.target ?? s.name);
-    return memoryBlock({ operation: operationNow(), objective: running ? objectiveText(running) : null, recent, targets }, { patterns: patternsRef.current, habits: habitsRef.current, memory: memoryRef.current });
+    return memoryBlock({ operation: operationNow(), objective: running ? objectiveText(running) : null, recent, targets, blocked: avoidRulesRef.current.filter((r) => isBlocking(r)).map((r) => `${ruleScope(r)} — ${r.reason}`) }, { patterns: patternsRef.current, habits: habitsRef.current, memory: memoryRef.current });
   };
 
   /** Saves a failed operation as a reminder (with its screenshots) and logs it. */
@@ -1255,7 +1261,7 @@ export function useAssist() {
 
   /** A step's reflect verdict updates its habit: attempt, success and the verdict's lessons. */
   const learnHabit = (step: WorkflowStep, verdict: StepVerdict) => {
-    if (!stageOn('coords')) return;
+    if (!stageOn('coords') || isGridLabel(habitTarget(step))) return;
     commitHabits(recordOutcome(habitsRef.current, { target: habitTarget(step), context: habitContext(), success: verdict.success, avoid: verdict.pattern_avoid, add: verdict.pattern_add }));
     const lessons = [verdict.pattern_avoid && `avoid ${verdict.pattern_avoid}`, verdict.pattern_add && `add ${verdict.pattern_add}`].filter(Boolean);
     if (lessons.length) kb.recordFor('coords', 'method', `"${habitTarget(step)}": ${lessons.join('; ')}`);
@@ -1263,7 +1269,7 @@ export function useAssist() {
 
   /** A verified target point strengthens its habit's remembered coordinates. */
   const strengthen = (live: Frame, step: WorkflowStep, p: { x: number; y: number }) => {
-    if (!stageOn('coords')) return;
+    if (!stageOn('coords') || isGridLabel(habitTarget(step))) return;
     commitHabits(strengthenHabit(habitsRef.current, habitTarget(step), habitContext(), live.data, p));
   };
 
@@ -1352,6 +1358,38 @@ export function useAssist() {
   const deletePattern = (id: string) => {
     patternsRef.current = patternsRef.current.filter((p) => p.id !== id);
     setPatterns(patternsRef.current);
+  };
+
+  const commitAvoidRules = (next: AvoidRule[]) => {
+    avoidRulesRef.current = next;
+    setAvoidRules(next);
+  };
+
+  /** One fresh on-screen failure of `step` struck on its structured blacklist rule (a dismissal only ever gets a cooldown). */
+  const strikeAvoid = (step: WorkflowStep, message: string, source: 'habit' | 'test') => {
+    commitAvoidRules(recordFailure(avoidRulesRef.current, { step, message, source, ttl: ttlMs(settingsRef.current.avoidTtlHours), obstacle: popupRef.current ?? undefined }));
+  };
+
+  /** Clears one blacklist rule by id, or every rule for 'all'; the result says what was cleared. */
+  const clearBlacklist = (id = 'all') => {
+    const rules = avoidRulesRef.current;
+    const gone = id === 'all' ? rules : rules.filter((r) => r.id === id);
+    if (!gone.length) return id === 'all' ? 'blacklist already empty' : `no blacklist entry "${id}"`;
+    commitAvoidRules(withoutRules(rules, gone));
+    const what = id === 'all' ? `all ${gone.length} blacklist entr${gone.length === 1 ? 'y' : 'ies'}` : `blacklist entry ${ruleScope(gone[0])}`;
+    addLog('Blacklist', `Cleared ${what}`, 'ok');
+    return `cleared ${what}`;
+  };
+
+  /**
+   * Deadlock resolution before `step` is gated: with a popup/overlay detected, the blocking
+   * dismissal rules for it are expired so the dismissal is re-attempted with fresh grounding.
+   */
+  const breakDeadlock = (step: WorkflowStep, actor: string) => {
+    const stuck = deadlockRules(avoidRulesRef.current, step, !!popupRef.current, Date.now(), popupRef.current ?? undefined);
+    if (!stuck.length) return;
+    commitAvoidRules(withoutRules(avoidRulesRef.current, stuck));
+    addLog(actor, `Deadlock cleared — a popup/overlay blocks the screen and its dismissal was blacklisted; expired ${stuck.map(ruleScope).join(', ')} — "${step.name}" re-attempts with fresh grounding`, 'warn');
   };
 
   /** Saves a successful run as a card, replacing a near-duplicate of the same flow. */
@@ -1573,11 +1611,13 @@ export function useAssist() {
   /** What each recipient does with a forwarded element; the returned note is shown on its inbox message. */
   const busHandlers: Record<BusAgentId, (e: ForwardedElement, from: BusAgentId) => string> = {
     coords: (e) => {
+      if (isGridLabel(e.name)) return `Skipped "${e.name}" — an unnamed grid region is never predefined`;
       knownRef.current = predefine(knownRef.current, e);
       setKnownElements(knownRef.current);
       return `Predefined "${e.name}" at ${at(e.x, e.y)} — fed into planning`;
     },
     habits: (e, from) => {
+      if (isGridLabel(e.name)) return `Skipped "${e.name}" — an unnamed grid region is never a habit`;
       addPatterns([newPattern('add', `"${e.name}" is at ${at(e.x, e.y)} (found by ${BUS_AGENTS[from]})`, goalRef.current)]);
       return `Recorded "${e.name}" as a habit`;
     },
@@ -1868,7 +1908,8 @@ export function useAssist() {
     if (abortedRef.current) return refused(step, 'Aborted — real input not sent');
     if (!stageOn('executor')) return refused(step, `${stageOff('executor')} — not executed`);
     // Avoid entries gate every dispatch, agent tests and trigger hops included; stale-map gating is perform's (it can re-ground).
-    const block = gateStep(step, knowledge(), false);
+    breakDeadlock(step, actor);
+    const block = gateStep(step, knowledge(), avoidRulesRef.current, false);
     if (block) {
       addLog(actor, `"${step.name}" not dispatched — ${block.reason}`, 'error');
       return refused(step, `Blocked — ${block.reason} — not executed`);
@@ -2004,6 +2045,7 @@ export function useAssist() {
   };
 
   /** History gets real dispatches and verified dry runs; refused or unverified steps leave nothing. */
+  const recorded = (out: Performed, dryRun: boolean) => out.executed || (dryRun && out.ok);
   const historyWorthy = (out: Performed, dryRun: boolean) => out.executed || (dryRun && out.ok);
 
   /** Records a step's result on its route: a main-app failure is a main-app error; a desktop step is history and bridge health. */
@@ -2012,6 +2054,7 @@ export function useAssist() {
       if (out.bridgeFailed) captureError({ kind: 'main-app', message: out.message, goal: goalRef.current, step: step.name });
       return;
     }
+    if (recorded(out, dryRun)) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
     if (historyWorthy(out, dryRun)) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
     noteBridge(step, out, actor);
   };
@@ -2027,6 +2070,7 @@ export function useAssist() {
     if (!plan) return refused(step, NO_SOURCE);
     if (plan.input === 'demo') {
       const out = await performOnDemo(step, dryRun);
+      if (recorded(out, dryRun)) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
       if (historyWorthy(out, dryRun)) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
       return out;
     }
@@ -2207,7 +2251,7 @@ export function useAssist() {
   };
 
   /** Why `step` may not dispatch at all (blacklisted target+point, stale coordinates), or null. */
-  const dispatchBlock = (step: WorkflowStep): GateBlock | null => gateStep(step, knowledge(), true);
+  const dispatchBlock = (step: WorkflowStep): GateBlock | null => gateStep(step, knowledge(), avoidRulesRef.current, true);
 
   /** Why pack/workflow dispatch is paused now (Watching mode, AI-down breaker), or null. */
   const dispatchPaused = () => pauseReason(settingsRef.current.executionMode, breakerRef.current);
@@ -2287,6 +2331,7 @@ export function useAssist() {
    * fails with why and the run moves on); with the AI down it is held (see holdBlocked).
    */
   const gateDispatch = async (step: WorkflowStep, actor: string, proposal: Proposal): Promise<{ step: WorkflowStep } | { out: Performed }> => {
+    breakDeadlock(step, actor);
     const block = dispatchBlock(step);
     if (!block) return { step };
     await noteBlocked(step, proposal, block, actor);
@@ -2357,10 +2402,18 @@ export function useAssist() {
     if (a.n > 1 || !a.ok) note({ step: step.name, kind: 'attempt', text, thinking: null });
   };
 
-  /** A step that failed after its retries and re-plan teaches its habit an avoid lesson. */
+  /**
+   * A step that failed after its retries and re-plan teaches its habit an advisory avoid lesson and
+   * strikes its structured blacklist rule (action + target + point; it blocks only on repeated fresh failures).
+   */
   const learnFailure = (step: WorkflowStep, attempts: Attempt[]) => {
     if (!stageOn('coords')) return;
-    commitHabits(recordOutcome(habitsRef.current, { target: habitTarget(step), context: habitContext(), success: false, avoid: avoidPattern(step, attempts) }));
+    const lesson = avoidPattern(step, attempts);
+    commitHabits(recordOutcome(habitsRef.current, { target: habitTarget(step), context: habitContext(), success: false, avoid: lesson }));
+    const last = attempts[attempts.length - 1];
+    // Scoped to where the last attempt aimed, so a re-grounded point elsewhere is not blocked.
+    const aimed = last ? { ...step, x: last.at.x, y: last.at.y, correctedX: undefined, correctedY: undefined } : step;
+    strikeAvoid(aimed, last?.message ?? lesson, 'habit');
   };
 
   /**
@@ -6135,7 +6188,8 @@ export function useAssist() {
     addLog(of.source, `Test ${verdict}: ${tried} — ${out.message}`, out.ok ? 'ok' : 'warn');
     if (!out.ok) {
       addPatterns([newPattern('avoid', `${tried} failed — ${out.message}`, of.context)]);
-      addLog('Patterns', `${of.source} test failed — learned: avoid ${tried}`, 'warn');
+      strikeAvoid(step, out.message, 'test');
+      addLog('Patterns', `${of.source} test failed — advisory lesson: avoid ${tried}`, 'warn');
     }
     return { ok: out.ok, message: out.message };
   };
@@ -6709,6 +6763,7 @@ export function useAssist() {
       if (armedRef.current !== on) toggleArmed();
     },
     abort: triggerAbort, clearAbort, setBudget, status: assistStatus,
+    blacklist: () => avoidRulesRef.current.map((r) => ruleLine(r)), clearBlacklist,
   }, addLog, { url: settings.bridgeUrl, token: settings.bridgeToken });
 
   /** Runs the operations the AI asked for, in order, through the registry as the AI (refused while ABORTED). */
@@ -6760,7 +6815,7 @@ export function useAssist() {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
-    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
+    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, avoidRules, clearBlacklist, supervisor, superviseRun,
     ruler, continuing, habits, deleteHabit, pinHabit, runs, dossiers, preferPosition,
     /** The cross-referenced memory view: methods, element usage, paths, goals and positions. */
     memory: enhancedMemory,

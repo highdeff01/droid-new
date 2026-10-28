@@ -56,6 +56,10 @@ export interface AssistOps {
   clearAbort: () => void;
   setBudget: (limit: number) => string;
   status: () => AssistStatus;
+  /** Every structured blacklist rule as one line (id, scope, source, state, expiry). */
+  blacklist: () => string[];
+  /** Clears one blacklist rule by id, or all of them for 'all'; the result says what was cleared. */
+  clearBlacklist: (id?: string) => string;
 }
 
 type Ops = () => AssistOps;
@@ -137,6 +141,8 @@ function libraryCaps(ops: Ops): Capability[] {
       return 'trigger fired — see the log';
     }, { realInput: true }),
     cap('trigger.list', 'List triggers', {}, () => list(ops().triggers(), 'no triggers'), { readOnly: true }),
+    cap('blacklist.list', 'List the active blacklist (structured avoid rules: scope, source, state, expiry)', {}, () => list(ops().blacklist(), 'blacklist empty'), { readOnly: true }),
+    cap('blacklist.clear', 'Clear one blacklist entry by id, or every entry with "all"', { id: str('rule id, or "all" (default)', false) }, (p) => ops().clearBlacklist(typeof p.id === 'string' && p.id.trim() ? p.id.trim() : 'all')),
   ];
 }
 

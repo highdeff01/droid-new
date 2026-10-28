@@ -193,23 +193,30 @@ export interface TurnMemory {
   recent: string[];
   /** Targets of the operation's current steps. */
   targets: string[];
+  /** The structured blacklist rules that block dispatch now, one line each (the only hard blocks). */
+  blocked?: string[];
 }
 
 /**
  * The operation memory block sent with every AI turn: the goal, the current objective, the
- * operation's notes, the BLACKLISTED methods it must not repeat, its similar failed operations
- * and the recent activity. Empty sections are left out, the goal and objective never are.
+ * operation's notes, the BLACKLISTED methods (structured blacklist rules and failed steps of similar
+ * operations), the ADVISORY prose lessons (learned avoid patterns and habit lessons — context for
+ * planning, never dispatch blockers), its similar failed operations and the recent activity. Empty
+ * sections are left out, the goal and objective never are.
  */
 export function memoryBlock(turn: TurnMemory, src: MemorySources): string[] {
   const notes = notesFor(turn.operation, src.memory.notes);
-  const blacklist = blacklistFor(turn.operation, turn.targets, src);
+  const entries = blacklistFor(turn.operation, turn.targets, src);
+  const blacklist = [...(turn.blocked ?? []).map((r) => `- [blacklist rule] ${r}`), ...entries.filter((e) => e.source === 'failure').map(blacklistLine)];
+  const advisory = entries.filter((e) => e.source !== 'failure');
   const failures = similarFailures(turn.operation, src.memory.failures).slice(0, FAILURE_CONTEXT_LIMIT);
   return [
     'OPERATION MEMORY (applies to this whole operation):',
     `Goal: ${turn.operation.trim() || '(none)'}`,
     `Current objective: ${turn.objective ?? '(none — between steps)'}`,
     ...(notes.length ? ['Notes:', ...notes.map((n) => `- ${n.text}`)] : []),
-    ...(blacklist.length ? ['BLACKLISTED — known-bad methods and invalid operations; never repeat them, choose a different approach:', ...blacklist.map(blacklistLine)] : []),
+    ...(blacklist.length ? ['BLACKLISTED — known-bad methods and invalid operations; never repeat them, choose a different approach:', ...blacklist] : []),
+    ...(advisory.length ? ['ADVISORY lessons (context, not blockers) — weigh them when planning:', ...advisory.map(blacklistLine)] : []),
     ...(failures.length ? ['Similar operations that FAILED before — adjust your approach:', ...failures.map((f) => `- ${failureLine(f)}`)] : []),
     ...(turn.recent.length ? ['Recent activity (newest first):', ...turn.recent] : []),
   ];

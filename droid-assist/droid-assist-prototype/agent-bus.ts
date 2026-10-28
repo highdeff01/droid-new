@@ -73,8 +73,15 @@ export const sameElement = (a: string, b: string) => a.trim().toLowerCase().repl
 /** Most predefined elements kept. */
 export const ELEMENT_LIMIT = 100;
 
-/** Records `element` as predefined knowledge, replacing an earlier entry with the same name; newest first. */
+/** True for a bare grid-cell label ("region at R10C10", "text at R8C13", "R3C4"): no name, description or mapping. */
+export const isGridLabel = (name: string) => /^((region|text|element)\s+at\s+)?R\d+C\d+$/i.test(name.trim());
+
+/**
+ * Records `element` as predefined knowledge, replacing an earlier entry with the same name; newest
+ * first. A bare grid-cell label is never predefined: `known` comes back unchanged.
+ */
 export function predefine(known: ForwardedElement[], element: ForwardedElement): ForwardedElement[] {
+  if (isGridLabel(element.name)) return known;
   return [element, ...known.filter((k) => !sameElement(k.name, element.name))].slice(0, ELEMENT_LIMIT);
 }
 

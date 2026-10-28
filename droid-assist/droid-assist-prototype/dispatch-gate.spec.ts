@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { Habit, LearnedPattern, WorkflowStep } from './types.js';
 import type { MappedElement } from './element-map-studio.js';
 import type { Knowledge } from './cross-reference.js';
-import { AI_DOWN_PAUSE, AI_DOWN_STRIKES, BREAKER_IDLE, MODE_PAUSE, avoidPoints, dispatchKey, gateStep, modePauseText, pauseReason, strike } from './dispatch-gate.js';
+import { AI_DOWN_PAUSE, AI_DOWN_STRIKES, BREAKER_IDLE, MODE_PAUSE, dispatchKey, gateStep, modePauseText, pauseReason, strike } from './dispatch-gate.js';
 import { runGoalFor } from './packs.js';
+import { recordFailure } from './blacklist.js';
+
+const DAY = 24 * 3600 * 1000;
 
 const step = (over: Partial<WorkflowStep> = {}): WorkflowStep => ({ id: 's1', name: 'Click 6', action: 'click', target: 'Click 6', x: 0.06, y: 0.599, status: 'pending', ...over });
 const habit = (avoid: string): Habit => ({ id: 'h1', target: 'Click 6', context: '', attempts: 3, successes: 0, lastUsed: 1, pinned: false, lessons: [{ kind: 'avoid', text: avoid, time: 1 }] });
@@ -12,50 +15,52 @@ const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], fami
 const OBSERVED = 'click "Click 6" failed after 3 attempt(s) at (6.0%, 59.9%): Click hit nothing interactive';
 
 describe('gateStep — avoid entries', () => {
-  it('blocks the observed blacklisted click at its recorded point, with the avoid reason', () => {
-    const block = gateStep(step(), knowledge({ habits: [habit(OBSERVED)] }), true);
+  const learned = (target = 'Click 6', x = 0.06, y = 0.599, strikes = 2) => recordFailure(
+    strikes > 1 ? recordFailure([], { step: step({ target, x, y }), message: 'Click hit nothing interactive', source: 'habit', ttl: DAY, now: 0 }) : [],
+    { step: step({ target, x, y }), message: 'Click hit nothing interactive', source: 'habit', ttl: DAY, now: 0 },
+  );
+
+  it('blocks the observed blacklisted click at its recorded point, with one decisive reason', () => {
+    const block = gateStep(step(), knowledge(), learned(), true, 1);
     expect(block).toMatchObject({ kind: 'avoid' });
-    expect(block?.reason).toContain('Click hit nothing interactive');
+    expect(block?.reason).toBe('blacklisted — Habit avoid: click "Click 6" near (6.0%, 59.9%) — Click hit nothing interactive');
   });
 
   it('blocks on the corrected point a re-grounding left on the step', () => {
-    expect(gateStep(step({ x: 0.5, y: 0.5, correctedX: 0.061, correctedY: 0.6 }), knowledge({ habits: [habit(OBSERVED)] }), true)?.kind).toBe('avoid');
+    expect(gateStep(step({ x: 0.5, y: 0.5, correctedX: 0.061, correctedY: 0.6 }), knowledge(), learned(), true, 1)?.kind).toBe('avoid');
   });
 
-  it('lets the same target dispatch at a point away from every blacklisted one', () => {
-    expect(gateStep(step({ x: 0.4, y: 0.2 }), knowledge({ habits: [habit(OBSERVED)] }), true)).toBeNull();
+  it('lets the same target dispatch at a point away from the rule, and another target ("Click 1") at the same point', () => {
+    expect(gateStep(step({ x: 0.4, y: 0.2 }), knowledge(), learned(), true, 1)).toBeNull();
+    expect(gateStep(step({ name: 'Click 1', target: 'Click 1' }), knowledge(), learned(), true, 1)).toBeNull();
   });
 
-  it('an avoid entry that names no point blacklists the target anywhere', () => {
-    expect(gateStep(step({ x: 0.9, y: 0.9 }), knowledge({ habits: [habit('never click Click 6 here')] }), false)?.kind).toBe('avoid');
-  });
-
-  it('a learned avoid pattern naming the target blocks it', () => {
+  it('prose habit lessons and learned avoid patterns never block (they are advisory)', () => {
     const pattern: LearnedPattern = { id: 'p1', kind: 'avoid', pattern: 'clicking Click 6 at (6.0%, 60.0%)', context: '', time: 1 };
-    expect(gateStep(step(), knowledge({ patterns: [pattern] }), false)?.reason).toMatch(/Learned avoid/);
+    expect(gateStep(step(), knowledge({ habits: [habit(OBSERVED)], patterns: [pattern] }), [], false)).toBeNull();
   });
 
-  it('reads the points an avoid entry names', () => {
-    expect(avoidPoints('at (6.0%, 59.9%), (10%, 20.5%)')).toEqual([{ x: 0.06, y: 0.599 }, { x: 0.1, y: 0.205 }]);
+  it('a single failure does not block yet', () => {
+    expect(gateStep(step(), knowledge(), learned('Click 6', 0.06, 0.599, 1), true, 1)).toBeNull();
   });
 });
 
 describe('gateStep — mapped-element conflict', () => {
   it('a mapped element of another name over the point marks the coordinates stale', () => {
-    const block = gateStep(step(), knowledge({ map: [mapped('region at R10C2', 0.06, 0.6)] }), true);
+    const block = gateStep(step(), knowledge({ map: [mapped('region at R10C2', 0.06, 0.6)] }), [], true);
     expect(block).toMatchObject({ kind: 'stale' });
     expect(block?.reason).toContain('"region at R10C2"');
     expect(block?.reason).toContain('not "Click 6"');
   });
 
   it('a mapped element named like the target agrees with the plan', () => {
-    expect(gateStep(step(), knowledge({ map: [mapped('Click 6 button', 0.06, 0.6)] }), true)).toBeNull();
+    expect(gateStep(step(), knowledge({ map: [mapped('Click 6 button', 0.06, 0.6)] }), [], true)).toBeNull();
   });
 
   it('is not checked for non-pointer steps or when stale checking is off', () => {
     const k = knowledge({ map: [mapped('region at R10C2', 0.06, 0.6)] });
-    expect(gateStep(step({ action: 'type' }), k, true)).toBeNull();
-    expect(gateStep(step(), k, false)).toBeNull();
+    expect(gateStep(step({ action: 'type' }), k, [], true)).toBeNull();
+    expect(gateStep(step(), k, [], false)).toBeNull();
   });
 });
 

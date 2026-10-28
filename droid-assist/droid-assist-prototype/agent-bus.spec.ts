@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUS_AGENT_IDS, BUS_LIMIT, elementLine, forward, inbox, markHandled, predefine, recipientsOf } from './agent-bus.js';
+import { BUS_AGENT_IDS, BUS_LIMIT, elementLine, forward, inbox, isGridLabel, markHandled, predefine, recipientsOf } from './agent-bus.js';
 
 const files = { name: 'Files icon', x: 0.1, y: 0.9 };
 
@@ -38,5 +38,14 @@ describe('agent bus', () => {
     const known = predefine(predefine([], files), { name: 'files  ICON', x: 0.2, y: 0.8 });
     expect(known).toEqual([{ name: 'files  ICON', x: 0.2, y: 0.8 }]);
     expect(elementLine(known[0])).toBe('[Known element] "files  ICON" at x=0.200, y=0.800');
+  });
+
+  it('never predefines a bare grid-cell label; named elements that mention a cell still count', () => {
+    for (const name of ['region at R10C10', 'text at R8C13', 'Element at r2c3', 'R4C5']) {
+      expect(isGridLabel(name)).toBe(true);
+      expect(predefine([files], { name, x: 0.5, y: 0.5 })).toEqual([files]);
+    }
+    expect(isGridLabel('Files icon')).toBe(false);
+    expect(isGridLabel('Save button at R2C3')).toBe(false);
   });
 });

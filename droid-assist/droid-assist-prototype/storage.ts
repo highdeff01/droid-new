@@ -50,6 +50,7 @@ import { OPERATION_RETRIES_MAX, OPERATION_RETRIES_MIN } from './operation-retry.
 import { PLAYBACK_WINDOW_SEC_MAX, PLAYBACK_WINDOW_SEC_MIN } from './playback.js';
 import { readOpsState, type OpsState } from './operations.js';
 import { sanitizePanelLayout } from './panel-layout.js';
+import { AVOID_RULE_LIMIT, AVOID_TTL_HOURS_MAX, AVOID_TTL_HOURS_MIN, isAvoidRule, pruneRules, type AvoidRule } from './blacklist.js';
 
 /** Most folders the System panel reports on. */
 export const SYSTEM_FOLDER_LIMIT = 10;
@@ -102,6 +103,7 @@ const KEYS = {
   personas: 'droid-assist.personas',
   approvalQueue: 'droid-assist.approval-queue',
   screenSections: 'droid-assist.sections',
+  avoidRules: 'droid-assist.avoid-rules',
 } as const;
 const STEP_STATUSES: readonly StepStatus[] = ['pending', 'running', 'done', 'drift', 'failed'];
 
@@ -115,7 +117,7 @@ export const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec', [number, number]> = {
+export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec' | 'avoidTtlHours', [number, number]> = {
   crewSize: [CREW_SIZE_MIN, CREW_SIZE_MAX],
   gallerySize: [4, 30],
   checkpoints: [1, 20],
@@ -141,6 +143,7 @@ export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watch
   mainBridgeBackoffMaxMs: [1000, MAIN_BRIDGE_BACKOFF_MAX_MS],
   operationRetries: [OPERATION_RETRIES_MIN, OPERATION_RETRIES_MAX],
   playbackWindowSec: [PLAYBACK_WINDOW_SEC_MIN, PLAYBACK_WINDOW_SEC_MAX],
+  avoidTtlHours: [AVOID_TTL_HOURS_MIN, AVOID_TTL_HOURS_MAX],
 };
 
 const BRIDGE_MODES: ReadonlyArray<AssistSettings['mainBridgeMode']> = ['listen', 'dial'];
@@ -365,6 +368,17 @@ export function saveOutbox(outbox: ErrorReport[]) {
 /** Persists the newest PATTERN_LIMIT learned patterns. */
 export function savePatterns(patterns: LearnedPattern[]) {
   writeJson(KEYS.patterns, patterns.slice(0, PATTERN_LIMIT));
+}
+
+/** The stored structured blacklist rules still alive (at most AVOID_RULE_LIMIT); invalid or expired rules are dropped. */
+export function loadAvoidRules(): AvoidRule[] {
+  const stored = readJson(KEYS.avoidRules);
+  return Array.isArray(stored) ? pruneRules(stored.filter(isAvoidRule)).slice(0, AVOID_RULE_LIMIT) : [];
+}
+
+/** Persists the structured blacklist rules. */
+export function saveAvoidRules(rules: AvoidRule[]) {
+  writeJson(KEYS.avoidRules, rules.slice(0, AVOID_RULE_LIMIT));
 }
 
 function isFamiliar(v: unknown): v is FamiliarElement {

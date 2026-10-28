@@ -326,6 +326,8 @@ export interface AssistSettings {
   maxIterations: number;
   /** Retries of a failed step (re-verify, re-correct, retry) before the planner re-plans it once. */
   stepRetries: number;
+  /** Lifetime of a blocking blacklist rule, hours (structured avoid entries expire on their own). */
+  avoidTtlHours: number;
   /** Retries of a detected recent operation's best variant, each verified by screenshot comparison (0 = off). */
   operationRetries: number;
   /** How far back a playback of the main app's actions reaches, in seconds (30 s .. 10 min). */
