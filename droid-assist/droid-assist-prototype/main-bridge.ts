@@ -72,6 +72,12 @@ export interface MainBridge {
 export const NOT_CONNECTED = 'Main app not connected — command not sent';
 export const LISTEN_NEEDS_DESKTOP = 'Listen mode needs the Droid Assist desktop app — in a browser, switch the main app bridge to dial mode and set the main app URL';
 export const DIAL_NEEDS_URL = 'Dial mode needs the main app URL — set it in Settings › Main app bridge';
+
+/** True in a plain browser build: no Electron preload exposed the main-bridge listener. */
+export const inBrowser = () => typeof window !== 'undefined' && !window.droidMainBridge;
+
+/** The bridge mode a fresh install starts in: dial in a browser (listen cannot work there), listen on the desktop. */
+export const defaultBridgeMode = (): 'listen' | 'dial' => (inBrowser() ? 'dial' : 'listen');
 export const POLL_MS = 500;
 export const REQUEST_TIMEOUT_MS = 30000;
 

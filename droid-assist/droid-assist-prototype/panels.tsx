@@ -4,6 +4,8 @@ import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { DRY_RUN } from './run-step.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
+import { ABORT_AUTO_CLEAR_MAX_MIN } from './abort-latch.js';
+import { LISTEN_NEEDS_DESKTOP, inBrowser } from './main-bridge.js';
 import { AiStatusBadge, InsecureBridgeWarning, MainBridgeBadge } from './hud.js';
 import { ModelPicker } from './model-picker.js';
 import type { AssistSettings, FamiliarElement, Frame, Habit, LogEntry } from './types.js';
@@ -432,6 +434,13 @@ function MainBridgeSettings({ engine }: { engine: AssistEngine }) {
           <option value="dial">Dial — connect to the main app URL</option>
         </select>
       </label>
+      {listen && inBrowser() && (
+        <div className={styles.insecure} role="alert" aria-label="Listen mode needs the desktop app">
+          {LISTEN_NEEDS_DESKTOP}.
+          {' '}
+          <button type="button" className={styles.primary} onClick={() => set({ mainBridgeMode: 'dial' })}>Switch to dial mode</button>
+        </div>
+      )}
       {listen ? (
         <span className={styles.row}>
           <input value={settings.mainBridgeHost} onChange={(e) => set({ mainBridgeHost: e.target.value })} aria-label="Main app bridge host" placeholder="127.0.0.1" />
@@ -538,6 +547,10 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
           }}
         />
         <small>Focus the field and press a new combo (works while this page has focus).</small>
+      </label>
+      <label className={styles.setting}>Auto-clear ABORTED after <b>{settings.abortAutoClearMin ? `${settings.abortAutoClearMin} min` : 'never (off)'}</b>
+        <input type="number" min={0} max={ABORT_AUTO_CLEAR_MAX_MIN} step={1} value={settings.abortAutoClearMin} onChange={(e) => setSettings({ ...settings, abortAutoClearMin: Number.isFinite(e.target.valueAsNumber) ? Math.min(ABORT_AUTO_CLEAR_MAX_MIN, Math.max(0, Math.round(e.target.valueAsNumber))) : 0 })} aria-label="Auto-clear ABORTED after (minutes, 0 = off)" />
+        <small>0 keeps ABORTED until you press Clear abort in the HUD.</small>
       </label>
       <label className={styles.setting}>Desktop bridge URL (pyautogui)
         <span className={styles.row}>

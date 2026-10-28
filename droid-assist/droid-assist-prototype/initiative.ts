@@ -1,6 +1,7 @@
 import type { WorkflowStep } from './types.js';
 import type { StageId } from './loop-control.js';
 import { uid } from './planner.js';
+import { ABORTED_REFUSAL } from './abort-latch.js';
 
 /**
  * AI initiative: what the AI may start on its own (scan the screen, test itself, work around a
@@ -125,7 +126,7 @@ export interface Guard {
  * is a proposal; an input-sending one also stays a proposal while disarmed or out of budget.
  */
 export function disposition(category: InitiativeCategory, g: Guard): Disposition {
-  if (g.aborted) return { kind: 'blocked', reason: 'ABORTED is active' };
+  if (g.aborted) return { kind: 'blocked', reason: ABORTED_REFUSAL };
   if (!g.stageOn) return { kind: 'blocked', reason: g.stageOffText };
   if (!g.autoApply) return { kind: 'propose', reason: `auto-apply is off for ${CATEGORY_NAME[category]}` };
   if (g.needsInput && !g.armed) return { kind: 'propose', reason: 'real input is disarmed' };

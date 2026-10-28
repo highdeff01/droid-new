@@ -56,6 +56,16 @@ export interface MeasureDeps {
   addLog: (from: string, message: string, tone?: LogEntry['tone']) => void;
   /** Rescales the engine's stored coordinates (workflow steps, saved flows). */
   rescale: (cal: Calibration) => void;
+  /** Raised once when automatic recalibration fires with no baseline (the user is asked to set one). */
+  onNeedBaseline?: (message: string) => void;
+}
+
+/** The prompt shown when automatic recalibration needs a baseline that was never set. */
+export const NEED_BASELINE = 'Set the calibration baseline now on a known-good screen';
+
+/** Turns the ruler on and brings the Ruler/calibration panel into view. */
+export function revealRulerPanel(): void {
+  document.querySelector('[data-panel-id="ruler"]')?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
 }
 
 let seq = 0;
@@ -67,7 +77,7 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
  * picked gallery frame, AI/command measurements between named elements, a recalibration
  * baseline, and automatic recalibration after repeated grounding failures.
  */
-export function useMeasure({ frames, framesRef, elementMap, addLog, rescale }: MeasureDeps) {
+export function useMeasure({ frames, framesRef, elementMap, addLog, rescale, onNeedBaseline }: MeasureDeps) {
   const [on, setOn] = useState(false);
   const [points, setPoints] = useState<RulerPoint[]>([]);
   const [labels, setLabels] = useState<string[]>([]);
@@ -76,6 +86,9 @@ export function useMeasure({ frames, framesRef, elementMap, addLog, rescale }: M
   const [measurements, setMeasurements] = useState<SavedMeasurement[]>([]);
   const [baseline, setBaselineState] = useState<Baseline | null>(null);
   const [calibration, setCalibration] = useState<Calibration | null>(null);
+  /** True while automatic coordinate correction is paused for want of a baseline. */
+  const [needsBaseline, setNeedsBaseline] = useState(false);
+  const needsBaselineRef = useRef(false);
   const baselineRef = useRef<Baseline | null>(null);
   const pointsRef = useRef<RulerPoint[]>([]);
   const failuresRef = useRef(0);
@@ -147,6 +160,9 @@ export function useMeasure({ frames, framesRef, elementMap, addLog, rescale }: M
     const base = makeBaseline(live, elementMap());
     baselineRef.current = base;
     setBaselineState(base);
+    if (needsBaselineRef.current) addLog('Calibration', 'Baseline set — automatic coordinate correction resumed', 'ok');
+    needsBaselineRef.current = false;
+    setNeedsBaseline(false);
     const pair = base.a && base.b ? `"${base.a.name}" ↔ "${base.b.name}" and ` : 'no mapped pair (Point out or plan a flow to add one) — ';
     addLog('Calibration', `Baseline set: ${pair}grid cell ${Math.round(base.cellW)}×${Math.round(base.cellH)}px on ${live.srcW}×${live.srcH}`, 'ok');
   }, [addLog, elementMap, framesRef]);
@@ -181,16 +197,34 @@ export function useMeasure({ frames, framesRef, elementMap, addLog, rescale }: M
     }
   }, [addLog, applyDrift, framesRef]);
 
-  /** Records one grounding outcome; repeated failures recalibrate once automatically. */
+  /** Pauses automatic correction until a baseline exists: logs and prompts once, then stays quiet. */
+  const pauseForBaseline = useCallback(() => {
+    if (needsBaselineRef.current) return;
+    needsBaselineRef.current = true;
+    setNeedsBaseline(true);
+    addLog('Calibration', `Automatic coordinate correction paused — no calibration baseline yet. ${NEED_BASELINE} (Ruler panel › Set baseline); it resumes once the baseline is set`, 'warn');
+    onNeedBaseline?.(NEED_BASELINE);
+  }, [addLog, onNeedBaseline]);
+
+  /** Records one grounding outcome; repeated failures recalibrate once automatically (paused while there is no baseline). */
   const noteGrounding = useCallback((out: { ok: boolean; halt?: boolean }) => {
     const { count, trigger } = tallyGrounding(failuresRef.current, out);
     failuresRef.current = count;
-    if (trigger) recalibrateNow(`auto: grounding failed ${AUTO_RECALIBRATE_AFTER}× in a row`);
-  }, [recalibrateNow]);
+    if (!trigger) return;
+    if (baselineRef.current) recalibrateNow(`auto: grounding failed ${AUTO_RECALIBRATE_AFTER}× in a row`);
+    else pauseForBaseline();
+  }, [pauseForBaseline, recalibrateNow]);
+
+  /** Opens the calibration tools: the ruler on, its panel in view. */
+  const openCalibration = useCallback(() => {
+    setOn(true);
+    setFrameId(null);
+    revealRulerPanel();
+  }, []);
 
   return {
-    on, toggle, points, labels, frameId, frame, measurement, measurements, baseline, calibration,
-    addPoint, undo, clear, measureFrame, saveRuler, measureQuery, setBaseline, recalibrateNow, noteGrounding,
+    on, toggle, points, labels, frameId, frame, measurement, measurements, baseline, calibration, needsBaseline,
+    addPoint, undo, clear, measureFrame, saveRuler, measureQuery, setBaseline, recalibrateNow, noteGrounding, openCalibration,
   };
 }
 

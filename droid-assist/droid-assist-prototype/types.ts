@@ -308,6 +308,8 @@ export interface AssistSettings {
   mainBridgeBackoffMaxMs: number;
   /** Emergency-stop key combo, e.g. "Shift+Escape". */
   abortHotkey: string;
+  /** Minutes after which an ABORTED latch clears by itself; 0 = never (the default). */
+  abortAutoClearMin: number;
   /** Max real (bridge-dispatched) input actions per Auto Act / replay run. */
   actionBudget: number;
   /** Ollama-compatible /api/chat URL every AI feature calls. */

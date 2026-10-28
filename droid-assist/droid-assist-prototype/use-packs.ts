@@ -5,6 +5,7 @@ import { createBudget, type ActionBudget } from './safety.js';
 import { runSubagents, type SubagentOutcome, type SubagentResult, type SubagentTask } from './subagents.js';
 import type { RunOutcome } from './triggers.js';
 import { loadPacks, savePacks } from './storage.js';
+import { ABORTED_REFUSAL } from './abort-latch.js';
 import {
   PACK_MOVE_LIMIT, addMove, appendTestResult, combinePacks, crossRunSelection, generateGoal, isFull, moveStep, newPack, packTestResult, packTestTasks, runGoalFor, runnable,
   similarGoal, similarReport, stepLine, withGoal, type PackSelection, type SimilarReport, type StepRun, type WorkflowPack,
@@ -212,7 +213,7 @@ export function usePacks(deps: PackDeps, recording: boolean) {
   const performSimilar = async () => {
     const picked = crossRunSelection(packsRef.current, selectionRef.current);
     const d = depsRef.current;
-    const refused = !picked.length ? 'select recorded steps first' : d.busy() ? 'a run is in progress or ABORTED is active' : null;
+    const refused = !picked.length ? 'select recorded steps first' : d.busy() ? `a run is in progress or ${ABORTED_REFUSAL}` : null;
     setRunning('Perform similar');
     try {
       const r = refused ? similarReport([], [], true, refused) : await planAndRun(picked, !d.armed());

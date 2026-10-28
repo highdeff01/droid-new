@@ -10,10 +10,12 @@ import { EXECUTION_MODES, MODE_IDS, type ExecutionMode } from './execution-mode.
 import { MAX_SHIFT_LIMIT, sanitizeAutoApply, type AutoApplyBounds } from './aggressive.js';
 import type { MainBridgeState, MainBridgeStatus } from './main-bridge.js';
 import styles from './droid-assist.module.css';
+import { abortBannerText } from './abort-latch.js';
+import { NEED_BASELINE } from './use-measure.js';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
-const AI_LEVEL: Record<AiStatus['state'], SyncLevel> = { online: 'green', checking: 'yellow', offline: 'red' };
-const AI_LABEL: Record<AiStatus['state'], string> = { online: 'AI connected', checking: 'AI connecting…', offline: 'AI unavailable' };
+const AI_LEVEL: Record<AiStatus['state'], SyncLevel> = { online: 'green', checking: 'yellow', offline: 'red', backoff: 'yellow' };
+const AI_LABEL: Record<AiStatus['state'], string> = { online: 'AI connected', checking: 'AI connecting…', offline: 'AI unavailable', backoff: 'AI endpoint erroring — backing off' };
 const MAIN_LEVEL: Record<MainBridgeStatus, SyncLevel> = { off: 'idle', waiting: 'yellow', connecting: 'yellow', connected: 'green', error: 'red' };
 const MAIN_LABEL: Record<MainBridgeStatus, string> = { off: 'Main app bridge off', waiting: 'Waiting for main app', connecting: 'Connecting to main app…', connected: 'Connected', error: 'Error' };
 
@@ -223,6 +225,33 @@ export function ModeControls({ engine }: { engine: AssistEngine }) {
   );
 }
 
+/** Persistent ABORTED banner: shown for as long as the latch is set, with the one-click way out. */
+export function AbortBanner({ engine }: { engine: AssistEngine }) {
+  if (!engine.aborted) return null;
+  return (
+    <div className={styles.insecure} role="alert" aria-label="ABORTED banner" data-testid="abort-banner">
+      ⛔ {abortBannerText(engine.abortedAt, engine.settings.abortAutoClearMin)}
+      {' '}
+      <button type="button" className={styles.primary} onClick={() => void engine.invoke('guard.clearAbort')}>Clear abort</button>
+    </div>
+  );
+}
+
+/** Shown while automatic coordinate correction is paused for want of a calibration baseline. */
+export function CalibrationPrompt({ engine }: { engine: AssistEngine }) {
+  const { ruler } = engine;
+  if (!ruler.needsBaseline) return null;
+  return (
+    <div className={styles.insecure} role="alert" aria-label="Calibration baseline needed">
+      📏 {NEED_BASELINE} — automatic coordinate correction is paused until it is set.
+      {' '}
+      <button type="button" className={styles.primary} onClick={ruler.openCalibration}>Open calibration</button>
+      {' '}
+      <button type="button" onClick={ruler.setBaseline}>Set baseline now</button>
+    </div>
+  );
+}
+
 /** Primary HUD: screen source, record / replay / self-test, goal + AI plan. */
 export function Hud({ engine }: { engine: AssistEngine }) {
   const { source, recording, replaying, goal, setGoal, settings, setSettings, steps, progress, plays, aiStatus, aiBusy } = engine;
@@ -232,6 +261,8 @@ export function Hud({ engine }: { engine: AssistEngine }) {
   const done = steps.filter((s) => s.status === 'done').length;
   return (
     <>
+      <AbortBanner engine={engine} />
+      <CalibrationPrompt engine={engine} />
       <div className={styles.hud}>
         <div className={styles.group}>
           {source === 'demo' ? (
