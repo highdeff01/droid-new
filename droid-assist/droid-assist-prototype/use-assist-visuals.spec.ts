@@ -47,7 +47,9 @@ describe('AI visual presence during runs (demo desktop, AI offline)', () => {
   it('a disarmed replay animates the cursor along a path and leaves click and typing markers', async () => {
     const result = await replayed([click, type, move], false);
     const { trail, cursor, log, history } = result.current;
-    expect(history).toHaveLength(0);
+    // Disarmed: only entries labeled as dry runs — nothing dispatched.
+    expect(history.length).toBeGreaterThan(0);
+    expect(history.every((h) => h.dryRun && h.message.includes('dry run — not dispatched'))).toBe(true);
     expect(log.filter((l) => /dry run — not dispatched/.test(l.message)).length).toBeGreaterThanOrEqual(3);
     expect(trail.filter((p) => p.click)).toEqual([at(0.5, 0.62)]);
     expect(trail.filter((p) => p.typed)).toEqual([at(0.5, 0.62)]);
