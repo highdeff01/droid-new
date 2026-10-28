@@ -311,6 +311,13 @@ describe('useAssist Qwen thinking timeline', () => {
     expect(result.current.timeline[0].error).toMatch(/unreachable.*Failed to fetch/);
   });
 
+  it('lists an AI-down failure in the Errors panel with forwarding off', async () => {
+    const result = await askWith(vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    expect(result.current.settings.errorForwarding).toBe(false);
+    await vi.waitFor(() => expect(result.current.errors.some((e) => e.report.kind === 'ai' && /Failed to fetch/.test(e.report.message))).toBe(true));
+    expect(result.current.errors.every((e) => e.status === 'not sent')).toBe(true);
+  });
+
   it('records the plan thought, reflection and verdict of a planned drag replayed on the demo desktop', async () => {
     const replies: Record<string, Record<string, unknown>> = {
       plan: { content: '{"steps":[{"name":"Drag Report to Archive","action":"drag","target":"Report file","x":0.9,"y":0.2,"endTarget":"Archive folder","endX":0.9,"endY":0.7}]}', thinking: 'Report is top-right.' },

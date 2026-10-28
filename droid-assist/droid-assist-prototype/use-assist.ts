@@ -88,6 +88,7 @@ import { findScenario, progressLines, scenarioComplete } from './test-world-scen
 import { MAX_DISCOVERY, OBJECTIVE_TONE, chainReport, discoverTarget, isChainGoal, locateTarget, objectiveLine, planChain, type ChainObjective, type ChainPlan, type ChainRun, type DiscoveryMove } from './chain.js';
 import { applyReach, currentPath, deletePath, editPath, isHopAction, learnPaths, parseHops, pathLine, pathOutcome, pathSteps, reachTarget, relevantPaths, runPath, usablePath, type AccessProfile, type Reach } from './access-paths.js';
 import { useResolution } from './use-resolution.js';
+import { AUTO_RETRY_LABEL, AUTO_RETRY_TICK_MS, countAttempts, retryDue, retryText, type RetryCounts } from './auto-retry.js';
 import { DISAGREEMENT_THRESHOLD } from './resolution-center.js';
 import { dropGoal, loadGoals, projectId, queueGoal, saveGoals, settleGoal, startGoal, type GoalRecord } from './goal-objectives.js';
 import { DEFAULT_GOAL_STALL, type GoalSource } from './goal-tracer.js';
@@ -126,6 +127,8 @@ import { recoverStorage, recoveryFile, recoveryFileName, recoveryText, restoreLa
 import { useNotifications } from './use-notifications.js';
 import { useSystemInfo } from './use-system-info.js';
 import type { CaptureInput } from './error-forwarding.js';
+import { LOG_CAPTURE_WINDOW_MS, logErrorKind } from './error-forwarding.js';
+import { ERRORS_SOURCE } from './use-error-forwarding.js';
 import { captureDraft, elementDraft, errorDraft, errorSection, ideaDraft, projectOf, trackDraft, type OperationDraft } from './operation-log.js';
 import { useOperationDatabase, useOperations } from './use-operations.js';
 import { usePresentations } from './use-presentations.js';
@@ -692,6 +695,12 @@ export function useAssist() {
   /** Set while the supervisor itself moves the pointer; Auto Act waits for it. */
   const supervisorMovingRef = useRef(false);
   const lastReviewAt = useRef(Date.now());
+  /** Routes an error-tone log line into the Errors list (assigned once error forwarding exists). */
+  const logErrorRef = useRef<(from: string, message: string, time: number) => void>(() => undefined);
+  /** Automatic main-retry attempts by step id; a new manual run starts the counts afresh. */
+  const retryCountsRef = useRef<RetryCounts>(new Map());
+  /** Set while the automatic main retry is re-running steps. */
+  const autoRetryBusyRef = useRef(false);
   /** Supervisor re-plans since the last plan_ok review or new plan (the convergence guard's count). */
   const replansRef = useRef(0);
   /** Set when the convergence guard stopped the run: periodic reviews pause until a new plan. */
@@ -898,7 +907,10 @@ export function useAssist() {
   const addLog = useCallback((from: string, message: string, tone: LogEntry['tone'] = 'info', shots?: string[]) => {
     const project = projectId(goalRef.current);
     const entry: LogEntry = { id: uid('log'), time: Date.now(), source: from, message, tone, ...(shots?.length ? { shots } : {}), ...(project ? { project } : {}) };
-    if (tone === 'error') takeNote('error', message, from);
+    if (tone === 'error') {
+      takeNote('error', message, from);
+      if (from !== ERRORS_SOURCE) logErrorRef.current(from, message, entry.time);
+    }
     if (!settingsRef.current.stages.opsLogging) return setLog((l) => [entry, ...l].slice(0, LOG_LIMIT));
     const tagged = tagLog(entry, operationRef.current ?? goalRef.current);
     setLog((l) => dedupeLog(l, tagged, LOG_LIMIT));
@@ -1000,11 +1012,23 @@ export function useAssist() {
     recordRaw({ project: projectOf(flow, goalRef.current), agent, section }, draft);
   }, [recordRaw]);
   const forwardError = errorForwarding.capture;
-  /** Captures an error for forwarding and records it in the operation database. */
-  const captureError = useCallback((input: CaptureInput) => {
+  /** When the last explicit capture was made; an error log line close to it is the same failure. */
+  const explicitCaptureAt = useRef(0);
+  /** Lists (and forwards when configured) an error and records it in the operation database. */
+  const recordError = useCallback((input: CaptureInput) => {
     forwardError(input);
     recordOp('Errors', errorSection(input.kind), errorDraft(input));
   }, [forwardError, recordOp]);
+  /** Captures an error for forwarding and records it in the operation database. */
+  const captureError = useCallback((input: CaptureInput) => {
+    explicitCaptureAt.current = Date.now();
+    recordError(input);
+  }, [recordError]);
+  /** Every error-tone log line lands in the Errors list, unless an explicit capture of it was made alongside. */
+  logErrorRef.current = (from, message, time) => queueMicrotask(() => {
+    if (Math.abs(explicitCaptureAt.current - time) < LOG_CAPTURE_WINDOW_MS) return;
+    recordError({ kind: logErrorKind(from), message: `[${from}] ${message}`, goal: goalRef.current });
+  });
 
   const annotationsRef = useRef(annotations);
   annotationsRef.current = annotations;
@@ -1123,12 +1147,13 @@ export function useAssist() {
     const text = escalationNotice(thinking);
     setTimeline((t) => addEntry(t, { step: `AI (${stage}) · thinking only`, kind: 'thought', text, thinking }));
     addLog('AI', `Content was never produced for this ${stage} call — the model's thinking is shown as the response.`, 'warn');
+    captureError({ kind: 'ai', message: `AI returned empty content for this ${stage} call — content was never produced, only thinking`, goal: goalRef.current });
     const goal = suggestedGoal(thinking, goalRef.current);
     const { proposals, added } = mergeProposals(watcherRef.current.proposals, [{ kind: 'workflow', text: `Suggested next workflow from the AI's thinking: ${goal}`, target: goal }]);
     watcherRef.current = { ...watcherRef.current, proposals };
     setWatcher(watcherRef.current);
     if (added.length) addLog('Screen watcher', `Proposed workflow from thinking-only reply: ${goal} — Accept to queue it as the goal`, 'info');
-  }, [addLog]);
+  }, [addLog, captureError]);
 
   /**
    * Repeat-limit 500 backoff: the rephrased retry inside chat() failed too, so calls are held for
@@ -1958,6 +1983,7 @@ export function useAssist() {
     const block = gateStep(step, knowledge(), avoidRulesRef.current, false);
     if (block) {
       addLog(actor, `"${step.name}" not dispatched — ${block.reason}`, 'error');
+      captureError({ kind: 'step', message: `"${step.name}" not dispatched — ${block.reason}`, goal: goalRef.current, step: step.name });
       return refused(step, `Blocked — ${block.reason} — not executed`);
     }
     const attempt = beginAttempt(step, actor);
@@ -2092,7 +2118,6 @@ export function useAssist() {
 
   /** History gets real dispatches and verified dry runs; refused or unverified steps leave nothing. */
   const recorded = (out: Performed, dryRun: boolean) => out.executed || (dryRun && out.ok);
-  const historyWorthy = (out: Performed, dryRun: boolean) => out.executed || (dryRun && out.ok);
 
   /** Records a step's result on its route: a main-app failure is a main-app error; a desktop step is history and bridge health. */
   const noteRoute = (plan: StepPlan, step: WorkflowStep, out: Performed, actor: string, dryRun: boolean) => {
@@ -2100,9 +2125,7 @@ export function useAssist() {
       if (out.bridgeFailed) captureError({ kind: 'main-app', message: out.message, goal: goalRef.current, step: step.name });
       return;
     }
-    if (out.executed) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
     if (recorded(out, dryRun)) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
-    if (historyWorthy(out, dryRun)) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
     noteBridge(step, out, actor);
   };
 
@@ -2118,7 +2141,6 @@ export function useAssist() {
     if (plan.input === 'demo') {
       const out = await performOnDemo(step, dryRun);
       if (recorded(out, dryRun)) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
-      if (historyWorthy(out, dryRun)) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
       return out;
     }
     const local = plan.input === 'main-app' ? LOCAL_ACTIONS[step.action] : undefined;
@@ -2344,6 +2366,7 @@ export function useAssist() {
   /** A blocked step's briefing: rebuilt on the live frame, marked blocked with why, and logged. */
   const noteBlocked = async (step: WorkflowStep, proposal: Proposal, block: GateBlock, actor: string) => {
     addLog(actor, `"${step.name}" not dispatched — ${block.reason}`, 'error');
+    captureError({ kind: 'step', message: `"${step.name}" not dispatched — ${block.reason}`, goal: goalRef.current, step: step.name });
     if (stageOn('briefing')) await publishBriefing({ ...buildBriefingFor(step, proposal), outcome: 'blocked', blocked: block.reason });
   };
 
@@ -3431,11 +3454,15 @@ export function useAssist() {
     }
   };
 
-  /** One supervisor tick: movement for unapplied corrections, then a periodic review when due. */
+  /** True when the automatic review may run now: Supervisor stage on, AI up, and no pipeline AI call waiting in the queue. */
+  const reviewAllowed = () => stageOn('supervisor') && aiOnline() && aiQueueRef.current.stats().queued === 0;
+
+  /** One supervisor tick: movement for unapplied corrections, then the automatic periodic review when due. */
   const superviseTick = () => {
     if (!agentsRef.current('supervisor')) return;
     void superviseMovement();
-    if (stepsRef.current.length && !supervisorHaltedRef.current && Date.now() - lastReviewAt.current >= SUPERVISOR_INTERVAL_MS) void superviseRun();
+    const due = Date.now() - lastReviewAt.current >= SUPERVISOR_INTERVAL_MS;
+    if (stepsRef.current.length && !supervisorHaltedRef.current && due && reviewAllowed()) void superviseRun();
   };
   const superviseTickRef = useRef(superviseTick);
   superviseTickRef.current = superviseTick;
@@ -4234,6 +4261,7 @@ export function useAssist() {
   /** Starts a run: clears the stop flag and the per-run memory and shows the run as replaying. */
   const beginRun = () => {
     abortRef.current = false;
+    retryCountsRef.current = new Map();
     runStartRef.current = Date.now();
     reproposedRef.current = new Set();
     escalatedRef.current = new Set();
@@ -5544,10 +5572,56 @@ export function useAssist() {
     return out ? { ok: out.ok === out.total && !out.stopped, message: `${out.ok}/${out.total} step(s) ${out.dryRun ? 'verified (dry run)' : 'executed'}` } : { ok: false, message: `${label} refused — see the log` };
   };
 
+  /** True while the automatic main retry must not run: aborted, stopped, paused, executor stage off, or the screen is busy. */
+  const autoRetryBlocked = () =>
+    abortedRef.current || abortRef.current || !!dispatchPaused() || !stageOn('executor') || autoRetryBusyRef.current || supervisorMovingRef.current
+    || supervisorExecutorBusy({ autoBusy: autoBusyRef.current, replaying: replayingRef.current, recording: recordingRef.current, steps: stepsRef.current });
+
+  /** Re-runs one failed or drifted step through the gated pipeline (dry run unless armed); false when the run must halt. */
+  const autoRetryStep = async (id: string, budget: ActionBudget): Promise<boolean> => {
+    const idx = stepsRef.current.findIndex((s) => s.id === id);
+    if (idx < 0) return true;
+    const step = stepsRef.current[idx];
+    const dry = !armedRef.current;
+    updateStep(idx, { status: 'running' });
+    const why = `"${step.name}" ${step.status === 'drift' ? 'drifted' : 'failed'}, so the main retry re-runs it automatically`;
+    const out = await perform(step, AUTO_RETRY_LABEL, budget, dry, recordLocal(AUTO_RETRY_LABEL, step, why), false);
+    applyOutcome(idx, out, dry);
+    addLog(dry ? `${AUTO_RETRY_LABEL} (dry run)` : AUTO_RETRY_LABEL, `${step.name}: ${out.message}`, out.ok ? 'ok' : 'error');
+    return !out.halt;
+  };
+
+  /** One automatic main-retry pass: every failed or drifted step with attempts left, on one budget. */
+  const autoRetryTick = async () => {
+    if (autoRetryBlocked()) return;
+    const limit = settingsRef.current.stepRetries;
+    const due = retryDue(stepsRef.current, retryCountsRef.current, limit).map((i) => stepsRef.current[i]);
+    if (!due.length) return;
+    retryCountsRef.current = countAttempts(retryCountsRef.current, due.map((s) => s.id));
+    addLog(AUTO_RETRY_LABEL, retryText(due, retryCountsRef.current, limit), 'info');
+    autoRetryBusyRef.current = true;
+    const budget = createBudget(settingsRef.current.actionBudget);
+    try {
+      for (const s of due) {
+        if (abortedRef.current || abortRef.current || !(await autoRetryStep(s.id, budget))) break;
+      }
+    } finally {
+      autoRetryBusyRef.current = false;
+    }
+  };
+  const autoRetryTickRef = useRef(autoRetryTick);
+  autoRetryTickRef.current = autoRetryTick;
+
+  useEffect(() => {
+    const id = setInterval(() => void autoRetryTickRef.current(), AUTO_RETRY_TICK_MS);
+    return () => clearInterval(id);
+  }, []);
+
   /** The AI resolution center and recovery operations, on the engine's gated pipeline and memories. */
   const resolution = useResolution({
     steps,
     bus,
+    busy: replaying || recording,
     context: habitContext,
     goal: () => goalRef.current,
     addLog,
@@ -6057,6 +6131,7 @@ export function useAssist() {
     }).finally(endRun);
     setSelfTestReport(report);
     addLog('Self-test', selfTestText(report), report.pass ? 'ok' : 'error');
+    if (!report.pass) captureError({ kind: 'watcher', message: `Self-test failed — ${selfTestText(report)}`, goal: goalRef.current });
     return report;
   };
 
@@ -6234,6 +6309,7 @@ export function useAssist() {
     updateWatcher((w) => ({ ...w, tests: addTest(w.tests, { proposalId: of.proposalId, tried, happened: out.message, verdict, dryRun }), proposals: patchProposal(w.proposals, of.proposalId, { tested: true }) }));
     addLog(of.source, `Test ${verdict}: ${tried} — ${out.message}`, out.ok ? 'ok' : 'warn');
     if (!out.ok) {
+      captureError({ kind: 'watcher', message: `${of.source} test failed: ${tried} — ${out.message}`, goal: goalRef.current, step: step.name });
       addPatterns([newPattern('avoid', `${tried} failed — ${out.message}`, of.context)]);
       strikeAvoid(step, out.message, 'test');
       addLog('Patterns', `${of.source} test failed — advisory lesson: avoid ${tried}`, 'warn');
@@ -6862,8 +6938,7 @@ export function useAssist() {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
-    armed, aborted, abortedAt, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
-    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, avoidRules, clearBlacklist, supervisor, superviseRun,
+    armed, aborted, abortedAt, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, avoidRules, clearBlacklist, supervisor, superviseRun,
     ruler, continuing, habits, deleteHabit, pinHabit, runs, dossiers, preferPosition,
     /** The cross-referenced memory view: methods, element usage, paths, goals and positions. */
     memory: enhancedMemory,
