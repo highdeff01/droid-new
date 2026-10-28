@@ -97,6 +97,10 @@ export function scopedEntries(pattern: string): Array<Point & { element: string 
   return [...pattern.matchAll(SCOPED_STEP)].map((m) => ({ element: m[1], x: Number(m[2]) / 100, y: Number(m[3]) / 100 }));
 }
 
+const normName = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+/** The same element: equal names (case/space-insensitive, so short names like "OK" or "Click 1" match) or names sharing a meaningful word. */
+const sameElement = (a: string, b: string) => normName(a) === normName(b) || related(a, b);
+
 /**
  * Whether an avoid pattern blocks this target at this point: a scoped pattern only for the same element
  * within AGREE_DISTANCE of a recorded point; an unscoped one only when it covers the target's words.
@@ -104,7 +108,7 @@ export function scopedEntries(pattern: string): Array<Point & { element: string 
 export function avoidMatches(pattern: string, target: string, p: Point): boolean {
   const scoped = scopedEntries(pattern);
   if (!scoped.length) return similarity(target, pattern) >= AVOID_MATCH;
-  return scoped.some((e) => related(target, e.element) && Math.hypot(e.x - p.x, e.y - p.y) <= AGREE_DISTANCE);
+  return scoped.some((e) => sameElement(target, e.element) && Math.hypot(e.x - p.x, e.y - p.y) <= AGREE_DISTANCE);
 }
 
 /** Learned avoid-patterns and habit avoid-lessons that match the target; a match always conflicts. */

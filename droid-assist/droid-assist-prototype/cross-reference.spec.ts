@@ -119,6 +119,14 @@ describe('crossReference — avoid patterns', () => {
     it('does not block a target named like the step ("Click 1") elsewhere', () => {
       expect(avoidMatches(scoped.pattern, 'Click 1', { x: 0.6, y: 0.6 })).toBe(false);
     });
+
+    it('blocks a short-named element ("Click 1", "OK") at its recorded point but not elsewhere', () => {
+      const short = failurePattern('g', [{ id: 'a', name: 'Click 1', action: 'click', x: 0.2, y: 0.3, status: 'failed' }, { id: 'b', name: 'Confirm', action: 'click', target: 'OK', x: 0.7, y: 0.8, status: 'failed' }]);
+      expect(avoidMatches(short.pattern, 'Click 1', { x: 0.2, y: 0.3 })).toBe(true);
+      expect(avoidMatches(short.pattern, 'click 1', { x: 0.5, y: 0.5 })).toBe(false);
+      expect(avoidMatches(short.pattern, 'ok', { x: 0.7, y: 0.8 })).toBe(true);
+      expect(avoidMatches(short.pattern, 'Go', { x: 0.7, y: 0.8 })).toBe(false);
+    });
   });
 
   it('ignores an "add" pattern', () => {
