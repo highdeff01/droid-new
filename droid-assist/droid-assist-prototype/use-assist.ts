@@ -2042,13 +2042,16 @@ export function useAssist() {
     };
   };
 
+  /** History gets real dispatches and verified dry runs; refused or unverified steps leave nothing. */
+  const recorded = (out: Performed, dryRun: boolean) => out.executed || (dryRun && out.ok);
+
   /** Records a step's result on its route: a main-app failure is a main-app error; a desktop step is history and bridge health. */
-  const noteRoute = (plan: StepPlan, step: WorkflowStep, out: Performed, actor: string) => {
+  const noteRoute = (plan: StepPlan, step: WorkflowStep, out: Performed, actor: string, dryRun: boolean) => {
     if (plan.input === 'main-app') {
       if (out.bridgeFailed) captureError({ kind: 'main-app', message: out.message, goal: goalRef.current, step: step.name });
       return;
     }
-    if (out.executed) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
+    if (recorded(out, dryRun)) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
     noteBridge(step, out, actor);
   };
 
@@ -2063,7 +2066,7 @@ export function useAssist() {
     if (!plan) return refused(step, NO_SOURCE);
     if (plan.input === 'demo') {
       const out = await performOnDemo(step, dryRun);
-      if (out.executed) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
+      if (recorded(out, dryRun)) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
       return out;
     }
     const local = plan.input === 'main-app' ? LOCAL_ACTIONS[step.action] : undefined;
@@ -2073,7 +2076,7 @@ export function useAssist() {
     if (gate) return refused(step, gate);
     if (!dryRun && plan.input === 'desktop-bridge' && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) return performLiveDrag(step, actor);
     const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), stepDeps(plan, actor, budget, dryRun));
-    noteRoute(plan, step, out, actor);
+    noteRoute(plan, step, out, actor, dryRun);
     return out;
   };
 
