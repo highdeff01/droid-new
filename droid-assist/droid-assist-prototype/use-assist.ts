@@ -393,8 +393,9 @@ export function useAssist() {
   /** The AI cursor animator: every frame of a movement moves the cursor and extends the trail. */
   const animator = () => (animatorRef.current ??= createCursorAnimator({
     frame: (p) => {
+      const t = Date.now();
       setCursor(p);
-      setTrail((t) => [...t, { x: p.x, y: p.y, t: Date.now() }].slice(-1500));
+      setTrail((trail) => [...trail, { x: p.x, y: p.y, t }].slice(-1500));
     },
     mark: (p) => setTrail((t) => [...t, p].slice(-1500)),
   }));
@@ -1805,16 +1806,22 @@ export function useAssist() {
   const performStep = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     if (abortedRef.current) return refused(step, 'Aborted — real input not sent');
     if (!stageOn('executor')) return refused(step, `${stageOff('executor')} — not executed`);
+    const attempt = beginAttempt(step, actor);
+    const out = await performAction(step, actor, budget, dryRun);
+    endAttempt(attempt.id, out.ok);
+    return out;
+  };
+
+  /** One attempt's action past the abort and executor gates: measure, the approval gate, snip or real input. */
+  const performAction = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     if (step.action === 'measure') return measureStep(step, actor);
     const held = dryRun ? null : approvals.gate(step, actor, { goal: goalRef.current, planned: stepsRef.current.some((s) => s.id === step.id) });
     if (held) return refused(step, held);
     if (step.action === 'snip') return snipStep(step);
-    const attempt = beginAttempt(step, actor);
     const out = await performInput(step, actor, budget, dryRun);
     ruler.noteGrounding(out);
     if (out.ok) markOutcome(step, out);
     await animator().idle();
-    endAttempt(attempt.id, out.ok);
     return out;
   };
 
