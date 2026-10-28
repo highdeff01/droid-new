@@ -2,6 +2,7 @@ import type { AssistSettings, FamiliarElement, Habit, HabitAnchor, HabitLesson, 
 import { STEP_ACTIONS } from './types.js';
 import { decodeFrame, decodeFrames, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 import { sanitizeBudget } from './safety.js';
+import { ABORT_AUTO_CLEAR_MAX_MIN } from './abort-latch.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { MAP_LIMIT, type ElementKind, type MappedElement, type MoveEvent, type PerformFn, type PositionRecord } from './element-map-studio.js';
 import { TRAIN_MODES, type TrainMode } from './element-training.js';
@@ -115,7 +116,8 @@ export const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec', [number, number]> = {
+export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec' | 'abortAutoClearMin', [number, number]> = {
+  abortAutoClearMin: [0, ABORT_AUTO_CLEAR_MAX_MIN],
   crewSize: [CREW_SIZE_MIN, CREW_SIZE_MAX],
   gallerySize: [4, 30],
   checkpoints: [1, 20],

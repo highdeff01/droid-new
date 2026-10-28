@@ -5,7 +5,7 @@ import { MATCHED, SAMPLE_H, SAMPLE_W, SEARCH_RADIUS, STABLE, boundingBox, boxDis
 import { AD_CYCLE, demoAd, demoDrag, demoFileAt, demoPlayButton, drawDemoDesktop, findIcon, initialDemoFile, initialDemoIcons, moveIcon, type DemoFile, type DemoIcon } from './demo-desktop.js';
 import { AI_PLAN_SOURCE, calculate, generateCard, patternLine, planFromGoal, planRemaining, relevantPatterns, relocateTarget, replanDrag, replanStep, uid } from './planner.js';
 import { checkMoved, sameElement, verifyArrangement, type Expectation, type MovedElement } from './rearrange.js';
-import { AI_VIEWS, AiCancelled, AiParseError, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi, stripThinking, thinkingOnlyNotice } from './ai.js';
+import { AI_VIEWS, AiCancelled, AiError, AiParseError, isRepeatLimit, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi, stripThinking, thinkingOnlyNotice } from './ai.js';
 import { OVERLAP_PREFIX, firstValid } from './ai-overlap.js';
 import { STAGE_LABEL, appContextSections, escalationNotice, suggestedGoal, type EscalationEvent, type EscalationHooks } from './ai-escalation.js';
 import type { AiReply, AiStatus, AskFn, AskRequest, HistoryChangeFn } from './ai.js';
@@ -23,7 +23,7 @@ import { localProposal, proposalText, proposeStep, type Proposal, type ProposalC
 import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './thinking-timeline.js';
 import { radarStatus, radarStatusText, radarTick, startRadar, type RadarEvent, type RadarState, type RadarTarget } from './radar.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, pointerAction, selfTestBridge, sendNative, type BridgeResult } from './bridge.js';
-import { DRY_RUN, dragEndError, runStep, type Grounding, type SendFn, type StepDeps, type StepOutcome } from './run-step.js';
+import { DRY_RUN, dragEndError, groundTarget, runStep, type Grounding, type SendFn, type StepDeps, type StepOutcome } from './run-step.js';
 import { NO_SOURCE, captureLabel, captureStatus, stepPlan, type FrameProvider, type StepPlan } from './capture-source.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
@@ -132,7 +132,7 @@ import type { Got } from './presentation-sources.js';
 import { drawWorldScreen, worldImageAt } from './presentation-project.js';
 import { DEFAULT_EXECUTION_MODE, EXECUTION_MODES, modeCaptureMs, modeChangeText, modeStatus, resolveAiDirective, type ExecutionMode, type ModeActor, type ModeDirective } from './execution-mode.js';
 import { DEFAULT_AUTO_APPLY, autoApplyDecision, bestGrounding, groundGoal, groundedStep, groundingShift, judgeCandidate, judgmentText, type KnownGrounding, type HeldCandidate, type Judgment } from './aggressive.js';
-import { NOT_CONNECTED, createMainBridge, type MainBridge, type MainBridgeConfig, type MainBridgeState } from './main-bridge.js';
+import { NOT_CONNECTED, createMainBridge, defaultBridgeMode, type MainBridge, type MainBridgeConfig, type MainBridgeState } from './main-bridge.js';
 import type { FramePayload, InboundMessage, InterceptKind, InterceptPayload, RunScriptPayload } from './main-bridge-protocol.js';
 import { DEFAULT_OPERATION_RETRIES } from './operation-retry.js';
 import { DEFAULT_PLAYBACK_WINDOW_SEC } from './playback.js';
@@ -145,6 +145,8 @@ import { AI_RECHECK_MS, BREAKER_IDLE, PAUSE_POLL_MS, conflictDetails, dispatchKe
 import { CADENCE_MS, CADENCE_TICK_MS, addReports, dueAgents, reportContext, type AgentReport, type CadenceAgent } from './agent-cadence.js';
 import { activityReports } from './agent-activity.js';
 import { IDLE_ATTENTION, focusOn, scopeLines as scopeAttention, type Attention } from './attention.js';
+import { NO_BACKOFF, backoffStatus, backoffText, clearBackoff, noteRepeatLimit, repeatLimitLine, type AiBackoff } from './ai-backoff.js';
+import { ABORT_HINT, ABORTED_REFUSAL, DEFAULT_ABORT_AUTO_CLEAR_MIN, refusedWhileAborted, useAbortAutoClear } from './abort-latch.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -324,6 +326,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   bridgeUrl: '',
   bridgeToken: '',
   abortHotkey: DEFAULT_ABORT_HOTKEY,
+  abortAutoClearMin: DEFAULT_ABORT_AUTO_CLEAR_MIN,
   actionBudget: DEFAULT_ACTION_BUDGET,
   aiUrl: DEFAULT_AI_URL,
   aiModel: DEFAULT_AI_MODEL,
@@ -384,7 +387,7 @@ export interface Agent {
 export function useAssist() {
   /** Startup recovery runs before any store is loaded, so every loader reads repaired data. */
   const [recovery, setRecovery] = useState<RecoveryReport>(() => recoverStorage());
-  const [settings, setSettings] = useState<AssistSettings>(() => loadSettings(DEFAULT_SETTINGS));
+  const [settings, setSettings] = useState<AssistSettings>(() => loadSettings({ ...DEFAULT_SETTINGS, mainBridgeMode: defaultBridgeMode() }));
   const [source, setSource] = useState<ScreenSource>('demo');
   /** The app the assistant is attached to via /use. */
   const [target, setTarget] = useState<string | null>(null);
@@ -505,6 +508,8 @@ export function useAssist() {
   const [mainBridge, setMainBridge] = useState<MainBridgeState>({ status: 'off', lastError: null, peer: null });
   const mainBridgeRef = useRef<MainBridge | null>(null);
   const [aborted, setAborted] = useState(false);
+  /** When the ABORTED latch was set (for the HUD banner); null while clear. */
+  const [abortedAt, setAbortedAt] = useState<number | null>(null);
   const [aiStatus, setAiStatus] = useState<AiStatus>({ state: 'checking', detail: 'Connecting to the AI endpoint…' });
   const [aiAnswer, setAiAnswer] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
@@ -1008,7 +1013,10 @@ export function useAssist() {
     setCards(cardsRef.current);
   }, []);
 
-  const ruler = useMeasure({ frames, framesRef, elementMap: measureMap, addLog, rescale: rescaleStored });
+  const needBaseline = useCallback((title: string) => {
+    notify({ source: 'Calibration', category: 'errors', severity: 'warning', title });
+  }, [notify]);
+  const ruler = useMeasure({ frames, framesRef, elementMap: measureMap, addLog, rescale: rescaleStored, onNeedBaseline: needBaseline });
 
   const aiCheckSeqRef = useRef(0);
   /** Pings `url`+`model` with the health check and shows the result; a result overtaken by a newer check is dropped. */
@@ -1116,6 +1124,38 @@ export function useAssist() {
     if (added.length) addLog('Screen watcher', `Proposed workflow from thinking-only reply: ${goal} — Accept to queue it as the goal`, 'info');
   }, [addLog]);
 
+  /**
+   * Repeat-limit 500 backoff: the rephrased retry inside chat() failed too, so calls are held for
+   * 15s, 30s, 60s, 120s then 300s, the badge says so, the failure is counted in the log, and the
+   * endpoint is re-pinged when the wait ends. A good reply ends it.
+   */
+  const aiBackoffRef = useRef<AiBackoff>(NO_BACKOFF);
+  const aiBackoffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startBackoff = useCallback(() => {
+    const now = Date.now();
+    const b = noteRepeatLimit(aiBackoffRef.current, now);
+    aiBackoffRef.current = b;
+    setAiStatus(backoffStatus(b, now));
+    addLog('AI', repeatLimitLine(b, now), 'warn');
+    captureError({ kind: 'ai', message: `AI repeat-limit 500 #${b.total} — ${backoffText(b, now)}`, goal: goalRef.current });
+    if (aiBackoffTimerRef.current) clearTimeout(aiBackoffTimerRef.current);
+    aiBackoffTimerRef.current = setTimeout(() => {
+      aiBackoffTimerRef.current = null;
+      const { aiUrl, aiModel, aiThink } = settingsRef.current;
+      void checkAi(aiUrl, aiModel, aiThink);
+    }, b.until - now);
+  }, [addLog, captureError, checkAi]);
+  const endBackoff = useCallback(() => {
+    if (!aiBackoffRef.current.streak) return;
+    addLog('AI', `Endpoint answering again after ${aiBackoffRef.current.streak} repeat-limit 500(s) in a row — backoff ended (${aiBackoffRef.current.total} repeat-limit 500(s) this session)`, 'ok');
+    aiBackoffRef.current = clearBackoff(aiBackoffRef.current);
+    if (aiBackoffTimerRef.current) clearTimeout(aiBackoffTimerRef.current);
+    aiBackoffTimerRef.current = null;
+  }, [addLog]);
+  useEffect(() => () => {
+    if (aiBackoffTimerRef.current) clearTimeout(aiBackoffTimerRef.current);
+  }, []);
+
   /** One model call of `stage` through the shared queue, with the current settings (master prompt included). */
   const queuedAsk = useCallback((req: AskRequest, stage: StageId, signal: AbortSignal): Promise<AiReply> => aiQueueRef.current.run(stage, (timeoutMs) => {
     const { aiUrl, aiModel, aiView, masterPrompt, aiThink } = settingsRef.current;
@@ -1132,6 +1172,7 @@ export function useAssist() {
    */
   const askAi = useCallback(async (req: AskRequest, stage: StageId): Promise<AiReply> => {
     if (!settingsRef.current.stages[stage]) throw new AiCancelled(stageOff(stage));
+    if (aiBackoffRef.current.until > Date.now()) throw new AiError(`AI call held — ${backoffText(aiBackoffRef.current, Date.now())}`);
     const memory = operationMemoryBlock(req.context === undefined, stage);
     const project = projectId(goalRef.current);
     const injected = pendingNotesFor(userNotesRef.current, project);
@@ -1149,6 +1190,7 @@ export function useAssist() {
         ])
         : await queuedAsk(ctxReq, stage, signal);
       setAiHistory(aiSessionRef.current.history());
+      endBackoff();
       if (injected.length) injectNotes(injected, project);
       const { aiModel } = settingsRef.current;
       if (aiStatusRef.current.state !== 'online') setAiStatus({ state: 'online', detail: `Connected · ${aiModel}` });
@@ -1160,7 +1202,8 @@ export function useAssist() {
       }
       return reply;
     } catch (error) {
-      if (!(error instanceof AiCancelled)) {
+      if (isRepeatLimit(error)) startBackoff();
+      else if (!(error instanceof AiCancelled)) {
         setAiStatus({ state: 'offline', detail: `AI unavailable — ${errorText(error)}` });
         captureError({ kind: 'ai', message: `AI unavailable — ${errorText(error)}`, goal: goalRef.current });
       }
@@ -1168,7 +1211,7 @@ export function useAssist() {
     } finally {
       setAiCalls((n) => n - 1);
     }
-  }, [addLog, captureError, queuedAsk, injectNotes, thinkingOnlyOutput]);
+  }, [addLog, captureError, queuedAsk, injectNotes, thinkingOnlyOutput, startBackoff, endBackoff]);
 
   /** The AskFn of one loop-control stage. */
   const askFor = useCallback((stage: StageId): AskFn => (req) => askAi(req, stage), [askAi]);
@@ -1409,18 +1452,21 @@ export function useAssist() {
     abortedRef.current = true;
     cancelAi();
     setAborted(true);
+    setAbortedAt(Date.now());
     setSettings((s) => ({ ...s, autoAct: false }));
     notify({ source: 'Safety', category: 'abort', severity: 'critical', title: `Automation aborted (${reason})` });
     mirrorOnRef.current = false;
     setMirrorOn(false);
-    addLog('Safety', `ABORTED (${reason}) — Auto Act, replay, auto-continue, mirror input, AI play, monitor automation and in-flight AI calls halted`, 'error');
+    addLog('Safety', `ABORTED (${reason}) — Auto Act, replay, auto-continue, mirror input, AI play, monitor automation and in-flight AI calls halted; ${ABORT_HINT} to resume`, 'error');
   }, [addLog, cancelAi, notify]);
 
-  const clearAbort = () => {
+  const clearAbort = useCallback((how = 'by the user') => {
     abortedRef.current = false;
     setAborted(false);
-    addLog('Safety', 'Abort cleared — automation may run again', 'warn');
-  };
+    setAbortedAt(null);
+    addLog('Safety', `Abort cleared ${how} — automation may run again`, 'warn');
+  }, [addLog]);
+  useAbortAutoClear(aborted, settings.abortAutoClearMin, clearAbort);
 
   const toggleArmed = () => {
     const next = !armedRef.current;
@@ -1450,7 +1496,7 @@ export function useAssist() {
    * input was disarmed mid-run, or when the run's action budget is spent.
    */
   const gateRealInput = useCallback((budget: ActionBudget): string | null => {
-    if (abortedRef.current) return 'Aborted — real input not sent';
+    if (abortedRef.current) return `Aborted — real input not sent; ${ABORT_HINT}`;
     if (!armedRef.current) return 'Real input disarmed — not sent';
     if (spendAction(budget)) return null;
     addLog('Safety', `Action budget reached: ${budget.limit} real input action(s) this run — stopping`, 'error');
@@ -1525,7 +1571,7 @@ export function useAssist() {
 
   /** Why background variations must hold their real-input work now (abort, unchecked stages, main executor busy), or null. */
   const variationHold = (): string | null => {
-    if (abortedRef.current) return 'Aborted — background variations hold';
+    if (abortedRef.current) return `Aborted — background variations hold; ${ABORT_HINT}`;
     if (!stageOn('variations')) return stageOff('variations');
     if (!stageOn('executor')) return stageOff('executor');
     return executorBusy() ? 'Main executor needs the screen — background variations paused' : null;
@@ -1603,7 +1649,7 @@ export function useAssist() {
 
   /** Why no project may take a turn now: a guardrail (abort, disarmed, executor kill-switch) or its loop-control stage; null = go on. */
   const projectHalt = (): string | null => {
-    if (abortedRef.current) return 'ABORTED is active — clear the abort first';
+    if (abortedRef.current) return ABORTED_REFUSAL;
     if (!armedRef.current) return 'Real input is disarmed';
     if (!stageOn('executor')) return stageOff('executor');
     if (!stageOn('projects')) return stageOff('projects');
@@ -1865,7 +1911,7 @@ export function useAssist() {
    * targets, bridge dispatch, re-verify), gated by abort, arm and the run's budget.
    */
   const performStep = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
-    if (abortedRef.current) return refused(step, 'Aborted — real input not sent');
+    if (abortedRef.current) return refused(step, `Aborted — real input not sent; ${ABORT_HINT}`);
     if (!stageOn('executor')) return refused(step, `${stageOff('executor')} — not executed`);
     // Avoid entries gate every dispatch, agent tests and trigger hops included; stale-map gating is perform's (it can re-ground).
     const block = gateStep(step, knowledge(), false);
@@ -1985,22 +2031,6 @@ export function useAssist() {
   const stepDeps = (plan: StepPlan, actor: string, budget: ActionBudget, dryRun: boolean): StepDeps => {
     const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
     return {
-    /** History gets real dispatches and verified dry runs; refused or unverified steps leave nothing. */
-    const record = (out: Performed, via: ActionRecord['via'], w: number, h: number) => {
-      if (out.executed || (dryRun && out.ok)) recordAction(step, out, actor, via, w, h);
-      return out;
-    };
-    if (sourceRef.current === 'main-app') {
-      const frame = framesRef.current[0];
-      return record(await performOnMainApp(step, budget, dryRun), 'main-app', frame?.srcW ?? 1920, frame?.srcH ?? 1080);
-    }
-    if (sourceRef.current === 'demo' && (dryRun || !bridgeUrl)) return record(await performOnDemo(step, dryRun), 'demo', DEMO_W, DEMO_H);
-    if (!bridgeUrl) return refused(step, BRIDGE_REQUIRED);
-    const gate = dryRun ? null : gateRealInput(budget);
-    if (gate) return refused(step, gate);
-    if (!dryRun && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) return performLiveDrag(step, actor);
-    let size = { w: 1920, h: 1080 };
-    const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), {
       bridgeUrl,
       bridgeToken,
       capture: () => stepFrame(plan.frames),
@@ -2026,8 +2056,6 @@ export function useAssist() {
       return;
     }
     if (out.executed) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
-    });
-    record(out, 'bridge', size.w, size.h);
     noteBridge(step, out, actor);
   };
 
@@ -2325,8 +2353,6 @@ export function useAssist() {
     const gated = await gateDispatch(resolved, actor, proposal);
     if ('out' in gated) return gated.out;
     const { step } = gated;
-    const step = resolveMappedStep(planned, elementMapRef.current);
-    if ('error' in step) return refused(planned, `${step.error} — not executed`);
     if (proposal.why.trim()) intentWhyRef.current.set(step.id, proposal.why);
     const before = framesRef.current[0] ?? null;
     const fresh = () => (ladder ? performWithRetries(step, actor, budget, dryRun) : performIdentified(step, actor, budget, dryRun));
@@ -2721,7 +2747,7 @@ export function useAssist() {
   const trainMapped = async (id: string, by = 'You') => {
     const el = elementMapRef.current.find((e) => e.id === id);
     if (!el) return;
-    if (abortedRef.current) return addLog('Trainer', 'Training refused — ABORTED is active; clear the abort first', 'error');
+    if (abortedRef.current) return addLog('Trainer', refusedWhileAborted('Training'), 'error');
     if (!stageOn('trainer')) return addLog('Trainer', `Training "${el.name}" refused — ${stageOff('trainer')}`, 'warn');
     if (trainingRef.current) return addLog('Trainer', 'A training session is already running', 'warn');
     const mode = settingsRef.current.trainMode;
@@ -2986,7 +3012,7 @@ export function useAssist() {
   const toggleMirror = () => {
     const next = !mirrorOnRef.current;
     if (next && abortedRef.current) {
-      addLog('Mirror', 'Aborted — clear the abort before turning mirror input on', 'warn');
+      addLog('Mirror', `Aborted — mirror input stays off; ${ABORT_HINT}`, 'warn');
       return;
     }
     mirrorOnRef.current = next;
@@ -3085,7 +3111,7 @@ export function useAssist() {
       return null;
     }
     if (abortedRef.current) {
-      addLog('AI play', 'Aborted — AI play not started', 'error');
+      addLog('AI play', refusedWhileAborted('AI play'), 'error');
       return null;
     }
     let reply: PlayTurn;
@@ -4177,7 +4203,7 @@ export function useAssist() {
       return null;
     }
     if (abortedRef.current) {
-      addLog('Safety', `${label} refused — ABORTED is active; clear the abort first`, 'error');
+      addLog('Safety', refusedWhileAborted(label), 'error');
       return null;
     }
     const dryRun = selfTest || !armedRef.current;
@@ -4443,7 +4469,7 @@ export function useAssist() {
     const script = pendingFixRef.current;
     if (!script) return;
     if (abortedRef.current || replayingRef.current) {
-      addLog('Safety', abortedRef.current ? 'Fix script refused — ABORTED is active; clear the abort first' : 'Fix script waits — a run is in progress', 'error');
+      addLog('Safety', abortedRef.current ? refusedWhileAborted('Fix script') : 'Fix script waits — a run is in progress', 'error');
       return;
     }
     showFix(null);
@@ -4495,7 +4521,7 @@ export function useAssist() {
   const retestFlow = async (indices: number[] = []) => {
     const flow = stepsRef.current;
     if (!flow.length || abortedRef.current || replayingRef.current) {
-      addLog('Retest', !flow.length ? 'Nothing to retest — record or plan a flow first' : abortedRef.current ? 'Retest refused — ABORTED is active' : 'Retest waits — a run is in progress', 'warn');
+      addLog('Retest', !flow.length ? 'Nothing to retest — record or plan a flow first' : abortedRef.current ? refusedWhileAborted('Retest') : 'Retest waits — a run is in progress', 'warn');
       return null;
     }
     const selected = selectSteps(flow.length, indices);
@@ -4617,7 +4643,7 @@ export function useAssist() {
    * then wait for its next command — until done, stalled, Max iterations rounds, or Stop plan / abort.
    */
   const runCrewGoal = async (text: string) => {
-    if (abortedRef.current) return addLog('Agent crew', 'Crew refused — ABORTED is active; clear the abort first', 'error');
+    if (abortedRef.current) return addLog('Agent crew', refusedWhileAborted('Crew'), 'error');
     if (crewRunningRef.current) return addLog('Agent crew', 'A crew run is already going', 'warn');
     if (!stageOn('crew') || !stageOn('planner')) return addLog('Agent crew', `${stageOff(stageOn('crew') ? 'planner' : 'crew')} — no crew run`, 'warn');
     const dryRun = !armedRef.current;
@@ -4763,7 +4789,7 @@ export function useAssist() {
    * "/ops <agent>: <task>" commands one agent directly.
    */
   const runOps = async (text: string) => {
-    if (abortedRef.current) return addLog('Operations', 'Operations refused — ABORTED is active; clear the abort first', 'error');
+    if (abortedRef.current) return addLog('Operations', refusedWhileAborted('Operations'), 'error');
     if (opsRunningRef.current) return addLog('Operations', 'An Operations run is already going', 'warn');
     const target = parseOpsTarget(text);
     abortRef.current = false;
@@ -5115,7 +5141,7 @@ export function useAssist() {
       return;
     }
     if (abortedRef.current) {
-      addLog('Safety', 'Chain refused — ABORTED is active; clear the abort first', 'error');
+      addLog('Safety', refusedWhileAborted('Chain'), 'error');
       return;
     }
     const objectives = await planChainFor(text);
@@ -5202,7 +5228,7 @@ export function useAssist() {
    * report; its lessons go to the habit system and passed elements to the agent bus.
    */
   const testRoutes = async (req: TestRequest) => {
-    if (abortedRef.current) return addLog('Supervisor', 'Link/route test refused — ABORTED is active; clear the abort first', 'error');
+    if (abortedRef.current) return addLog('Supervisor', refusedWhileAborted('Link/route test'), 'error');
     if (subRunningRef.current) return addLog('Supervisor', 'A link/route test is already running', 'warn');
     if (!agentsRef.current('supervisor')) return addLog('Supervisor', 'Supervisor agent is off — enable it to run link/route tests', 'warn');
     const dryRun = !armedRef.current;
@@ -5417,7 +5443,7 @@ export function useAssist() {
       addLog('Verify real input', r.message, tone);
       return r;
     };
-    if (abortedRef.current) return report({ ok: false, message: 'Aborted — real input not sent' });
+    if (abortedRef.current) return report({ ok: false, message: `Aborted — real input not sent; ${ABORT_HINT}` });
     if (!armedRef.current) return report({ ok: false, message: `Real input disarmed — ${DRY_RUN}` }, 'warn');
     if (!stageOn('executor')) return report({ ok: false, message: `${stageOff('executor')} — not sent` });
     const gate = gateRealInput(createBudget(1));
@@ -5610,7 +5636,7 @@ export function useAssist() {
 
   /** Why a notification's action may not run now (abort, executor unchecked, executor busy); null when it may. */
   const actionBlocked = (): string | null => {
-    if (abortedRef.current) return 'ABORTED is active';
+    if (abortedRef.current) return ABORTED_REFUSAL;
     if (!stageOn('executor')) return stageOff('executor');
     return executorBusy() ? 'the executor is busy with another run' : null;
   };
@@ -5918,7 +5944,7 @@ export function useAssist() {
 
   /** Why the self-test must stop now (abort, Stop, self-test or executor stage unchecked), or null. */
   const selfTestStopped = (): string | null => {
-    if (abortedRef.current) return 'Aborted — self-test stopped';
+    if (abortedRef.current) return `Aborted — self-test stopped; ${ABORT_HINT}`;
     if (abortRef.current) return 'Stopped by the user';
     if (!stageOn('selfTest')) return stageOff('selfTest');
     return stageOn('executor') ? null : stageOff('executor');
@@ -6514,7 +6540,7 @@ export function useAssist() {
     const now = Date.now();
     const skip = fireGate(t, now);
     const target = resolveTarget(t.target, cardsRef.current, draftCard, savedOps.operations);
-    const refusal = skip ? skip.detail : abortedRef.current ? 'ABORTED is active; clear the abort first' : 'error' in target ? `cannot run — ${target.error}` : null;
+    const refusal = skip ? skip.detail : abortedRef.current ? ABORTED_REFUSAL : 'error' in target ? `cannot run — ${target.error}` : null;
     if (refusal !== null || 'error' in target) {
       addLog(!skip && abortedRef.current ? 'Safety' : 'Triggers', `"${t.name}" skipped (${why}): ${refusal}`, skip?.reason === 'cooldown' ? 'info' : 'warn');
       patchTrigger(id, (x) => afterSkip(x, now));
@@ -6731,7 +6757,7 @@ export function useAssist() {
   /** Runs the operations the AI asked for, in order, through the registry as the AI (refused while ABORTED). */
   const runAiRequests = async (requests: CapabilityRequest[]) => {
     for (const r of requests) {
-      if (abortedRef.current) return addLog('Capabilities', `AI request "${r.id}" refused — ABORTED is active`, 'error');
+      if (abortedRef.current) return addLog('Capabilities', refusedWhileAborted(`AI request "${r.id}"`), 'error');
       await capabilities.invoke(r.id, r.params, AI);
     }
   };
@@ -6777,7 +6803,7 @@ export function useAssist() {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
-    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
+    armed, aborted, abortedAt, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
     ruler, continuing, habits, deleteHabit, pinHabit, runs, dossiers, preferPosition,
     /** The cross-referenced memory view: methods, element usage, paths, goals and positions. */
     memory: enhancedMemory,

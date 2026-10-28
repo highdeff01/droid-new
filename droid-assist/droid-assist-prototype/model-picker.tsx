@@ -8,8 +8,8 @@ export const MODEL_CANDIDATES = ['qwen3.5:0.8b', 'qwen3.5:2b', 'qwen3.5:4b', 'qw
 /** The per-candidate ping results, keyed by model name; a model never pinged has no entry. */
 export type ModelPings = Record<string, AiStatus>;
 
-const PING_LABEL: Record<AiStatus['state'], string> = { checking: 'pinging…', online: 'reachable', offline: 'error' };
-const PING_TONE: Record<AiStatus['state'], string> = { checking: 'info', online: 'ok', offline: 'error' };
+const PING_LABEL: Record<AiStatus['state'], string> = { checking: 'pinging…', online: 'reachable', offline: 'error', backoff: 'erroring — backing off' };
+const PING_TONE: Record<AiStatus['state'], string> = { checking: 'info', online: 'ok', offline: 'error', backoff: 'warn' };
 
 /**
  * Pings candidate models against `url` with the real health check. Results are cleared when the

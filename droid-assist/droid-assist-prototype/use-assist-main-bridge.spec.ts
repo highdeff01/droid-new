@@ -109,6 +109,7 @@ describe('main app bridge — connection lifecycle', () => {
   });
 
   it('listen mode in a plain browser (no desktop listener) reports the plain error instead of waiting', async () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ mainBridgeMode: 'listen' }));
     const { result } = renderHook(() => useAssist());
     await act(async () => {});
     expect(result.current.mainBridge).toMatchObject({ status: 'error', lastError: LISTEN_NEEDS_DESKTOP });
