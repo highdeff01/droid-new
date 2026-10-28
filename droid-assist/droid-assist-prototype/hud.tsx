@@ -242,7 +242,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
           ) : (
             <>
               <button type="button" className={styles.primary} onClick={() => void engine.invoke('replay.run', { selfTest: false })} disabled={recording || !total} title="Performs every step as real input on the PC through the desktop bridge">▶ Replay + drift</button>
-              <button type="button" onClick={() => void engine.invoke('replay.run', { selfTest: true })} disabled={recording || !total} title="Verifies each step on the live desktop; sends no input">🧪 AI self-test (no input)</button>
+              <button type="button" onClick={() => void engine.invoke('selftest.run')} disabled={recording} title="Plans a goal, grounds it on the live frame, executes it (dry run unless armed) and verifies the result — report in the Self-test panel">🧪 AI self-test</button>
             </>
           )}
           {engine.pointOutAuto ? (
