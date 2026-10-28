@@ -118,9 +118,8 @@ export const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec' | 'abortAutoClearMin', [number, number]> = {
+export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec' | 'abortAutoClearMin' | 'avoidTtlHours', [number, number]> = {
   abortAutoClearMin: [0, ABORT_AUTO_CLEAR_MAX_MIN],
-export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec' | 'avoidTtlHours', [number, number]> = {
   crewSize: [CREW_SIZE_MIN, CREW_SIZE_MAX],
   gallerySize: [4, 30],
   checkpoints: [1, 20],

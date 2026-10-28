@@ -6,6 +6,8 @@
 
 import { drawTestWorld, drawWorldToggle } from './test-world-draw.js';
 import type { World } from './test-world.js';
+import { drawQuestToggle, drawQuestWorld } from './quest-world-draw.js';
+import type { Quest } from './quest-world.js';
 
 /** Ticks per ad cycle in the demo desktop. */
 export const AD_CYCLE = 24;
@@ -108,13 +110,24 @@ export function demoAd(t: number) {
 
 /**
  * Draws the demo desktop for tick `t` onto a canvas context of size w×h; with a `world` it draws
- * the test world scene instead. Both scenes carry the taskbar button that switches between them.
+ * the test world scene instead, and with a `quest` the quest world in place of the Puzzle Quest
+ * window (sidebar icons, Report/Archive and the ad stay). The taskbar carries the scene buttons.
  */
-export function drawDemoDesktop(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, adDismissed = false, file: DemoFile = initialDemoFile(), icons: DemoIcon[] = initialDemoIcons(), world: World | null = null) {
+export function drawDemoDesktop(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, adDismissed = false, file: DemoFile = initialDemoFile(), icons: DemoIcon[] = initialDemoIcons(), world: World | null = null, quest: Quest | null = null) {
   if (world) {
     drawTestWorld(ctx, w, h, t, world);
     return;
   }
+  drawBackdrop(ctx, w, h, icons);
+  if (quest) drawQuestWorld(ctx, w, h, quest);
+  else drawPuzzleGame(ctx, w, h, t);
+  drawTaskbar(ctx, w, h, t, !!quest);
+  drawDraggable(ctx, w, h, file);
+  if (!adDismissed) drawAd(ctx, w, h, t, quest ? 'Unlock Character 5 and the Dragon Gate' : 'Buy 9999 gems now');
+}
+
+/** The desktop background and its rearrangeable sidebar icons. */
+function drawBackdrop(ctx: CanvasRenderingContext2D, w: number, h: number, icons: DemoIcon[]) {
   const bg = ctx.createLinearGradient(0, 0, w, h);
   bg.addColorStop(0, '#1e293b');
   bg.addColorStop(1, '#0f172a');
@@ -129,7 +142,10 @@ export function drawDemoDesktop(ctx: CanvasRenderingContext2D, w: number, h: num
     ctx.font = `${Math.round(h * 0.03)}px sans-serif`;
     ctx.fillText(icon.label, (icon.x - DEMO_ICON.hw) * w, (icon.y + DEMO_ICON.hh + 0.04) * h);
   });
+}
 
+/** The offline Puzzle Quest window with its drifting PLAY button. */
+function drawPuzzleGame(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
   // game window
   const gx = w * 0.18, gy = h * 0.1, gw = w * 0.64, gh = h * 0.72;
   ctx.fillStyle = '#0b3b3a';
@@ -149,7 +165,10 @@ export function drawDemoDesktop(ctx: CanvasRenderingContext2D, w: number, h: num
   ctx.fillStyle = '#1c1917';
   ctx.font = `bold ${Math.round(h * 0.045)}px sans-serif`;
   ctx.fillText('PLAY', play.x * w - bw * 0.2, play.y * h + bh * 0.18);
+}
 
+/** The taskbar with its clock and the World and Quest scene buttons. */
+function drawTaskbar(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, inQuest: boolean) {
   // taskbar + clock (changes every tick, like a real screen)
   ctx.fillStyle = '#020617';
   ctx.fillRect(0, h * 0.93, w, h * 0.07);
@@ -157,11 +176,13 @@ export function drawDemoDesktop(ctx: CanvasRenderingContext2D, w: number, h: num
   ctx.font = `${Math.round(h * 0.03)}px monospace`;
   ctx.fillText(`12:${String(Math.floor(t / 2) % 60).padStart(2, '0')}`, w * 0.92, h * 0.975);
   drawWorldToggle(ctx, w, h, false);
+  drawQuestToggle(ctx, w, h, inQuest);
+}
 
-  drawDraggable(ctx, w, h, file);
-
+/** The ad popup when it is in its visible phase at tick `t`, with `offer` under its headline. */
+function drawAd(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, offer: string) {
   const ad = demoAd(t);
-  if (ad.visible && !adDismissed) {
+  if (ad.visible) {
     ctx.fillStyle = '#be123c';
     ctx.fillRect(ad.x * w, ad.y * h, ad.w * w, ad.h * h);
     ctx.fillStyle = '#fde047';
@@ -169,7 +190,7 @@ export function drawDemoDesktop(ctx: CanvasRenderingContext2D, w: number, h: num
     ctx.fillText('MEGA OFFER!!!', ad.x * w + 14, ad.y * h + h * 0.12);
     ctx.font = `${Math.round(h * 0.032)}px sans-serif`;
     ctx.fillStyle = '#fff';
-    ctx.fillText('Buy 9999 gems now', ad.x * w + 14, ad.y * h + h * 0.2);
+    ctx.fillText(offer, ad.x * w + 14, ad.y * h + h * 0.2);
     ctx.fillStyle = '#fff';
     ctx.fillRect(ad.closeX * w - 10, ad.closeY * h - 10, 20, 20);
     ctx.fillStyle = '#be123c';
