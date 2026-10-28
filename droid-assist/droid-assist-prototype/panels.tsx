@@ -940,9 +940,10 @@ function BriefingComparison({ b }: { b: Briefing }) {
 function BriefingItem({ b }: { b: Briefing }) {
   const o = b.objectives;
   return (
-    <li data-tone={b.outcome === 'unresolved' ? 'warn' : 'ok'}>
+    <li data-tone={b.outcome === 'unresolved' || b.outcome === 'blocked' ? 'warn' : 'ok'}>
       <small>{clock(b.time)}</small> <b>{b.stepName}</b> <small>· {b.outcome}</small>
       {b.aiNote && <p role="alert">{b.aiNote}</p>}
+      {b.blocked && <p role="alert"><b>Blocked:</b> {b.blocked}</p>}
       {b.mode && <p><b>Mode:</b> {b.mode}</p>}
       <h4>Objectives</h4>
       <p><b>Goal:</b> {o.goal || '(none)'}</p>
