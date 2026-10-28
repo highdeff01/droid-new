@@ -1,35 +1,107 @@
 import type { AssistSettings, FamiliarElement, Habit, HabitAnchor, HabitLesson, LearnedPattern, LogEntry, MonitorMode, SavedCard, StepAction, StepStatus, WorkflowStep } from './types.js';
 import { STEP_ACTIONS } from './types.js';
-import { decodeFrame, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
+import { decodeFrame, decodeFrames, isStoredFrame, toStoredFrame, type StoredFrame } from './frame-codec.js';
 import { sanitizeBudget } from './safety.js';
 import { FAMILIAR_LIMIT } from './elements.js';
-import { MAP_LIMIT, type MappedElement } from './element-map-studio.js';
+import { MAP_LIMIT, type ElementKind, type MappedElement, type MoveEvent, type PerformFn, type PositionRecord } from './element-map-studio.js';
+import { TRAIN_MODES, type TrainMode } from './element-training.js';
+import { PERFORM_KINDS, checkPerform } from './element-perform.js';
 import { pruneHabits } from './habits.js';
 import { OUTBOX_LIMIT, isErrorReport, type ErrorReport } from './error-forwarding.js';
 import { EMPTY_WATCHER, NOTE_KINDS, NOTE_LIMIT, PROPOSAL_KINDS, PROPOSAL_LIMIT, PROPOSAL_STATUSES, TEST_LIMIT } from './watcher.js';
 import type { NoteKind, ProposalKind, ProposalStatus, WatchNote, WatchProposal, WatchTest, WatcherState } from './watcher.js';
 import { sanitizeStages } from './loop-control.js';
-import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, type AiView } from './ai.js';
+import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, MASTER_PROMPT_MAX, type AiView } from './ai.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
+import { CREW_SIZE_MAX, CREW_SIZE_MIN } from './crew.js';
+import { PROJECT_LIMIT, isProject, pruneProjects, type Project } from './project.js';
+import { APPROVAL_LIMIT as APPROVAL_QUEUE_LIMIT, EMPTY_APPROVALS, LEARNED_LIMIT, isApprovalRequest, isLearnedMethod, type ApprovalState } from './approval-queue.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
+import { EMPTY_MEMORY, FAILURE_LIMIT, OPERATION_NOTE_LIMIT, isFailureRecord, isOperationNote, type OperationMemory } from './operation-memory.js';
 import { ACCESS_PATH_LIMIT, isAccessProfile, type AccessProfile } from './access-paths.js';
 import { APPROVAL_LIMIT, isApprovalItem, sanitizePolicy, type ApprovalItem } from './approvals.js';
+import { PERSONA_LIMIT, PORTFOLIO_KINDS, PORTFOLIO_LIMIT as PERSONA_PORTFOLIO_LIMIT, type Persona, type PortfolioEntry as PersonaPortfolioEntry, type PortfolioKind } from './persona.js';
 import { PORTFOLIO_LIMIT, isPortfolioEntry, type PortfolioEntry } from './portfolio.js';
 import { PROFILE_LIMIT, isProfileEvent, type ProfileEvent } from './user-profile.js';
 import { SECTION_LIMIT, isKnowledgeSection, type KnowledgeSection } from './knowledge-sections.js';
 import { VARIATION_LIMIT, VARIATION_STATUSES, type Variation, type VariationStatus } from './variations.js';
+import { PACK_TEST_LIMIT, type GoalSource as PackGoalSource, type PackKind, type PackTestResult, type WorkflowPack } from './packs.js';
+import type { SubagentStatus } from './subagents.js';
+import { PROFILE_LIMIT as ROUTE_PROFILE_LIMIT, type RouteHop, type RouteProfile } from './route-plot.js';
+import { FIX_ACTIONS, FIX_METHOD_LIMIT, type FixMethod } from './fix-script.js';
+import { DOSSIER_LIMIT, pruneDossiers, type PositionDossier } from './position-dossier.js';
+import { SIDE_TEST_MODES, type SideTestMode } from './side-test.js';
+import { SECTION_EVENT_LIMIT, SECTION_LIMIT as SCREEN_SECTION_LIMIT, type ScreenSection, type SectionEvent } from './sections.js';
+import { WAKE_MS_MAX, WAKE_MS_MIN } from './wake.js';
+import { EMPTY_INITIATIVE, INITIATIVE_CATEGORIES, INITIATIVE_LOG_LIMIT, INITIATIVE_PROPOSAL_LIMIT, INITIATIVE_STATUSES, SCAN_SEC_MAX, SCAN_SEC_MIN, SELF_TEST_MODES, STRESS_CYCLES_MAX, STRESS_CYCLES_MIN, STRESS_LIMIT } from './initiative.js';
+import type { AutoApplyMap, InitiativeCategory, InitiativeEntry, InitiativeProposal, InitiativeState, InitiativeStatus, SelfTestMode, StressReport } from './initiative.js';
+import { GOAL_LIMIT, GOAL_SOURCES, GOAL_STATUSES, OBSTACLE_CAUSES, STEP_STATES, type GoalRecord, type GoalSource, type GoalStatus, type Obstacle, type ObstacleCause, type StepState, type StepTrace, type TracedCheck } from './goal-tracer.js';
+import { NOTIFICATION_LIMIT, isNotification, sanitizeAutoAct, type AssistNotification } from './notifications.js';
+import { BREAK_MINUTES_RANGE } from './relax.js';
+import { SYSTEM_REFRESH_SEC_RANGE } from './system-info.js';
+
+import { isExecutionMode } from './execution-mode.js';
+import { sanitizeAutoApply } from './aggressive.js';
+import { OPERATION_LIMIT, OPERATION_SOURCES, type OperationSource, type SavedOperation } from './saved-operations.js';
+import { OPERATION_RETRIES_MAX, OPERATION_RETRIES_MIN } from './operation-retry.js';
+import { PLAYBACK_WINDOW_SEC_MAX, PLAYBACK_WINDOW_SEC_MIN } from './playback.js';
+import { readOpsState, type OpsState } from './operations.js';
+
+/** Most folders the System panel reports on. */
+export const SYSTEM_FOLDER_LIMIT = 10;
 
 /** Valid range of the Screen watcher interval (matches its Settings slider). */
 export const WATCH_MS_MIN = 2000;
 export const WATCH_MS_MAX = 30000;
 
+/** Valid range of the Goal tracer's stall threshold (setbacks in a row; matches its Settings slider). */
+export const GOAL_STALL_MIN = 1;
+export const GOAL_STALL_MAX = 10;
+/** Valid ranges of the main app bridge's port and reconnect backoff (match their Settings inputs). */
+export const MAIN_BRIDGE_PORT_MIN = 1;
+export const MAIN_BRIDGE_PORT_MAX = 65535;
+export const MAIN_BRIDGE_BACKOFF_MIN_MS = 250;
+export const MAIN_BRIDGE_BACKOFF_MAX_MS = 120000;
+
 /** Most recent log entries kept, in memory and in storage. */
 export const LOG_LIMIT = 200;
 
-const KEYS = { settings: 'droid-assist.settings', cards: 'droid-assist.cards', log: 'droid-assist.log', patterns: 'droid-assist.patterns', outbox: 'droid-assist.outbox', habits: 'droid-assist.habits', familiar: 'droid-assist.familiar', watcher: 'droid-assist.watcher', elementMap: 'droid-assist.element-map', triggers: 'droid-assist.triggers', runs: 'droid-assist.runs', portfolios: 'droid-assist.portfolios', profile: 'droid-assist.user-profile', sections: 'droid-assist.knowledge-sections', variations: 'droid-assist.variations' } as const;
+const KEYS = {
+  settings: 'droid-assist.settings',
+  cards: 'droid-assist.cards',
+  log: 'droid-assist.log',
+  patterns: 'droid-assist.patterns',
+  outbox: 'droid-assist.outbox',
+  habits: 'droid-assist.habits',
+  familiar: 'droid-assist.familiar',
+  watcher: 'droid-assist.watcher',
+  elementMap: 'droid-assist.element-map',
+  triggers: 'droid-assist.triggers',
+  runs: 'droid-assist.runs',
+  portfolios: 'droid-assist.portfolios',
+  profile: 'droid-assist.user-profile',
+  sections: 'droid-assist.knowledge-sections',
+  variations: 'droid-assist.variations',
+  accessPaths: 'droid-assist.access-paths',
+  approvals: 'droid-assist.approvals',
+  packs: 'droid-assist.packs',
+  routes: 'droid-assist.routes',
+  fixMethods: 'droid-assist.fix-methods',
+  dossiers: 'droid-assist.dossiers',
+  initiative: 'droid-assist.initiative',
+  goals: 'droid-assist.goals',
+  notifications: 'droid-assist.notifications',
+  operations: 'droid-assist.operations',
+  memory: 'droid-assist.memory',
+  ops: 'droid-assist.ops',
+  projects: 'droid-assist.projects',
+  personas: 'droid-assist.personas',
+  approvalQueue: 'droid-assist.approval-queue',
+  screenSections: 'droid-assist.sections',
+} as const;
 const STEP_STATUSES: readonly StepStatus[] = ['pending', 'running', 'done', 'drift', 'failed'];
 
 /** Most learned patterns kept. */
@@ -42,11 +114,13 @@ export const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs', [number, number]> = {
+export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec', [number, number]> = {
+  crewSize: [CREW_SIZE_MIN, CREW_SIZE_MAX],
   gallerySize: [4, 30],
   checkpoints: [1, 20],
   captureMs: [250, 2000],
   watchMs: [WATCH_MS_MIN, WATCH_MS_MAX],
+  wakeMs: [WAKE_MS_MIN, WAKE_MS_MAX],
   changeCells: [2, 40],
   maxIterations: [1, 20],
   stepRetries: [STEP_RETRIES_MIN, STEP_RETRIES_MAX],
@@ -56,7 +130,19 @@ export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watch
   gridOpacity: GRID_OPACITY_RANGE,
   aiMaxInFlight: [AI_MAX_IN_FLIGHT_MIN, AI_MAX_IN_FLIGHT_MAX],
   aiTimeoutMs: [AI_TIMEOUT_MS_MIN, AI_TIMEOUT_MS_MAX],
+  scanSec: [SCAN_SEC_MIN, SCAN_SEC_MAX],
+  stressCycles: [STRESS_CYCLES_MIN, STRESS_CYCLES_MAX],
+  goalStall: [GOAL_STALL_MIN, GOAL_STALL_MAX],
+  breakMinutes: BREAK_MINUTES_RANGE,
+  systemRefreshSec: SYSTEM_REFRESH_SEC_RANGE,
+  mainBridgePort: [MAIN_BRIDGE_PORT_MIN, MAIN_BRIDGE_PORT_MAX],
+  mainBridgeBackoffMinMs: [MAIN_BRIDGE_BACKOFF_MIN_MS, 10000],
+  mainBridgeBackoffMaxMs: [1000, MAIN_BRIDGE_BACKOFF_MAX_MS],
+  operationRetries: [OPERATION_RETRIES_MIN, OPERATION_RETRIES_MAX],
+  playbackWindowSec: [PLAYBACK_WINDOW_SEC_MIN, PLAYBACK_WINDOW_SEC_MAX],
 };
+
+const BRIDGE_MODES: ReadonlyArray<AssistSettings['mainBridgeMode']> = ['listen', 'dial'];
 
 /** A step as persisted: its screenshot without the pixel buffer. */
 type StoredStep = Omit<WorkflowStep, 'refFrame'> & { refFrame?: StoredFrame };
@@ -95,23 +181,43 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     const v = stored[key];
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'showGrid', 'gridLabels'] as const) {
+  out.crewSize = Math.round(out.crewSize);
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'liveDrag', 'showGrid', 'gridLabels', 'autoScan', 'relaxMode', 'aiThink', 'aiOverlap', 'mainBridgeEnabled'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
-  for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken'] as const) {
+  if (typeof stored.masterPrompt === 'string' && stored.masterPrompt.length <= MASTER_PROMPT_MAX) out.masterPrompt = stored.masterPrompt;
+  for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken', 'mainBridgeUrl', 'mainBridgeToken'] as const) {
     const v = stored[key];
     if (typeof v === 'string') out[key] = v;
   }
-  for (const key of ['abortHotkey', 'aiUrl', 'aiModel'] as const) {
+  for (const key of ['abortHotkey', 'aiUrl', 'aiModel', 'mainBridgeHost'] as const) {
     const v = stored[key];
     if (typeof v === 'string' && v.trim()) out[key] = v;
   }
   if (typeof stored.aiView === 'string' && Object.hasOwn(AI_VIEWS, stored.aiView)) out.aiView = stored.aiView as AiView;
+  if (typeof stored.trainMode === 'string' && TRAIN_MODES.includes(stored.trainMode as TrainMode)) out.trainMode = stored.trainMode as TrainMode;
   if (typeof stored.monitorMode === 'string' && MODES.includes(stored.monitorMode as MonitorMode)) out.monitorMode = stored.monitorMode as MonitorMode;
+  out.executionMode = isExecutionMode(stored.executionMode) ? stored.executionMode : defaults.executionMode;
+  out.autoApply = sanitizeAutoApply(stored.autoApply ?? defaults.autoApply);
+  out.initiativeAutoApply = sanitizeInitiativeAutoApply(stored.initiativeAutoApply, defaults.initiativeAutoApply);
+  if (BRIDGE_MODES.includes(stored.mainBridgeMode as AssistSettings['mainBridgeMode'])) out.mainBridgeMode = stored.mainBridgeMode as AssistSettings['mainBridgeMode'];
+  if (out.mainBridgeBackoffMaxMs < out.mainBridgeBackoffMinMs) out.mainBridgeBackoffMaxMs = defaults.mainBridgeBackoffMaxMs;
   if (stored.displayId === null || (typeof stored.displayId === 'string' && stored.displayId)) out.displayId = stored.displayId;
   if (isNum(stored.actionBudget)) out.actionBudget = sanitizeBudget(stored.actionBudget);
   out.stages = sanitizeStages(stored.stages ?? defaults.stages);
   out.operationPolicy = sanitizePolicy(stored.operationPolicy, defaults.operationPolicy);
+  if (SIDE_TEST_MODES.includes(stored.sideTestMode as SideTestMode)) out.sideTestMode = stored.sideTestMode as SideTestMode;
+  if (typeof stored.selfTestMode === 'string' && SELF_TEST_MODES.includes(stored.selfTestMode as SelfTestMode)) out.selfTestMode = stored.selfTestMode as SelfTestMode;
+  out.notifyAutoAct = sanitizeAutoAct(stored.notifyAutoAct ?? defaults.notifyAutoAct);
+  if (Array.isArray(stored.systemFolders)) out.systemFolders = [...new Set(stored.systemFolders.filter(isStr).map((p) => p.trim()))].slice(0, SYSTEM_FOLDER_LIMIT);
+  return out;
+}
+
+/** A stored AI initiative auto-apply map over `defaults`: only boolean values of known categories are kept. */
+function sanitizeInitiativeAutoApply(raw: unknown, defaults: AutoApplyMap): AutoApplyMap {
+  const out = { ...defaults };
+  if (!isObject(raw)) return out;
+  for (const c of INITIATIVE_CATEGORIES) if (typeof raw[c] === 'boolean') out[c] = raw[c] as boolean;
   return out;
 }
 
@@ -122,7 +228,8 @@ export function saveSettings(settings: AssistSettings) {
 
 function isLogEntry(v: unknown): v is LogEntry {
   return isObject(v) && typeof v.id === 'string' && isNum(v.time) && typeof v.source === 'string'
-    && typeof v.message === 'string' && TONES.includes(v.tone as LogEntry['tone']);
+    && typeof v.message === 'string' && TONES.includes(v.tone as LogEntry['tone'])
+    && (v.op === undefined || typeof v.op === 'string') && (v.repeat === undefined || isNum(v.repeat));
 }
 
 /** The stored action log (newest first, at most LOG_LIMIT); invalid entries are dropped. */
@@ -152,6 +259,7 @@ function parseStep(v: unknown): StoredStep | null {
     ...(typeof v.target === 'string' && v.target ? { target: v.target } : {}),
     ...(isNum(v.endX) && isNum(v.endY) ? { endX: v.endX, endY: v.endY } : {}),
     ...(typeof v.endTarget === 'string' && v.endTarget ? { endTarget: v.endTarget } : {}),
+    ...(typeof v.mappedId === 'string' && v.mappedId ? { mappedId: v.mappedId } : {}),
     ...(isNum(v.delayMs) && v.delayMs >= 0 ? { delayMs: v.delayMs } : {}),
     ...(isStoredFrame(v.refFrame) ? { refFrame: v.refFrame } : {}),
   };
@@ -185,6 +293,48 @@ export function saveCards(cards: SavedCard[]) {
     steps: c.steps.map(({ refFrame, ...s }) => (keepFrames && refFrame ? { ...s, refFrame: toStoredFrame(refFrame) } : s)),
   }));
   if (!writeJson(KEYS.cards, toStored(true))) writeJson(KEYS.cards, toStored(false));
+}
+
+const PACK_KINDS: ReadonlyArray<PackKind> = ['recorded', 'combined'];
+const PACK_GOAL_SOURCES: ReadonlyArray<PackGoalSource> = ['input', 'ai', 'user', null];
+const TEST_STATUSES: ReadonlyArray<SubagentStatus> = ['pass', 'fail', 'aborted', 'skipped'];
+type StoredPack = Omit<WorkflowPack, 'steps'> & { steps: StoredStep[] };
+
+function isPackTest(v: unknown): v is PackTestResult {
+  return isObject(v) && typeof v.id === 'string' && isNum(v.time) && TEST_STATUSES.includes(v.status as SubagentStatus) && typeof v.message === 'string' && typeof v.dry === 'boolean';
+}
+
+/** A valid stored pack with its valid steps and test results, or null. */
+function parsePack(v: unknown): StoredPack | null {
+  if (!isObject(v) || typeof v.id !== 'string' || typeof v.name !== 'string' || !Array.isArray(v.steps)) return null;
+  const goal = typeof v.goal === 'string' ? v.goal : '';
+  return {
+    id: v.id,
+    name: v.name,
+    kind: PACK_KINDS.includes(v.kind as PackKind) ? (v.kind as PackKind) : 'recorded',
+    goal,
+    goalSource: goal && PACK_GOAL_SOURCES.includes(v.goalSource as PackGoalSource) ? (v.goalSource as PackGoalSource) : null,
+    steps: v.steps.map(parseStep).filter((s): s is StoredStep => s !== null),
+    tests: Array.isArray(v.tests) ? v.tests.filter(isPackTest).slice(0, PACK_TEST_LIMIT) : [],
+    savedAt: isNum(v.savedAt) ? v.savedAt : 0,
+  };
+}
+
+/** The stored workflow packs with their step screenshots decoded; invalid packs are dropped. */
+export async function loadPacks(): Promise<WorkflowPack[]> {
+  const stored = readJson(KEYS.packs);
+  if (!Array.isArray(stored)) return [];
+  const packs = stored.map(parsePack).filter((p): p is StoredPack => p !== null);
+  return Promise.all(packs.map(async (p) => ({ ...p, steps: await Promise.all(p.steps.map(restoreStep)) })));
+}
+
+/** Persists the packs; when they do not fit, retries without step screenshots. */
+export function savePacks(packs: WorkflowPack[]) {
+  const toStored = (keepFrames: boolean): StoredPack[] => packs.map((p) => ({
+    ...p,
+    steps: p.steps.map(({ refFrame, shot: _shot, beforeFrame: _before, afterFrame: _after, ...s }) => (keepFrames && refFrame ? { ...s, refFrame: toStoredFrame(refFrame) } : s)),
+  }));
+  if (!writeJson(KEYS.packs, toStored(true))) writeJson(KEYS.packs, toStored(false));
 }
 
 function isPattern(v: unknown): v is LearnedPattern {
@@ -232,17 +382,72 @@ export function loadFamiliar(): FamiliarElement[] {
 type StoredMapped = Omit<MappedElement, 'frame'> & { frame?: StoredFrame };
 
 const isUnit = (v: unknown) => isNum(v) && v >= 0 && v <= 1;
+const ELEMENT_KINDS: readonly ElementKind[] = ['button', 'icon', 'text', 'input', 'region'];
+const MOVE_CAUSES: ReadonlyArray<MoveEvent['cause']> = ['user', 'ai', 'self'];
+
+/** A box inside the screen, or null. */
+function parseBox(v: unknown): MappedElement['box'] | null {
+  if (!isObject(v)) return null;
+  const { x, y, w, h } = v;
+  if (!isUnit(x) || !isUnit(y) || !isUnit(w) || !isUnit(h) || (x as number) + (w as number) > 1.0001 || (y as number) + (h as number) > 1.0001) return null;
+  return { x: x as number, y: y as number, w: w as number, h: h as number };
+}
+
+function parsePosition(v: unknown): PositionRecord | null {
+  const box = isObject(v) ? parseBox(v.box) : null;
+  if (!box || !isObject(v) || !isNum(v.count) || !isNum(v.firstSeen) || !isNum(v.lastSeen)) return null;
+  return { box, count: v.count, firstSeen: v.firstSeen, lastSeen: v.lastSeen };
+}
+
+function parseMove(v: unknown): MoveEvent | null {
+  if (!isObject(v) || !isNum(v.time) || !MOVE_CAUSES.includes(v.cause as MoveEvent['cause'])) return null;
+  const from = parseBox(v.from);
+  const to = parseBox(v.to);
+  return from && to ? { time: v.time, cause: v.cause as MoveEvent['cause'], from, to } : null;
+}
+
+/** A complete stored perform function, or null. */
+function parsePerform(v: unknown): PerformFn | null {
+  if (!isObject(v) || !PERFORM_KINDS.includes(v.kind as PerformFn['kind']) || (v.source !== 'user' && v.source !== 'ai')) return null;
+  const p: PerformFn = {
+    kind: v.kind as PerformFn['kind'],
+    source: v.source,
+    ...(typeof v.text === 'string' ? { text: v.text } : {}),
+    ...(isObject(v.to) && isUnit(v.to.x) && isUnit(v.to.y) ? { to: { x: v.to.x as number, y: v.to.y as number } } : {}),
+    ...(typeof v.toElementId === 'string' && v.toElementId ? { toElementId: v.toElementId } : {}),
+    ...(typeof v.reason === 'string' && v.reason ? { reason: v.reason } : {}),
+  };
+  return checkPerform(p).ok ? p : null;
+}
+
+const parsedList = <T>(v: unknown, parse: (x: unknown) => T | null): T[] => (Array.isArray(v) ? v.map(parse).filter((x): x is T => x !== null) : []);
+
+/** The auto-scan and tracking fields of a stored mapped element; invalid ones are dropped. */
+function parseTracking(v: Json): Partial<MappedElement> {
+  const perform = parsePerform(v.perform);
+  return {
+    ...(v.origin === 'user' || v.origin === 'auto' ? { origin: v.origin } : {}),
+    ...(ELEMENT_KINDS.includes(v.kind as ElementKind) ? { kind: v.kind as ElementKind } : {}),
+    ...(isObject(v.appearance) && isNum(v.appearance.lum) && isNum(v.appearance.edges) ? { appearance: { lum: v.appearance.lum, edges: v.appearance.edges } } : {}),
+    ...(isNum(v.timesSeen) ? { timesSeen: v.timesSeen } : {}),
+    ...(isNum(v.lastSeen) ? { lastSeen: v.lastSeen } : {}),
+    ...(Array.isArray(v.positions) ? { positions: parsedList(v.positions, parsePosition) } : {}),
+    ...(Array.isArray(v.moves) ? { moves: parsedList(v.moves, parseMove) } : {}),
+    ...(perform ? { perform } : {}),
+  };
+}
 
 /** A valid stored mapped element (box inside the screen), or null. */
 function parseMapped(v: unknown): StoredMapped | null {
-  if (!isObject(v) || typeof v.id !== 'string' || typeof v.name !== 'string' || !v.name.trim() || !isObject(v.box)) return null;
-  const { x, y, w, h } = v.box;
-  if (!isUnit(x) || !isUnit(y) || !isUnit(w) || !isUnit(h) || (x as number) + (w as number) > 1.0001 || (y as number) + (h as number) > 1.0001) return null;
+  if (!isObject(v) || typeof v.id !== 'string' || typeof v.name !== 'string' || !v.name.trim()) return null;
+  const box = parseBox(v.box);
+  if (!box) return null;
   return {
     id: v.id,
     name: v.name,
-    box: { x: x as number, y: y as number, w: w as number, h: h as number },
+    box,
     mappedAt: isNum(v.mappedAt) ? v.mappedAt : 0,
+    ...parseTracking(v),
     ...(isStoredFrame(v.frame) ? { frame: v.frame } : {}),
   };
 }
@@ -312,7 +517,8 @@ const isStr = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
 const optNum = (v: unknown) => v === undefined || isNum(v);
 
 function isNote(v: unknown): v is WatchNote {
-  return isObject(v) && isStr(v.id) && isNum(v.time) && NOTE_KINDS.includes(v.kind as NoteKind) && isStr(v.text);
+  return isObject(v) && isStr(v.id) && isNum(v.time) && NOTE_KINDS.includes(v.kind as NoteKind) && isStr(v.text)
+    && (v.source === undefined || typeof v.source === 'string') && (v.op === undefined || typeof v.op === 'string');
 }
 
 function isProposal(v: unknown): v is WatchProposal {
@@ -352,6 +558,69 @@ export function saveRunSummaries(summaries: RunSummary[]) {
   while (!writeJson(KEYS.runs, kept) && kept.length) kept = kept.slice(0, Math.floor(kept.length / 2));
 }
 
+const isPoint = (v: unknown) => isObject(v) && isUnit(v.x) && isUnit(v.y);
+const isVisit = (v: unknown) => isPoint(v) && isNum((v as Json).since) && optNum((v as Json).until);
+const isSpot = (v: unknown) => isPoint(v) && isNum((v as Json).attempts) && isNum((v as Json).successes);
+const isPositionTest = (v: unknown) => isObject(v) && isPoint(v.planned) && isPoint(v.actual) && isNum(v.time);
+const isMoves = (v: unknown) => isObject(v) && isNum(v.user) && isNum(v.ai);
+const optPoint = (v: unknown) => v === undefined || isPoint(v);
+
+function isDossier(v: unknown): v is PositionDossier {
+  return isObject(v) && isStr(v.id) && isStr(v.name) && Array.isArray(v.visits) && v.visits.length > 0 && v.visits.every(isVisit)
+    && Array.isArray(v.spots) && v.spots.every(isSpot) && Array.isArray(v.tests) && v.tests.every(isPositionTest)
+    && isNum(v.timesSeen) && isNum(v.lastSeen) && isMoves(v.moves) && optPoint(v.move) && optPoint(v.preferred);
+}
+
+/** The stored position dossiers (at most DOSSIER_LIMIT); invalid entries are dropped. */
+export const loadDossiers = (): PositionDossier[] => listOf(readJson(KEYS.dossiers), isDossier, DOSSIER_LIMIT);
+
+/** Persists the newest-seen DOSSIER_LIMIT dossiers; while they do not fit, the least recently seen half is pruned. */
+export function saveDossiers(dossiers: PositionDossier[]) {
+  let kept = pruneDossiers(dossiers);
+  while (!writeJson(KEYS.dossiers, kept) && kept.length) kept = kept.slice(0, Math.floor(kept.length / 2));
+}
+
+function isStepTrace(v: unknown): v is StepTrace {
+  return isObject(v) && typeof v.name === 'string' && STEP_STATES.includes(v.state as StepState) && isNum(v.at)
+    && optNum(v.doneAt) && optNum(v.verifiedAt) && optNum(v.failedAt);
+}
+
+function isObstacle(v: unknown): v is Obstacle {
+  return isObject(v) && isNum(v.time) && OBSTACLE_CAUSES.includes(v.cause as ObstacleCause) && typeof v.text === 'string';
+}
+
+function isTracedCheck(v: unknown): v is TracedCheck {
+  return isObject(v) && isNum(v.time) && typeof v.complete === 'boolean' && typeof v.progress === 'boolean' && typeof v.reason === 'string';
+}
+
+const isStrList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+
+/** Every plan step id has a valid trace, and every trace belongs to a plan step. */
+function hasStepTraces(stepIds: string[], steps: unknown): boolean {
+  if (!isObject(steps)) return false;
+  return stepIds.every((id) => isStepTrace(steps[id])) && Object.keys(steps).every((id) => stepIds.includes(id));
+}
+
+function isGoalRecord(v: unknown): v is GoalRecord {
+  return isObject(v) && isStr(v.id) && isStr(v.goal) && GOAL_SOURCES.includes(v.source as GoalSource) && isNum(v.createdAt) && isNum(v.updatedAt)
+    && GOAL_STATUSES.includes(v.status as GoalStatus) && isStrList(v.stepIds) && hasStepTraces(v.stepIds, v.steps)
+    && Array.isArray(v.obstacles) && v.obstacles.every(isObstacle) && isNum(v.retries) && v.retries >= 0
+    && (v.workflowId === null || typeof v.workflowId === 'string') && isStrList(v.runIds)
+    && isNum(v.progress) && v.progress >= 0 && v.progress <= 100 && isNum(v.stalls) && isNum(v.checkedProgress)
+    && (v.lastCheck === null || isTracedCheck(v.lastCheck));
+}
+
+/** The stored goal records (newest first, at most GOAL_LIMIT); invalid entries are dropped. */
+export function loadGoals(): GoalRecord[] {
+  return listOf(readJson(KEYS.goals), isGoalRecord, GOAL_LIMIT);
+}
+
+/** Persists the newest GOAL_LIMIT goal records; while they do not fit, the oldest half is pruned. */
+export function saveGoals(goals: GoalRecord[]) {
+  let kept = goals.slice(0, GOAL_LIMIT);
+  while (!writeJson(KEYS.goals, kept) && kept.length) kept = kept.slice(0, Math.floor(kept.length / 2));
+}
+
 /** Persists the Screen watcher state, capped per list. */
 export function saveWatcher(state: WatcherState) {
   writeJson(KEYS.watcher, { notes: state.notes.slice(0, NOTE_LIMIT), proposals: state.proposals.slice(0, PROPOSAL_LIMIT), tests: state.tests.slice(0, TEST_LIMIT) });
@@ -360,9 +629,115 @@ export function saveWatcher(state: WatcherState) {
 /** The stored triggers; invalid entries are dropped. */
 export const loadTriggers = (): Trigger[] => listOf(readJson(KEYS.triggers), isTrigger, TRIGGER_LIMIT);
 
+const HOP_VIAS: ReadonlyArray<RouteHop['via']> = ['start', 'opens', 'contains', 'adjacent'];
+
+function isHop(v: unknown): v is RouteHop {
+  return isObject(v) && isStr(v.name) && isUnit(v.x) && isUnit(v.y) && HOP_VIAS.includes(v.via as RouteHop['via']);
+}
+
+function isProfile(v: unknown): v is RouteProfile {
+  return isObject(v) && isStr(v.id) && isStr(v.goal) && Array.isArray(v.hops) && v.hops.length > 0 && v.hops.every(isHop)
+    && isNum(v.uses) && isNum(v.successes) && isNum(v.savedAt);
+}
+
+/** The stored access-path (route) profiles; invalid entries are dropped. */
+export const loadRouteProfiles = (): RouteProfile[] => listOf(readJson(KEYS.routes), isProfile, ROUTE_PROFILE_LIMIT);
+
+/** Persists the route profiles, capped at ROUTE_PROFILE_LIMIT. */
+export function saveRouteProfiles(profiles: RouteProfile[]) {
+  writeJson(KEYS.routes, profiles.slice(0, ROUTE_PROFILE_LIMIT));
+}
+
+/** A fix-method step: an allowed fix action at a point inside the screen. */
+const isFixStep = (v: unknown) => isObject(v) && FIX_ACTIONS.has(v.action as StepAction) && parseStep(v) !== null;
+
+function isFixMethod(v: unknown): v is FixMethod {
+  return isObject(v) && isStr(v.id) && isStr(v.element) && typeof v.flow === 'string' && Array.isArray(v.steps) && v.steps.length > 0
+    && v.steps.every(isFixStep) && isNum(v.uses) && isNum(v.successes) && isNum(v.savedAt);
+}
+
+/** The stored fix methods with their steps normalised to pending; invalid entries are dropped. */
+export function loadFixMethods(): FixMethod[] {
+  return listOf(readJson(KEYS.fixMethods), isFixMethod, FIX_METHOD_LIMIT).map((m) => ({ ...m, steps: m.steps.map(fixStep) }));
+}
+
+/** A validated stored fix step as a pending step without a screenshot. */
+function fixStep(v: unknown): WorkflowStep {
+  const { refFrame: _refFrame, ...s } = parseStep(v)!;
+  return s;
+}
+
+/** Persists the fix methods, capped at FIX_METHOD_LIMIT. */
+export function saveFixMethods(methods: FixMethod[]) {
+  writeJson(KEYS.fixMethods, methods.slice(0, FIX_METHOD_LIMIT));
+}
+
+function isPersonaPortfolioEntry(v: unknown): v is PersonaPortfolioEntry {
+  return isObject(v) && PORTFOLIO_KINDS.includes(v.kind as PortfolioKind) && isStr(v.text) && isNum(v.time);
+}
+
+/** A valid stored persona (invalid portfolio entries dropped), or null. */
+function parsePersona(v: unknown): Persona | null {
+  if (!isObject(v) || !isStr(v.id) || !isStr(v.name) || typeof v.character !== 'string' || !isNum(v.createdAt)) return null;
+  return { id: v.id, name: v.name, character: v.character, createdAt: v.createdAt, entries: listOf(v.entries, isPersonaPortfolioEntry, PERSONA_PORTFOLIO_LIMIT) };
+}
+
+/** The stored persona portfolios (at most PERSONA_LIMIT); invalid personas are dropped. */
+export function loadPersonas(): Persona[] {
+  const stored = readJson(KEYS.personas);
+  return Array.isArray(stored) ? stored.map(parsePersona).filter((p): p is Persona => p !== null).slice(0, PERSONA_LIMIT) : [];
+}
+
+/** Persists the persona portfolios, capped at PERSONA_LIMIT. */
+export function savePersonas(personas: Persona[]) {
+  writeJson(KEYS.personas, personas.slice(0, PERSONA_LIMIT));
+}
+
 /** Persists the triggers, capped at TRIGGER_LIMIT. */
 export function saveTriggers(triggers: Trigger[]) {
   writeJson(KEYS.triggers, triggers.slice(0, TRIGGER_LIMIT));
+}
+
+/** The stored Operations agents' state (statuses, reports, evidence); invalid entries are dropped. */
+export const loadOpsState = (): OpsState => readOpsState(readJson(KEYS.ops));
+
+/** Persists the Operations state; when it does not fit, retries without the evidence screenshots. */
+export function saveOpsState(state: OpsState) {
+  if (!writeJson(KEYS.ops, state)) writeJson(KEYS.ops, { ...state, evidence: state.evidence.map((e) => ({ ...e, before: null, after: null })) });
+}
+
+/** The stored operation memory (failure reminders and notes); invalid entries are dropped. */
+export function loadOperationMemory(): OperationMemory {
+  const stored = readJson(KEYS.memory);
+  if (!isObject(stored)) return EMPTY_MEMORY;
+  return { failures: listOf(stored.failures, isFailureRecord, FAILURE_LIMIT), notes: listOf(stored.notes, isOperationNote, OPERATION_NOTE_LIMIT) };
+}
+
+/** Persists the operation memory, capped per list; when it does not fit, retries without the failure screenshots. */
+export function saveOperationMemory(memory: OperationMemory) {
+  const kept = { failures: memory.failures.slice(0, FAILURE_LIMIT), notes: memory.notes.slice(0, OPERATION_NOTE_LIMIT) };
+  if (!writeJson(KEYS.memory, kept)) writeJson(KEYS.memory, { ...kept, failures: kept.failures.map((f) => ({ ...f, shots: [] })) });
+}
+
+/** The stored projects, pruned to PROJECT_LIMIT (unfinished first); invalid entries are dropped. */
+export const loadProjects = (): Project[] => pruneProjects(listOf(readJson(KEYS.projects), isProject, Infinity));
+
+/** Persists the pruned projects; while they do not fit, the lowest-ranked half is pruned. */
+export function saveProjects(projects: Project[]) {
+  let kept = pruneProjects(projects, PROJECT_LIMIT);
+  while (!writeJson(KEYS.projects, kept) && kept.length) kept = kept.slice(0, Math.floor(kept.length / 2));
+}
+
+/** The stored approval queue and learned methods; invalid entries are dropped. */
+export function loadApprovalQueue(): ApprovalState {
+  const stored = readJson(KEYS.approvalQueue);
+  if (!isObject(stored)) return EMPTY_APPROVALS;
+  return { queue: listOf(stored.queue, isApprovalRequest, APPROVAL_QUEUE_LIMIT), learned: listOf(stored.learned, isLearnedMethod, LEARNED_LIMIT) };
+}
+
+/** Persists the approval queue and learned methods, capped per list. */
+export function saveApprovalQueue(state: ApprovalState) {
+  writeJson(KEYS.approvalQueue, { queue: state.queue.slice(0, APPROVAL_QUEUE_LIMIT), learned: state.learned.slice(0, LEARNED_LIMIT) });
 }
 
 /** The stored access-path profiles; invalid entries are dropped. */
@@ -371,12 +746,16 @@ export const loadAccessPaths = (): AccessProfile[] => listOf(readJson(KEYS.acces
 /** Persists the access-path profiles, capped at ACCESS_PATH_LIMIT. */
 export function saveAccessPaths(profiles: AccessProfile[]) {
   writeJson(KEYS.accessPaths, profiles.slice(0, ACCESS_PATH_LIMIT));
+}
+
 /** The stored approval queue (newest first); invalid entries are dropped. */
 export const loadApprovals = (): ApprovalItem[] => listOf(readJson(KEYS.approvals), isApprovalItem, APPROVAL_LIMIT);
 
 /** Persists the approval queue, capped at APPROVAL_LIMIT. */
 export function saveApprovals(items: ApprovalItem[]) {
   writeJson(KEYS.approvals, items.slice(0, APPROVAL_LIMIT));
+}
+
 /** Every actor's stored portfolio entries; invalid entries are dropped. */
 export const loadPortfolios = (): PortfolioEntry[] => listOf(readJson(KEYS.portfolios), isPortfolioEntry, PORTFOLIO_LIMIT);
 
@@ -424,4 +803,101 @@ export const loadSections = (): KnowledgeSection[] => listOf(readJson(KEYS.secti
 /** Persists the knowledge sections, capped at SECTION_LIMIT. */
 export function saveSections(sections: KnowledgeSection[]) {
   writeJson(KEYS.sections, sections.slice(0, SECTION_LIMIT));
+}
+
+const isBox = (v: unknown) => isObject(v) && isNum(v.x) && isNum(v.y) && isNum(v.w) && isNum(v.h);
+
+function isSectionEvent(v: unknown): v is SectionEvent {
+  return isObject(v) && isNum(v.time) && (v.kind === 'log' || v.kind === 'change') && typeof v.text === 'string' && (v.box === undefined || isBox(v.box));
+}
+
+function isSection(v: unknown): v is ScreenSection {
+  return isObject(v) && isStr(v.id) && isStr(v.name) && isBox(v.box) && (v.source === 'drawn' || v.source === 'ai') && Array.isArray(v.events);
+}
+
+/** The stored screen sections with their histories; invalid sections and events are dropped. */
+export const loadScreenSections = (): ScreenSection[] =>
+  listOf(readJson(KEYS.screenSections), isSection, SCREEN_SECTION_LIMIT).map((s) => ({ ...s, events: listOf(s.events, isSectionEvent, SECTION_EVENT_LIMIT) }));
+
+/** Persists the screen sections, capped at SCREEN_SECTION_LIMIT. */
+export function saveScreenSections(sections: ScreenSection[]) {
+  writeJson(KEYS.screenSections, sections.slice(0, SCREEN_SECTION_LIMIT));
+}
+
+const isCategory = (v: unknown) => INITIATIVE_CATEGORIES.includes(v as InitiativeCategory);
+
+function isInitiativeProposal(v: unknown): v is InitiativeProposal {
+  return isObject(v) && isStr(v.id) && isNum(v.time) && isCategory(v.category) && isStr(v.text)
+    && INITIATIVE_STATUSES.includes(v.status as InitiativeStatus)
+    && (v.step === undefined || isObject(v.step)) && (v.edits === undefined || Array.isArray(v.edits)) && (v.pack === undefined || (isObject(v.pack) && Array.isArray(v.pack.steps)));
+}
+
+function isInitiativeEntry(v: unknown): v is InitiativeEntry {
+  return isObject(v) && isStr(v.id) && isNum(v.time) && isCategory(v.category) && typeof v.text === 'string' && typeof v.ok === 'boolean';
+}
+
+function isStressReport(v: unknown): v is StressReport {
+  return isObject(v) && isStr(v.id) && isNum(v.time) && typeof v.target === 'string' && isNum(v.attempts) && isNum(v.succeeded)
+    && isNum(v.reliability) && isObject(v.byAction) && typeof v.dryRun === 'boolean';
+}
+
+/** The stored AI initiative proposals, log and stress reports; invalid entries are dropped. */
+export function loadInitiative(): InitiativeState {
+  const stored = readJson(KEYS.initiative);
+  if (!isObject(stored)) return EMPTY_INITIATIVE;
+  return { proposals: listOf(stored.proposals, isInitiativeProposal, INITIATIVE_PROPOSAL_LIMIT), log: listOf(stored.log, isInitiativeEntry, INITIATIVE_LOG_LIMIT), stress: listOf(stored.stress, isStressReport, STRESS_LIMIT) };
+}
+
+/** Persists the AI initiative state, capped per list. */
+export function saveInitiative(state: InitiativeState) {
+  writeJson(KEYS.initiative, { proposals: state.proposals.slice(0, INITIATIVE_PROPOSAL_LIMIT), log: state.log.slice(0, INITIATIVE_LOG_LIMIT), stress: state.stress.slice(0, STRESS_LIMIT) });
+}
+
+/** The stored notifications (newest first, at most NOTIFICATION_LIMIT); invalid entries are dropped. */
+export const loadNotifications = (): AssistNotification[] => listOf(readJson(KEYS.notifications), isNotification, NOTIFICATION_LIMIT);
+
+/** Persists the newest NOTIFICATION_LIMIT notifications. */
+export function saveNotifications(list: AssistNotification[]) {
+  writeJson(KEYS.notifications, list.slice(0, NOTIFICATION_LIMIT));
+}
+
+/** An operation as persisted: step and reference screenshots without their pixel buffers. */
+type StoredOperation = Omit<SavedOperation, 'steps' | 'screenshots'> & { steps: StoredStep[]; screenshots: StoredFrame[] };
+
+/** A valid stored operation with its valid steps and screenshots, or null. */
+function parseOperation(v: unknown): StoredOperation | null {
+  if (!isObject(v) || !isStr(v.id) || !isStr(v.name) || !Array.isArray(v.steps)) return null;
+  const steps = v.steps.map(parseStep).filter((s): s is StoredStep => s !== null);
+  const counter = (n: unknown) => (isNum(n) && n >= 0 ? Math.floor(n) : 0);
+  const runs = counter(v.runs);
+  return {
+    id: v.id,
+    name: v.name,
+    goal: typeof v.goal === 'string' && v.goal.trim() ? v.goal : v.name,
+    steps,
+    screenshots: Array.isArray(v.screenshots) ? v.screenshots.filter(isStoredFrame) : [],
+    source: OPERATION_SOURCES.includes(v.source as OperationSource) ? (v.source as OperationSource) : 'recorded',
+    savedAt: isNum(v.savedAt) ? v.savedAt : 0,
+    runs,
+    successes: Math.min(runs, counter(v.successes)),
+    ...(isNum(v.lastRun) ? { lastRun: v.lastRun } : {}),
+  };
+}
+
+/** The stored saved operations (at most OPERATION_LIMIT) with screenshots decoded; invalid entries are dropped. */
+export async function loadOperations(): Promise<SavedOperation[]> {
+  const stored = readJson(KEYS.operations);
+  if (!Array.isArray(stored)) return [];
+  const ops = stored.map(parseOperation).filter((o): o is StoredOperation => o !== null).slice(0, OPERATION_LIMIT);
+  return Promise.all(ops.map(async (o) => ({ ...o, steps: await Promise.all(o.steps.map(restoreStep)), screenshots: await decodeFrames(o.screenshots) })));
+}
+
+/** Persists the saved operations; when they do not fit, retries without screenshots. */
+export function saveOperations(ops: SavedOperation[]) {
+  const toStored = (keepFrames: boolean): StoredOperation[] => ops.slice(0, OPERATION_LIMIT).map((o) => ({
+    ...o,
+    steps: o.steps.map(({ refFrame, beforeFrame: _b, afterFrame: _a, shot: _s, ...s }) => (keepFrames && refFrame ? { ...s, refFrame: toStoredFrame(refFrame) } : s)),
+    screenshots: keepFrames ? o.screenshots.map(toStoredFrame) : [],
+  }));
+  if (!writeJson(KEYS.operations, toStored(true))) writeJson(KEYS.operations, toStored(false));
 }

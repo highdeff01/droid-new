@@ -1,6 +1,7 @@
 import type { Frame, SavedCard } from './types.js';
 import { MATCHED, boxDistance } from './drift.js';
 import type { MappedElement } from './element-map-studio.js';
+import type { SavedOperation } from './saved-operations.js';
 
 /** How often the trigger loop checks schedules and the newest live frame. */
 export const TRIGGER_TICK_MS = 1000;
@@ -12,8 +13,8 @@ export const TRIGGER_LIMIT = 50;
 export const ELEMENT_EVENTS = ['appear', 'disappear', 'change'] as const;
 export type ElementEvent = (typeof ELEMENT_EVENTS)[number];
 
-/** What a trigger runs: a saved flow from the Library, or the current draft card (the unsaved plan). */
-export type TriggerTarget = { kind: 'card'; cardId: string } | { kind: 'draft' };
+/** What a trigger runs: a saved flow from the Library, the current draft card (the unsaved plan), or a saved operation. */
+export type TriggerTarget = { kind: 'card'; cardId: string } | { kind: 'draft' } | { kind: 'operation'; operationId: string };
 
 interface TriggerBase {
   id: string;
@@ -112,11 +113,26 @@ export function createTrigger(draft: TriggerDraft, id: string): Trigger {
   return base.kind === 'schedule' ? { ...base, everySec: wholeAtLeast0(base.everySec) } : base;
 }
 
+/** A trigger target's owner: what to name it as, and the saved flow or operation whose steps run. */
+export type ResolvedTarget = { name: string; card?: SavedCard; operation?: SavedOperation };
+
 /** The trigger's target as steps' owner, or the reason it cannot run now. */
-export function resolveTarget(target: TriggerTarget, cards: SavedCard[], draft: { name: string } | null): { name: string; card?: SavedCard } | { error: string } {
+export function resolveTarget(target: TriggerTarget, cards: SavedCard[], draft: { name: string } | null, operations: SavedOperation[] = []): ResolvedTarget | { error: string } {
   if (target.kind === 'draft') return draft ? { name: `draft card "${draft.name}"` } : { error: 'no draft card — plan a goal first' };
+  if (target.kind === 'operation') {
+    const operation = operations.find((o) => o.id === target.operationId);
+    return operation ? { name: `operation "${operation.name}"`, operation } : { error: 'its saved operation was deleted' };
+  }
   const card = cards.find((c) => c.id === target.cardId);
   return card ? { name: `flow "${card.name}"`, card } : { error: 'its saved flow was deleted' };
+}
+
+/** The target in words, for the panel and the log. */
+export function targetText(target: TriggerTarget, cards: SavedCard[], operations: SavedOperation[]): string {
+  if (target.kind === 'draft') return 'the draft card';
+  const r = resolveTarget(target, cards, null, operations);
+  if (!('error' in r)) return r.name;
+  return target.kind === 'card' ? 'flow "deleted flow"' : 'operation "deleted operation"';
 }
 
 const EVENT_TEXT: Record<ElementEvent, string> = { appear: 'appears', disappear: 'disappears', change: 'changes' };
@@ -150,7 +166,7 @@ const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFin
 const isStr = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 
 function isTarget(v: unknown): v is TriggerTarget {
-  return isObject(v) && (v.kind === 'draft' || (v.kind === 'card' && isStr(v.cardId)));
+  return isObject(v) && (v.kind === 'draft' || (v.kind === 'card' && isStr(v.cardId)) || (v.kind === 'operation' && isStr(v.operationId)));
 }
 
 const KIND_FIELDS: Record<TriggerKind, (v: Json) => boolean> = {

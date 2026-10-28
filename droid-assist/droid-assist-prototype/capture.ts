@@ -1,4 +1,5 @@
 import type { NativeCaptureApi, NativeFrame } from './electron/capture-api.js';
+import type { NativeSystemApi } from './electron/system-api.js';
 import type { MonitorMode } from './types.js';
 import { SAMPLE_H, SAMPLE_W } from './drift.js';
 
@@ -17,7 +18,7 @@ export function monitorInterval(mode: MonitorMode, captureMs: number): number {
 declare global {
   interface Window {
     /** Exposed by the Electron preload; undefined in a plain browser. */
-    droidNative?: NativeCaptureApi;
+    droidNative?: NativeCaptureApi & NativeSystemApi;
   }
 }
 

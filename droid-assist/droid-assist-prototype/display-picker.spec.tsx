@@ -21,6 +21,7 @@ function stubApi(displays = DISPLAYS): NativeCaptureApi {
     stopCapture: vi.fn(),
     listDisplays: vi.fn(async () => displays),
     selectDisplay: vi.fn(),
+    grabDisplay: vi.fn(),
   };
 }
 

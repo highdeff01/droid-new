@@ -2,6 +2,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BRIDGE_REQUIRED, BRIDGE_UNAUTHORIZED, captureDesktop, checkBridge, humanMoveMs, insecureBridgeUrl, nativeActions, selfTestBridge, sendToBridge } from './bridge.js';
 import type { WorkflowStep } from './types.js';
 
+describe('nativeActions for an auto-navigate type step', () => {
+  const step = (mappedId?: string): WorkflowStep => ({ id: 's', name: 'n', action: 'type', x: 0.5, y: 0.25, text: 'hi', status: 'pending', ...(mappedId ? { mappedId } : {}) });
+  it('clicks the mapped element at its position before typing into it', () => {
+    expect(nativeActions(step('m1'), 800, 400).map((a) => [a.action, a.x, a.y, a.text])).toEqual([['click', 400, 100, undefined], ['type_text', 400, 100, 'hi']]);
+  });
+  it('types without a click for an ordinary type step', () => {
+    expect(nativeActions(step(), 800, 400).map((a) => a.action)).toEqual(['type_text']);
+  });
+});
+
 const step = (patch: Partial<WorkflowStep>): WorkflowStep => ({ id: 's1', name: 'Step', action: 'click', x: 0.5, y: 0.25, status: 'pending', ...patch });
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 

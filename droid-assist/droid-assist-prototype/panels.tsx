@@ -3,11 +3,13 @@ import type { AssistEngine } from './use-assist.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
-import { AiStatusBadge, InsecureBridgeWarning } from './hud.js';
+import { AiStatusBadge, InsecureBridgeWarning, MainBridgeBadge } from './hud.js';
 import { ModelPicker } from './model-picker.js';
-import type { FamiliarElement, Frame, Habit, LogEntry } from './types.js';
+import type { AssistSettings, FamiliarElement, Frame, Habit, LogEntry } from './types.js';
 import type { Box } from './assist-ai.js';
 import type { Briefing } from './briefing.js';
+import { OBJECTIVE_TONE, type ChainRun } from './chain.js';
+import { snipText, type Snip } from './snip.js';
 import { DisplayPicker } from './display-picker.js';
 import { BridgeWizard } from './bridge-wizard.js';
 import { isReliable, successRate } from './habits.js';
@@ -17,18 +19,31 @@ import type { DeliveryStatus, EndpointStatus, ForwardedError } from './error-for
 import { segmentLine } from './ruler.js';
 import type { ElementSource, ScreenElement } from './elements.js';
 import { gridRef } from './grid.js';
-import { MAP_COLS, MAP_ROWS, boxCenter, mapCells } from './element-map-studio.js';
-import { WATCH_MS_MAX, WATCH_MS_MIN } from './storage.js';
-import { proposalStep, type NoteKind, type WatchProposal } from './watcher.js';
+import { MAP_COLS, MAP_ROWS, boxCenter, mapCells, type MappedElement, type PerformFn, type PerformKind } from './element-map-studio.js';
+import { countHere, ghostPositions, motionOf, motionTiming, type MotionKind } from './element-tracking.js';
+import { PERFORM_KINDS, checkPerform, performText } from './element-perform.js';
+import { TRAIN_MODES, type TrainMode, type TrainingReport } from './element-training.js';
+import { WATCH_MS_MAX, WATCH_MS_MIN, GOAL_STALL_MAX, GOAL_STALL_MIN, MAIN_BRIDGE_BACKOFF_MAX_MS, MAIN_BRIDGE_BACKOFF_MIN_MS, MAIN_BRIDGE_PORT_MAX, MAIN_BRIDGE_PORT_MIN } from './storage.js';
+import { proposalStep, recallNotes, type NoteKind, type WatchProposal } from './watcher.js';
+import { WAKE_MS_MAX, WAKE_MS_MIN } from './wake.js';
+import { contextText } from './context-workflow.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
-import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS } from './ai.js';
+import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, MASTER_PROMPT_MAX, type AiView } from './ai.js';
 import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-history.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
+import { OPERATION_RETRIES_MAX, OPERATION_RETRIES_MIN } from './operation-retry.js';
+import { PLAYBACK_WINDOW_SEC_MAX, PLAYBACK_WINDOW_SEC_MIN } from './playback.js';
 import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
+import { CREW_SIZE_MAX, CREW_SIZE_MIN, clampCrewSize } from './crew.js';
 import { BackupSettings } from './backup-panel.js';
+import { FixScriptReview } from './screen-ai-panels.js';
+import { sectionMemoryLines } from './sections.js';
+import { replicaLine } from './replicate.js';
+import { SIDE_TEST_MODES, feedbackLine, type SideTestMode } from './side-test.js';
+import { RecoverySettings, RelaxSettings } from './relax-recovery-settings.js';
 import styles from './droid-assist.module.css';
 
-const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity' };
+const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity', wake: 'Wake', decision: 'Decision', error: 'Error' };
 const clock = (t: number) => new Date(t).toLocaleTimeString();
 
 /** One proposal with Accept / Dismiss (pending) and Test (when it has an on-screen target). */
@@ -42,6 +57,12 @@ function ProposalItem({ engine, p }: { engine: AssistEngine; p: WatchProposal })
       {proposalStep(p) && (
         <button type="button" onClick={() => void engine.testProposal(p.id)} title={engine.armed ? 'Real click (armed, budgeted)' : 'Dry run — nothing is sent'}>Test</button>
       )}
+      {p.related?.length ? (
+        <details>
+          <summary>{p.related.length} related prior operation(s)</summary>
+          <ul>{p.related.map((line) => <li key={line}>{line}</li>)}</ul>
+        </details>
+      ) : null}
     </li>
   );
 }
@@ -68,6 +89,37 @@ export function WatcherPanel({ engine }: { engine: AssistEngine }) {
       <ul className={styles.log}>
         {notes.map((n) => <li key={n.id}><small>{clock(n.time)}</small> <b>{NOTE_LABEL[n.kind]}</b> {n.text}</li>)}
       </ul>
+    </section>
+  );
+}
+
+/** Wake and continue: the running wait, parallel context workflows, and this operation's notes grouped by kind. */
+export function WakePanel({ engine }: { engine: AssistEngine }) {
+  const { wait, contexts, endContext } = engine.wake;
+  const op = engine.goal.trim();
+  const opNotes = op ? recallNotes(engine.watcher.notes, { op }) : [];
+  const errors = recallNotes(engine.watcher.notes, { kind: 'error' });
+  return (
+    <section className={styles.panel} aria-label="Wake and continue">
+      <h3>Wake and continue <small>{engine.settings.stages.wake ? `wakes after ${(engine.settings.wakeMs / 1000).toFixed(0)} s` : 'off — enable Wake and continue in Loop control'}</small></h3>
+      {wait ? (
+        <p>Waiting before <b>{wait.step}</b> on: {wait.waitingOn} <small>· since {clock(wait.since)} · wakes in {Math.round(wait.delay / 1000)} s</small></p>
+      ) : (
+        <p className={styles.muted}>Not waiting.</p>
+      )}
+      <h4>Parallel workflows <small>{contexts.filter((c) => c.running).length} running</small></h4>
+      <ul className={styles.log}>
+        {contexts.map((c) => (
+          <li key={c.id} data-tone={c.running ? 'ok' : 'info'}>
+            <small>{clock(c.time)} · {c.by}</small> {contextText(c)}
+            {c.running && <button type="button" onClick={() => endContext(c.id, 'user')}>Stop</button>}
+          </li>
+        ))}
+      </ul>
+      <h4>This operation <small>{opNotes.length} note(s)</small></h4>
+      <ul className={styles.log}>{opNotes.map((n) => <li key={n.id}><small>{clock(n.time)} · {n.source ?? 'Screen watcher'}</small> <b>{NOTE_LABEL[n.kind]}</b> {n.text}</li>)}</ul>
+      <h4>Errors <small>{errors.length}</small></h4>
+      <ul className={styles.log}>{errors.map((n) => <li key={n.id} data-tone="error"><small>{clock(n.time)} · {n.source ?? ''}{n.op ? ` · ${n.op}` : ''}</small> {n.text}</li>)}</ul>
     </section>
   );
 }
@@ -277,6 +329,7 @@ export function CapabilitiesPanel({ engine }: { engine: AssistEngine }) {
 const STAGE_GROUPS: Array<{ group: StageGroup; title: string }> = [
   { group: 'pipeline', title: 'Pipeline' },
   { group: 'agent', title: 'Agents' },
+  { group: 'operations', title: 'Operations' },
 ];
 
 /**
@@ -319,10 +372,47 @@ export function AgentsPanel({ engine }: { engine: AssistEngine }) {
       {agents.map((a) => (
         <label key={a.id} className={styles.agent}>
           <input type="checkbox" checked={a.on} onChange={(e) => void engine.invoke(`agent.${a.id}`, { on: e.target.checked })} />
-          <span><strong>{a.name}</strong><small>{a.description}</small></span>
+          <span><strong>{a.name}</strong><small>{a.description}</small>{a.id === 'goalTracer' && <small aria-label="Goal tracer status">Live: {engine.tracerStatus}</small>}</span>
         </label>
       ))}
     </section>
+  );
+}
+
+/** Settings › Main app bridge: enabled, listen/dial, address, token and reconnect backoff, with the live status. */
+function MainBridgeSettings({ engine }: { engine: AssistEngine }) {
+  const { settings, setSettings } = engine;
+  const set = (patch: Partial<AssistSettings>) => setSettings({ ...settings, ...patch });
+  const clamp = (v: number, min: number, max: number, fallback: number) => (Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : fallback);
+  const listen = settings.mainBridgeMode === 'listen';
+  return (
+    <fieldset className={styles.setting} aria-label="Main app bridge">
+      <legend>Main app bridge</legend>
+      <MainBridgeBadge state={engine.mainBridge} />
+      <label><input type="checkbox" checked={settings.mainBridgeEnabled} onChange={(e) => set({ mainBridgeEnabled: e.target.checked })} aria-label="Main app bridge enabled" /> Enabled — starts with this app</label>
+      <label>Mode
+        <select value={settings.mainBridgeMode} onChange={(e) => set({ mainBridgeMode: e.target.value as AssistSettings['mainBridgeMode'] })} aria-label="Main app bridge mode">
+          <option value="listen">Listen — wait for the main app to connect</option>
+          <option value="dial">Dial — connect to the main app URL</option>
+        </select>
+      </label>
+      {listen ? (
+        <span className={styles.row}>
+          <input value={settings.mainBridgeHost} onChange={(e) => set({ mainBridgeHost: e.target.value })} aria-label="Main app bridge host" placeholder="127.0.0.1" />
+          <input type="number" min={MAIN_BRIDGE_PORT_MIN} max={MAIN_BRIDGE_PORT_MAX} value={settings.mainBridgePort} onChange={(e) => set({ mainBridgePort: clamp(e.target.valueAsNumber, MAIN_BRIDGE_PORT_MIN, MAIN_BRIDGE_PORT_MAX, settings.mainBridgePort) })} aria-label="Main app bridge port" />
+        </span>
+      ) : (
+        <input value={settings.mainBridgeUrl} onChange={(e) => set({ mainBridgeUrl: e.target.value })} aria-label="Main app URL" placeholder="http://127.0.0.1:5000 or ws://host:port" />
+      )}
+      <label>Token (optional)
+        <input type="password" value={settings.mainBridgeToken} onChange={(e) => set({ mainBridgeToken: e.target.value })} aria-label="Main app bridge token" autoComplete="off" />
+        <small>Sent as ?token= on the WebSocket and as a Bearer token over HTTP; never written to the activity log.</small>
+      </label>
+      <span className={styles.row}>
+        <label>Retry after <input type="number" min={MAIN_BRIDGE_BACKOFF_MIN_MS} max={10000} step={250} value={settings.mainBridgeBackoffMinMs} onChange={(e) => set({ mainBridgeBackoffMinMs: clamp(e.target.valueAsNumber, MAIN_BRIDGE_BACKOFF_MIN_MS, 10000, settings.mainBridgeBackoffMinMs) })} aria-label="Main app bridge first retry (ms)" /> ms</label>
+        <label>up to <input type="number" min={1000} max={MAIN_BRIDGE_BACKOFF_MAX_MS} step={1000} value={settings.mainBridgeBackoffMaxMs} onChange={(e) => set({ mainBridgeBackoffMaxMs: clamp(e.target.valueAsNumber, 1000, MAIN_BRIDGE_BACKOFF_MAX_MS, settings.mainBridgeBackoffMaxMs) })} aria-label="Main app bridge longest retry (ms)" /> ms</label>
+      </span>
+    </fieldset>
   );
 }
 
@@ -352,12 +442,32 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>Screen watcher: observe every <b>{(settings.watchMs / 1000).toFixed(1)} s</b>
         <input type="range" min={WATCH_MS_MIN} max={WATCH_MS_MAX} step={500} value={settings.watchMs} onChange={(e) => void engine.invoke('setting.watchMs', { value: +e.target.value })} />
       </label>
+      <label className={styles.setting}>Wake timer: wake the AI after waiting <b>{(settings.wakeMs / 1000).toFixed(0)} s</b>
+        <small>The AI may ask for a longer wait when it estimates one; the backup watcher can wake it earlier.</small>
+        <input type="range" min={WAKE_MS_MIN} max={WAKE_MS_MAX} step={5000} value={settings.wakeMs} onChange={(e) => setSettings({ ...settings, wakeMs: +e.target.value })} aria-label="Wake timer" />
+      </label>
       <label className={styles.setting}>Screen-change threshold <b>{settings.changeCells} cells</b>
         <input type="range" min={2} max={40} value={settings.changeCells} onChange={(e) => setSettings({ ...settings, changeCells: +e.target.value })} aria-label="Screen-change threshold" />
+      </label>
+      <label className={styles.setting}>Goal tracer: stalled after <b>{settings.goalStall} setback(s)</b>
+        <small>Failed steps or goal checks without progress in a row before the tracer reports a stall.</small>
+        <input type="range" min={GOAL_STALL_MIN} max={GOAL_STALL_MAX} value={settings.goalStall} onChange={(e) => setSettings({ ...settings, goalStall: +e.target.value })} aria-label="Goal tracer stall threshold" />
       </label>
       <label className={styles.setting}>Retries per failed step <b>{settings.stepRetries}</b>
         <small>Each retry re-verifies and re-corrects the target and spends budget; then the planner re-plans the step once.</small>
         <input type="range" min={STEP_RETRIES_MIN} max={STEP_RETRIES_MAX} value={settings.stepRetries} onChange={(e) => void engine.invoke('setting.stepRetries', { value: +e.target.value })} aria-label="Retries per failed step" />
+      </label>
+      <label className={styles.setting}>Crew size <b>{settings.crewSize} agents</b>
+        <small>Worker agents the main AI assigns to coordinate sentinels, path checkers, adjusters, test runners and monitors.</small>
+        <input type="range" min={CREW_SIZE_MIN} max={CREW_SIZE_MAX} value={settings.crewSize} onChange={(e) => setSettings({ ...settings, crewSize: clampCrewSize(+e.target.value) })} aria-label="Crew size" />
+      </label>
+      <label className={styles.setting}>Retries of a detected operation <b>{settings.operationRetries}</b>
+        <small>After a run or playback, the best variant of a recently performed operation is retried up to this many times, each verified by screenshot comparison (0 = off).</small>
+        <input type="range" min={OPERATION_RETRIES_MIN} max={OPERATION_RETRIES_MAX} value={settings.operationRetries} onChange={(e) => setSettings({ ...settings, operationRetries: +e.target.value })} aria-label="Retries of a detected operation" />
+      </label>
+      <label className={styles.setting}>Playback window <b>{settings.playbackWindowSec} s</b>
+        <small>How far back the playback of the main app's actions reaches (30 s to 10 min).</small>
+        <input type="range" min={PLAYBACK_WINDOW_SEC_MIN} max={PLAYBACK_WINDOW_SEC_MAX} step={30} value={settings.playbackWindowSec} onChange={(e) => setSettings({ ...settings, playbackWindowSec: +e.target.value })} aria-label="Playback window seconds" />
       </label>
       <label className={styles.setting}>Max real input actions per run <b>{settings.actionBudget}</b>
         <input type="number" min={1} value={settings.actionBudget} onChange={(e) => void engine.invoke('guard.budget', { limit: sanitizeBudget(e.target.valueAsNumber) })} />
@@ -369,6 +479,14 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <label className={styles.setting}>AI request timeout <b>{settings.aiTimeoutMs / 1000} s</b>
         <small>A model call with no reply by then fails; queued calls start their clock when they leave the queue. Stop still cancels at once.</small>
         <input type="range" min={AI_TIMEOUT_MS_MIN} max={AI_TIMEOUT_MS_MAX} step={5000} value={settings.aiTimeoutMs} onChange={(e) => setSettings({ ...settings, aiTimeoutMs: +e.target.value })} aria-label="AI request timeout" />
+      </label>
+      <label className={styles.setting}>
+        <span><input type="checkbox" checked={settings.aiOverlap} onChange={(e) => setSettings({ ...settings, aiOverlap: e.target.checked })} aria-label="AI overlap mode" /> AI overlap mode</span>
+        <small>Each AI ask also fires a second, freshly worded call through the same queue; the first valid answer wins and the other is cancelled.</small>
+      </label>
+      <label className={styles.setting}>Master Prompt Override
+        <small>Steers every goal, task, operation and workflow — preferred methods, tone, mood. Added to every AI prompt; leave empty for none.</small>
+        <textarea value={settings.masterPrompt} maxLength={MASTER_PROMPT_MAX} onChange={(e) => setSettings({ ...settings, masterPrompt: e.target.value.slice(0, MASTER_PROMPT_MAX) })} aria-label="Master Prompt Override" placeholder="e.g. Prefer keyboard shortcuts, be cautious, keep a calm tone" />
       </label>
       <label className={styles.setting}>Emergency-stop hotkey <b>{settings.abortHotkey}</b>
         <input
@@ -404,6 +522,7 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         <input type="password" value={settings.bridgeToken} onChange={(e) => setSettings({ ...settings, bridgeToken: e.target.value })} aria-label="Bridge auth token" autoComplete="off" />
         <small>Must match DROID_BRIDGE_TOKEN on the bridge; sent as a Bearer token on every bridge call and never written to the activity log.</small>
       </label>
+      <MainBridgeSettings engine={engine} />
       <label className={styles.setting}>AI endpoint (Ollama /api/chat)
         <input value={settings.aiUrl} onChange={(e) => setSettings({ ...settings, aiUrl: e.target.value })} aria-label="AI endpoint URL" />
       </label>
@@ -413,13 +532,28 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         </select>
         <small>Size of the screenshot the model sees; replies are scaled back to the 480x270 sample space.</small>
       </label>
+      <label className={styles.setting}>Side tests run in
+        <select value={settings.sideTestMode} onChange={(e) => setSettings({ ...settings, sideTestMode: e.target.value as SideTestMode })} aria-label="Side test mode">
+          {SIDE_TEST_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <small>Background keeps the main capture and acts via the bridge; foreground switches to the side window first.</small>
+      </label>
       <ModelPicker url={settings.aiUrl} model={settings.aiModel} onSelect={(aiModel) => setSettings({ ...settings, aiModel })} />
+      <label className={styles.setting}>
+        <input type="checkbox" checked={settings.aiThink} onChange={(e) => setSettings({ ...settings, aiThink: e.target.checked })} aria-label="Model thinking" />
+        Model thinking (may slow replies / empty answers)
+        <small>Off sends think:false; small models can spend the whole reply thinking and return an empty answer.</small>
+        <small>Escalation (when on): a thinking-only reply is retried 3 times with the thinking added to the conversation, then a similar question, then a re-ask with fresh app context (screenshot, elements, log, goal, habits), then two overlapping calls. If none answers, the thinking is shown as the response and a next workflow is proposed in the Screen watcher.</small>
+      </label>
       <span className={styles.row}>
         <button type="button" onClick={() => void engine.connectAi()} disabled={engine.aiStatus.state === 'checking' || !settings.aiUrl} aria-label="Connect AI">Connect</button>
         <AiStatusBadge status={engine.aiStatus} />
       </span>
       <ErrorForwardingSettings engine={engine} />
       <BackupSettings onExport={() => void engine.invoke('backup.export')} />
+      <RelaxSettings engine={engine} />
+      <BackupSettings />
+      <RecoverySettings engine={engine} />
     </section>
   );
 }
@@ -585,12 +719,23 @@ export function ElementsPanel({ engine }: { engine: AssistEngine }) {
 
 /** Element map studio: toggle the map mode, name the drawn box, list and delete mapped elements. */
 export function ElementMapPanel({ engine }: { engine: AssistEngine }) {
-  const { elementMap, mapMode, mapDraft } = engine;
+  const { elementMap, mapMode, mapDraft, settings, setSettings } = engine;
   const [name, setName] = useState('');
   return (
     <section className={styles.panel} aria-label="Element map">
       <h3>Element map <small>{elementMap.length} mapped · own {MAP_ROWS}x{MAP_COLS} grid</small></h3>
       <button type="button" aria-pressed={mapMode} onClick={() => void engine.invoke('map.toggle')}>{mapMode ? 'Done mapping' : 'Map elements'}</button>
+      <button type="button" aria-pressed={mapMode} onClick={engine.toggleMapMode}>{mapMode ? 'Done mapping' : 'Map elements'}</button>
+      <button type="button" onClick={() => engine.scanNow()}>Scan now</button>
+      <label>
+        <input type="checkbox" checked={settings.autoScan} onChange={(e) => setSettings({ ...settings, autoScan: e.target.checked })} /> Auto-scan every frame
+      </label>
+      <label>
+        Training{' '}
+        <select value={settings.trainMode} onChange={(e) => setSettings({ ...settings, trainMode: e.target.value as TrainMode })} aria-label="Training mode">
+          {TRAIN_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+      </label>
       {mapMode && !mapDraft && <p className={styles.muted}>Click-drag on the live screen to draw an element's boundary.</p>}
       {mapDraft && (
         <form
@@ -606,14 +751,91 @@ export function ElementMapPanel({ engine }: { engine: AssistEngine }) {
         </form>
       )}
       <ul className={styles.log}>
-        {elementMap.map((el) => (
-          <li key={el.id} data-tone="info">
-            <b>{el.name}</b> · {mapCells(el.box)} · center {gridRef(boxCenter(el.box))}
-            <button type="button" aria-label={`Delete ${el.name}`} onClick={() => engine.deleteMapped(el.id)}>✕</button>
+        {elementMap.map((el) => <MappedItem key={el.id} engine={engine} el={el} />)}
+      </ul>
+      {engine.training && <TrainingReportView report={engine.training} />}
+    </section>
+  );
+}
+
+const MOTION_LABEL: Record<MotionKind, string> = { static: 'static', moved: 'moved', in_motion: 'always in motion' };
+
+/** Where an element is and was: motion label with move counts, ghost positions with counts, and observed timing. */
+function TrackingInfo({ el }: { el: MappedElement }) {
+  const motion = motionOf(el);
+  const timing = motionTiming(el);
+  const ghosts = ghostPositions(el);
+  return (
+    <small>
+      {' '}· {el.origin === 'auto' ? `auto ${el.kind ?? ''}` : 'drawn'} · <b>{MOTION_LABEL[motion.kind]}</b>
+      {motion.kind !== 'static' && ` (user ${motion.user}, AI ${motion.ai}, self ${motion.self})`}
+      {el.timesSeen !== undefined && ` · seen ${el.timesSeen}× (${countHere(el)}× here)`}
+      {ghosts.length > 0 && ` · was at ${ghosts.map((g) => `${mapCells(g.box)} ${g.count}×`).join(', ')}`}
+      {timing && ` · moves every ~${Math.round(timing.meanMs)} ms ±${Math.round(timing.jitterMs)} (intervals ${timing.intervals.map((i) => Math.round(i)).join('/')}) · next move ~${new Date(timing.nextAt).toLocaleTimeString()}`}
+    </small>
+  );
+}
+
+/** The user's perform editor: kind, text for type, drop element for drag. */
+function PerformEditor({ engine, el }: { engine: AssistEngine; el: MappedElement }) {
+  const [kind, setKind] = useState<PerformKind>(el.perform?.kind ?? 'click');
+  const [text, setText] = useState(el.perform?.text ?? '');
+  const [drop, setDrop] = useState(el.perform?.toElementId ?? '');
+  const others = engine.elementMap.filter((o) => o.id !== el.id);
+  const draft: PerformFn = { kind, source: 'user', ...(kind === 'type' ? { text } : {}), ...(kind === 'drag' && drop ? { toElementId: drop } : {}) };
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        engine.setElementPerform(el.id, draft);
+      }}
+    >
+      <select value={kind} onChange={(e) => setKind(e.target.value as PerformKind)} aria-label={`Perform of ${el.name}`}>
+        {PERFORM_KINDS.map((k) => <option key={k} value={k}>{k.replace('_', ' ')}</option>)}
+      </select>
+      {kind === 'type' && <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Text to type" aria-label={`Text for ${el.name}`} />}
+      {kind === 'drag' && (
+        <select value={drop} onChange={(e) => setDrop(e.target.value)} aria-label={`Drop target of ${el.name}`}>
+          <option value="">Drop on…</option>
+          {others.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+        </select>
+      )}
+      <button type="submit" disabled={!checkPerform(draft).ok}>Set perform</button>
+    </form>
+  );
+}
+
+/** One mapped element: tracking info, its perform, and the perform / workflow / training actions. */
+function MappedItem({ engine, el }: { engine: AssistEngine; el: MappedElement }) {
+  return (
+    <li data-tone={motionOf(el).kind === 'in_motion' ? 'warn' : 'info'}>
+      <b>{el.name}</b> · {mapCells(el.box)} · center {gridRef(boxCenter(el.box))}
+      <TrackingInfo el={el} />
+      {el.perform && <small> · performs {performText(el.perform, engine.elementMap)} ({el.perform.source === 'ai' ? 'AI' : 'you'})</small>}
+      <PerformEditor engine={engine} el={el} />
+      <button type="button" onClick={() => void engine.proposePerform(el.id)}>Ask AI</button>
+      <button type="button" disabled={!el.perform} onClick={() => engine.addNavigateStep(el.id)}>Add to workflow</button>
+      <button type="button" onClick={() => void engine.trainMapped(el.id)}>Train</button>
+      <button type="button" aria-label={`Delete ${el.name}`} onClick={() => engine.deleteMapped(el.id)}>✕</button>
+    </li>
+  );
+}
+
+/** The latest training session: status, each action with its screenshot, related elements and research. */
+function TrainingReportView({ report }: { report: TrainingReport }) {
+  return (
+    <div aria-label="Training report">
+      <h4>Training "{report.name}" <small>{report.mode} · {report.status} · {report.related.length} related</small></h4>
+      <ul className={styles.log}>
+        {report.entries.map((e, i) => (
+          <li key={i} data-tone={e.ok ? 'ok' : 'error'}>
+            {e.shot && <img src={e.shot.url} alt={`${e.label} screenshot`} width={96} />}
+            <b>{e.label}</b> — {e.message}
           </li>
         ))}
       </ul>
-    </section>
+      {report.research && <p>{report.research}</p>}
+    </div>
   );
 }
 
@@ -645,7 +867,7 @@ export function LearnedCoordsPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement', attempt: '🔄 Attempt' };
+const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement', attempt: '🔄 Attempt', snip: '✂️ Snip' };
 
 /** Tone of an entry: failures as errors, verdicts and checks by their outcome, unready proposals as warnings, the rest informational. */
 function entryTone(e: ThinkingEntry): LogEntry['tone'] {
@@ -656,8 +878,11 @@ function entryTone(e: ThinkingEntry): LogEntry['tone'] {
   return /^(SUCCESS|PASS)/.test(e.text) ? 'ok' : 'warn';
 }
 
+/** What the panel says when an entry carries no thinking: plainly why, never invented reasoning. */
+const thinkingAbsentText = (think: boolean) => (think ? 'No thinking returned by the model' : 'No thinking — thinking is disabled in Settings');
+
 /** One timeline entry: what the model answered and the thinking it returned — or plainly that there was none. */
-function ThinkingItem({ entry }: { entry: ThinkingEntry }) {
+function ThinkingItem({ entry, think }: { entry: ThinkingEntry; think: boolean }) {
   return (
     <li id={`think-${entry.id}`} data-tone={entryTone(entry)}>
       <time>{new Date(entry.time).toLocaleTimeString()}</time> <b>{entry.step}</b> · {KIND_LABEL[entry.kind]}
@@ -666,7 +891,8 @@ function ThinkingItem({ entry }: { entry: ThinkingEntry }) {
       ) : (
         <>
           <p>{entry.text}</p>
-          {entry.thinking ? <pre className={styles.muted}>{entry.thinking}</pre> : <p className={styles.muted}>No thinking returned by the model</p>}
+          {entry.frame && <img src={entry.frame.url} alt={`Snip for ${entry.step}`} style={{ maxWidth: '100%' }} />}
+          {entry.thinking ? <pre className={styles.muted}>{entry.thinking}</pre> : <p className={styles.muted}>{thinkingAbsentText(think)}</p>}
         </>
       )}
     </li>
@@ -712,8 +938,10 @@ function BriefingItem({ b }: { b: Briefing }) {
     <li data-tone={b.outcome === 'unresolved' ? 'warn' : 'ok'}>
       <small>{clock(b.time)}</small> <b>{b.stepName}</b> <small>· {b.outcome}</small>
       {b.aiNote && <p role="alert">{b.aiNote}</p>}
+      {b.mode && <p><b>Mode:</b> {b.mode}</p>}
       <h4>Objectives</h4>
       <p><b>Goal:</b> {o.goal || '(none)'}</p>
+      {o.progress && <p><b>Traced:</b> {o.progress}</p>}
       <ol>{o.sequence.map((s) => <li key={s.id}>{s.current ? <b>{s.action} "{s.target}" ← now</b> : `${s.action} "${s.target}" · ${s.status}`}</li>)}</ol>
       <p><b>What:</b> {o.what} — {o.action} "{o.target}" at ({(o.x * 100).toFixed(1)}%, {(o.y * 100).toFixed(1)}%)</p>
       <p><b>Why:</b> {o.why} <small>({o.source === 'ai' ? 'AI proposal' : 'local, AI not consulted'})</small></p>
@@ -724,22 +952,135 @@ function BriefingItem({ b }: { b: Briefing }) {
       {b.revisions.length > 0 && (
         <>
           <h4>Review and update</h4>
-          <ol>{b.revisions.map((r, i) => <li key={i}><small>{clock(r.time)}</small> <b>{r.kind}</b> {r.text}</li>)}</ol>
+          <ol>{b.revisions.map((r, i) => <li key={i}><small>{clock(r.time)}</small> <b>{r.kind}</b> {r.text}{r.snip && <img src={r.snip.url} alt={`Fresh snip for ${b.stepName}`} style={{ display: 'block', maxWidth: '100%' }} />}</li>)}</ol>
         </>
       )}
     </li>
   );
 }
 
+/** The multi-element chain: each objective's what, why and status, then the completion report (red when incomplete). */
+function ChainBreakdown({ chain }: { chain: ChainRun }) {
+  return (
+    <div aria-label="Chain objectives">
+      <h4>Objective breakdown <small>{chain.goal}</small></h4>
+      <ol className={styles.log}>
+        {chain.objectives.map((o) => (
+          <li key={o.id} data-tone={OBJECTIVE_TONE[o.status]}>
+            <b>{o.name}</b> <small>· {o.status}</small>
+            <p><b>What:</b> {o.what}{o.path.length > 0 && <small> (via {o.path.join(' → ')})</small>}</p>
+            <p><b>Why:</b> {o.why}</p>
+            {o.reason && <p><b>Reason:</b> {o.reason}</p>}
+          </li>
+        ))}
+      </ol>
+      {chain.report && (
+        <ul className={styles.log}>
+          <li data-tone={chain.report.complete ? 'ok' : 'error'} role={chain.report.complete ? undefined : 'alert'}><b>{chain.report.text}</b></li>
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** One snip: the image, its region and size, and Save to element map. */
+function SnipItem({ engine, s }: { engine: AssistEngine; s: Snip }) {
+  const [name, setName] = useState('');
+  return (
+    <figure>
+      <img src={s.frame.url} alt={`Snip ${s.label}`} />
+      <figcaption>
+        <small>{clock(s.time)} · {s.by}{s.displayId ? ` · display ${s.displayId}` : ''}</small> {snipText(s)}
+        {!s.displayId && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              engine.snipToMap(s.id, name);
+              setName('');
+            }}
+          >
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Element name" aria-label={`Name for snip ${s.label}`} />
+            <button type="submit" disabled={!name.trim()}>Save to element map</button>
+          </form>
+        )}
+      </figcaption>
+    </figure>
+  );
+}
+
+/** Snip gallery: regions the AI, agents, reroutes and the user snipped, newest first. */
+export function SnipGalleryPanel({ engine }: { engine: AssistEngine }) {
+  const { snips, snipMode } = engine;
+  return (
+    <section className={styles.panel} aria-label="Snip gallery">
+      <h3>Snips <small>{snips.length} kept</small></h3>
+      <button type="button" aria-pressed={snipMode} onClick={engine.toggleSnipMode}>{snipMode ? 'Cancel snip' : '✂ Snip a region'}</button>
+      {!snips.length && <p className={styles.muted}>Press ✂ Snip and drag a region on the screen, or type /snip x,y,w,h [WxH] [display id].</p>}
+      <div className={styles.gallery}>{snips.map((s) => <SnipItem key={s.id} engine={engine} s={s} />)}</div>
+    </section>
+  );
+}
+
 /** Pre-action briefing: the reasoning and evidence for each step, recorded before it dispatches. */
 export function BriefingPanel({ engine }: { engine: AssistEngine }) {
-  const { briefings, settings } = engine;
+  const { briefings, settings, chain, replicas } = engine;
   return (
     <section className={styles.panel} aria-label="Pre-action briefing">
       <h3>Pre-action briefing <small>{settings.stages.briefing ? `${briefings.length} recorded` : 'stage unchecked in Loop control'}</small></h3>
+      {chain && <ChainBreakdown chain={chain} />}
       {!briefings.length && <p className={styles.muted}>No step briefed yet.</p>}
+      <FixScriptReview engine={engine} />
       <ul className={styles.log}>
         {briefings.map((b) => <BriefingItem key={`${b.id}:${b.revisions.length}`} b={b} />)}
+      </ul>
+      {replicas.length > 0 && <h4>Replicated by the AI <small>{replicas.length}</small></h4>}
+      <ul className={styles.log} aria-label="Replicated elements">
+        {replicas.map((r) => (
+          <li key={r.id} data-tone="ok">
+            <img src={r.crop} alt={`Snip of ${r.name}`} width={48} /> {replicaLine(r)}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Screen sections: profiles drawn in the element map or proposed by the AI, the goal scope, cross-section memory and side tests. */
+export function SectionsPanel({ engine }: { engine: AssistEngine }) {
+  const { sectionProfiles, scope, mapDraft, sideResults } = engine;
+  const [name, setName] = useState('');
+  return (
+    <section className={styles.panel} aria-label="Screen sections">
+      <h3>Screen sections <small>{sectionProfiles.length} · scope {scope.length ? scope.join(', ') : 'whole screen'}</small></h3>
+      <button type="button" onClick={() => void engine.proposeSections()}>AI propose sections</button>
+      {mapDraft && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            engine.saveSection(name);
+            setName('');
+          }}
+        >
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Section name" aria-label="Section name" />
+          <button type="submit" disabled={!name.trim()}>Save drawn box as section</button>
+        </form>
+      )}
+      <ul className={styles.log}>
+        {sectionProfiles.map(({ section, elements, log, changes }) => (
+          <li key={section.id} data-tone={scope.includes(section.name) ? 'ok' : 'info'}>
+            <b>{section.name}</b> <small>· {section.source} · {mapCells(section.box)} · {elements.length} element(s) · {log.length} log · {changes.length} change(s)</small>
+            <button type="button" aria-label={`Delete section ${section.name}`} onClick={() => engine.deleteSection(section.id)}>✕</button>
+            <ul>{elements.map((el) => <li key={el.name}><small>{el.dossier}</small></li>)}</ul>
+          </li>
+        ))}
+      </ul>
+      <h4>Section memory</h4>
+      <ul className={styles.log} aria-label="Section memory">
+        {sectionMemoryLines(sectionProfiles).map((line) => <li key={line} data-tone="info"><small>{line}</small></li>)}
+      </ul>
+      <h4>Side tests <small>{sideResults.length}</small></h4>
+      <ul className={styles.log} aria-label="Side tests">
+        {sideResults.map((r) => <li key={r.id} data-tone={r.status === 'passed' ? 'ok' : 'warn'}><small>{feedbackLine(r)}</small></li>)}
       </ul>
     </section>
   );
@@ -754,7 +1095,7 @@ export function QwenThinkingPanel({ engine }: { engine: AssistEngine }) {
       {aiStatus.state === 'offline' && <p className={styles.muted} role="alert">{aiStatus.detail}</p>}
       {!timeline.length && <p className={styles.muted}>No AI calls yet.</p>}
       <ul className={styles.log}>
-        {timeline.map((e) => <ThinkingItem key={e.id} entry={e} />)}
+        {timeline.map((e) => <ThinkingItem key={e.id} entry={e} think={settings.aiThink} />)}
       </ul>
     </section>
   );

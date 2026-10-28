@@ -26,6 +26,7 @@ function installNative() {
     stopCapture: vi.fn(),
     listDisplays: vi.fn(async () => []),
     selectDisplay: vi.fn(),
+    grabDisplay: vi.fn(),
   };
   window.droidNative = api;
   return { api, hooks };
@@ -249,6 +250,33 @@ describe('useAssist Qwen thinking timeline', () => {
     expect(result.current.timeline[0]).toMatchObject({ kind: 'thought', text: 'Top bar', thinking: null });
   });
 
+  const thinkSent = (fetchImpl: ReturnType<typeof vi.fn>) => fetchImpl.mock.calls.map((c) => JSON.parse((c as unknown as [string, RequestInit])[1].body as string).think);
+
+  it('sends think:false on every AI request by default', async () => {
+    const fetchImpl = chatReply({ content: '{"answer":"Top bar","items":[]}' });
+    await askWith(fetchImpl);
+    expect(fetchImpl).toHaveBeenCalled();
+    expect(new Set(thinkSent(fetchImpl))).toEqual(new Set([false]));
+  });
+
+  it('sends think:true on every AI request when model thinking is on in Settings', async () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ aiThink: true }));
+    const fetchImpl = chatReply({ content: '{"answer":"Top bar","items":[]}', thinking: 'top' });
+    const result = await askWith(fetchImpl);
+    expect(new Set(thinkSent(fetchImpl))).toEqual(new Set([true]));
+    expect(result.current.timeline[0]).toMatchObject({ text: 'Top bar', thinking: 'top' });
+  });
+
+  it('accepts a thinking-only reply as the answer and shows what happened on the timeline and the log', async () => {
+    const result = await askWith(chatReply({ content: '', thinking: 'I think {"answer":"Search sits in the top bar","items":[]}' }));
+    const notice = result.current.timeline.find((e) => /only in its thinking/.test(e.text));
+    expect(notice).toMatchObject({ kind: 'thought', thinking: 'I think {"answer":"Search sits in the top bar","items":[]}' });
+    expect(notice!.text).toMatch(/self-test|queue/);
+    expect(result.current.timeline[0]).toMatchObject({ step: 'Ask: Where is search?', text: 'Search sits in the top bar' });
+    expect(result.current.log.some((l) => l.source === 'AI' && l.tone === 'warn' && /only in its thinking/.test(l.message))).toBe(true);
+    expect(result.current.aiStatus.state).toBe('online');
+  });
+
   it('records the plan thought, reflection and verdict of a /move step run through the pipeline', async () => {
     const replies: Record<string, Record<string, unknown>> = {
       plan: { content: '{"steps":[{"name":"Hover Files","action":"move","target":"files icon","x":0.1,"y":0.9}]}', thinking: 'Files sits bottom-left.' },
@@ -466,6 +494,70 @@ describe('useAssist key and scroll recorder with human timing', () => {
     act(() => result.current.triggerAbort('test'));
     await act(() => result.current.replay());
     expect(result.current.history).toHaveLength(0);
+  });
+});
+
+describe('useAssist multi-element chain', () => {
+  const objective = (name: string, extra: Record<string, unknown>) => ({ name, what: `${name} on the desktop`, why: `${name} is the next element of the goal`, action: 'move', target: name, ...extra });
+
+  function stubChain(objectives: unknown[], discovery = '{"visible":false,"step":null,"why":"no menu reveals it"}') {
+    const replies: Record<string, Record<string, unknown>> = {
+      plan: { content: JSON.stringify({ objectives }), thinking: 'Three elements in order.' },
+      discover: { content: discovery, thinking: null },
+      reflect: { content: 'Done.', thinking: null },
+      verdict: { content: '{"success":true,"pattern_avoid":null,"pattern_add":null}', thinking: null },
+      propose: { content: '{"ready":true,"x":0.055,"y":0.105,"why":"it is the next element of the chain."}', thinking: null },
+    };
+    const pick = (body: string) => (body.includes('discovery agent') ? 'discover' : body.includes('final verdict') ? 'verdict' : body.includes('reviewing a step') ? 'reflect' : body.includes('state WHAT') ? 'propose' : 'plan');
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => new Response(JSON.stringify({ message: { role: 'assistant', ...replies[pick(init.body as string)] } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    return fetch;
+  }
+
+  async function chain(goal: string) {
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.toggleArmed());
+    act(() => result.current.setGoal(goal));
+    await act(() => result.current.submitInput());
+    return result;
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('plans the objective breakdown and executes every element in order with before/after screenshots', async () => {
+    const fetch = stubChain([objective('Files icon', { x: 0.055, y: 0.105 }), objective('Game icon', { x: 0.055, y: 0.425, path: ['Files icon'] }), objective('Notes icon', { x: 0.055, y: 0.265 })]);
+    const result = await chain('hover Files, then hover Game; hover Notes');
+    const run = result.current.chain!;
+    expect(run.goal).toBe('hover Files, then hover Game; hover Notes');
+    expect(run.objectives.map((o) => [o.name, o.status])).toEqual([['Files icon', 'done'], ['Game icon', 'done'], ['Notes icon', 'done']]);
+    expect(run.objectives[1]).toMatchObject({ what: 'Game icon on the desktop', why: 'Game icon is the next element of the goal', path: ['Files icon'] });
+    expect(run.report).toMatchObject({ complete: true, failed: null });
+    expect(result.current.steps.map((s) => s.status)).toEqual(['done', 'done', 'done']);
+    const planCalls = fetch.mock.calls.filter(([, init]) => (init.body as string).includes('MULTI-ELEMENT CHAIN'));
+    expect(planCalls).toHaveLength(1);
+    const chainLog = result.current.log.filter((l) => l.source === 'Chain').map((l) => l.message);
+    expect(chainLog.some((m) => m.startsWith('Chain COMPLETE — 3/3'))).toBe(true);
+  });
+
+  it('discovers a hidden target, then reports INCOMPLETE in red naming the failed objective and why', async () => {
+    stubChain([objective('Files icon', { x: 0.055, y: 0.105 }), objective('Talk option', { discover: 'behind the menu' }), objective('Game icon', { x: 0.055, y: 0.425 })]);
+    const result = await chain('hover Files, talk to the priest, hover Game');
+    const run = result.current.chain!;
+    expect(run.objectives.map((o) => o.status)).toEqual(['done', 'failed', 'not run']);
+    expect(run.objectives[1].reason).toMatch(/not found/);
+    expect(run.report).toMatchObject({ complete: false, failed: { name: 'Talk option' } });
+    const discovery = result.current.log.find((l) => l.source === 'Chain' && l.message.startsWith('Discovery 1/3 for "Talk option"'));
+    expect(discovery?.message).toMatch(/gave up — no menu reveals it/);
+    const incomplete = result.current.log.find((l) => l.source === 'Chain' && l.message.startsWith('Chain INCOMPLETE'));
+    expect(incomplete).toMatchObject({ tone: 'error' });
+    expect(incomplete?.message).toMatch(/objective 2 "Talk option" failed: target not found.*1\/3 done, 1 not run/);
+  });
+
+  it('keeps a single-clause goal on the single plan path', async () => {
+    stubChain([]);
+    const result = await chain('dismiss the ads and play the videos');
+    expect(result.current.chain).toBeNull();
   });
 });
 
@@ -762,7 +854,7 @@ describe('useAssist auto-continue and AI stop', () => {
 });
 
 describe('useAssist loop control', () => {
-  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'variations'] as const;
+  const ALL_STAGES = ['planner', 'grounding', 'briefing', 'executor', 'reflect', 'verdict', 'autoContinue', 'screenResponder', 'popup', 'drift', 'progress', 'goal', 'screenWatcher', 'identify', 'coords', 'supervisor', 'elementMap', 'subagents', 'variations', 'trainer', 'sideTests', 'wake', 'contextWorkflow', 'initiativeScan', 'selfTest', 'workarounds', 'workflowCreation', 'goalTracer', 'projects', 'crew', 'dragTrackers', 'opsMonitor', 'opsLogging', 'opsTesting', 'opsApply', 'opsRecheck', 'opsReapply', 'opsLoopControl', 'opsPlacement', 'opsScreenshots'] as const;
 
   /** A model whose reflection call hangs until cancelled; every other prompt gets a plain answer. */
   function hangingReflect() {
@@ -1031,11 +1123,26 @@ describe('useAssist agent forwarding and subagent link tests', () => {
   it('forwards an element from any agent into every other inbox', () => {
     const { result } = renderHook(() => useAssist());
     act(() => result.current.forwardElement('drift', { name: 'Search box', x: 0.5, y: 0.1 }));
-    expect(new Set(result.current.bus.map((m) => m.to)).size).toBe(7);
+    expect(new Set(result.current.bus.map((m) => m.to)).size).toBe(10);
     expect(result.current.bus.every((m) => m.status === 'handled')).toBe(true);
     expect(result.current.knownElements[0].name).toBe('Search box');
     expect(result.current.patterns[0]).toMatchObject({ kind: 'add' });
     expect(result.current.annotations.some((a) => a.label === 'Watching: Search box')).toBe(true);
+  });
+
+  it('/section and /scope seclude the goal to named sections; /scope all lifts it', async () => {
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    for (const cmd of ['/section Sidebar 0,0,0.2,1', '/section Toolbar 0.2,0,0.8,0.1', '/scope sidebar, nowhere']) {
+      act(() => result.current.setGoal(cmd));
+      await act(() => result.current.submitInput());
+    }
+    expect(result.current.sections.map((s) => s.name)).toEqual(['Toolbar', 'Sidebar']);
+    expect(result.current.scope).toEqual(['Sidebar']);
+    expect(result.current.log[0].message).toMatch(/secluded to Sidebar.*unknown: nowhere/);
+    act(() => result.current.setGoal('/scope all'));
+    await act(() => result.current.submitInput());
+    expect(result.current.scope).toEqual([]);
   });
 });
 
@@ -1205,7 +1312,7 @@ describe('useAssist Screen watcher', () => {
     await act(() => vi.advanceTimersByTimeAsync(5000 * 3 + 100));
     expect(watcherCalls(fetchMock)).toBeGreaterThanOrEqual(2);
     // A static screen: the same notes and proposal every round are kept once.
-    expect(result.current.watcher.notes.map((n) => n.text)).toEqual(['Files sidebar item at the left', 'An ad covers the top right']);
+    expect(result.current.watcher.notes.filter((n) => n.kind !== 'error').map((n) => n.text)).toEqual(['Files sidebar item at the left', 'An ad covers the top right']);
     expect(result.current.watcher.proposals).toHaveLength(1);
     expect(result.current.timeline.some((e) => e.step === 'Screen watcher' && e.thinking === 'watching')).toBe(true);
     // Its background test ran once (no bridge here, so it failed) and fed the pattern system.
@@ -1214,7 +1321,7 @@ describe('useAssist Screen watcher', () => {
     expect(result.current.watcher.tests[0].tried).toMatch(/Dry-run click on "Files sidebar item"/);
     expect(result.current.patterns.some((p) => p.kind === 'avoid' && /Files sidebar item/.test(p.pattern))).toBe(true);
     expect(result.current.history).toHaveLength(0);
-    expect(JSON.parse(localStorage.getItem('droid-assist.watcher')!).notes).toHaveLength(2);
+    expect(JSON.parse(localStorage.getItem('droid-assist.watcher')!).notes.filter((n: { kind: string }) => n.kind !== 'error')).toHaveLength(2);
   });
 
   it('makes no model call while its stage is off, and none without a live capture', async () => {
@@ -1364,5 +1471,206 @@ describe('useAssist habits', () => {
     const { result } = renderHook(() => useAssist());
     expect(result.current.habits.map((h) => h.id)).toEqual(['h1', 'h2']);
     expect(result.current.patterns.map((p) => p.id)).toEqual(['p1', 'p2']);
+  });
+});
+
+describe('useAssist element auto-mapping, perform and training', () => {
+  /** A native frame: black with white filled rectangles [x0, y0, x1, y1] in 320x180 sample pixels. */
+  const painted = (rects: Array<[number, number, number, number]>): NativeFrame => {
+    const f = frame();
+    for (let i = 3; i < f.pixels.length; i += 4) f.pixels[i] = 255;
+    for (const [x0, y0, x1, y1] of rects) {
+      for (let y = y0; y < y1; y++) f.pixels.fill(255, (y * 320 + x0) * 4, (y * 320 + x1) * 4);
+    }
+    return f;
+  };
+
+  it('auto-maps every element of each captured frame and keeps a moved element\'s ghost with counts', async () => {
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(painted([[20, 20, 60, 40], [200, 120, 260, 150]])));
+    expect(result.current.elementMap).toHaveLength(2);
+    expect(result.current.elementMap.every((e) => e.origin === 'auto' && e.timesSeen === 1)).toBe(true);
+    act(() => hooks.onFrame!(painted([[20, 20, 60, 40], [200, 120, 260, 150]])));
+    expect(result.current.elementMap.map((e) => e.timesSeen)).toEqual([2, 2]);
+    act(() => hooks.onFrame!(painted([[20, 20, 60, 40], [230, 120, 290, 150]])));
+    expect(result.current.elementMap).toHaveLength(2);
+    const moved = result.current.elementMap.find((e) => e.moves?.length)!;
+    expect(moved.moves).toMatchObject([{ cause: 'self' }]);
+    expect(moved.positions?.map((p) => p.count).sort()).toEqual([1, 2]);
+    expect(result.current.log.find((l) => l.source === 'Auto-scan')?.message).toMatch(/1 moved/);
+    expect(JSON.parse(localStorage.getItem('droid-assist.element-map')!).find((e: { id: string }) => e.id === moved.id).positions).toHaveLength(2);
+  });
+
+  it('maps nothing per frame with auto-scan off, and on demand with Scan now', async () => {
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.setSettings({ ...result.current.settings, autoScan: false }));
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(painted([[100, 60, 160, 90]])));
+    expect(result.current.elementMap).toEqual([]);
+    act(() => result.current.scanNow());
+    expect(result.current.elementMap).toHaveLength(1);
+  });
+
+  it('sets a user perform and adds an auto-navigate step that references the element', async () => {
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(painted([[100, 60, 160, 90]])));
+    const id = result.current.elementMap[0].id;
+    act(() => result.current.addNavigateStep(id));
+    expect(result.current.steps).toEqual([]);
+    expect(result.current.log[0].message).toMatch(/no perform function/);
+    act(() => result.current.setElementPerform(id, { kind: 'type', text: 'hello', source: 'user' }));
+    expect(result.current.elementMap[0].perform).toMatchObject({ kind: 'type', text: 'hello', source: 'user' });
+    act(() => result.current.addNavigateStep(id));
+    expect(result.current.steps[0]).toMatchObject({ action: 'type', text: 'hello', mappedId: id });
+    expect(result.current.steps[0].x).toBeCloseTo(130 / 320, 1);
+  });
+
+  it('trains an element on its own background task as a disarmed dry run and reports it', async () => {
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(painted([[100, 60, 160, 90]])));
+    await act(() => result.current.trainMapped(result.current.elementMap[0].id));
+    expect(result.current.training).toMatchObject({ mode: 'background' });
+    expect(result.current.training?.status).not.toBe('running');
+    expect(result.current.training?.entries.length).toBeGreaterThan(0);
+    expect(result.current.log.some((l) => l.source === 'Trainer' && /dry run/.test(l.message))).toBe(true);
+  });
+});
+
+describe('useAssistExecutionModes', () => {
+  it('defaults to thoughtful, with the capture interval unmodified', () => {
+    const { result } = renderHook(() => useAssist());
+    expect(result.current.settings.executionMode).toBe('thoughtful');
+    expect(result.current.intervalMs).toBe(result.current.settings.captureMs);
+  });
+
+  it('user switches mode from the HUD: logged once, persisted, re-selecting logs nothing, guardrails untouched', () => {
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.setMode('parallel', 'selected in the HUD', 'user'));
+    expect(result.current.settings.executionMode).toBe('parallel');
+    const modeLogs = result.current.log.filter((l) => l.source === 'Mode');
+    expect(modeLogs).toHaveLength(1);
+    expect(modeLogs[0].message).toMatch(/User/);
+    expect(modeLogs[0].message).toMatch(/Thoughtful/);
+    expect(modeLogs[0].message).toMatch(/Parallel/);
+    expect(JSON.parse(localStorage.getItem('droid-assist.settings')!).executionMode).toBe('parallel');
+    act(() => result.current.setMode('parallel', 'selected in the HUD', 'user'));
+    expect(result.current.log.filter((l) => l.source === 'Mode')).toHaveLength(1);
+    expect(result.current.armed).toBe(false);
+    expect(result.current.settings.autoApply).toEqual({ enabled: false, minConfidence: 0.8, maxShift: 0.05, maxPerRun: 5 });
+  });
+
+  it('AI switches to a low-cadence mode: capture interval clamped, change announced', () => {
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.setMode('watching', 'movie', 'ai'));
+    expect(result.current.intervalMs).toBe(2000);
+    expect(result.current.modeChange).toMatch(/AI/);
+    expect(result.current.modeChange).toMatch(/movie/);
+  });
+
+  it('loads a stored execution mode, and falls back to thoughtful for an unknown one', () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ executionMode: 'tracking' }));
+    expect(renderHook(() => useAssist()).result.current.settings.executionMode).toBe('tracking');
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ executionMode: 'bogus' }));
+    expect(renderHook(() => useAssist()).result.current.settings.executionMode).toBe('thoughtful');
+  });
+
+  describe('AI mode switching via the screen watcher', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    });
+
+    /** A fake model whose screen-watcher observation asks for `mode`, with everything else idle. */
+    const modelWithMode = (mode: string, reason: string) => vi.fn(async (_url: string, init: RequestInit) => {
+      const body = String(init.body);
+      const content = body.includes('screen watcher') ? JSON.stringify({ notes: [], proposals: [], mode: { mode, reason } })
+        : body.includes('final verdict') ? '{"success":false,"pattern_avoid":null,"pattern_add":null}'
+          : body.includes('reviewing a step') ? 'It did not run.' : 'OK';
+      return new Response(JSON.stringify({ message: { role: 'assistant', content, thinking: 'watching' } }), { status: 200 });
+    });
+
+    it('accepts a watching directive and announces why', async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal('fetch', modelWithMode('watching', 'a movie is playing'));
+      const { hooks } = installNative();
+      const { result } = renderHook(() => useAssist());
+      await act(() => vi.advanceTimersByTimeAsync(10));
+      await act(() => result.current.shareScreen());
+      act(() => hooks.onFrame!(frame()));
+      act(() => result.current.toggleStage('screenWatcher', true));
+      await act(() => vi.advanceTimersByTimeAsync(5100));
+      expect(result.current.settings.executionMode).toBe('watching');
+      const modeLog = result.current.log.find((l) => l.source === 'Mode');
+      expect(modeLog?.message).toMatch(/AI/);
+      expect(modeLog?.message).toMatch(/Watching/);
+      expect(modeLog?.message).toMatch(/a movie is playing/);
+    });
+
+    it('rejects a mode the AI may not set, leaving it and the guardrails untouched', async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal('fetch', modelWithMode('aggressive', 'acting fast'));
+      const { hooks } = installNative();
+      const { result } = renderHook(() => useAssist());
+      await act(() => vi.advanceTimersByTimeAsync(10));
+      await act(() => result.current.shareScreen());
+      act(() => hooks.onFrame!(frame()));
+      act(() => result.current.toggleStage('screenWatcher', true));
+      await act(() => vi.advanceTimersByTimeAsync(5100));
+      expect(result.current.settings.executionMode).toBe('thoughtful');
+      const modeLog = result.current.log.find((l) => l.source === 'Mode');
+      expect(modeLog?.message).toMatch(/rejected/);
+      expect(result.current.armed).toBe(false);
+    });
+  });
+});
+
+describe('useAssist thinking-on escalation', () => {
+  const THOUGHT = 'Search is probably in the top bar. Try clicking the search icon.';
+
+  /** Asks about the screen with every model reply thinking only, with model thinking on or off in Settings. */
+  async function askThinking(aiThink: boolean) {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ aiThink }));
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ message: { role: 'assistant', content: '', thinking: THOUGHT } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchImpl);
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(frame()));
+    act(() => result.current.setGoal('Find search'));
+    await act(() => result.current.askScreen('Where is search?'));
+    return result;
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('logs every escalation stage, shows the thinking as a thinking-only response and says content was never produced', async () => {
+    const result = await askThinking(true);
+    const steps = result.current.timeline.map((e) => e.step);
+    for (const stage of ['Conversation update', 'Similar question', 'App-context re-ask', 'Overlap AI']) expect(steps).toContain(`Escalation: ${stage}`);
+    expect(result.current.log.filter((l) => l.source === 'AI escalation').length).toBeGreaterThanOrEqual(6);
+    expect(result.current.timeline.find((e) => /thinking only/.test(e.step))).toMatchObject({ thinking: THOUGHT });
+    expect(result.current.log.some((l) => /Content was never produced/.test(l.message))).toBe(true);
+  });
+
+  it('proposes a next workflow from the thinking that Accept queues as the goal', async () => {
+    const result = await askThinking(true);
+    const p = result.current.watcher.proposals.find((x) => x.kind === 'workflow');
+    expect(p).toMatchObject({ status: 'pending', target: 'Find search — next: Try clicking the search icon' });
+    act(() => result.current.acceptProposal(p!.id));
+    expect(result.current.goal).toBe(p!.target);
+    expect(result.current.watcher.proposals.find((x) => x.id === p!.id)!.status).toBe('accepted');
+  });
+
+  it('runs no escalation with model thinking off', async () => {
+    const result = await askThinking(false);
+    expect(result.current.timeline.some((e) => e.step.startsWith('Escalation:'))).toBe(false);
+    expect(result.current.watcher.proposals.some((x) => x.kind === 'workflow')).toBe(false);
   });
 });

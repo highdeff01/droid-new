@@ -7,6 +7,7 @@ export const CAPTURE_CHANNELS = {
   error: 'capture:error',
   displays: 'capture:displays',
   selectDisplay: 'capture:select-display',
+  grabDisplay: 'capture:grab-display',
 } as const;
 
 /** Width/height of the display JPEG every native frame carries. */
@@ -49,6 +50,16 @@ export interface DisplayInfo {
   thumbnail: string;
 }
 
+/** A full-resolution screenshot of one display, for snipping any region of it. */
+export interface DisplayGrab {
+  /** JPEG data URL at the display's physical resolution. */
+  url: string;
+  srcW: number;
+  srcH: number;
+  originX: number;
+  originY: number;
+}
+
 /** The API the preload exposes on `window.droidNative` when running under Electron. */
 export interface NativeCaptureApi {
   /** Starts the main-process capture loop; frames and the terminal error arrive on the callbacks. */
@@ -61,4 +72,6 @@ export interface NativeCaptureApi {
   listDisplays(): Promise<DisplayInfo[]>;
   /** Chooses the display the loop captures from (null = primary); applies from the next tick. */
   selectDisplay(id: string | null): void;
+  /** A full-resolution grab of display `id` (null = primary), for snipping a region of any monitor. */
+  grabDisplay(id: string | null): Promise<DisplayGrab>;
 }

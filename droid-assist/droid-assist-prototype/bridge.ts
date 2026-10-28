@@ -18,7 +18,7 @@ export const BRIDGE_REQUIRED = 'Desktop bridge not connected — connect the bri
 
 /** One native action as the Droid replay engine (python-service/replay.py, pyautogui) accepts it. */
 export interface NativeAction {
-  action: 'click' | 'double_click' | 'move' | 'drag' | 'scroll' | 'type_text' | 'press_key' | 'hotkey' | 'wait';
+  action: 'click' | 'double_click' | 'move' | 'drag' | 'scroll' | 'type_text' | 'press_key' | 'hotkey' | 'wait' | 'mouse_down' | 'mouse_up';
   x: number;
   y: number;
   /** A `drag`'s release point (pyautogui mouseDown at x,y → moveTo(endX, endY, duration) → mouseUp). */
@@ -61,7 +61,7 @@ const NATIVE: Record<StepAction, (step: WorkflowStep, p: Point, end: Point | nul
   move: (_s, p) => [at(p, 'move', { durationMs: humanMoveMs() })],
   drag: (_s, p, end) => (end ? [drag(p, end)] : []),
   scroll: (s, p) => [at(p, 'scroll', { keyPayload: scrollDir(s) })],
-  type: (s, p) => [write(p, s.text ?? '')],
+  type: (s, p) => [...(s.mappedId ? [at(p, 'click')] : []), write(p, s.text ?? '')],
   key: (s, p) => Array.from({ length: Math.max(1, s.repeat ?? 1) }, () => keys(p, s.text ?? 'enter')),
   open_app: (s, p) => [keys(p, 'win'), at(p, 'wait', { delayMs: 600 }), write(p, appName(s)), keys(p, 'enter')],
   search: (s, p) => [keys(p, 'ctrl+l'), write(p, s.text ?? ''), keys(p, 'enter')],
@@ -69,6 +69,7 @@ const NATIVE: Record<StepAction, (step: WorkflowStep, p: Point, end: Point | nul
   media: (_s, p) => [keys(p, 'playpause')],
   wait: (_s, p) => [at(p, 'wait', { delayMs: 800 })],
   measure: () => [],
+  snip: () => [],
 };
 
 /**
@@ -83,6 +84,11 @@ export function nativeActions(step: WorkflowStep, srcW: number, srcH: number, or
   const [first, ...rest] = NATIVE[step.action](step, p, end && shift(end));
   if (!first) return [];
   return typeof step.delayMs === 'number' ? [{ ...first, delayMs: step.delayMs }, ...rest] : [first, ...rest];
+}
+
+/** One drag segment's raw input (press, short move, release) at a normalized point of a srcW×srcH screen at `origin`. */
+export function pointerAction(action: 'mouse_down' | 'move' | 'mouse_up', p: Point, srcW: number, srcH: number, origin: Point = { x: 0, y: 0 }): NativeAction {
+  return { action, x: toPx(p.x, srcW) + origin.x, y: toPx(p.y, srcH) + origin.y, delayMs: 0, ...(action === 'move' ? { durationMs: 40 } : {}) };
 }
 
 const base = (url: string) => url.replace(/\/$/, '');
@@ -143,6 +149,22 @@ export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: 
   if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };
   const actions = nativeActions(step, srcW, srcH, origin);
   if (!actions.length) return { ok: false, message: `"${step.name}" has no end point — a drag needs both a start and an end; not sent` };
+  return sendNative(bridgeUrl, { id: step.id, name: step.name }, actions, { token, pollMs, timeoutMs });
+}
+
+/** Options of one bridge replay run. */
+export interface SendOptions {
+  token?: string;
+  pollMs?: number;
+  timeoutMs?: number;
+}
+
+/**
+ * Sends native actions as one replay run (POST /api/replay, then polls it). Succeeds only when
+ * the PC completed it. `label` names the run's steps.
+ */
+export async function sendNative(bridgeUrl: string, label: { id: string; name: string }, actions: NativeAction[], { token = '', pollMs = 250, timeoutMs = 60000 }: SendOptions = {}): Promise<BridgeResult> {
+  if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };
   const { x, y } = actions[0];
   try {
     const res = await fetch(`${base(bridgeUrl)}/api/replay`, {
@@ -152,7 +174,7 @@ export async function sendToBridge(bridgeUrl: string, step: WorkflowStep, srcW: 
         targetDevice: 'desktop',
         iterations: 1,
         confirmation: true,
-        steps: actions.map((a, i) => ({ id: `${step.id}-${i}`, name: `${step.name} (${a.action})`, ...a })),
+        steps: actions.map((a, i) => ({ id: `${label.id}-${i}`, name: `${label.name} (${a.action})`, ...a })),
       }),
       signal: AbortSignal.timeout(8000),
     });
@@ -193,6 +215,75 @@ export async function captureDesktop(bridgeUrl: string, token: string): Promise<
     return { ok: true, frame: { image: frame.image, width: frame.width, height: frame.height } };
   } catch (error) {
     return { ok: false, message: `${BRIDGE_REQUIRED} (unreachable: ${errorText(error)})` };
+  }
+}
+
+/** The message for a main app whose bridge does not serve the action history route. */
+export const HISTORY_UNSUPPORTED = 'main app does not support playback history yet';
+
+/** One performed action as the main Droid app's action history reports it (native pixel coordinates). */
+export interface HistoryRecord {
+  id: string;
+  /** When it happened, ms since epoch. */
+  timestamp: number;
+  /** Set on real mouse/keyboard input only. */
+  inputKind?: 'mouse' | 'keyboard';
+  action?: string;
+  x?: number;
+  y?: number;
+  /** Typed text or key chord of a keyboard action. */
+  input?: string;
+  executed?: boolean;
+  screenshotId?: string;
+}
+
+const NOT_SERVED = new Set([404, 405, 501]);
+const optNum = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+const optStr = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+const stampOf = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' ? Date.parse(v) : NaN);
+
+/** A history row as a record, or null when it has no id or time. */
+function toRecord(v: unknown): HistoryRecord | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = v as Record<string, unknown>;
+  const timestamp = stampOf(r.timestamp);
+  if (!optStr(r.id) || !Number.isFinite(timestamp)) return null;
+  const inputKind = r.inputKind === 'mouse' || r.inputKind === 'keyboard' ? r.inputKind : undefined;
+  return {
+    id: r.id as string, timestamp, inputKind, action: optStr(r.action), x: optNum(r.x), y: optNum(r.y), input: optStr(r.input),
+    executed: typeof r.executed === 'boolean' ? r.executed : undefined, screenshotId: optStr(r.screenshotId),
+  };
+}
+
+/**
+ * The main app's performed actions of the last `windowSec` seconds (GET /api/ai/action-history?limit=N&windowSec=S).
+ * A bridge that does not serve the route (404/405/501, or a reply without a history list) yields HISTORY_UNSUPPORTED; nothing is invented.
+ */
+export async function requestActionHistory(bridgeUrl: string, token: string, limit = 200, windowSec = 30): Promise<{ ok: true; records: HistoryRecord[] } | { ok: false; message: string }> {
+  if (!bridgeUrl) return { ok: false, message: BRIDGE_REQUIRED };
+  try {
+    const res = await fetch(`${base(bridgeUrl)}/api/ai/action-history?limit=${limit}&windowSec=${windowSec}`, { headers: bridgeHeaders(token), signal: AbortSignal.timeout(8000) });
+    const body = await res.json().catch(() => null);
+    if (NOT_SERVED.has(res.status)) return { ok: false, message: HISTORY_UNSUPPORTED };
+    if (!res.ok || body?.success === false) return { ok: false, message: failure(res, body) };
+    if (!Array.isArray(body?.history)) return { ok: false, message: HISTORY_UNSUPPORTED };
+    return { ok: true, records: body.history.map(toRecord).filter((r: HistoryRecord | null): r is HistoryRecord => r !== null) };
+  } catch (error) {
+    return { ok: false, message: `${BRIDGE_REQUIRED} (unreachable: ${errorText(error)})` };
+  }
+}
+
+/** The screenshot the main app took at an action (GET /api/ai/action-history/screenshots/:id) as an image data URL, or null. */
+export async function requestHistoryScreenshot(bridgeUrl: string, token: string, id: string): Promise<string | null> {
+  if (!bridgeUrl) return null;
+  try {
+    const res = await fetch(`${base(bridgeUrl)}/api/ai/action-history/screenshots/${encodeURIComponent(id)}`, { headers: bridgeHeaders(token), signal: AbortSignal.timeout(8000) });
+    const body = await res.json().catch(() => null);
+    const image = body?.imageData;
+    if (!res.ok || typeof image !== 'string' || !image) return null;
+    return image.startsWith('data:image/') ? image : `data:image/png;base64,${image}`;
+  } catch {
+    return null;
   }
 }
 

@@ -1,9 +1,15 @@
 import type { StageMap } from './loop-control.js';
 import type { AiView } from './ai.js';
 import type { OperationPolicy } from './approvals.js';
+import type { TrainMode } from './element-training.js';
+import type { SideTestMode } from './side-test.js';
+import type { AutoApplyMap, SelfTestMode } from './initiative.js';
+import type { AutoActMap } from './notifications.js';
+import type { ExecutionMode } from './execution-mode.js';
+import type { AutoApplyBounds } from './aggressive.js';
 
-/** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, or the PC via the bridge. */
-export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge';
+/** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, the PC via the bridge, or the main Droid app's preview. */
+export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge' | 'main-app';
 
 /** A captured screen frame: a display image plus a downsampled pixel buffer for drift math. */
 export interface Frame {
@@ -21,8 +27,8 @@ export interface Frame {
   /** Physical position of the captured display's top-left on the virtual desktop (multi-monitor); absent = 0,0. Input lands at origin + normalized × src size. */
   originX?: number;
   originY?: number;
-  /** Where the frame came from: the demo canvas, a shared screen, or a real desktop screenshot from the bridge. */
-  source: 'demo' | 'screen' | 'desktop';
+  /** Where the frame came from: the demo canvas, a shared screen, a real desktop screenshot from the bridge, or the main Droid app's preview. */
+  source: 'demo' | 'screen' | 'desktop' | 'main-app';
 }
 
 /** One point of the mouse trail, normalized to 0..1 of the screen. */
@@ -40,10 +46,10 @@ export interface TrailPoint {
  * `drag` presses at (x, y), travels to (endX, endY) and releases there; `measure` only measures
  * distances (no input).
  */
-export type StepAction = 'click' | 'double_click' | 'move' | 'drag' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media' | 'measure';
+export type StepAction = 'click' | 'double_click' | 'move' | 'drag' | 'scroll' | 'type' | 'key' | 'open_app' | 'wait' | 'search' | 'calc' | 'media' | 'measure' | 'snip';
 
 /** Every step action, in the order the planner contract lists them. */
-export const STEP_ACTIONS: readonly StepAction[] = ['click', 'double_click', 'move', 'drag', 'scroll', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media', 'measure'];
+export const STEP_ACTIONS: readonly StepAction[] = ['click', 'double_click', 'move', 'drag', 'scroll', 'type', 'key', 'open_app', 'wait', 'search', 'calc', 'media', 'measure', 'snip'];
 
 /** Step actions that point the mouse at an on-screen target, so their coordinates must be grounded. */
 export const POINTER_ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(['click', 'double_click', 'move', 'drag', 'scroll']);
@@ -171,6 +177,8 @@ export interface WorkflowStep {
   endY?: number;
   /** The on-screen thing a drag drops onto ("Archive folder"). */
   endTarget?: string;
+  /** "Auto-navigate to element E then perform F": the element-map id the step re-aims at (its current position and perform) every time it runs. */
+  mappedId?: string;
   /** Recorded human pause before this step (ms since the previous recorded input); replay sends it to the bridge. */
   delayMs?: number;
   /** Screenshot captured when the step was recorded — the template for drift matching. */
@@ -218,6 +226,10 @@ export interface LogEntry {
   shots?: string[];
   /** Project (trimmed goal text) the entry was logged under; absent when no goal was set. */
   project?: string;
+  /** The operation (goal) the entry belongs to, tagged by the Logging agent for recall. */
+  op?: string;
+  /** How many identical entries in a row the Logging agent folded into this one (absent = 1). */
+  repeat?: number;
 }
 
 /** A saved, named workflow card for later comparison and selection. */
@@ -231,6 +243,8 @@ export interface SavedCard {
 
 /** User-tunable settings for capture, drift and automation. */
 export interface AssistSettings {
+  /** Worker agents in the coordinated crew (5–50, default 25). */
+  crewSize: number;
   /** Frames kept in the comparison gallery. */
   gallerySize: number;
   /** Drift checkpoints sampled per cursor move, start to finish. */
@@ -246,10 +260,16 @@ export interface AssistSettings {
   /** Drift: template search radius, in sample pixels of the 320x180 drift buffer. */
   driftRadius: number;
   monitorMode: MonitorMode;
+  /** How the assistant paces and grounds its work (separate from the capture monitor mode). */
+  executionMode: ExecutionMode;
+  /** The user's limits on what aggressive mode applies without asking. */
+  autoApply: AutoApplyBounds;
   /** Electron display id native capture takes screenshots from; null = the primary display. */
   displayId: string | null;
   /** How often the Screen watcher observes the live frame, in ms. */
   watchMs: number;
+  /** Wake timer: how long a wait lasts before the AI is woken to continue (the AI may ask for longer), in ms. */
+  wakeMs: number;
   autoAct: boolean;
   aiHelp: boolean;
   showTrail: boolean;
@@ -263,6 +283,22 @@ export interface AssistSettings {
   bridgeUrl: string;
   /** Shared secret the bridge requires on every call (Authorization: Bearer); masked in the UI, never logged. */
   bridgeToken: string;
+  /** Main app bridge: start automatically and connect the main Droid app. */
+  mainBridgeEnabled: boolean;
+  /** Main app bridge: wait for the main app to connect (listen) or dial out to `mainBridgeUrl` (dial). */
+  mainBridgeMode: 'listen' | 'dial';
+  /** Main app bridge: interface the listener binds (listen mode). */
+  mainBridgeHost: string;
+  /** Main app bridge: port the listener binds (listen mode). */
+  mainBridgePort: number;
+  /** Main app bridge: base URL of the main app (dial mode). */
+  mainBridgeUrl: string;
+  /** Main app bridge: optional shared secret, same Bearer pattern as `bridgeToken`; never logged. */
+  mainBridgeToken: string;
+  /** Main app bridge: first reconnect delay, doubled per failure. */
+  mainBridgeBackoffMinMs: number;
+  /** Main app bridge: longest reconnect delay. */
+  mainBridgeBackoffMaxMs: number;
   /** Emergency-stop key combo, e.g. "Shift+Escape". */
   abortHotkey: string;
   /** Max real (bridge-dispatched) input actions per Auto Act / replay run. */
@@ -273,16 +309,30 @@ export interface AssistSettings {
   aiModel: string;
   /** Pixel size every screenshot is rendered at for the model (the sample space stays 480x270). */
   aiView: AiView;
+  /** Ask the model to think before answering; off by default because small models can spend the whole reply thinking. */
+  aiThink: boolean;
   /** After a replay, verify the goal on the live screen and keep planning/running until it is done. */
   autoContinue: boolean;
+  /** Armed bridge drags run as live parallel drags: segment by segment, corrected by the coordinate-agent swarm. */
+  liveDrag: boolean;
   /** Max auto-continue rounds (verify → re-plan → run) after the first run. */
   maxIterations: number;
   /** Retries of a failed step (re-verify, re-correct, retry) before the planner re-plans it once. */
   stepRetries: number;
+  /** Retries of a detected recent operation's best variant, each verified by screenshot comparison (0 = off). */
+  operationRetries: number;
+  /** How far back a playback of the main app's actions reaches, in seconds (30 s .. 10 min). */
+  playbackWindowSec: number;
   /** Cap on model calls in flight at once; further calls wait in the shared priority queue. */
   aiMaxInFlight: number;
   /** Per-request AI timeout in ms; queued calls get it when they start. Cancelling still aborts at once. */
   aiTimeoutMs: number;
+  /** Goal tracer: failed steps / no-progress checks in a row that count as a stalled goal. */
+  goalStall: number;
+  /** Master Prompt Override: a free-text directive injected into every AI prompt; empty = none. */
+  masterPrompt: string;
+  /** Overlap mode: each AI ask also fires a second, freshly worded call; the first valid answer wins. */
+  aiOverlap: boolean;
   /** Loop control: on/off per automation stage and agent (guardrails are never in it). */
   stages: StageMap;
   /** Error forwarding: the error-fix app's HTTP endpoint captured errors are POSTed to. */
@@ -293,4 +343,28 @@ export interface AssistSettings {
   errorToken: string;
   /** User-set conditions for AI operation: allowed hours, allowed operation classes, project scope. */
   operationPolicy: OperationPolicy;
+  /** Auto-map every identifiable element on each captured frame into the element map. */
+  autoScan: boolean;
+  /** Element training runs exclusively in the foreground (Auto Act pauses) or on its own background task. */
+  trainMode: TrainMode;
+  /** Where side tests primarily run: background (bridge, main capture kept) or foreground (capture switched to the target). */
+  sideTestMode: SideTestMode;
+  /** AI initiative: seconds between the AI's own screen scans (it may ask to scan sooner). */
+  scanSec: number;
+  /** AI initiative: self-tests verify-only in the background, or highlighted (real when armed) in the foreground. */
+  selfTestMode: SelfTestMode;
+  /** AI initiative: cycles per input kind the heavy element tester runs. */
+  stressCycles: number;
+  /** AI initiative: per category, apply without asking (still inside arm, budget and loop control). */
+  initiativeAutoApply: AutoApplyMap;
+  /** Relaxation mode: slower cadence, no background agent tests, dimmed info notifications, break reminders. */
+  relaxMode: boolean;
+  /** Minutes between "take a break" reminders while relaxation mode is on. */
+  breakMinutes: number;
+  /** Seconds between automatic System panel refreshes. */
+  systemRefreshSec: number;
+  /** Auto-act on notifications, per category; every category defaults off. */
+  notifyAutoAct: AutoActMap;
+  /** Folders (native paths) the System panel reports file specs for. */
+  systemFolders: string[];
 }

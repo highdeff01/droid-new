@@ -74,6 +74,7 @@ Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":
 To move or rearrange several elements ("move the Files icon below Game", "rearrange the sidebar to Calc, Game, Notes, Files") plan one "drag" per element, in an order where every drop point is free when that drag runs, and list the arrangement the goal asks for in "expect": one relation per requested placement; an order "A, B, C" top to bottom is {"element":"B","relation":"below","anchor":"A"},{"element":"C","relation":"below","anchor":"B"}.
 "text" is the text to type, the key to press, the search query, the arithmetic expression or the scroll direction.
 "measure" sends no input: it measures on-screen distances; "text" lists the endpoints joined by " to " — element names from the element map, "x,y" coordinates or a screen edge ("left edge", "right edge", "top edge", "bottom edge"), e.g. {"name":"Files to Game","action":"measure","target":"Files icon","x":0.42,"y":0.97,"text":"Files icon to Game icon"}. The measured distances are returned to you in the log.
+"snip" sends no input: it screenshots a region of the screen for you to reason over; "text" is the region "x,y,w,h" as fractions 0..1, optionally followed by an output size "WxH" (either side may be left out) and "display <id>" for another monitor, e.g. {"name":"Look at toolbar","action":"snip","target":"toolbar","x":0.5,"y":0.05,"text":"0,0,1,0.1 1600x"}. Without a valid "text" it snips the region around x,y. The snip is shown in the thinking timeline and the snip gallery.
 Never substitute another action for the one the goal asks for; if the target is not visible, return {"steps":[]}.`;
 
 /** The planner's system prompt for a sample-space (480x270) screenshot. */
@@ -142,7 +143,7 @@ export function parseExpectations(reply: string): Expectation[] {
 }
 
 /** Converts one model step into a WorkflowStep; throws AiError when it breaks the contract. */
-function toStep(raw: unknown, frame: Frame | null, view: ViewSize): WorkflowStep {
+export function toStep(raw: unknown, frame: Frame | null, view: ViewSize): WorkflowStep {
   const s = (raw ?? {}) as Record<string, unknown>;
   const action = s.action as StepAction;
   if (!ACTIONS.has(action)) throw new AiError(`AI proposed an unknown action "${String(s.action)}"`);

@@ -1,12 +1,14 @@
 import type { StepVerdict } from './assist-ai.js';
+import type { Frame } from './types.js';
 import { uid } from './planner.js';
 
 /**
  * What an entry records: the model's initial thought, its assessment of a screen change, the
  * what/why proposal made before a step runs, its follow-up reflection, the final verdict, a
- * verification check, a supervisor review / movement, or one attempt of a step's retry ladder.
+ * verification check, a supervisor review / movement, one attempt of a step's retry ladder, or a
+ * screenshot the AI snipped of a screen region.
  */
-export type ThoughtKind = 'thought' | 'change' | 'proposal' | 'reflection' | 'verdict' | 'check' | 'review' | 'movement' | 'attempt';
+export type ThoughtKind = 'thought' | 'change' | 'proposal' | 'reflection' | 'verdict' | 'check' | 'review' | 'movement' | 'attempt' | 'snip';
 
 /** One timestamped AI call on the per-step thinking timeline. */
 export interface ThinkingEntry {
@@ -23,6 +25,8 @@ export interface ThinkingEntry {
   error?: string;
   /** Project (trimmed goal text) the call was made for; absent when no goal was set. */
   project?: string;
+  /** The image the entry reasons over (a snipped region), shown with it. */
+  frame?: Frame;
 }
 
 /** The newest entries kept on the timeline. */

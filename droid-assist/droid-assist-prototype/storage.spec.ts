@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard } from './types.js';
-import { LOG_LIMIT, PATTERN_LIMIT, loadAccessPaths, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadPatterns, loadRunSummaries, loadSettings, loadWatcher, saveAccessPaths, saveRunSummaries, saveElementMap, saveFamiliar, saveHabits, savePatterns, saveCards, saveLog, saveSettings, saveWatcher } from './storage.js';
+import type { AssistSettings, FamiliarElement, Habit, LearnedPattern, LogEntry, SavedCard, WorkflowStep } from './types.js';
+import { LOG_LIMIT, PATTERN_LIMIT, SYSTEM_FOLDER_LIMIT, loadAccessPaths, loadApprovalQueue, loadCards, loadDossiers, loadElementMap, loadFamiliar, loadGoals, loadHabits, loadLog, loadNotifications, loadOperationMemory, loadOperations, loadPatterns, loadPersonas, loadProjects, loadRunSummaries, loadSettings, loadWatcher, saveAccessPaths, saveApprovalQueue, saveCards, saveDossiers, saveElementMap, saveFamiliar, saveGoals, saveHabits, saveLog, saveNotifications, saveOperationMemory, saveOperations, savePatterns, savePersonas, saveProjects, saveRunSummaries, saveSettings, saveWatcher } from './storage.js';
+import { PROJECT_LIMIT, createProject, type PlannedStep, type Project } from './project.js';
+import { EMPTY_APPROVALS, decide, enqueue } from './approval-queue.js';
+import { DEFAULT_AUTO_ACT, NOTIFICATION_LIMIT, type AssistNotification } from './notifications.js';
+import type { Persona } from './persona.js';
 import { FAMILIAR_LIMIT } from './elements.js';
 import { HABIT_STALE_MS } from './habits.js';
 import { DEFAULT_STAGES } from './loop-control.js';
@@ -8,7 +12,12 @@ import type { WatchNote, WatchProposal, WatchTest } from './watcher.js';
 import { DEFAULT_SETTINGS } from './use-assist.js';
 import { DEFAULT_GRID_OPACITY } from './grid-overlay.js';
 import { RUN_SUMMARY_LIMIT, type RunSummary } from './run-stats.js';
+import { EMPTY_MEMORY, addFailure, addNote, newFailure } from './operation-memory.js';
+import { MASTER_PROMPT_MAX } from './ai.js';
 import { ACCESS_PATH_LIMIT, type AccessProfile } from './access-paths.js';
+import type { PositionDossier } from './position-dossier.js';
+import { GOAL_LIMIT, createGoal, trace, type TraceContext } from './goal-tracer.js';
+import type { SavedOperation } from './saved-operations.js';
 
 const DEFAULTS: AssistSettings = { ...DEFAULT_SETTINGS, aiUrl: 'https://ai.example/api/chat', autoContinue: false };
 const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test', message: `message ${n}`, tone: 'info' });
@@ -40,6 +49,17 @@ describe('settings', () => {
     expect(loadSettings(DEFAULT_SETTINGS).autoContinue).toBe(false);
   });
 
+  it('model thinking defaults off; a saved on round-trips and non-boolean values fall back', () => {
+    expect(DEFAULT_SETTINGS.aiThink).toBe(false);
+    expect(loadSettings(DEFAULT_SETTINGS).aiThink).toBe(false);
+    saveSettings({ ...DEFAULT_SETTINGS, aiThink: true });
+    expect(loadSettings(DEFAULT_SETTINGS).aiThink).toBe(true);
+    for (const raw of ['{"aiThink":"true"}', '{"aiThink":1}', '{}']) {
+      localStorage.setItem('droid-assist.settings', raw);
+      expect(loadSettings(DEFAULT_SETTINGS).aiThink).toBe(false);
+    }
+  });
+
   it('grid labels default off with a faint grid; the grid settings round-trip and invalid values fall back', () => {
     expect(DEFAULT_SETTINGS).toMatchObject({ gridLabels: false, gridOpacity: DEFAULT_GRID_OPACITY });
     expect(DEFAULT_GRID_OPACITY).toBeLessThan(0.28);
@@ -65,6 +85,18 @@ describe('settings', () => {
     }
   });
 
+  it('keeps a stored goalStall within 1..10 and falls back to the default (2) otherwise', () => {
+    expect(DEFAULT_SETTINGS.goalStall).toBe(2);
+    for (const ok of [1, 10]) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ goalStall: ok }));
+      expect(loadSettings(DEFAULTS).goalStall).toBe(ok);
+    }
+    for (const bad of [0, 11, '3']) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ goalStall: bad }));
+      expect(loadSettings(DEFAULTS).goalStall).toBe(DEFAULTS.goalStall);
+    }
+  });
+
   it('keeps in-range drift, grid-opacity and AI concurrency settings and falls back on out-of-range ones', () => {
     const inRange = { driftStable: 0.2, driftMatched: 0.4, driftRadius: 32, gridOpacity: 0.3, aiMaxInFlight: 8 };
     localStorage.setItem('droid-assist.settings', JSON.stringify(inRange));
@@ -82,6 +114,17 @@ describe('settings', () => {
       localStorage.setItem('droid-assist.settings', JSON.stringify({ aiTimeoutMs: bad }));
       expect(loadSettings(DEFAULTS).aiTimeoutMs).toBe(DEFAULTS.aiTimeoutMs);
     }
+  });
+
+  it('persists the Master Prompt Override and overlap mode, keeping the defaults on invalid values', () => {
+    expect(DEFAULTS.masterPrompt).toBe('');
+    expect(DEFAULTS.aiOverlap).toBe(false);
+    saveSettings({ ...DEFAULTS, masterPrompt: 'Prefer keyboard shortcuts', aiOverlap: true });
+    expect(loadSettings(DEFAULTS)).toMatchObject({ masterPrompt: 'Prefer keyboard shortcuts', aiOverlap: true });
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ masterPrompt: 42, aiOverlap: 'yes' }));
+    expect(loadSettings(DEFAULTS)).toMatchObject({ masterPrompt: '', aiOverlap: false });
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ masterPrompt: 'x'.repeat(MASTER_PROMPT_MAX + 1) }));
+    expect(loadSettings(DEFAULTS).masterPrompt).toBe('');
   });
 
   it('round-trips loop-control stages and sanitizes a stored stage map', () => {
@@ -301,6 +344,32 @@ describe('familiar elements', () => {
   });
 });
 
+describe('operation memory', () => {
+  beforeEach(() => localStorage.clear());
+  const failure = newFailure({ operation: 'Send invoice', actor: 'Replay', what: 'Step "Send" did not complete', steps: ['"Send" (click)'], targets: ['Send'], shots: ['data:image/jpeg;base64,QQ'] }, 5);
+
+  it('round-trips failures and notes and drops invalid entries', () => {
+    const memory = addNote(addFailure(EMPTY_MEMORY, failure), 'Send invoice', 'Check the recipient', 6);
+    saveOperationMemory(memory);
+    expect(loadOperationMemory()).toEqual(memory);
+    localStorage.setItem('droid-assist.memory', JSON.stringify({ failures: [null, { ...failure, steps: 'x' }, failure], notes: [{ id: 'n', time: 1, operation: 'op', text: ' ' }] }));
+    expect(loadOperationMemory()).toEqual({ failures: [failure], notes: [] });
+    localStorage.setItem('droid-assist.memory', 'nope');
+    expect(loadOperationMemory()).toEqual(EMPTY_MEMORY);
+  });
+
+  it('retries without the failure screenshots when storage is full', () => {
+    const real = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (v.includes('data:image')) throw new Error('QuotaExceededError');
+      real.call(this, k, v);
+    });
+    saveOperationMemory(addFailure(EMPTY_MEMORY, failure));
+    spy.mockRestore();
+    expect(loadOperationMemory().failures).toEqual([{ ...failure, shots: [] }]);
+  });
+});
+
 describe('element map', () => {
   beforeEach(() => localStorage.clear());
 
@@ -383,6 +452,61 @@ describe('run summaries', () => {
   });
 });
 
+describe('projects', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('round-trips saved projects', () => {
+    const projects = [createProject('Script', 'Write a script', 2), createProject('Deck', 'Build a slide deck', 1)];
+    saveProjects(projects);
+    expect(loadProjects()).toEqual(projects);
+  });
+
+  it('drops invalid entries and corrupt JSON returns []', () => {
+    const valid = createProject('Deck', 'Build a slide deck', 1);
+    localStorage.setItem('droid-assist.projects', JSON.stringify([valid, null, { id: 'bad' }, { ...valid, state: 'bogus' }]));
+    expect(loadProjects()).toEqual([valid]);
+    localStorage.setItem('droid-assist.projects', '{nope');
+    expect(loadProjects()).toEqual([]);
+  });
+
+  it('saveProjects prunes beyond PROJECT_LIMIT keeping unfinished first', () => {
+    const finished: Project = { ...createProject('Done', 'goal', 1), state: 'complete', completion: { done: true, reason: 'ok', time: 1 }, updatedAt: 1000 };
+    const unfinished = Array.from({ length: PROJECT_LIMIT + 5 }, (_, i) => createProject(`P${i}`, 'goal', i + 2));
+    saveProjects([finished, ...unfinished]);
+    const loaded = loadProjects();
+    expect(loaded).toHaveLength(PROJECT_LIMIT);
+    expect(loaded.every((p) => p.state !== 'complete')).toBe(true);
+  });
+});
+
+describe('approvals', () => {
+  beforeEach(() => localStorage.clear());
+  const step = (n: number): PlannedStep => ({ id: `s${n}`, name: `Step ${n}`, action: 'click', x: 0.1, y: 0.2 });
+
+  it('round-trips queue and learned methods', () => {
+    const { state: queued } = enqueue(EMPTY_APPROVALS, 'proj_1', [step(1)], 5);
+    const decided = decide(queued, queued.queue[0].id, { kind: 'approve' }, 'notepad', 10);
+    expect(decided).not.toBeNull();
+    saveApprovalQueue(decided!.state);
+    expect(loadApprovalQueue()).toEqual(decided!.state);
+  });
+
+  it('returns EMPTY_APPROVALS when missing or corrupt', () => {
+    expect(loadApprovalQueue()).toEqual(EMPTY_APPROVALS);
+    localStorage.setItem('droid-assist.approval-queue', '{nope');
+    expect(loadApprovalQueue()).toEqual(EMPTY_APPROVALS);
+    localStorage.setItem('droid-assist.approval-queue', '[1,2]');
+    expect(loadApprovalQueue()).toEqual(EMPTY_APPROVALS);
+  });
+
+  it('drops invalid requests', () => {
+    const { state: queued } = enqueue(EMPTY_APPROVALS, 'proj_1', [step(1), step(2)], 5);
+    const [valid, invalid] = queued.queue;
+    localStorage.setItem('droid-assist.approval-queue', JSON.stringify({ queue: [valid, null, { ...invalid, step: { id: 'bad' } }], learned: [] }));
+    expect(loadApprovalQueue()).toEqual({ queue: [valid], learned: [] });
+  });
+});
+
 describe('loadAccessPaths', () => {
   beforeEach(() => localStorage.clear());
 
@@ -408,5 +532,333 @@ describe('loadAccessPaths', () => {
   it('keeps at most ACCESS_PATH_LIMIT entries', () => {
     saveAccessPaths(Array.from({ length: ACCESS_PATH_LIMIT + 5 }, (_, i) => profile(i)));
     expect(loadAccessPaths()).toHaveLength(ACCESS_PATH_LIMIT);
+  });
+});
+
+describe('loadDossiers', () => {
+  beforeEach(() => localStorage.clear());
+
+  const dossier = (n: number, lastSeen = n): PositionDossier => ({
+    id: `pos_${n}`, name: `Element ${n}`, visits: [{ x: 0.1, y: 0.2, since: n }], spots: [], tests: [],
+    timesSeen: 1, lastSeen, moves: { user: 0, ai: 0 },
+  });
+
+  it('round-trips saveDossiers/loadDossiers keeping a valid dossier', () => {
+    saveDossiers([dossier(1)]);
+    expect(localStorage.getItem('droid-assist.dossiers')).not.toBeNull();
+    expect(loadDossiers()).toEqual([dossier(1)]);
+  });
+
+  it('drops an invalid entry (missing visits, out-of-range x)', () => {
+    localStorage.setItem('droid-assist.dossiers', JSON.stringify([
+      dossier(1),
+      { ...dossier(2), visits: [] },
+      { ...dossier(3), visits: [{ x: 2, y: 0.2, since: 3 }] },
+      null,
+    ]));
+    expect(loadDossiers()).toEqual([dossier(1)]);
+  });
+
+  it('keeps only the 100 dossiers with the newest lastSeen when saving 120', () => {
+    saveDossiers(Array.from({ length: 120 }, (_, i) => dossier(i, i)));
+    const loaded = loadDossiers();
+    expect(loaded).toHaveLength(100);
+    expect(loaded[0]).toEqual(dossier(119, 119));
+    expect(loaded.map((d) => d.lastSeen)).not.toContain(19);
+  });
+});
+
+describe('goals', () => {
+  beforeEach(() => localStorage.clear());
+
+  const ctx: TraceContext = { now: 1000, stallLimit: 2 };
+  const twoStepGoal = (n: number) => {
+    let g = createGoal({ goal: `Finish task ${n}`, source: 'user', steps: [{ id: 's1', name: 'Step 1' }, { id: 's2', name: 'Step 2' }] }, n);
+    g = trace(g, { kind: 'step', stepId: 's1', name: 'Step 1', ok: true, executed: true, detail: '' }, ctx).record;
+    g = trace(g, { kind: 'deviation', cause: 'popup', text: 'ad popup appeared' }, ctx).record;
+    g = trace(g, { kind: 'run', runId: `run_${n}`, outcome: 'success', flowId: 'card_1' }, ctx).record;
+    return g;
+  };
+
+  it('round-trips goals under their own key, newest first', () => {
+    const goals = [twoStepGoal(2), twoStepGoal(1)];
+    saveGoals(goals);
+    expect(localStorage.getItem('droid-assist.goals')).not.toBeNull();
+    expect(loadGoals()).toEqual(goals);
+  });
+
+  it('keeps only the newest GOAL_LIMIT goals', () => {
+    saveGoals(Array.from({ length: GOAL_LIMIT + 5 }, (_, i) => createGoal({ goal: `g${i}`, source: 'user', steps: [] }, i)));
+    expect(loadGoals()).toHaveLength(GOAL_LIMIT);
+  });
+
+  it('prunes the oldest goal records until the write fits in storage', () => {
+    const real = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === 'droid-assist.goals' && v.length > 1200) throw new DOMException('full', 'QuotaExceededError');
+      real.call(this, k, v);
+    });
+    const goals = Array.from({ length: 8 }, (_, i) => createGoal({ goal: `g${8 - i}`, source: 'user', steps: [] }, 8 - i));
+    saveGoals(goals);
+    spy.mockRestore();
+    const loaded = loadGoals();
+    expect(loaded.length).toBeGreaterThan(0);
+    expect(loaded.length).toBeLessThan(8);
+    expect(loaded[0]).toEqual(goals[0]);
+  });
+
+  it('drops invalid records and tolerates corrupt data', () => {
+    const valid = createGoal({ goal: 'Base', source: 'user', steps: [{ id: 's1', name: 'Step 1' }] }, 500);
+    localStorage.setItem('droid-assist.goals', JSON.stringify([
+      valid,
+      null,
+      { ...valid, status: 'great' },
+      { ...valid, source: 'bogus' },
+      { ...valid, steps: {} },
+      { ...valid, progress: 150 },
+    ]));
+    expect(loadGoals()).toEqual([valid]);
+    localStorage.setItem('droid-assist.goals', '{nope');
+    expect(loadGoals()).toEqual([]);
+  });
+});
+
+describe('settings: system & relax', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('DEFAULT_SETTINGS has the system & relax defaults', () => {
+    expect(DEFAULT_SETTINGS).toMatchObject({ relaxMode: false, breakMinutes: 45, systemRefreshSec: 30, notifyAutoAct: DEFAULT_AUTO_ACT, systemFolders: [] });
+  });
+
+  it('round-trips relaxMode, breakMinutes, systemRefreshSec, notifyAutoAct and systemFolders', () => {
+    const custom = { ...DEFAULTS, relaxMode: true, breakMinutes: 20, systemRefreshSec: 60, notifyAutoAct: { ...DEFAULT_AUTO_ACT, suggestion: true }, systemFolders: ['/home/u/docs'] };
+    saveSettings(custom);
+    expect(loadSettings(DEFAULTS)).toEqual(custom);
+  });
+
+  it('keeps breakMinutes only within 5..120', () => {
+    for (const bad of [2, 500, 'x']) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ breakMinutes: bad }));
+      expect(loadSettings(DEFAULTS).breakMinutes).toBe(DEFAULTS.breakMinutes);
+    }
+  });
+
+  it('keeps systemRefreshSec only within 5..600', () => {
+    for (const bad of [1, 1000]) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ systemRefreshSec: bad }));
+      expect(loadSettings(DEFAULTS).systemRefreshSec).toBe(DEFAULTS.systemRefreshSec);
+    }
+  });
+
+  it('falls back to the default relaxMode on a non-boolean value', () => {
+    localStorage.setItem('droid-assist.settings', '{"relaxMode":"yes"}');
+    expect(loadSettings(DEFAULTS).relaxMode).toBe(DEFAULTS.relaxMode);
+  });
+
+  it('sanitizes a stored notifyAutoAct map, keeping every category and dropping unknown keys', () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ notifyAutoAct: { suggestion: 'true', ai: true, bogus: true } }));
+    const loaded = loadSettings(DEFAULTS).notifyAutoAct;
+    expect(loaded).toEqual({ ...DEFAULT_AUTO_ACT, ai: true });
+    expect(loaded).not.toHaveProperty('bogus');
+  });
+
+  it('defaults notifyAutoAct when missing from stored settings', () => {
+    localStorage.setItem('droid-assist.settings', '{"bridgeUrl":"x"}');
+    expect(loadSettings(DEFAULTS).notifyAutoAct).toEqual(DEFAULT_AUTO_ACT);
+  });
+
+  it('filters non-strings, blanks and duplicates from systemFolders and caps at SYSTEM_FOLDER_LIMIT', () => {
+    const many = Array.from({ length: SYSTEM_FOLDER_LIMIT + 5 }, (_, i) => `/f${i}`);
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ systemFolders: [...many, '/f0', '  ', 42, null] }));
+    const loaded = loadSettings(DEFAULTS).systemFolders;
+    expect(loaded).toHaveLength(SYSTEM_FOLDER_LIMIT);
+    expect(loaded).toEqual(many.slice(0, SYSTEM_FOLDER_LIMIT));
+  });
+
+  it('keeps the default systemFolders when the stored value is not an array', () => {
+    localStorage.setItem('droid-assist.settings', '{"systemFolders":"nope"}');
+    expect(loadSettings(DEFAULTS).systemFolders).toEqual(DEFAULTS.systemFolders);
+  });
+});
+
+describe('notifications', () => {
+  beforeEach(() => localStorage.clear());
+  const notif = (overrides: Partial<AssistNotification> = {}): AssistNotification => ({
+    id: 'n1', time: 1000, source: 'AI', category: 'ai', severity: 'warning', title: 'AI status changed', read: false,
+    ...overrides,
+  });
+
+  it('round-trips a valid notification under its own key', () => {
+    saveNotifications([notif()]);
+    expect(localStorage.getItem('droid-assist.notifications')).not.toBeNull();
+    expect(loadNotifications()).toEqual([notif()]);
+  });
+
+  it('drops invalid entries', () => {
+    localStorage.setItem('droid-assist.notifications', JSON.stringify([notif(), { ...notif(), id: 'n2', category: 'bogus' }, null]));
+    expect(loadNotifications()).toEqual([notif()]);
+  });
+
+  it('keeps only the newest NOTIFICATION_LIMIT entries', () => {
+    const list = Array.from({ length: NOTIFICATION_LIMIT + 10 }, (_, i) => notif({ id: `n${i}`, time: i }));
+    saveNotifications(list);
+    expect(loadNotifications()).toHaveLength(NOTIFICATION_LIMIT);
+  });
+
+  it('returns [] for corrupt JSON', () => {
+    localStorage.setItem('droid-assist.notifications', '{bad');
+    expect(loadNotifications()).toEqual([]);
+  });
+});
+
+describe('loadSettingsExecutionMode', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('persists a valid stored executionMode', () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ executionMode: 'watching' }));
+    expect(loadSettings(DEFAULTS).executionMode).toBe('watching');
+  });
+
+  it('falls back to thoughtful for an unknown or non-string executionMode', () => {
+    for (const bad of ['warp', 7]) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ executionMode: bad }));
+      expect(loadSettings(DEFAULTS).executionMode).toBe('thoughtful');
+    }
+  });
+
+  it('keeps a valid stored autoApply as given', () => {
+    const autoApply = { enabled: true, minConfidence: 0.6, maxShift: 0.1, maxPerRun: 2 };
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ autoApply }));
+    expect(loadSettings(DEFAULTS).autoApply).toEqual(autoApply);
+  });
+
+  it('sanitizes an invalid stored autoApply field by field to the defaults', () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ autoApply: { enabled: true, minConfidence: 3, maxShift: -1, maxPerRun: 0 } }));
+    expect(loadSettings(DEFAULTS).autoApply).toEqual({ enabled: true, minConfidence: 0.8, maxShift: 0.05, maxPerRun: 5 });
+  });
+
+  it('leaves monitorMode unaffected by executionMode', () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ executionMode: 'watching', monitorMode: 'background' }));
+    const loaded = loadSettings(DEFAULTS);
+    expect(loaded.executionMode).toBe('watching');
+    expect(loaded.monitorMode).toBe('background');
+  });
+});
+
+describe('loadPersonas', () => {
+  beforeEach(() => localStorage.clear());
+
+  const persona = (n: number): Persona => ({
+    id: `p${n}`, name: `Persona ${n}`, character: `Character ${n}`, createdAt: n,
+    entries: [{ kind: 'did', text: `did ${n}`, time: n }],
+  });
+
+  it('round-trips saved personas', () => {
+    savePersonas([persona(1), persona(2)]);
+    expect(loadPersonas()).toEqual([persona(1), persona(2)]);
+  });
+
+  it('stores personas under their own key', () => {
+    savePersonas([persona(1)]);
+    expect(localStorage.getItem('droid-assist.personas')).not.toBeNull();
+  });
+
+  it('returns [] for corrupt JSON', () => {
+    localStorage.setItem('droid-assist.personas', '{oops');
+    expect(loadPersonas()).toEqual([]);
+  });
+
+  it('drops invalid personas and invalid entries of a valid persona', () => {
+    localStorage.setItem('droid-assist.personas', JSON.stringify([
+      { ...persona(1), name: '   ' },
+      { ...persona(2), createdAt: undefined },
+      { ...persona(3), entries: [{ kind: 'bogus', text: 'x', time: 1 }, { kind: 'did', text: '   ', time: 2 }, { kind: 'learned', text: 'ok', time: 3 }] },
+      null,
+    ]));
+    expect(loadPersonas()).toEqual([{ ...persona(3), entries: [{ kind: 'learned', text: 'ok', time: 3 }] }]);
+  });
+});
+
+describe('loadSettings: playbackWindowSec', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('defaults to 30 s', () => {
+    expect(DEFAULTS.playbackWindowSec).toBe(30);
+    expect(loadSettings(DEFAULTS).playbackWindowSec).toBe(30);
+  });
+
+  it('keeps stored windows inside 30..600 s, including both ends', () => {
+    for (const ok of [30, 300, 600]) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ playbackWindowSec: ok }));
+      expect(loadSettings(DEFAULTS).playbackWindowSec).toBe(ok);
+    }
+  });
+
+  it('falls back to the default for 29, 601 and non-numbers', () => {
+    for (const bad of [29, 601, '120']) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ playbackWindowSec: bad }));
+      expect(loadSettings(DEFAULTS).playbackWindowSec).toBe(30);
+    }
+  });
+});
+
+describe('loadSettings: operationRetries', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('keeps a stored operationRetries of 5', () => {
+    localStorage.setItem('droid-assist.settings', '{"operationRetries":5}');
+    expect(loadSettings(DEFAULTS).operationRetries).toBe(5);
+  });
+
+  it('falls back to the default (2) for 11 and -1', () => {
+    for (const bad of [11, -1]) {
+      localStorage.setItem('droid-assist.settings', JSON.stringify({ operationRetries: bad }));
+      expect(loadSettings(DEFAULTS).operationRetries).toBe(DEFAULTS.operationRetries);
+    }
+  });
+});
+
+describe('loadOperations / saveOperations', () => {
+  beforeEach(() => localStorage.clear());
+
+  const operation: SavedOperation = {
+    id: 'op_1',
+    name: 'Open YouTube',
+    goal: 'open youtube in chrome',
+    steps: [{ id: 's1', name: 'Click Chrome', action: 'click', x: 0.5, y: 0.5, status: 'done' } as WorkflowStep],
+    screenshots: [],
+    source: 'ai',
+    savedAt: 100,
+    runs: 2,
+    successes: 1,
+  };
+
+  it('round-trips name/goal/steps(pending)/runs/successes/source', async () => {
+    saveOperations([operation]);
+    const [loaded] = await loadOperations();
+    expect(loaded).toMatchObject({ name: 'Open YouTube', goal: 'open youtube in chrome', runs: 2, successes: 1, source: 'ai' });
+    expect(loaded.steps.map((s) => s.status)).toEqual(['pending']);
+    expect(loaded.screenshots).toEqual([]);
+  });
+
+  it('drops invalid entries', async () => {
+    localStorage.setItem('droid-assist.operations', JSON.stringify([operation, { id: 'bad' }, null]));
+    const loaded = await loadOperations();
+    expect(loaded).toHaveLength(1);
+  });
+
+  it('leaves other stored keys untouched', () => {
+    saveCards([]);
+    const triggers = ['droid-assist.triggers', JSON.stringify([{ foo: 'bar' }])] as const;
+    localStorage.setItem(triggers[0], triggers[1]);
+    saveOperations([operation]);
+    expect(localStorage.getItem('droid-assist.cards')).toBe('[]');
+    expect(localStorage.getItem('droid-assist.triggers')).toBe(triggers[1]);
+  });
+
+  it('gives [] screenshots when none are saved', async () => {
+    saveOperations([operation]);
+    const [loaded] = await loadOperations();
+    expect(loaded.screenshots).toEqual([]);
   });
 });

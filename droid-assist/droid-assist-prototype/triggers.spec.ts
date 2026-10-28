@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MATCHED } from './drift.js';
 import type { Frame, SavedCard } from './types.js';
 import type { MappedElement } from './element-map-studio.js';
+import type { SavedOperation } from './saved-operations.js';
 import {
   afterFire,
   afterSkip,
@@ -13,8 +14,9 @@ import {
   outcomeText,
   resolveTarget,
   scheduleDue,
+  targetText,
 } from './triggers.js';
-import type { ElementTrigger, ScheduleTrigger, Trigger, TriggerDraft } from './triggers.js';
+import type { ElementTrigger, ScheduleTrigger, Trigger, TriggerDraft, TriggerTarget } from './triggers.js';
 
 if (typeof globalThis.ImageData === 'undefined') {
   class ImageDataPolyfill {
@@ -301,5 +303,57 @@ describe('createTrigger / resolveTarget / isTrigger / outcomeText', () => {
   it('partial run gives "warn" tone', () => {
     const { tone } = outcomeText({ ok: 1, total: 2, dryRun: false, stopped: false });
     expect(tone).toBe('warn');
+  });
+});
+
+describe('resolveTarget: operation target', () => {
+  const operation: SavedOperation = { id: 'op_1', name: 'Open YouTube', goal: 'open youtube', steps: [], screenshots: [], source: 'ai', savedAt: 0, runs: 0, successes: 0 };
+
+  it('resolves a matching operation target to its name and the op', () => {
+    const target: TriggerTarget = { kind: 'operation', operationId: 'op_1' };
+    expect(resolveTarget(target, [], null, [operation])).toEqual({ name: 'operation "Open YouTube"', operation });
+  });
+
+  it('errors with "its saved operation was deleted" when missing', () => {
+    const target: TriggerTarget = { kind: 'operation', operationId: 'missing' };
+    expect(resolveTarget(target, [], null, [operation])).toEqual({ error: 'its saved operation was deleted' });
+  });
+
+  it('still resolves a card target', () => {
+    const card: SavedCard = { id: 'c1', name: 'Flow', description: '', savedAt: 0, steps: [] };
+    expect(resolveTarget({ kind: 'card', cardId: 'c1' }, [card], null, [operation])).toEqual({ name: 'flow "Flow"', card });
+  });
+
+  it('still resolves a draft target', () => {
+    expect(resolveTarget({ kind: 'draft' }, [], { name: 'Draft' }, [operation])).toEqual({ name: 'draft card "Draft"' });
+  });
+});
+
+describe('targetText', () => {
+  const operation: SavedOperation = { id: 'op_1', name: 'Open YouTube', goal: 'open youtube', steps: [], screenshots: [], source: 'ai', savedAt: 0, runs: 0, successes: 0 };
+  const card: SavedCard = { id: 'c1', name: 'Flow', description: '', savedAt: 0, steps: [] };
+
+  it('names a draft target', () => {
+    expect(targetText({ kind: 'draft' }, [], [])).toBe('the draft card');
+  });
+
+  it('names a card target', () => {
+    expect(targetText({ kind: 'card', cardId: 'c1' }, [card], [])).toBe('flow "Flow"');
+  });
+
+  it('names an operation target', () => {
+    expect(targetText({ kind: 'operation', operationId: 'op_1' }, [], [operation])).toBe('operation "Open YouTube"');
+  });
+});
+
+describe('isTrigger: operation target', () => {
+  it('accepts a trigger with an operation target', () => {
+    const t = elementTrigger({ target: { kind: 'operation', operationId: 'op_1' } });
+    expect(isTrigger(t)).toBe(true);
+  });
+
+  it('rejects a trigger with an empty operationId', () => {
+    const t = { ...elementTrigger(), target: { kind: 'operation', operationId: '' } };
+    expect(isTrigger(t)).toBe(false);
   });
 });

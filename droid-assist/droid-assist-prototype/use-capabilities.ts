@@ -52,8 +52,14 @@ const lines = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
 const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 const mode = (d: DispatchState) => (d.real ? 'sent to the bridge' : `${d.label} — ${d.reason}, no real input sent`);
 
-/** Runs `steps` one by one on the real-input path; stops at the first failure or halt. */
-async function runSteps(deps: CapabilityDeps, label: string, steps: WorkflowStep[]): Promise<CapabilityResult> {
+/** What running steps on the real-input path needs. */
+export type RunDeps = Pick<CapabilityDeps, 'runBriefed' | 'newBudget' | 'armed' | 'dispatch'>;
+
+/** How a caller is named in the log and in approvals. */
+export const callerName = (c: Caller) => (c.kind === 'agent' ? `Agent ${c.stage}` : c.kind === 'main' ? 'Main AI' : 'User');
+
+/** Runs `steps` one by one on the real-input path (dry run unless armed); stops at the first failure or halt. */
+export async function runSteps(deps: RunDeps, label: string, steps: WorkflowStep[]): Promise<CapabilityResult> {
   const dryRun = !deps.armed();
   const budget = deps.newBudget();
   for (const step of steps) {
@@ -71,7 +77,8 @@ function controlStep(p: Params): WorkflowStep | string {
   return { id: uid('ctl'), name: target ?? action, action, x: num(p.x, 0.5), y: num(p.y, 0.5), status: 'pending', ...(target ? { target } : {}), ...(str(p.text) ? { text: str(p.text) } : {}) };
 }
 
-const param = (name: string, type: Capability['params'][number]['type'], required: boolean, description: string) => ({ name, type, required, description });
+/** A capability parameter's spec. */
+export const param = (name: string, type: Capability['params'][number]['type'], required: boolean, description: string) => ({ name, type, required, description });
 
 /** The artifact stores the capabilities read and write. */
 interface Stores {
@@ -210,7 +217,7 @@ export function capabilities(deps: CapabilityDeps, stores: Stores): Capability[]
 }
 
 /** Persisted state of one artifact store, with its ref for reads inside a running capability. */
-function useStore<T>(load: () => T[], save: (list: T[]) => void) {
+export function useStore<T>(load: () => T[], save: (list: T[]) => void) {
   const [list, setList] = useState<T[]>(load);
   const ref = useRef(list);
   const commit = (next: T[]) => {
@@ -225,7 +232,7 @@ function useStore<T>(load: () => T[], save: (list: T[]) => void) {
  * The capability registry of the engine: the main AI (/do), the user (panel) and agents invoke
  * capabilities through one permission-checked path; artifacts persist in the artifact stores.
  */
-export function useCapabilities(deps: CapabilityDeps) {
+export function useCapabilities(deps: CapabilityDeps, extra: Capability[] = []) {
   const presentations = useStore(() => loadArtifacts('presentations'), (l) => saveArtifacts('presentations', l));
   const scripts = useStore(() => loadArtifacts('scripts'), (l) => saveArtifacts('scripts', l));
   const knowledge = useStore(() => loadArtifacts('knowledge'), (l) => saveArtifacts('knowledge', l));
@@ -235,13 +242,12 @@ export function useCapabilities(deps: CapabilityDeps) {
     saveScripts: scripts.commit,
     saveKnowledge: (e) => knowledge.commit(upsertArtifact(knowledge.ref.current, e)),
   };
-  const registry: Registry = createRegistry(capabilities(deps, stores));
-  const who = (c: Caller) => (c.kind === 'agent' ? `Agent ${c.stage}` : c.kind === 'main' ? 'Main AI' : 'User');
+  const registry: Registry = createRegistry([...capabilities(deps, stores), ...extra]);
 
   /** Invokes `id` for `caller` through the permission check; the result is logged either way. */
   const invoke = async (caller: Caller, id: string, params: Params): Promise<CapabilityResult> => {
     const r = await invokeCapability(registry, caller, id, params, deps.stageOn);
-    deps.log(ACTOR, `${who(caller)} → ${id}: ${r.message}`, r.ok ? 'ok' : 'error');
+    deps.log(ACTOR, `${callerName(caller)} → ${id}: ${r.message}`, r.ok ? 'ok' : 'error');
     return r;
   };
 
@@ -261,39 +267,4 @@ export function useCapabilities(deps: CapabilityDeps) {
   };
 
   return { registry, invoke, doCommand, presentations: presentations.list, scripts: scripts.list, knowledge: knowledge.list };
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { LogEntry } from './types.js';
-import { INVOCATION_LIMIT, createRegistry, type InvocationRecord, type Params, type Registry, type Requester } from './capabilities.js';
-import { assistCapabilities, type AssistOps } from './assist-capabilities.js';
-import { MAIN_APP_POLL_MS, serveMainApp } from './main-app-bridge.js';
-
-type AddLog = (from: string, message: string, tone?: LogEntry['tone']) => void;
-
-const USER: Requester = { kind: 'user' };
-const paramText = (p: Params) => (Object.keys(p).length ? ` ${JSON.stringify(p)}` : '');
-
-/**
- * The engine's capability registry over `ops` (read at invoke time, so the latest engine state is
- * used): every invocation is kept (newest first) and logged with its requester, parameters and
- * result. While a bridge is configured, the main Droid app's mailbox is served every MAIN_APP_POLL_MS.
- */
-export function useCapabilities(ops: AssistOps, addLog: AddLog, bridge: { url: string; token: string }) {
-  const opsRef = useRef(ops);
-  opsRef.current = ops;
-  const [invocations, setInvocations] = useState<InvocationRecord[]>([]);
-  const [registry] = useState<Registry>(() => createRegistry(assistCapabilities(() => opsRef.current), (r) => {
-    setInvocations((list) => [r, ...list].slice(0, INVOCATION_LIMIT));
-    addLog('Capabilities', `${r.requester} → ${r.id}${paramText(r.params)}: ${r.ok ? '' : 'REFUSED/FAILED — '}${r.result}`, r.ok ? 'info' : 'warn');
-  }));
-
-  /** Invokes one capability; buttons call it as the user, the AI and agents name themselves. */
-  const invoke = useCallback((id: string, params: Params = {}, requester: Requester = USER) => registry.invoke(id, params, requester), [registry]);
-
-  useEffect(() => {
-    if (!bridge.url) return undefined;
-    const tick = setInterval(() => void serveMainApp(bridge.url, bridge.token, opsRef.current.status(), registry), MAIN_APP_POLL_MS);
-    return () => clearInterval(tick);
-  }, [bridge.url, bridge.token, registry]);
-
-  return { registry, invocations, invoke };
 }

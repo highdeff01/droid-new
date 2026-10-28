@@ -10,6 +10,16 @@ const COMMANDS = {
   arrange: 'Usage: /arrange <how to move or reorder elements>, e.g. /arrange move the Files icon below Game',
   scenario: 'Usage: /scenario <dragon|wedding> — resets the test world and plans that persona goal',
   do: 'Usage: /do <capability id> {json params} · /do <request for the main AI>, e.g. /do script.run {"name":"login"}',
+  snip: 'Usage: /snip x,y,w,h [WxH] [display <id>], e.g. /snip 0.1,0.2,0.3,0.25 800x',
+  intercept: 'Usage: /intercept [bridge:|agent:|app:|ai:] <what changed> [at x,y], e.g. /intercept app: popup opened at 40%,50%',
+  backtrack: 'Usage: /backtrack <number of recent steps>, e.g. /backtrack 3',
+  section: 'Usage: /section <name> x,y,w,h · /section auto · /section remove <name>',
+  scope: 'Usage: /scope <section>[, <section>…] · /scope all',
+  replicate: 'Usage: /replicate <name> x,y,w,h, e.g. /replicate save button 0.8,0.05,0.1,0.06',
+  sidetest: 'Usage: /sidetest <target window> : <experimental action> [: <main action>], e.g. /sidetest Game : move character left : move character to the door',
+  research: 'Usage: /research <window or URL> : <what to find>',
+  crew: 'Usage: /crew <goal>, e.g. /crew find the Save button and the Files icon — the main AI commands a crew of agents · /crew locate <element> · /crew test <element or reason>',
+  ops: 'Usage: /ops <goal> — the main AI commands the Operations agents · /ops <agent>: <task>, e.g. /ops apply: click Save, /ops loopControl: disable Reflect',
 } as const;
 
 /** The name of a slash command. */
@@ -20,15 +30,16 @@ const isCommand = (name: string): name is CommandName => Object.prototype.hasOwn
  * Parses the assist input. Returns null for plain goals (anything not starting with "/").
  * "/use <target>" attaches to an app; "/move <target>" moves the mouse onto an on-screen target;
  * "/measure <a> to <b>" measures between points; "/arrange <goal>" plans and runs a drag
- * rearrangement; "/do <capability>" invokes a registered capability. A command without a target and unknown commands are errors.
+ * rearrangement; "/do <capability>" invokes a registered capability; "/snip <region>" screenshots a
+ * region; the crew, section, replication, side-test and Operations commands are listed in COMMANDS.
+ * A command without a target and unknown commands are errors.
  */
 export function parseCommand(input: string): AssistCommand | null {
   const text = input.trim();
   if (!text.startsWith('/')) return null;
   const match = /^\/([a-z]+)(?:\s+(.*))?$/.exec(text);
   const name = match?.[1] ?? '';
-  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal> or /scenario <dragon|wedding>` };
-  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal> or /do <capability>` };
+  if (!match || !isCommand(name)) return { kind: 'error', message: `Unknown command "${text.split(/\s/)[0]}" — try /use <app or target>, /move <target>, /test <links|route ...>, /measure <a> to <b>, /arrange <goal>, /scenario <dragon|wedding>, /do <capability>, /snip x,y,w,h, /crew <goal|locate|test ...>, /intercept <text>, /backtrack <n>, /section <name> x,y,w,h, /scope <sections>, /replicate <name> x,y,w,h, /sidetest <target> : <action>, /research <target> : <query> or /ops <goal>` };
   const target = (match[2] ?? '').trim();
   return target ? { kind: name, target } : { kind: 'error', message: COMMANDS[name] };
 }

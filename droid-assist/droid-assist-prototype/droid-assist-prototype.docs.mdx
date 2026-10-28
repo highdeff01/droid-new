@@ -19,11 +19,61 @@ To run the app locally, run the following:
 bit run droid-assist-prototype 
 ```
 
+## Workflow packs
+
+The **Workflow Packs** section (`PacksPanel`) sits directly below the screen preview.
+
+- **+ New pack** creates a pack. **● Record** records up to 5 moves into it — click, navigate (Alt+click, a cursor move), type (live write), key, scroll and drag — each with its coordinates and the screenshot it was recorded on. Recording stops by itself at the 5th move.
+- Each pack has a **goal bar** above it: the goal typed with the pack (or the main goal input), cleaned of lead-ins such as `goal:` or `I want to`. With no input, the AI writes a goal from the recorded steps when recording stops; any goal can be edited.
+- **Combine selected packs** makes a new combined workflow of copies of their steps (not capped). A step's **Move to…** moves it to another pack (refused when that pack already holds 5 moves). **▶ Run** runs one pack; **▶ Cross-run selection** runs just the ticked steps and whole packs, in pack order, each once.
+- **✨ Perform similar action** gives the ticked steps to the planner as an example; it plans afresh on the live screen (never a saved template) and runs each step through the grounded pipeline. It reports `Complete — …`, or a red `Incomplete at step N/M "<name>" — <action> "<target>" at (x%, y%): <reason>`.
+- **Background tests** (on by default) run every 60 s while the executor is idle: one subagent per pack through the existing subagent runner, dry run unless real input is armed. The last 10 results show under each pack and are logged as `Pack tester`. **Test now** runs a round at once.
+- Packs persist in `localStorage` (`droid-assist.packs`) and are part of the backup export.
+
 ## Flow and pattern memory
 
 - A replay or Auto Act run that executes every step as real input (not a dry run) is saved automatically as a workflow card, logged as `Flow saved: "<name>"`. Steps keep their drift-corrected coordinates and screenshots. A near-duplicate card for the same flow is replaced, not added again.
 - Typing a goal that resembles a saved flow (synonyms, plurals and verb forms are folded, e.g. "launch the calculator" ≈ "Open calculator app") reuses it without calling the model, and the log says `Reused saved workflow "<name>"`.
 - After each real run the AI adds lessons (`avoid` / `add`) to the **Learned patterns** panel (`PatternsPanel`). A failed run is never saved as a flow; its failure is recorded as an `avoid` pattern. Patterns persist in `localStorage` and can be deleted with ✕, and the ones relevant to a new goal are sent as planning context.
+
+## Operation memory
+
+- Every AI turn carries an `OPERATION MEMORY` block for the current operation (the goal, or a subagent's slice goal): the goal, the current objective (the step running now), the operation's notes, the **BLACKLISTED** methods it must never repeat (avoid patterns for this kind of operation, habit avoid-lessons for its targets, and failed steps of similar failed operations), similar operations that failed before, and the recent activity. The block is resent each turn and is not stored in the AI session history.
+- A failed run, replay or subagent is saved as a failure reminder: what failed, the failed steps and targets, and the screenshots taken when it failed (dropped first when storage is full). It is logged under `Memory`.
+- Starting a similar operation (a plan, replay, trigger fire or subagent assignment) logs a `Memory` reminder of the similar failures with their screenshots, so the AI and agents adjust before acting. The pre-action briefing cross-references them as `failure` entries on the same target.
+- The **Operation memory** panel (`OperationMemoryPanel`) groups everything per operation: notes (add and forget), failures with screenshots (forget), the blacklist and successful runs.
+## Resolution center and recovery operations
+
+The **Resolution center** panel (`ResolutionPanel`, driven by `use-resolution.ts`) settles judgment differences between AIs:
+
+- A **disagreement** is two or more distinct reporters, the main AI's plan or the agents forwarding on the bus, placing the same element (case and spacing ignored) more than 0.05 apart. Agreeing reports are not listed.
+- **Resolve disagreements** asks the model for a ruling `{winner, workflow, info, needs_test}`. The winning position is applied to the plan, and the main AI is told the edit, the workflow and the info that go with it. When the AI is offline, unsure or asks for a test, each report is tested in turn: an off-screen point fails, and otherwise the element must be confirmed at the reported point (by the AI on a zoomed crop of the live screen when it is online, or by the coordinate learner's memory of it when it is not). The first report that passes wins, and if none passes the disagreement stays unresolved.
+- **Recovery operations**:
+  - main retry and main test (replay and self-test)
+  - error fix (supervisor review)
+  - app recovery
+  - element recovery and hard tracking (repeated re-acquisition; the found point is forwarded to the agents)
+  - app creation (a scaffold of `main.js` and `README.md`, refused when the script breaks the sandboxed script rules: destructive commands, power or registry changes, network or registry writes, privilege escalation, or more than 8000 characters)
+  - computer maintenance (`repair`, `backup` or `cleanup` via computer control)
+  - re-chat (`Program: message` in another AI's program)
+  - reconnect (the bridge, retried with exponential backoff)
+- Every real-input step goes through the real-input guarantee: a recorded proposal, abort, arm, the executor stage and the action budget. Maintenance is admin-class and only queues until it is approved in the panel.
+- Every resolution and recovery result is logged under `Resolution center` and saved as a learned pattern and a habit outcome.
+## Mirror input
+
+The **Mirror input** checkbox under the screen preview switches the preview between passive (off: the stage only records, measures or acts on the demo as before) and interactive. While it is on, clicks, double-clicks, drags, mouse-wheel scrolls, key presses and text typed in the box under the preview are dispatched to the PC: clicking the Files icon in the mirror clicks it on the real screen.
+
+- Every mirrored input goes through the same real-input path as replays (`performStep`): armed with a connected bridge it is sent through the bridge; disarmed it is a dry run and its log line starts with `DRY RUN ·` and ends with `dry run — not dispatched`. Nothing is ever reported as a simulated success.
+- Each switch-on starts a session with a fresh action budget (`actionBudget`). Recording, the ruler and element-map mode take precedence over mirror input.
+- The kill switch (abort hotkey or button) turns mirror input off at once and stops AI play; mirror input cannot be switched on again until the abort is cleared.
+
+## Persona portfolios and AI play
+
+The **Personas** panel keeps one portfolio per character (persisted in `localStorage` under `droid-assist.personas`). Each AI play turn asks the model, as the selected persona, what it sees and for one action (click, double-click, drag, scroll, key or type), which runs through the mirror path above. The turn's outcome is added to the portfolio as `did`, plus any `learned` and `achieved` notes; the panel shows the level (1 + achievements + one per three lessons) and the newest entries. A turn without a selected persona is refused.
+
+## Element relevance and perspective
+
+Every play turn logs the important elements the model reported with their position and relevance (0..1, clamped; merged by case-insensitive name). The log is cross-referenced into a perspective: the most relevant element is the focus (what to do next), other elements at or above 0.5 are candidates, and those below 0.5 are peripheral. The perspective is planned as parallel lanes: the act lane acts on the focus and recaptures the screen, and one side-agent monitor lane per peripheral element reports, on the next turn, whether it moved, vanished or changed relevance.
 
 ## Error forwarding
 

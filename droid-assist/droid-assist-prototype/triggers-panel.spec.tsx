@@ -14,6 +14,7 @@ function engineWith(triggers: Trigger[]) {
     elementMap: [{ id: 'e1', name: 'Play button', box: { x: 0.1, y: 0.1, w: 0.1, h: 0.1 }, mappedAt: 1 }],
     cards: [{ id: 'c1', name: 'Calc flow', description: '', savedAt: 1, steps: [] }],
     addTrigger: vi.fn(), deleteTrigger: vi.fn(), invoke: vi.fn(async () => ({ ok: true, result: '' })),
+    operations: [{ id: 'o1', name: 'Open youtube', goal: 'go to chrome and open youtube', steps: [], screenshots: [], source: 'ai', savedAt: 1, runs: 0, successes: 0 }],
   } as unknown as AssistEngine & { addTrigger: ReturnType<typeof vi.fn>; invoke: ReturnType<typeof vi.fn>; deleteTrigger: ReturnType<typeof vi.fn> };
 }
 
@@ -39,6 +40,16 @@ describe('TriggersPanel', () => {
     fireEvent.change(screen.getByLabelText('Repeat every seconds'), { target: { value: '3600' } });
     fireEvent.click(screen.getByText('Add trigger'));
     expect(engine.addTrigger).toHaveBeenCalledWith(expect.objectContaining({ kind: 'schedule', name: 'Hourly', target: { kind: 'draft' }, everySec: 3600, at: new Date('2030-01-01T10:00').getTime() }));
+  });
+
+  it('submits a trigger that runs a saved operation', () => {
+    const engine = engineWith([]);
+    render(<TriggersPanel engine={engine} />);
+    fireEvent.change(screen.getByLabelText('Trigger kind'), { target: { value: 'schedule' } });
+    fireEvent.change(screen.getByLabelText('Trigger name'), { target: { value: 'Morning youtube' } });
+    fireEvent.change(screen.getByLabelText('Trigger runs'), { target: { value: 'op:o1' } });
+    fireEvent.click(screen.getByText('Add trigger'));
+    expect(engine.addTrigger).toHaveBeenCalledWith(expect.objectContaining({ kind: 'schedule', target: { kind: 'operation', operationId: 'o1' } }));
   });
 
   it('lists triggers with counts and wires enable, Run now and delete', () => {

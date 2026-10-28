@@ -20,6 +20,7 @@ function stubApi() {
     stopCapture: vi.fn(),
     listDisplays: vi.fn(async () => []),
     selectDisplay: vi.fn(),
+    grabDisplay: vi.fn(),
   };
   return { api, calls };
 }

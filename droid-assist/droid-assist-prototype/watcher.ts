@@ -4,30 +4,50 @@ import type { AskFn, ViewSize } from './ai.js';
 import { gridPrompt, replyPoint } from './grid.js';
 import { uid } from './planner.js';
 import type { Thought } from './assist-ai.js';
+import { AI_MODES, type ModeDirective } from './execution-mode.js';
 
 /** Most notes, proposals and test results the watcher keeps. */
 export const NOTE_LIMIT = 100;
 export const PROPOSAL_LIMIT = 50;
 export const TEST_LIMIT = 50;
 
-/** What a note records: a notable UI element, a state change, something unusual, an opportunity. */
-export type NoteKind = 'element' | 'change' | 'unusual' | 'opportunity';
-export const NOTE_KINDS: readonly NoteKind[] = ['element', 'change', 'unusual', 'opportunity'];
+/**
+ * What a note records: a notable UI element, a state change, something unusual, an opportunity —
+ * or, from the agents during operations, a wait/wake, a decision, or an error.
+ */
+export type NoteKind = 'element' | 'change' | 'unusual' | 'opportunity' | 'wake' | 'decision' | 'error';
+export const NOTE_KINDS: readonly NoteKind[] = ['element', 'change', 'unusual', 'opportunity', 'wake', 'decision', 'error'];
 
-/** One short, timestamped observation of the screen. */
+/** One short, timestamped observation of the screen or of an operation. */
 export interface WatchNote {
   id: string;
   time: number;
   kind: NoteKind;
   text: string;
+  /** The agent that took it (Screen watcher, Wake, Backup watcher, …). */
+  source?: string;
+  /** The operation (goal) it was taken during. */
+  op?: string;
 }
+
+/** What notes are recalled by: any of kind, operation and agent; an absent field matches all. */
+export interface NoteQuery {
+  kind?: NoteKind;
+  op?: string;
+  source?: string;
+}
+
+/** The notes matching every given field of `q`, newest first as stored. */
+export const recallNotes = (notes: WatchNote[], q: NoteQuery): WatchNote[] =>
+  notes.filter((n) => (q.kind === undefined || n.kind === q.kind) && (q.op === undefined || n.op === q.op) && (q.source === undefined || n.source === q.source));
 
 /**
  * What a proposal changes: add a popup to the close list (a learned "add" pattern), save a
  * stable element as familiar, save a learned pattern, or reorder the current workflow steps.
  */
-export type ProposalKind = 'close_popup' | 'familiar' | 'pattern' | 'reorder';
-export const PROPOSAL_KINDS: readonly ProposalKind[] = ['close_popup', 'familiar', 'pattern', 'reorder'];
+export type ProposalKind = 'close_popup' | 'familiar' | 'pattern' | 'reorder' | 'workflow';
+/** `workflow` is proposed by the app (a thinking-only AI reply), never by the watcher's model. */
+export const PROPOSAL_KINDS: readonly ProposalKind[] = ['close_popup', 'familiar', 'pattern', 'reorder', 'workflow'];
 
 export type ProposalStatus = 'pending' | 'accepted' | 'dismissed';
 export const PROPOSAL_STATUSES: readonly ProposalStatus[] = ['pending', 'accepted', 'dismissed'];
@@ -49,6 +69,8 @@ export interface WatchProposal {
   status: ProposalStatus;
   /** Whether a background test already ran for it. */
   tested?: boolean;
+  /** Prior operations/elements/errors cross-referenced from the operation database when it was proposed. */
+  related?: string[];
 }
 
 /** The result of one background test of a proposal. */
@@ -81,14 +103,17 @@ export type ProposalDraft = Omit<WatchProposal, 'id' | 'time' | 'status' | 'test
 export interface Observation extends Thought {
   notes: NoteDraft[];
   proposals: ProposalDraft[];
+  /** The execution mode the watcher says fits what the user is doing, when it asked for one. */
+  mode?: ModeDirective;
 }
 
 /** System prompt of the screen watcher for a `view`-sized screenshot. */
 export const watchSystem = (view: ViewSize) => `You are Droid Assist's screen watcher. You observe the user's screen in the background and take short structured notes.
 ${gridPrompt(view)}
-Reply ONLY with JSON {"notes":[{"kind":"element"|"change"|"unusual"|"opportunity","text":string}],"proposals":[{"kind":"close_popup"|"familiar"|"pattern"|"reorder","text":string,"target":string,"cell":string,"cx":number,"cy":number,"from":number,"to":number}]}.
+Reply ONLY with JSON {"notes":[{"kind":"element"|"change"|"unusual"|"opportunity","text":string}],"proposals":[{"kind":"close_popup"|"familiar"|"pattern"|"reorder","text":string,"target":string,"cell":string,"cx":number,"cy":number,"from":number,"to":number}],"mode"?:{"mode":${AI_MODES.map((m) => `"${m}"`).join('|')},"reason":string}}.
 Notes: at most 4, each under 15 words: notable UI elements, what changed since the previous notes, anything unusual, opportunities to help. Do not repeat a previous note.
-Proposals (optional, at most 2): close_popup = a popup keeps returning, give its close control as target + cell; familiar = an element sits at a stable position, give its name as target + cell; pattern = a lesson to remember ("avoid ..." or "add ..." in text); reorder = the workflow keeps failing at a step, move step "from" to position "to" (1-based).`;
+Proposals (optional, at most 2): close_popup = a popup keeps returning, give its close control as target + cell; familiar = an element sits at a stable position, give its name as target + cell; pattern = a lesson to remember ("avoid ..." or "add ..." in text); reorder = the workflow keeps failing at a step, move step "from" to position "to" (1-based).
+Mode (optional): only when what the user is doing calls for a different execution mode — watching = a movie or video plays (low cadence, notes); reacting = the user is working through a workflow to react to; tracking = elements should be tracked into the project while working; parallel = many independent quick operations; thoughtful = deliberate work. Give the reason in a few words.`;
 
 /** The watcher's system prompt for a sample-space (480x270) screenshot. */
 export const WATCH_SYSTEM = watchSystem(SAMPLE_VIEW);
@@ -129,21 +154,31 @@ function toProposal(raw: unknown, view: ViewSize): ProposalDraft[] {
 
 /**
  * Asks the model (through the shared gateway) to observe `frame` and return notes and
- * proposals. Malformed entries are dropped; a non-JSON reply throws AiError.
+ * proposals. Malformed entries are dropped; a non-JSON reply throws AiError. `related` are prior
+ * operations/elements/errors from the operation database, so new ideas build on what was already tried.
  */
-export async function observeScreen(ask: AskFn, frame: Frame, recent: WatchNote[], steps: WorkflowStep[], goal: string): Promise<Observation> {
+export async function observeScreen(ask: AskFn, frame: Frame, recent: WatchNote[], steps: WorkflowStep[], goal: string, related: string[] = []): Promise<Observation> {
   const previous = recent.slice(0, 8).map((n) => `- [${n.kind}] ${n.text}`).join('\n') || '(none)';
   const flow = steps.map((s, i) => `${i + 1}. ${s.name} [${s.action}] → ${s.status}`).join('\n') || '(none)';
+  const prior = related.length ? `\nPrior operations (from the operation database):\n${related.join('\n')}` : '';
   const { content, thinking, view = SAMPLE_VIEW } = await ask({
     system: watchSystem,
-    prompt: `Goal: ${goal || '(none)'}\nPrevious notes:\n${previous}\nCurrent workflow steps:\n${flow}`,
+    prompt: `Goal: ${goal || '(none)'}\nPrevious notes:\n${previous}\nCurrent workflow steps:\n${flow}${prior}`,
     frame,
     json: true,
   });
   const r = parseJsonReply(content);
   const notes = Array.isArray(r.notes) ? r.notes.flatMap(toNote) : [];
   const proposals = Array.isArray(r.proposals) ? r.proposals.flatMap((p) => toProposal(p, view)) : [];
-  return { notes, proposals, thinking };
+  const mode = toDirective(r.mode);
+  return { notes, proposals, thinking, ...(mode ? { mode } : {}) };
+}
+
+/** The reply's mode directive, kept as given (the caller rules on it); null when absent or without a mode name. */
+function toDirective(raw: unknown): ModeDirective | null {
+  const m = (raw ?? {}) as Record<string, unknown>;
+  const mode = str(m.mode);
+  return mode ? { mode, reason: str(m.reason) } : null;
 }
 
 const norm = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();

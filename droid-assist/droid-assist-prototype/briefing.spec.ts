@@ -4,6 +4,7 @@ import {
   BRIEFING_LIMIT,
   addBriefing,
   briefingIssues,
+  briefingText,
   buildBriefing,
   compareFrames,
   objectivesOf,
@@ -52,7 +53,7 @@ const proposal = (over: Partial<Proposal> = {}): Proposal => ({
   ...over,
 });
 
-const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], familiar: [], habits: [], patterns: [], context: '', ...over });
+const knowledge = (over: Partial<Knowledge> = {}): Knowledge => ({ map: [], familiar: [], habits: [], patterns: [], failures: [], dossiers: [], memory: [], context: '', ...over });
 
 const mkBriefing = (over: Partial<Briefing> = {}): Briefing => ({
   id: 'b1',
@@ -219,5 +220,21 @@ describe('addBriefing', () => {
     for (let i = 0; i < BRIEFING_LIMIT + 5; i++) list = addBriefing(list, mkBriefing({ id: `b${i}` }));
     expect(list).toHaveLength(BRIEFING_LIMIT);
     expect(list[0].id).toBe(`b${BRIEFING_LIMIT + 4}`);
+  });
+});
+
+describe('briefingExecutionMode', () => {
+  it('copies input.mode onto the built briefing', () => {
+    const s = step();
+    const p = proposal();
+    const b = buildBriefing({ goal: 'finish', steps: [s], step: s, proposal: p, live: null, knowledge: knowledge(), thresholds: DEFAULT_DRIFT, online: true, mode: 'thoughtful' });
+    expect(b.mode).toBe('thoughtful');
+  });
+
+  it('ends with "; mode: <mode>" when mode is set and omits it when absent', () => {
+    const withMode = mkBriefing({ mode: 'aggressive' });
+    expect(briefingText(withMode)).toMatch(/; mode: aggressive$/);
+    const withoutMode = mkBriefing();
+    expect(briefingText(withoutMode)).not.toMatch(/mode:/);
   });
 });

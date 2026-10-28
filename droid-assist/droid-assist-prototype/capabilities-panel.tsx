@@ -5,7 +5,7 @@ import styles from './droid-assist.module.css';
 
 /** Invokes one registered capability as the user with JSON parameters. */
 function InvokeForm({ engine }: { engine: AssistEngine }) {
-  const ids = [...engine.capabilities.keys()];
+  const ids = [...engine.artifactCapabilities.keys()];
   const [id, setId] = useState(ids[0] ?? '');
   const [params, setParams] = useState('{}');
   const run = () => {
@@ -15,7 +15,7 @@ function InvokeForm({ engine }: { engine: AssistEngine }) {
       engine.addLog('Capabilities', `Parameters for ${id} are not valid JSON`, 'warn');
     }
   };
-  const cap = engine.capabilities.get(id);
+  const cap = engine.artifactCapabilities.get(id);
   return (
     <div>
       <select value={id} onChange={(e) => setId(e.target.value)} aria-label="Capability">
@@ -29,10 +29,10 @@ function InvokeForm({ engine }: { engine: AssistEngine }) {
 }
 
 /** The capability registry: invoke any capability, and the saved presentations, scripts and knowledge notes. */
-export function CapabilitiesPanel({ engine }: { engine: AssistEngine }) {
+export function ArtifactsPanel({ engine }: { engine: AssistEngine }) {
   return (
-    <section className={styles.panel} aria-label="Capabilities">
-      <h3>Capabilities <small>{engine.capabilities.size} registered · also /do</small></h3>
+    <section className={styles.panel} aria-label="Artifacts">
+      <h3>Artifacts <small>{engine.artifactCapabilities.size} registered · also /do</small></h3>
       <InvokeForm engine={engine} />
       <h4>Presentations</h4>
       {!engine.presentations.length && <p className={styles.muted}>None saved yet.</p>}
@@ -45,9 +45,9 @@ export function CapabilitiesPanel({ engine }: { engine: AssistEngine }) {
         {engine.scripts.map((s) => <li key={s.id}><b>{s.name}</b> <small>{s.steps.length} step(s){s.description ? ` · ${s.description}` : ''}</small></li>)}
       </ul>
       <h4>Knowledge</h4>
-      {!engine.knowledge.length && <p className={styles.muted}>No notes yet.</p>}
+      {!engine.artifactKnowledge.length && <p className={styles.muted}>No notes yet.</p>}
       <ul className={styles.log}>
-        {engine.knowledge.map((k) => (
+        {engine.artifactKnowledge.map((k) => (
           <li key={k.id}><b>{k.title}</b>
             <ol>{k.notes.map((n, i) => <li key={i}>[{timestamp(n.offsetMs)}] {n.text}{n.screenshot && <img src={n.screenshot} alt={`Moment at ${timestamp(n.offsetMs)}`} width={120} />}</li>)}</ol>
           </li>
