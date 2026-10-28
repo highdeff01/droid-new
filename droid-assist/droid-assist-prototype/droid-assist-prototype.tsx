@@ -20,6 +20,7 @@ import { VariationsPanel } from './variations-panel.js';
 import { InventoryPanel, RetestPanel, RoutesPanel, SelfTestPanel } from './screen-ai-panels.js';
 import { InitiativePanel } from './initiative-panel.js';
 import { GoalsPanel } from './goals-panel.js';
+import { CurrentOperationPanel as OperationProgressPanel } from './current-operation-panel.js';
 import { SystemPanel } from './system-panel.js';
 import { NotificationsPanel } from './notifications-panel.js';
 import { DatabasePanel } from './database-panel.js';
@@ -80,7 +81,7 @@ function AssistScreen() {
           <Stage engine={engine} />
           <PanelBoard area="side" ids={layout.side} className={styles.side} renderPanel={renderPanel} onMove={onMove} />
           <div className={styles.side}>
-            <CurrentOperationPanel engine={engine} />
+            <OperationProgressPanel engine={engine} />
             <WorkflowPanel engine={engine} />
             <VariationsPanel engine={engine} />
             <PersonaPanel engine={engine} />
