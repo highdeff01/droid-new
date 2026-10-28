@@ -478,16 +478,16 @@ export function windowTurns(history: HistoryEntry[], window?: number): ChatMessa
  * history + the new user turn (with the frame rendered at cfg.view by `render`), and on success appends
  * the text of both turns (content only, no thinking) with their time to the persisted history, which
  * is never capped, and to the append-only archive (AI_ARCHIVE_KEY), which no trim, stale guard or
- * reset ever shrinks. Each time the archive crosses a multiple of AUTO_SAVE_EVERY, `onAutoSave` gets it.
+ * reset ever shrinks, kept in `archiveStore` (a store that outlives the session). Each time the archive crosses a multiple of AUTO_SAVE_EVERY, `onAutoSave` gets it.
  * The reply carries the view its screenshots were sent at. `cancel()` aborts every request in
  * flight (they reject with AiError); `trim(n)` keeps the newest n messages; `reset()` cancels and
  * clears the live history; `noteParse(ok)` feeds the stale-context guard, which trims to STALE_KEEP after
  * STALE_PARSE_LIMIT unparseable replies in a row. Every trim and reset is reported to `onChange`.
  * With thinking on, a thinking-only reply escalates with `escalation` (app context + stage reports).
  */
-export function createAiSession(store: HistoryStore | null, render?: RenderFn, onChange?: HistoryChangeFn, escalation: EscalationHooks = {}, onAutoSave?: AutoSaveFn) {
+export function createAiSession(store: HistoryStore | null, render?: RenderFn, onChange?: HistoryChangeFn, escalation: EscalationHooks = {}, onAutoSave?: AutoSaveFn, archiveStore: HistoryStore | null = store) {
   let history = loadHistory(store);
-  let archive = loadHistory(store, AI_ARCHIVE_KEY);
+  let archive = loadHistory(archiveStore, AI_ARCHIVE_KEY);
   let controller = new AbortController();
   let parseFailures = 0;
   const shrink = (keep: number, reason: TrimReason) => {
@@ -501,7 +501,7 @@ export function createAiSession(store: HistoryStore | null, render?: RenderFn, o
     store?.setItem(HISTORY_KEY, JSON.stringify(history));
     const before = archive.length;
     archive = [...archive, ...turns];
-    store?.setItem(AI_ARCHIVE_KEY, JSON.stringify(archive));
+    archiveStore?.setItem(AI_ARCHIVE_KEY, JSON.stringify(archive));
     if (autoSaveDue(before, archive.length)) onAutoSave?.(archive);
   };
   const ask = async (cfg: AiConfig, req: AskRequest): Promise<AiReply> => {

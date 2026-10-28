@@ -5,7 +5,7 @@ import { MATCHED, SAMPLE_H, SAMPLE_W, SEARCH_RADIUS, STABLE, boundingBox, boxDis
 import { AD_CYCLE, demoAd, demoDrag, demoFileAt, demoPlayButton, drawDemoDesktop, findIcon, initialDemoFile, initialDemoIcons, moveIcon, type DemoFile, type DemoIcon } from './demo-desktop.js';
 import { AI_PLAN_SOURCE, calculate, generateCard, patternLine, planFromGoal, planRemaining, relevantPatterns, relocateTarget, replanDrag, replanStep, uid } from './planner.js';
 import { checkMoved, sameElement, verifyArrangement, type Expectation, type MovedElement } from './rearrange.js';
-import { AI_ARCHIVE_KEY, AI_VIEWS, AiCancelled, AiError, AiParseError, isRepeatLimit, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi, stripThinking, thinkingOnlyNotice } from './ai.js';
+import { AI_VIEWS, AiCancelled, AiError, AiParseError, isRepeatLimit, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi, stripThinking, thinkingOnlyNotice } from './ai.js';
 import { OVERLAP_PREFIX, firstValid } from './ai-overlap.js';
 import { STAGE_LABEL, appContextSections, escalationNotice, suggestedGoal, type EscalationEvent, type EscalationHooks } from './ai-escalation.js';
 import type { AiReply, AiStatus, AskFn, AskRequest, AutoSaveFn, HistoryChangeFn } from './ai.js';
@@ -638,7 +638,7 @@ export function useAssist() {
   const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage, renderView, (c) => historyChangeRef.current(c), {
     appContext: () => escalationRef.current.appContext(),
     onStage: (e) => escalationRef.current.onStage(e),
-  }, (archive) => autoSaveRef.current(archive)));
+  }, (archive) => autoSaveRef.current(archive), typeof localStorage === 'undefined' ? null : localStorage));
   const [aiHistory, setAiHistory] = useState(() => aiSessionRef.current.history());
   /** Cancels every in-flight model call when aborted; replaced by a fresh one after each cancel. */
   const aiCtrlRef = useRef(new AbortController());
@@ -979,10 +979,9 @@ export function useAssist() {
     addLog('AI history', historyChangeText(change), change.reason === 'manual' ? 'info' : 'warn');
   };
 
-  /** Every 100 archived AI messages: the archive is copied to localStorage and all data saved as the last good backup. */
+  /** Every 100 archived AI messages (the archive itself persists in localStorage across sessions): all data is saved as the last good backup. */
   autoSaveRef.current = (archive) => {
     try {
-      localStorage.setItem(AI_ARCHIVE_KEY, JSON.stringify(archive));
       snapshotLastGood();
       addLog('AI history', `Auto-saved all data at ${archive.length} archived AI message(s)`, 'ok');
     } catch (error) {

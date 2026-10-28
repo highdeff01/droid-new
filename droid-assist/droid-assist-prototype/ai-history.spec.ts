@@ -110,6 +110,16 @@ describe('AI session history management', () => {
     expect(windowTurns(entries(3), 2)).toEqual([{ role: 'assistant', content: 'm1' }, { role: 'user', content: 'm2' }]);
   });
 
+  it('the archive outlives the session: a new session appends to the persistent archive store', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => reply('ok')));
+    const durable = memoryStore();
+    await createAiSession(memoryStore(), undefined, undefined, {}, undefined, durable).ask(cfg, { system: 's', prompt: 'first' });
+    const next = createAiSession(memoryStore(), undefined, undefined, {}, undefined, durable);
+    expect(next.history()).toEqual([]);
+    await next.ask(cfg, { system: 's', prompt: 'second' });
+    expect(archived(durable).map((e) => e.content)).toEqual(['first', 'ok', 'second', 'ok']);
+  });
+
   it('the archive survives trim, the stale guard and reset', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => reply('ok')));
     const store = memoryStore();
