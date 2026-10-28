@@ -91,8 +91,28 @@ describe('proposeStep', () => {
     expect(ask.mock.calls[0][0].prompt).toMatch(/RE-PROPOSAL: the drift monitor reports RED/);
   });
 
-  it('rejects a proposal without a why', async () => {
-    await expect(proposeStep(askReturning('{"ready":true}'), full, step, { goal: '', change: null, patterns: [] })).rejects.toBeInstanceOf(AiError);
+  it('rejects a proposal still without a why after one schema retry', async () => {
+    const ask = askReturning('{"ready":true}');
+    await expect(proposeStep(ask, full, step, { goal: '', change: null, patterns: [] })).rejects.toBeInstanceOf(AiError);
+    expect(ask).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks once more with the exact schema when the proposal has no why', async () => {
+    const ask = vi.fn<AskFn>().mockResolvedValueOnce({ content: '{"ready":true,"x":0.3,"y":0.4}', thinking: null }).mockResolvedValueOnce({ content: '{"ready":true,"x":0.3,"y":0.4,"why":"starts it"}', thinking: null });
+    const p = await proposeStep(ask, full, step, { goal: '', change: null, patterns: [] });
+    expect(p).toMatchObject({ ready: true, x: 0.3, why: 'starts it' });
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(ask.mock.calls[1][0].prompt).toContain('{"ready":boolean,"x":number,"y":number,"why":string}');
+    expect(ask.mock.calls[1][0].prompt).toContain('no "why"');
+  });
+
+  it('asks once more when a coordinate is non-numeric, and fails after the second bad reply', async () => {
+    const ask = vi.fn<AskFn>().mockResolvedValueOnce({ content: '{"ready":true,"x":"left","y":0.4,"why":"w"}', thinking: null }).mockResolvedValueOnce({ content: '{"ready":true,"x":0.2,"y":0.4,"why":"w"}', thinking: null });
+    expect(await proposeStep(ask, full, step, { goal: '', change: null, patterns: [] })).toMatchObject({ x: 0.2, y: 0.4 });
+    expect(ask.mock.calls[1][0].prompt).toContain('non-numeric coordinate "x": left');
+    const bad = askReturning('{"ready":true,"x":0.2,"y":"top","why":"w"}');
+    await expect(proposeStep(bad, full, step, { goal: '', change: null, patterns: [] })).rejects.toThrow(/non-numeric coordinate "y"/);
+    expect(bad).toHaveBeenCalledTimes(2);
   });
 });
 

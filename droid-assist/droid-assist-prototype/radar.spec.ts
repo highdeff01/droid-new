@@ -68,6 +68,6 @@ describe('radarStatus', () => {
 
   it('calls out a recent prose / failed response as what is going wrong', () => {
     const { event } = radarTick(startRadar(t), { x: 0.1, y: 0.5 }, { x: 0.7, y: 0.5 }, W, H);
-    expect(radarStatus(t, event, ['AI reply was not a JSON object (model returned prose)']).wrong).toContain('did not give a usable location');
+    expect(radarStatus(t, event, ['AI reply was not a JSON object: no {...} object found in the reply']).wrong).toContain('did not give a usable location');
   });
 });

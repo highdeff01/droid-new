@@ -1,5 +1,5 @@
 import type { FamiliarElement, Frame, LogEntry, WorkflowStep } from './types.js';
-import { AiError, SAMPLE_VIEW, parseJsonReply } from './ai.js';
+import { AiError, SAMPLE_VIEW, askRetryingSchema, parseJsonReply } from './ai.js';
 import type { AskFn, ViewSize } from './ai.js';
 import { gridPrompt, replyPoint } from './grid.js';
 import { planSystem, toStep, uid } from './planner.js';
@@ -134,12 +134,15 @@ export function parseDiscovery(reply: string, frame: Frame | null, view: ViewSiz
   return { kind: 'explore', step, why };
 }
 
-/** Asks the discovery agent where the objective's target is, told what was already tried. */
+/** The discovery reply contract (found shape), quoted in the schema retry. */
+const DISCOVERY_SCHEMA = '{"visible":true,"cell":string,"cx":number,"cy":number,"why":string} or {"visible":false,"step":{...}|null,"why":string}';
+
+/** Asks the discovery agent where the objective's target is, told what was already tried; a non-numeric point is asked once more. */
 export async function discoverTarget(ask: AskFn, frame: Frame | null, o: ChainObjective, tried: string[]): Promise<DiscoveryMove & Thought> {
   const hint = o.discover ? `\nHint: ${o.discover}` : '';
   const done = tried.length ? `\nAlready tried: ${tried.join('; ')}` : '';
-  const reply = await ask({ system: discoverySystem, prompt: `Find: ${o.step.target ?? o.name} (to ${o.what})${hint}${done}`, frame, json: true });
-  return { ...parseDiscovery(reply.content, frame, reply.view), thinking: reply.thinking };
+  const req = { system: discoverySystem, prompt: `Find: ${o.step.target ?? o.name} (to ${o.what})${hint}${done}`, frame, json: true };
+  return askRetryingSchema(ask, req, DISCOVERY_SCHEMA, (reply) => ({ ...parseDiscovery(reply.content, frame, reply.view), thinking: reply.thinking }));
 }
 
 /** One line of the per-objective report. */

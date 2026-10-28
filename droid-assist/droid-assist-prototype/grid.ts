@@ -35,10 +35,16 @@ export function cellBox({ row, col }: GridCell) {
   return { x: col / GRID_COLS, y: row / GRID_ROWS, w: 1 / GRID_COLS, h: 1 / GRID_ROWS };
 }
 
+/** A number or numeric string as a finite number; null otherwise. */
+export function numberOf(v: unknown): number | null {
+  const n = typeof v === 'string' ? Number.parseFloat(v) : v;
+  return typeof n === 'number' && Number.isFinite(n) ? n : null;
+}
+
 /** A fraction inside a cell, clamped to 0..1; missing or non-numeric means the centre. */
 function inCell(v: unknown): number {
-  const n = typeof v === 'string' ? Number.parseFloat(v) : v;
-  return typeof n === 'number' && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.5;
+  const n = numberOf(v);
+  return n === null ? 0.5 : Math.min(1, Math.max(0, n));
 }
 
 /**
@@ -50,6 +56,18 @@ export function resolveCell(ref: unknown, cx: unknown = 0.5, cy: unknown = 0.5):
   if (!cell) return null;
   const b = cellBox(cell);
   return { x: b.x + inCell(cx) * b.w, y: b.y + inCell(cy) * b.h };
+}
+
+/**
+ * One model coordinate as a 0..1 fraction of the screen, read by magnitude: up to 1 a fraction,
+ * up to `cells` (the grid's column or row count) grid units, up to 100 a percent, above that
+ * pixels of the `px`-sized image the model saw; clamped to 0..1. Null when it is not a number.
+ */
+export function axisFraction(v: unknown, cells: number, px: number): number | null {
+  const n = numberOf(v);
+  if (n === null) return null;
+  const scale = n <= 1 ? 1 : n <= cells ? cells : n <= 100 ? 100 : px;
+  return Math.min(1, Math.max(0, n / scale));
 }
 
 /** The cell containing a screen point (fractions 0..1, clamped onto the grid). */
