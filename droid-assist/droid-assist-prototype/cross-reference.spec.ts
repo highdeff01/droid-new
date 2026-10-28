@@ -132,6 +132,10 @@ describe('crossReference — avoid patterns', () => {
       const quoted = failurePattern('g', [{ id: 'a', name: 'Click Save', action: 'click', target: 'The "Save" button', x: 0.2, y: 0.3, status: 'failed' }]);
       expect(avoidMatches(quoted.pattern, 'Save', { x: 0.9, y: 0.9 })).toBe(false);
       expect(avoidMatches(quoted.pattern, 'Save', { x: 0.2, y: 0.3 })).toBe(true);
+      const ok = failurePattern('g', [{ id: 'b', name: 'Confirm', action: 'click', target: '"OK"', x: 0.4, y: 0.5, status: 'failed' }, { id: 'c', name: 'Click "1"', action: 'click', x: 0.6, y: 0.6, status: 'failed' }]);
+      expect(avoidMatches(ok.pattern, '"OK"', { x: 0.4, y: 0.5 })).toBe(true);
+      expect(avoidMatches(ok.pattern, 'Click "1"', { x: 0.6, y: 0.6 })).toBe(true);
+      expect(avoidMatches(ok.pattern, '"OK"', { x: 0.9, y: 0.1 })).toBe(false);
     });
   });
 

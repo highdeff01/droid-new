@@ -97,7 +97,7 @@ export function scopedEntries(pattern: string): Array<Point & { element: string 
   return [...pattern.matchAll(SCOPED_STEP)].map((m) => ({ element: m[1], x: Number(m[2]) / 100, y: Number(m[3]) / 100 }));
 }
 
-const normName = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+const normName = (s: string) => s.toLowerCase().replace(/["']/g, '').replace(/\s+/g, ' ').trim();
 /** The same element: equal names (case/space-insensitive, so short names like "OK" or "Click 1" match) or names sharing a meaningful word. */
 const sameElement = (a: string, b: string) => normName(a) === normName(b) || related(a, b);
 
