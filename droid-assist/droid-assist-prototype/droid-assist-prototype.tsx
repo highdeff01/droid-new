@@ -28,11 +28,37 @@ import { PresentationPanel } from './presentation-panel.js';
 import { NotificationStack } from './notification-stack.js';
 import { OperationsPanel } from './operations-panel.js';
 import { OperationsPanel as OpsAgentsPanel } from './ops-panel.js';
+import { PanelBoard } from './panel-board.js';
+import { movePanel, type PanelArea, type PanelId } from './panel-layout.js';
+import type { AssistEngine } from './use-assist.js';
 import styles from './droid-assist.module.css';
+
+/** Every user-arrangeable panel by its layout id; the panels themselves render unchanged. */
+const PANELS: Record<PanelId, (props: { engine: AssistEngine }) => JSX.Element | null> = {
+  workflow: WorkflowPanel, variations: VariationsPanel, persona: PersonaPanel, ruler: RulerPanel, elements: ElementsPanel,
+  elementMap: ElementMapPanel, snipGallery: SnipGalleryPanel, inventory: InventoryPanel, routes: RoutesPanel, retest: RetestPanel,
+  sections: SectionsPanel, learnedCoords: LearnedCoordsPanel, library: LibraryPanel, patterns: PatternsPanel,
+  operationMemory: OperationMemoryPanel, knowledge: KnowledgePanel, profile: ProfilePanel, stats: StatsPanel, memory: MemoryPanel,
+  goals: GoalsPanel, notifications: NotificationsPanel, system: SystemPanel, watcher: WatcherPanel, wake: WakePanel,
+  initiative: InitiativePanel, triggers: TriggersPanel, projects: ProjectsPanel, approvals: ApprovalsPanel, artifacts: ArtifactsPanel,
+  presentation: PresentationPanel, operations: OperationsPanel,
+  comparisonGallery: ComparisonGallery, aiHelp: AiHelpPanel, briefing: BriefingPanel, aiHistory: AiHistoryPanel,
+  qwenThinking: QwenThinkingPanel, supervisor: SupervisorPanel, agents: AgentsPanel, portfolios: PortfoliosPanel,
+  loopControl: LoopControlPanel, capabilities: CapabilitiesPanel, settings: SettingsPanel, agentBus: AgentBusPanel, crew: CrewPanel,
+  agentCrew: AgentCrewPanel, opsAgents: OpsAgentsPanel, subagentReport: SubagentReportPanel, resolution: ResolutionPanel,
+  log: LogPanel, errors: ErrorsPanel, actionHistory: ActionHistoryPanel, database: DatabasePanel,
+};
 
 /** The Droid Assist workspace: live screen + overlay, HUDs, workflow, gallery, agents and log. */
 function AssistScreen() {
   const engine = useAssist();
+  const layout = engine.settings.panelLayout;
+  const onMove = (id: PanelId, area: PanelArea, before: PanelId | null) =>
+    engine.setSettings((s) => ({ ...s, panelLayout: movePanel(s.panelLayout, id, area, before) }));
+  const renderPanel = (id: PanelId) => {
+    const Panel = PANELS[id];
+    return <Panel engine={engine} />;
+  };
   return (
     <div className={styles.app}>
       <header className={styles.header}>
@@ -53,6 +79,7 @@ function AssistScreen() {
         <PopupPanel engine={engine} />
         <div className={styles.work}>
           <Stage engine={engine} />
+          <PanelBoard area="side" ids={layout.side} className={styles.side} renderPanel={renderPanel} onMove={onMove} />
           <div className={styles.side}>
             <CurrentOperationPanel engine={engine} />
             <WorkflowPanel engine={engine} />
@@ -112,6 +139,7 @@ function AssistScreen() {
           <ActionHistoryPanel engine={engine} />
           <DatabasePanel engine={engine} />
         </div>
+        <PanelBoard area="bottom" ids={layout.bottom} className={styles.bottom} renderPanel={renderPanel} onMove={onMove} />
       </main>
     </div>
   );

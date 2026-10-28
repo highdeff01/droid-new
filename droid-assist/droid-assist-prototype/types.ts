@@ -7,6 +7,7 @@ import type { AutoApplyMap, SelfTestMode } from './initiative.js';
 import type { AutoActMap } from './notifications.js';
 import type { ExecutionMode } from './execution-mode.js';
 import type { AutoApplyBounds } from './aggressive.js';
+import type { PanelLayout } from './panel-layout.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, the PC via the bridge, or the main Droid app's preview. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge' | 'main-app';
@@ -371,4 +372,6 @@ export interface AssistSettings {
   notifyAutoAct: AutoActMap;
   /** Folders (native paths) the System panel reports file specs for. */
   systemFolders: string[];
+  /** User arrangement of the workspace panels, per area; validated on load so no panel is ever lost. */
+  panelLayout: PanelLayout;
 }

@@ -25,6 +25,19 @@ const entry = (n: number): LogEntry => ({ id: `log_${n}`, time: n, source: 'Test
 describe('settings', () => {
   beforeEach(() => localStorage.clear());
 
+  it('round-trips a rearranged panel layout and validates it on load', () => {
+    const panelLayout = { side: [...DEFAULTS.panelLayout.side].reverse(), bottom: [...DEFAULTS.panelLayout.bottom] };
+    saveSettings({ ...DEFAULTS, panelLayout });
+    expect(JSON.parse(localStorage.getItem('droid-assist.settings')!).panelLayout).toEqual(panelLayout);
+    expect(loadSettings(DEFAULTS).panelLayout).toEqual(panelLayout);
+    localStorage.setItem('droid-assist.settings', '{"panelLayout":42}');
+    expect(loadSettings(DEFAULTS).panelLayout).toEqual(DEFAULTS.panelLayout);
+    localStorage.setItem('droid-assist.settings', '{"panelLayout":{"side":["log","bogus","log"]}}');
+    const loaded = loadSettings(DEFAULTS).panelLayout;
+    expect(loaded.side[0]).toBe('log');
+    expect([...loaded.side, ...loaded.bottom].sort()).toEqual([...DEFAULTS.panelLayout.side, ...DEFAULTS.panelLayout.bottom].sort());
+  });
+
   it('round-trips saved settings', () => {
     const custom = { ...DEFAULTS, bridgeUrl: 'http://127.0.0.1:9000', bridgeToken: 'tok', captureMs: 1250, autoAct: true };
     saveSettings(custom);
