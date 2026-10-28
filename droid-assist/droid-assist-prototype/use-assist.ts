@@ -60,7 +60,7 @@ import { REVERSE_ACTOR, reverseOffer } from './reverse.js';
 import { CREW_SIZE_DEFAULT, parseIntercept } from './crew.js';
 import { useCrew } from './use-crew.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, newPattern, runVerdict, upsertCard } from './flow-memory.js';
-import { SUPERVISOR_INTERVAL_MS, SUPERVISOR_TICK_MS, applyFixes, executorBusy as supervisorExecutorBusy, habitPatterns, isConfident, reviewRun, reviewText, staleFixes, type PendingFix, type SupervisorReview, type SupervisorState } from './supervisor.js';
+import { SUPERVISOR_INTERVAL_MS, SUPERVISOR_REPLAN_LIMIT, SUPERVISOR_TICK_MS, applyFixes, executorBusy as supervisorExecutorBusy, habitPatterns, haltText, isConfident, replanFeedback, reviewDecision, reviewRun, reviewText, staleFixes, type PendingFix, type SupervisorReview, type SupervisorState } from './supervisor.js';
 import { BUS_AGENTS, BUS_AGENT_IDS, elementLine, forward, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
 import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
@@ -671,6 +671,12 @@ export function useAssist() {
   /** Set while the supervisor itself moves the pointer; Auto Act waits for it. */
   const supervisorMovingRef = useRef(false);
   const lastReviewAt = useRef(Date.now());
+  /** Supervisor re-plans since the last plan_ok review or new plan (the convergence guard's count). */
+  const replansRef = useRef(0);
+  /** Set when the convergence guard stopped the run: periodic reviews pause until a new plan. */
+  const supervisorHaltedRef = useRef(false);
+  /** "[Opportunity]" notes already proposed as steps for the current plan (lower-cased). */
+  const opportunitiesRef = useRef<Set<string>>(new Set());
   const supervisorRef = useRef(supervisor);
   const busRef = useRef<BusMessage[]>([]);
   /** The crew's API, for callbacks defined before the crew hook runs. */
@@ -3104,7 +3110,8 @@ export function useAssist() {
 
   const updateStep = (index: number, patch: Partial<WorkflowStep>) => {
     if (patch.status && patch.status !== stepsRef.current[index]?.status) statusChangesRef.current++;
-    stepsRef.current = stepsRef.current.map((st, i) => (i === index ? { ...st, ...patch } : st));
+    const rerun = patch.status === 'running' ? { verifiedAt: undefined } : {};
+    stepsRef.current = stepsRef.current.map((st, i) => (i === index ? { ...st, ...rerun, ...patch } : st));
     setSteps(stepsRef.current);
   };
 
@@ -3117,7 +3124,8 @@ export function useAssist() {
       return;
     }
     const evidence = out.executed ? { beforeFrame: before ?? undefined, afterFrame: out.shot ?? framesRef.current[0] } : {};
-    updateStep(index, { status: out.executed ? 'done' : 'failed', ...measured, ...(out.shot ? { shot: out.shot } : {}), ...evidence });
+    const verifiedAt = out.executed && out.verdict?.success ? Date.now() : undefined;
+    updateStep(index, { status: out.executed ? 'done' : 'failed', verifiedAt, ...measured, ...(out.shot ? { shot: out.shot } : {}), ...evidence });
     const step = stepsRef.current[index];
     if (step) {
       tracer.emit({ kind: 'step', stepId: step.id, name: step.name, ok: out.ok, executed: out.executed, detail: out.message });
@@ -3144,6 +3152,75 @@ export function useAssist() {
     if (review.habits.length) addPatterns(habitPatterns(review.habits, goalRef.current, now));
   };
 
+  /** Puts `steps` in place of the plan and re-traces it, keeping the traced state of retained steps. */
+  const replacePlan = (steps: WorkflowStep[]) => {
+    stepsRef.current = steps;
+    setSteps(steps);
+    tracer.emit({ kind: 'plan', steps, append: false, keep: true });
+  };
+
+  /**
+   * Supervisor re-plan: the planner plans the rest of the goal from the live frame with the review's
+   * problem, strategy, blacklist and opportunities injected; its steps replace every step not done.
+   */
+  const supervisorReplan = async (review: SupervisorReview) => {
+    const n = replansRef.current;
+    const runGoal = runGoalOf();
+    try {
+      const plan = await thought(`Supervisor re-plan #${n}: ${runGoal}`, () => planRemaining(askFor('planner'), runGoal, framesRef.current[0] ?? null, stepsRef.current, replanFeedback(review), patternsRef.current, capabilityPrompt(capabilities.registry.list, AI)), (r) => `${r.steps.length} step(s): ${stepsText(r.steps)}`);
+      await runAiRequests(plan.capabilities);
+      pendingFixesRef.current = [];
+      review.opportunities.forEach((o) => opportunitiesRef.current.add(o.toLowerCase()));
+      replacePlan([...stepsRef.current.filter((s) => s.status === 'done'), ...plan.steps]);
+      addLog('Supervisor', `Re-plan ${n}/${SUPERVISOR_REPLAN_LIMIT} from the review: ${plan.steps.length} step(s) replace the pending steps — ${stepsText(plan.steps)}`, 'warn');
+    } catch (error) {
+      addLog('Supervisor', aiFailure(`AI unavailable — the supervisor's re-plan of "${runGoal}" was not made`, error), 'error');
+    }
+  };
+
+  /** Proposes the review's new "[Opportunity]" notes as the immediate next steps, before the first pending step. */
+  const proposeOpportunities = async (review: SupervisorReview) => {
+    const fresh = review.opportunities.filter((o) => !opportunitiesRef.current.has(o.toLowerCase()));
+    if (!fresh.length) return;
+    fresh.forEach((o) => opportunitiesRef.current.add(o.toLowerCase()));
+    const what = fresh.join('; ');
+    try {
+      const plan = await thought(`Supervisor opportunity: ${what}`, () => planRemaining(askFor('planner'), what, framesRef.current[0] ?? null, [], `Supervisor [Opportunity] toward "${runGoalOf()}" — plan only these immediate next steps`, patternsRef.current), (r) => `${r.steps.length} step(s): ${stepsText(r.steps)}`);
+      const steps = stepsRef.current;
+      const first = steps.findIndex((s) => s.status !== 'done');
+      const cut = first < 0 ? steps.length : first;
+      replacePlan([...steps.slice(0, cut), ...plan.steps, ...steps.slice(cut)]);
+      addLog('Supervisor', `Opportunity proposed as the next step(s): ${what} — ${stepsText(plan.steps)}`, 'info');
+    } catch (error) {
+      addLog('Supervisor', aiFailure(`AI unavailable — opportunity "${what}" not planned`, error), 'warn');
+    }
+  };
+
+  /** Convergence guard tripped: stop the run, Auto Act and AI calls, and say why the goal cannot proceed. */
+  const haltSupervisor = (review: SupervisorReview) => {
+    supervisorHaltedRef.current = true;
+    abortRef.current = true;
+    cancelAi();
+    pendingFixesRef.current = [];
+    setSettings((s) => ({ ...s, autoAct: false }));
+    const text = haltText(goalRef.current.trim() || runGoalOf(), review, replansRef.current);
+    note({ step: 'Supervisor', kind: 'review', text, thinking: null });
+    addLog('Supervisor', `${text}. Run stopped — make a new plan to continue.`, 'error');
+  };
+
+  /** Acts on a review: an OK plan resets the guard and takes its opportunities; a rejection re-plans or halts. */
+  const actOnReview = async (review: SupervisorReview, applied: boolean) => {
+    if (review.planOk) {
+      replansRef.current = 0;
+      return proposeOpportunities(review);
+    }
+    tracer.emit({ kind: 'deviation', cause: 'review', text: `supervisor says the plan needs updates — ${review.problem || review.assessment}` });
+    if (reviewDecision(review, replansRef.current) === 'halt') return haltSupervisor(review);
+    replansRef.current++;
+    if (!applied) return supervisorReplan(review);
+    return proposeOpportunities(review);
+  };
+
   /**
    * The supervisor's review: consolidates every agent's output, the gallery screenshots and the
    * thinking timeline into one structured AI question. With the AI down it says so and does nothing.
@@ -3162,10 +3239,10 @@ export function useAssist() {
       const review = await reviewRun(askFor('supervisor'), input);
       const applied = isConfident(review);
       if (applied) applyReview(review);
-      if (!review.planOk) tracer.emit({ kind: 'deviation', cause: 'review', text: `supervisor says the plan needs updates — ${review.assessment}` });
       const text = reviewText(review, applied);
       note({ step: 'Supervisor', kind: 'review', text, thinking: review.thinking });
       superviseReport({ status: 'done', detail: text, review, applied }, review.planOk ? 'ok' : 'warn');
+      await actOnReview(review, applied);
     } catch (error) {
       note({ step: 'Supervisor', kind: 'review', text: '', thinking: null, error: errorText(error) });
       superviseReport({ status: aiOnline() ? 'error' : 'offline', detail: `AI unavailable — no supervisor review, nothing applied: ${errorText(error)}`, review: null, applied: false }, 'error');
@@ -3210,7 +3287,7 @@ export function useAssist() {
   const superviseTick = () => {
     if (!agentsRef.current('supervisor')) return;
     void superviseMovement();
-    if (stepsRef.current.length && Date.now() - lastReviewAt.current >= SUPERVISOR_INTERVAL_MS) void superviseRun();
+    if (stepsRef.current.length && !supervisorHaltedRef.current && Date.now() - lastReviewAt.current >= SUPERVISOR_INTERVAL_MS) void superviseRun();
   };
   const superviseTickRef = useRef(superviseTick);
   superviseTickRef.current = superviseTick;
@@ -3534,6 +3611,9 @@ export function useAssist() {
     flowRef.current = null;
     tracer.release();
     planAtRef.current = Date.now();
+    replansRef.current = 0;
+    supervisorHaltedRef.current = false;
+    opportunitiesRef.current = new Set();
     reproposedRef.current = new Set();
     staleHandledRef.current = null;
     autoAppliedRef.current = 0;

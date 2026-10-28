@@ -1230,6 +1230,57 @@ describe('useAssist supervisor', () => {
     await act(() => vi.advanceTimersByTimeAsync(7000));
     expect(result.current.timeline.some((e) => e.kind === 'movement')).toBe(false);
   });
+
+  describe('acting on its reviews', () => {
+    const done = { id: 'd1', name: 'Open sheet', action: 'click' as const, x: 0.5, y: 0.5, status: 'done' as const };
+    const rejection = { plan_ok: false, assessment: 'Click 1 hits a popup', confidence: 0.4, problem: 'Popup occludes Cell A1 at the stale coordinates', strategy: 'Close the popup, then click Cell A1', avoid: ['Click 1 at (12%, 30%)'] };
+    const replanned = '{"steps":[{"name":"Close popup","action":"click","target":"Popup close","x":0.8,"y":0.2},{"name":"Click Cell A1","action":"click","target":"Cell A1","x":0.15,"y":0.35}]}';
+    const plannerBodies: string[] = [];
+    const replying = (supervisor: Record<string, unknown>) => async (_u: string, init: RequestInit) => {
+      const body = String(init.body);
+      if (body.includes('This is a continuation')) plannerBodies.push(body);
+      const message = body.includes("Droid Assist's supervisor") ? { content: JSON.stringify(supervisor) } : body.includes('This is a continuation') ? { content: replanned } : { content: 'OK' };
+      return new Response(JSON.stringify({ message }), { status: 200 });
+    };
+
+    afterEach(() => { plannerBodies.length = 0; });
+
+    it('re-plans a rejected plan with the review\'s problem, strategy and blacklist; new steps replace the pending ones', async () => {
+      const result = await mountWith(replying(rejection));
+      act(() => result.current.setSteps([done, stale]));
+      await act(() => result.current.superviseRun());
+      expect(plannerBodies).toHaveLength(1);
+      expect(plannerBodies[0]).toContain('Popup occludes Cell A1 at the stale coordinates');
+      expect(plannerBodies[0]).toContain('Close the popup, then click Cell A1');
+      expect(plannerBodies[0]).toContain('Blacklisted — do not repeat: Click 1 at (12%, 30%)');
+      expect(result.current.steps.map((s) => s.name)).toEqual(['Open sheet', 'Close popup', 'Click Cell A1']);
+      expect(result.current.steps.slice(1).every((s) => s.status === 'pending')).toBe(true);
+      expect(result.current.log.some((l) => l.source === 'Supervisor' && /Re-plan 1\/3/.test(l.message))).toBe(true);
+    });
+
+    it('stops with a clear message after 3 consecutive rejected re-plans instead of looping', async () => {
+      const result = await mountWith(replying(rejection));
+      for (let i = 0; i < 4; i++) await act(() => result.current.superviseRun());
+      expect(plannerBodies).toHaveLength(3);
+      const halt = result.current.log.find((l) => l.source === 'Supervisor' && l.tone === 'error');
+      expect(halt?.message).toMatch(/cannot proceed — the supervisor rejected 3 consecutive re-plan\(s\)\. Last diagnosis: Popup occludes Cell A1/);
+      expect(result.current.settings.autoAct).toBe(false);
+      await act(() => vi.advanceTimersByTimeAsync(20_000));
+      expect(plannerBodies).toHaveLength(3);
+    });
+
+    it('proposes an [Opportunity] note as the immediate next steps, once', async () => {
+      const ok = { plan_ok: true, assessment: 'Plan fine. [Opportunity] After closing the popup, re-center the mouse to Cell A1', confidence: 0.9 };
+      const result = await mountWith(replying(ok));
+      act(() => result.current.setSteps([done, { ...stale, status: 'pending' as const }]));
+      await act(() => result.current.superviseRun());
+      expect(plannerBodies).toHaveLength(1);
+      expect(plannerBodies[0]).toContain('After closing the popup, re-center the mouse to Cell A1');
+      expect(result.current.steps.map((s) => s.name)).toEqual(['Open sheet', 'Close popup', 'Click Cell A1', 'Click Save']);
+      await act(() => result.current.superviseRun());
+      expect(plannerBodies).toHaveLength(1);
+    });
+  });
 });
 
 describe('useAssist screen capture', () => {
