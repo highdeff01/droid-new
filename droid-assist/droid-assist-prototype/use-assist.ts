@@ -20,7 +20,7 @@ import { DEFAULT_CHANGE_CELLS, assessChange, changeText, detectChange, type Chan
 import { localProposal, proposalText, proposeStep, type Proposal, type ProposalContext } from './proposal.js';
 import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './thinking-timeline.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, pointerAction, selfTestBridge, sendNative, type BridgeResult } from './bridge.js';
-import { DRY_RUN, dragEndError, runStep, type Grounding, type StepOutcome } from './run-step.js';
+import { DRY_RUN, dragEndError, groundTarget, runStep, type Grounding, type StepOutcome } from './run-step.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
 import { parseCommand, type CommandName } from './commands.js';
@@ -109,6 +109,8 @@ import { DEFAULT_SIDE_TEST_MODE, busFeedback, feedbackLine, findingsToNotes, run
 import { DEFAULT_AUTO_APPLY as DEFAULT_INITIATIVE_AUTO_APPLY, DEFAULT_SCAN_SEC, DEFAULT_STRESS_CYCLES } from './initiative.js';
 import { useInitiative } from './use-initiative.js';
 import { testTargets } from './self-test.js';
+import { autoSideTestPlan, correctionFix, interactionKey, noteInteraction, pointBox, routeTrail, sideTestDue, type Interactions } from './auto-populate.js';
+import { runSelfTest, selfTestText, type SelfTestReport } from './self-test-run.js';
 import { useGoalTracer } from './use-goal-tracer.js';
 import { DEFAULT_AUTO_ACT, actionStep, actionText, diskSuggestion, habitSuggestions, suggestWithAi, type AssistNotification } from './notifications.js';
 import { DEFAULT_BREAK_MINUTES, backgroundTestsAllowed, breakPeriodMs, breakText, relaxInterval, relaxStep } from './relax.js';
@@ -139,6 +141,8 @@ const DEMO_W = 960;
 const DEMO_H = 540;
 /** How often background suggestions (habits, disk, AI) are made. */
 const SUGGEST_TICK_MS = 10 * 60_000;
+/** Shortest time between automatic section proposals. */
+const SECTIONS_AUTO_MS = 5 * 60_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 /** Log text of a failed model call: a user cancel says so, anything else is the endpoint failure after `what`. */
@@ -516,6 +520,12 @@ export function useAssist() {
   const fixMethodsRef = useRef(fixMethods);
   /** Consecutive failures per element/flow, for when to propose a fix script. */
   const failuresRef = useRef<Record<string, number>>({});
+  /** Uses and failures per target since the last automatic side tests, and when each target was last side-tested. */
+  const interactionsRef = useRef<Interactions>({});
+  const sideTestedRef = useRef<Record<string, number>>({});
+  /** When sections were last proposed automatically. */
+  const sectionsProposedAtRef = useRef(0);
+  const [selfTestReport, setSelfTestReport] = useState<SelfTestReport | null>(null);
   /** The fix script awaiting review in the pre-action briefing; null when none. */
   const [pendingFix, setPendingFix] = useState<FixScript | null>(null);
   const pendingFixRef = useRef<FixScript | null>(null);
@@ -1323,7 +1333,7 @@ export function useAssist() {
   const learnFromRun = useCallback(async (runSteps: WorkflowStep[], opts: { dryRun: boolean; stopped: boolean }) => {
     const verdict = runVerdict(runSteps, opts);
     const runGoal = goalRef.current.trim();
-    if (verdict === 'success' && stageOn('supervisor')) autoSaveFlow(runGoal, runSteps);
+    if (verdict === 'success' && stageOn('workflowCreation')) autoSaveFlow(runGoal, runSteps);
     if (verdict === 'success' && stageOn('coords')) commitAccessPaths(learnPaths(accessPathsRef.current, runSteps, habitContext(), Date.now(), [...pathCountedRef.current]));
     pathCountedRef.current.clear();
     recordRun(runGoal, runSteps, opts);
@@ -1802,11 +1812,20 @@ export function useAssist() {
     const held = dryRun ? null : approvals.gate(step, actor, { goal: goalRef.current, planned: stepsRef.current.some((s) => s.id === step.id) });
     if (held) return refused(step, held);
     if (step.action === 'snip') return snipStep(step);
+    const before = framesRef.current[0] ?? null;
     const out = await performInput(step, actor, budget, dryRun);
     ruler.noteGrounding(out);
     if (out.ok) markOutcome(step, out);
+    if (step.target) learnFromOutcome(step, out, before);
+    noteTargetUse(step, out, actor);
     await animator().idle();
     return out;
+  };
+
+  /** Counts a named pointer step's use and failure toward an automatic side test (the side tester's own steps excepted). */
+  const noteTargetUse = (step: WorkflowStep, out: Performed, actor: string) => {
+    if (!step.target || out.halt || actor === 'Side tester' || !POINTER_ACTIONS.has(step.action)) return;
+    interactionsRef.current = noteInteraction(interactionsRef.current, step.target, out.target, out.ok);
   };
 
   /**
@@ -2091,7 +2110,8 @@ export function useAssist() {
     const before = framesRef.current[0] ?? null;
     const fresh = () => (ladder ? performWithRetries(step, actor, budget, dryRun) : performIdentified(step, actor, budget, dryRun));
     const out = await reachByPath(step, actor, budget, dryRun, fresh);
-    learnFromOutcome(step, out, before);
+    // Named targets are learned in performStep; an unnamed planned step is learned under its step name.
+    if (!step.target) learnFromOutcome(step, out, before);
     kb.recordFor(actor, 'result', `"${step.name}": ${out.message}`, out.ok);
     void rememberTarget(step, out);
     if (actor !== OPS_APPLY_ACTOR) recordStepEvidence(step, out, before, out.shot ?? null);
@@ -2882,6 +2902,20 @@ export function useAssist() {
     }
     if (!out.executed) return;
     if (stageOn('progress')) setProgress((p) => ({ ...p, done: p.done + 1 }));
+    if (step) sectionEvent({ time: Date.now(), kind: 'log', text: `${step.name}: ${out.message}`, box: pointBox(out.target) });
+    if (step && out.ok && out.verdict?.success !== false) saveStepRoute(index);
+  };
+
+  /**
+   * Route accumulation: a verified executed step on a named target saves the element → element path
+   * the run took to reach it as that target's access-path profile (coordinate learner stage).
+   */
+  const saveStepRoute = (index: number) => {
+    const step = stepsRef.current[index];
+    if (!step?.target || !stageOn('coords') || !POINTER_ACTIONS.has(step.action)) return;
+    const hops = routeTrail(stepsRef.current, index);
+    commitProfiles(recordProfileResult(saveProfile(routeProfilesRef.current, step.target, hops), step.target, true));
+    addLog('Routes', `Access path to "${step.target}" saved: ${hops.map((h) => h.name).join(' → ')}`, 'info');
   };
 
   /** Shows the supervisor's state in its panel and logs it. */
@@ -3388,6 +3422,7 @@ export function useAssist() {
       updateStep(idx, { status: 'running' });
       const out = await perform(j.step, 'Auto-Actor', autoBudgetRef.current, dry, j.proposal);
       applyOutcome(idx, out, dry, frame);
+      trackFailure(next, out);
       addLog(dry ? 'Auto-Actor (dry run)' : 'Auto-Actor', `${next.name}: ${out.message}`, out.ok ? 'ok' : 'error');
       if (out.halt) {
         setSettings((s) => ({ ...s, autoAct: false }));
@@ -3401,6 +3436,7 @@ export function useAssist() {
       autoDryRef.current = false;
       void learnFromRun(stepsRef.current, { dryRun, stopped: false });
       void superviseRun();
+      void autoSideTests();
     }
   };
 
@@ -3771,6 +3807,7 @@ export function useAssist() {
     beginRun();
     abortRef.current = false;
     traceRun(runGoal);
+    void autoProposeSections();
     runStartRef.current = Date.now();
     reproposedRef.current = new Set();
     replayingRef.current = true;
@@ -3802,6 +3839,7 @@ export function useAssist() {
     const stopped = abortRef.current || (!dryRun && budget.used >= budget.limit && ok < ran.length);
     await learnFromRun(ran, { dryRun, stopped });
     await superviseRun();
+    if (!stopped) await autoSideTests();
     return { ok, total: ran.length, dryRun, stopped };
   };
 
@@ -3960,8 +3998,17 @@ export function useAssist() {
     if (out.halt && !out.executed) return;
     const ctx: FixContext = { element: step.target ?? step.name, flow: goalRef.current.trim() || 'current flow', problem: out.message };
     const k = failureKey(ctx.element, ctx.flow);
+    const failedBefore = (failuresRef.current[k] ?? 0) > 0;
     failuresRef.current = noteResult(failuresRef.current, k, out.ok);
+    if (out.ok && failedBefore && out.executed) rememberCorrection(ctx, step);
     if (needsFix(failuresRef.current, k) && !pendingFixRef.current) void proposeFix(ctx);
+  };
+
+  /** A step that really succeeded after failing on the same element and flow is remembered as its fix method (workarounds stage). */
+  const rememberCorrection = (ctx: FixContext, step: WorkflowStep) => {
+    if (!stageOn('workarounds')) return;
+    commitFixMethods(saveFixMethod(fixMethodsRef.current, correctionFix(ctx, step), true));
+    addLog('Fix script', `Corrected approach for "${ctx.element}" resolved the obstacle — remembered as its fix method`, 'ok');
   };
 
   /** One fix step through the pre-action briefing and the normal grounded pipeline. */
@@ -4007,6 +4054,10 @@ export function useAssist() {
     if (!dryRun) commitFixMethods(saveFixMethod(fixMethodsRef.current, script, ok));
     if (ok) failuresRef.current = noteResult(failuresRef.current, failureKey(script.context.element, script.context.flow), true);
     addLog('Fix script', `${ok ? 'Repaired' : 'Did not repair'} "${script.context.element}"${dryRun ? ' (dry run — not saved)' : ok ? ' — saved as its fix method' : ''}`, ok ? 'ok' : 'error');
+    if (ok && !dryRun && !abortedRef.current) {
+      addLog('Retest', `Retesting the flow after the repair of "${script.context.element}"`, 'info');
+      await retestFlow();
+    }
   };
 
   /** Drops the fix script under review without running it. */
@@ -4384,6 +4435,25 @@ export function useAssist() {
     tracer.begin({ goal: text, source: goalSource(text), steps: planned });
     setDraftCard(generateCard(planned, text));
     addLog('Planner', `${why}: ${planned.length} step(s) — ${planned.map((s) => `${s.action} "${s.target ?? s.name}"`).join(' → ')}${arrangement}${armedRef.current ? '' : ' (real input disarmed: replay / Auto Act run it as a dry run)'}`, 'ok');
+    autoPlotRoutes(text);
+  };
+
+  /** A goal was set: plots candidate routes to it from the mapped elements and saved paths (planner stage), logged when one is found. */
+  const autoPlotRoutes = (text: string) => {
+    if (!stageOn('planner') || !text.trim()) return;
+    const next = plotRoutes(text, inventoryRef.current, routeProfilesRef.current);
+    if (!next.length) return;
+    routesRef.current = next;
+    setRoutes(next);
+    addLog('Routes', `Auto-plotted ${next.length} route(s) to "${text.trim()}": ${next.map(routeText).join(' | ')}`, 'info');
+  };
+
+  /** Proposes screen sections while a run operates: AI online, a frame, the identify stage on, at most once per SECTIONS_AUTO_MS. */
+  const autoProposeSections = async () => {
+    if (!stageOn('identify') || !aiOnline() || !framesRef.current[0] || abortedRef.current) return;
+    if (Date.now() - sectionsProposedAtRef.current < SECTIONS_AUTO_MS) return;
+    sectionsProposedAtRef.current = Date.now();
+    await proposeSections();
   };
 
   /**
@@ -5366,6 +5436,84 @@ export function useAssist() {
     addLog('Side tester', feedbackLine(r), r.status === 'passed' ? 'ok' : 'warn');
   };
 
+  /**
+   * Background side tests of the targets the AI used repeatedly or failed on, after a run: sideTests
+   * stage and the Side tester agent on, not aborted; each test runs inside runSideTest's guardrails (arm, budget).
+   */
+  const autoSideTests = async () => {
+    if (abortedRef.current || !stageOn('sideTests') || !agentsRef.current('sidetest')) return;
+    const now = Date.now();
+    for (const c of sideTestDue(interactionsRef.current, sideTestedRef.current, now)) {
+      if (abortedRef.current) return;
+      const k = interactionKey(c.name);
+      sideTestedRef.current = { ...sideTestedRef.current, [k]: now };
+      const { [k]: _done, ...rest } = interactionsRef.current;
+      interactionsRef.current = rest;
+      await runSide(autoSideTestPlan(c, settingsRef.current.sideTestMode));
+    }
+  };
+
+  /** Why the self-test must stop now (abort, Stop, self-test or executor stage unchecked), or null. */
+  const selfTestStopped = (): string | null => {
+    if (abortedRef.current) return 'Aborted — self-test stopped';
+    if (abortRef.current) return 'Stopped by the user';
+    if (!stageOn('selfTest')) return stageOff('selfTest');
+    return stageOn('executor') ? null : stageOff('executor');
+  };
+
+  /** Grounds one self-test step on the live frame through the grounding stage (unnamed steps keep their point). */
+  const selfTestGround = async (step: WorkflowStep) => {
+    const live = framesRef.current[0];
+    if (!live) return { ok: false, detail: 'no live frame captured', step };
+    if (!step.target || !POINTER_ACTIONS.has(step.action)) return { ok: true, detail: `"${step.name}" needs no grounding`, step };
+    if (!aiOnline() || !stageOn('grounding')) return { ok: false, detail: !aiOnline() ? 'AI unavailable — target not grounded' : stageOff('grounding'), step };
+    const found = await groundTarget(step, live, { x: step.x, y: step.y }, grounding, (m, tone) => addLog('Self-test', m, tone));
+    return 'error' in found ? { ok: false, detail: found.error, step } : { ok: true, detail: `"${step.target}" at ${at(found.point.x, found.point.y)}`, step: { ...step, x: found.point.x, y: found.point.y } };
+  };
+
+  /** Verifies the self-test goal on the live frame with the verdict stage's AI; offline it fails (not verified). */
+  const selfTestVerify = async (text: string, ran: WorkflowStep[]) => {
+    if (!aiOnline() || !stageOn('verdict')) return { ok: false, detail: !aiOnline() ? 'AI unavailable — goal not verified' : stageOff('verdict') };
+    const check = await thought(`Self-test: ${text}`, () => verifyGoal(askFor('verdict'), framesRef.current[0] ?? null, text, ran), (c) => c.reason);
+    return { ok: check.complete, detail: check.reason || (check.complete ? 'goal achieved' : 'goal not achieved') };
+  };
+
+  /**
+   * The AI self-test: a real end-to-end run on the live frame — plan the goal (the current one, else a
+   * hover of the first test target) → ground every step → execute them through the gated executor (dry
+   * run unless armed, one budget) → verify the goal. The report goes to the Self-test panel and the log.
+   */
+  const runSelfTestNow = async (): Promise<SelfTestReport | null> => {
+    if (replayingRef.current) {
+      addLog('Self-test', 'Self-test waits — a run is in progress', 'warn');
+      return null;
+    }
+    const first = testTargets(elementMapRef.current, familiarRef.current)[0];
+    const text = goalRef.current.trim() || (first ? `Move the mouse cursor onto the ${first.name} (hover, do not click)` : 'Move the mouse cursor to the centre of the screen');
+    const dryRun = !armedRef.current;
+    const budget = createBudget(settingsRef.current.actionBudget);
+    abortRef.current = false;
+    beginRun();
+    const report = await runSelfTest({
+      goal: text,
+      dryRun,
+      stopped: selfTestStopped,
+      plan: async (g) => {
+        const p = await thought(`Self-test plan: ${g}`, () => planFromGoal(g, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [...sectionContext(), ...inventoryLines(inventoryRef.current)], patternsRef.current), planSummary);
+        return { steps: p.steps, detail: p.source };
+      },
+      ground: selfTestGround,
+      execute: async (s) => {
+        const out = await performStep(s, 'Self-test', budget, dryRun);
+        return { ok: out.ok, detail: out.message };
+      },
+      verify: selfTestVerify,
+    }).finally(endRun);
+    setSelfTestReport(report);
+    addLog('Self-test', selfTestText(report), report.pass ? 'ok' : 'error');
+    return report;
+  };
+
   /** "/sidetest <target> : <experiment> [: <main>]": experiment → capture → backtrack → main, sentinels watching. */
   const sideTestCommand = async (arg: string) => {
     const { target: where, rest } = splitSideArgs(arg);
@@ -6076,7 +6224,10 @@ export function useAssist() {
   };
 
   const capabilities = useCapabilityRegistry({
-    plan: autoPlan, replay, stop, toggleRecording, setStage: toggleStage,
+    plan: autoPlan, replay, selfTest: async () => {
+      const r = await runSelfTestNow();
+      return r ? selfTestText(r) : 'self-test not run — see the log';
+    }, stop, toggleRecording, setStage: toggleStage,
     setAgent: (id, on) => setAgents((list) => list.map((a) => (a.id === id ? { ...a, on } : a))),
     adjustSetting, setAutoAct: (on) => putSettings({ ...settingsRef.current, autoAct: on }), setRelaxed,
     saveWorkflow, loadWorkflow, workflows: () => cardsRef.current.map((c) => `${c.id}: ${c.name} (${c.steps.length} step(s))`),
@@ -6206,6 +6357,8 @@ export function useAssist() {
     /** The capability registry: the single dispatch surface for buttons, the AI, agents and the main app. */
     capabilities: capabilities.registry.list, invocations: capabilities.invocations, invoke: capabilities.invoke, requestCapability, relaxed: !!relaxedRef.current,
     inventory, routes, routeProfiles, plotRoute, runRoute, fixMethods, pendingFix, runFixScript, dismissFix, retest, retestFlow,
+    /** The last end-to-end AI self-test (plan → ground → execute → verify) and running one. */
+    selfTestReport, runSelfTestNow,
     /** The presentation studio: slideshows, movies, projects, composition approvals, rich notifications and the in-world embed. */
     studio,
     setMode, modeChange, candidates, applyCandidate, dismissCandidate,

@@ -15,7 +15,7 @@ import { ArtifactsPanel } from './capabilities-panel.js';
 import { PersonaPanel } from './persona-panel.js';
 import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
 import { VariationsPanel } from './variations-panel.js';
-import { InventoryPanel, RetestPanel, RoutesPanel } from './screen-ai-panels.js';
+import { InventoryPanel, RetestPanel, RoutesPanel, SelfTestPanel } from './screen-ai-panels.js';
 import { InitiativePanel } from './initiative-panel.js';
 import { GoalsPanel } from './goals-panel.js';
 import { SystemPanel } from './system-panel.js';
@@ -59,6 +59,7 @@ function AssistScreen() {
             <InventoryPanel engine={engine} />
             <RoutesPanel engine={engine} />
             <RetestPanel engine={engine} />
+            <SelfTestPanel engine={engine} />
             <SectionsPanel engine={engine} />
             <LearnedCoordsPanel engine={engine} />
             <LibraryPanel engine={engine} />

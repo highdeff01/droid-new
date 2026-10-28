@@ -1,10 +1,34 @@
 import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { inventoryLine, stateCounts } from './screen-inventory.js';
-import { routeText } from './route-plot.js';
+import { routeText, type RouteHop } from './route-plot.js';
 import { fixScriptText } from './fix-script.js';
 import { parseSelection, retestText } from './retest.js';
+import { selfTestText } from './self-test-run.js';
 import styles from './droid-assist.module.css';
+
+/** A route as the "/test route a > b" spec the subagent route test runs. */
+const routeSpec = (hops: RouteHop[]) => `route ${hops.map((h) => h.name).join(' > ')}`;
+
+/** The last end-to-end AI self-test: each stage (plan → ground → execute → verify) and the verdict. */
+export function SelfTestPanel({ engine }: { engine: AssistEngine }) {
+  const { selfTestReport: report, replaying } = engine;
+  return (
+    <section className={styles.panel} aria-label="AI self-test">
+      <h3>AI self-test <small>plan → ground → execute → verify</small></h3>
+      <button type="button" onClick={() => void engine.invoke('selftest.run')} disabled={replaying}>Run self-test</button>
+      {!report && <p className={styles.muted}>No self-test yet.</p>}
+      {report && (
+        <>
+          <p data-tone={report.pass ? 'ok' : 'error'}><b>{selfTestText(report)}</b></p>
+          <ul className={styles.log}>
+            {report.stages.map((s) => <li key={s.stage} data-tone={s.ok ? 'ok' : 'error'}><b>{s.stage}</b> {s.ok ? 'ok' : 'failed'} — {s.detail}</li>)}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
 
 /** Full-screen reading: every element detected on the current frame of the active capture source. */
 export function InventoryPanel({ engine }: { engine: AssistEngine }) {
@@ -32,7 +56,8 @@ export function RoutesPanel({ engine }: { engine: AssistEngine }) {
       <ol>
         {routes.map((r, i) => (
           <li key={i}>
-            {routeText(r)} <button type="button" onClick={() => void engine.runRoute(i)} disabled={replaying}>Run</button>
+            {routeText(r)} <button type="button" onClick={() => void engine.runRoute(i)} disabled={replaying}>Run</button>{' '}
+            <button type="button" onClick={() => void engine.invoke('test.routes', { spec: routeSpec(r.hops) })} disabled={replaying}>Test route</button>
           </li>
         ))}
       </ol>
