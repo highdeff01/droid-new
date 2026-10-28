@@ -15,6 +15,8 @@ import { DEFAULT_AI_MAX_IN_FLIGHT, createAiQueue, type AiQueue, type AiQueueStat
 import { confirmTarget, decidePopup, describeScreen, judgeStep, reflectOn, verifyGoal, type GoalCheck, type PopupDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
 import { DEFAULT_GRID_OPACITY } from './grid-overlay.js';
 import { MARKER_OF, createCursorAnimator, type CursorAnimator } from './cursor-path.js';
+import { defaultWhy, intentionDraft, intentionText } from './intention.js';
+import { ATTEMPT_LIMIT, type OperationAttempt } from './current-operation.js';
 import { DEFAULT_MAX_ITERATIONS, autoContinue, judgeCheck, type ContinueStop, type RunReport } from './auto-continue.js';
 import { DEFAULT_CHANGE_CELLS, assessChange, changeText, detectChange, type ChangeAssessment, type ScreenChange } from './screen-change.js';
 import { localProposal, proposalText, proposeStep, type Proposal, type ProposalContext } from './proposal.js';
@@ -395,12 +397,18 @@ export function useAssist() {
   const [sync, setSync] = useState<{ level: SyncLevel; detail: string }>({ level: 'idle', detail: 'No active step' });
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  /** Every performStep call (one attempt each), oldest first, for the Current operation panel. */
+  const [attempts, setAttempts] = useState<OperationAttempt[]>([]);
+  const attemptsRef = useRef<OperationAttempt[]>([]);
+  /** The planner's recorded \"why\" per step id, set from its proposal before the step runs. */
+  const intentWhyRef = useRef(new Map<string, string>());
   const animatorRef = useRef<CursorAnimator | null>(null);
   /** The AI cursor animator: every frame of a movement moves the cursor and extends the trail. */
   const animator = () => (animatorRef.current ??= createCursorAnimator({
     frame: (p) => {
+      const t = Date.now();
       setCursor(p);
-      setTrail((t) => [...t, { x: p.x, y: p.y, t: Date.now() }].slice(-1500));
+      setTrail((trail) => [...trail, { x: p.x, y: p.y, t }].slice(-1500));
     },
     mark: (p) => setTrail((t) => [...t, p].slice(-1500)),
   }));
@@ -1828,6 +1836,14 @@ export function useAssist() {
   const performStep = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     if (abortedRef.current) return refused(step, 'Aborted — real input not sent');
     if (!stageOn('executor')) return refused(step, `${stageOff('executor')} — not executed`);
+    const attempt = beginAttempt(step, actor);
+    const out = await performAction(step, actor, budget, dryRun);
+    endAttempt(attempt.id, out.ok);
+    return out;
+  };
+
+  /** One attempt's action past the abort and executor gates: measure, the approval gate, snip or real input. */
+  const performAction = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     if (step.action === 'measure') return measureStep(step, actor);
     const held = dryRun ? null : approvals.gate(step, actor, { goal: goalRef.current, planned: stepsRef.current.some((s) => s.id === step.id) });
     if (held) return refused(step, held);
@@ -1837,6 +1853,27 @@ export function useAssist() {
     if (out.ok) markOutcome(step, out);
     await animator().idle();
     return out;
+  };
+
+  /**
+   * Records one attempt (cursor before → step target) and, for an AI actor, states its intention
+   * in the notification center: "Moving to X to click it because …".
+   */
+  const beginAttempt = (step: WorkflowStep, actor: string): OperationAttempt => {
+    const why = intentWhyRef.current.get(step.id) || defaultWhy(step, goalRef.current);
+    const intent = intentionText(step, why);
+    const tries = attemptsRef.current.filter((a) => a.stepId === step.id).length + 1;
+    const to = { x: step.correctedX ?? step.x, y: step.correctedY ?? step.y };
+    const attempt: OperationAttempt = { id: uid('attempt'), stepId: step.id, name: step.name, action: step.action, actor, intent, from: animator().where(), to, start: Date.now() };
+    attemptsRef.current = [...attemptsRef.current, attempt].slice(-ATTEMPT_LIMIT);
+    setAttempts(attemptsRef.current);
+    if (!USER_ACTORS.has(actor)) notify(intentionDraft(intent, tries));
+    return attempt;
+  };
+
+  const endAttempt = (id: string, ok: boolean) => {
+    attemptsRef.current = attemptsRef.current.map((a) => (a.id === id ? { ...a, end: Date.now(), ok } : a));
+    setAttempts(attemptsRef.current);
   };
 
   /**
@@ -2122,6 +2159,7 @@ export function useAssist() {
     await catchOnTime(planned, actor);
     const step = resolveMappedStep(planned, elementMapRef.current);
     if ('error' in step) return refused(planned, `${step.error} — not executed`);
+    if (proposal.why.trim()) intentWhyRef.current.set(step.id, proposal.why);
     const before = framesRef.current[0] ?? null;
     const fresh = () => (ladder ? performWithRetries(step, actor, budget, dryRun) : performIdentified(step, actor, budget, dryRun));
     const out = await reachByPath(step, actor, budget, dryRun, fresh);
@@ -6305,6 +6343,8 @@ export function useAssist() {
     memory: enhancedMemory,
     /** Every operation's traced goal (newest first) and the Goal tracer's live status. */
     goals, tracerStatus: tracer.status(),
+    /** Every step attempt (planned target, timing, intention) and the traced goal of the running operation. */
+    attempts, activeGoal: tracer.active(),
     familiar, forgetFamiliar, elements, learned, highlight, testClick,
     elementMap, mapMode, toggleMapMode, mapDraft, setMapDraft, saveMapped, deleteMapped,
     scanNow, setElementPerform, proposePerform, addNavigateStep, trainMapped, training,
