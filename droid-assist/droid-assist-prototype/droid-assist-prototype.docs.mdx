@@ -72,6 +72,41 @@ The **Mirror input** checkbox under the screen preview switches the preview betw
 - Each switch-on starts a session with a fresh action budget (`actionBudget`). Recording, the ruler and element-map mode take precedence over mirror input.
 - The kill switch (abort hotkey or button) turns mirror input off at once and stops AI play; mirror input cannot be switched on again until the abort is cleared.
 
+## Quest demo world
+
+The **Use quest world** button, or the **Quest** taskbar button on the demo desktop, attaches the demo source and shows the quest scene, a port of the HighDeff/droid-new-1 test world. It has:
+
+- Knight Guy (20 kg) and Mage Girl (15 kg). An equipped Sword, Hat or Glasses adds its own weight and is drawn on the wearer.
+- The Priest, whose Talk button opens a multi-step dialogue that answers "hi".
+- A Treasure Chest holding items, and a Mystery Box that opens on a double-click and gives the Golden Key.
+- A Calculator, and the Dragon Gate, which opens only with the Golden Key.
+- The game tabs Games / Custom Game / Char 5 / Start Game.
+- The desktop's draggable Report→Archive, its rearrangeable sidebar icons and the MEGA OFFER popup stay in this scene too.
+
+Every element is a named target in `questElements`. Step grounding, Test click, element mapping, habits and the coordinate learner resolve it by name, and a recorded drag of an item or hero carries it as the step target.
+
+```ts
+import { findQuestElement, initialQuest, questClick, questDoubleClick, weightOf } from './quest-world.js';
+
+let quest = initialQuest();
+quest = questDoubleClick(quest, findQuestElement(quest, 'Mystery Box')!).quest; // finds the Golden Key
+quest = questClick(quest, findQuestElement(quest, 'Dragon Gate')!).quest;       // unlocks the gate
+quest = questClick(quest, findQuestElement(quest, 'Sword')!).quest;             // equips it to Knight Guy
+weightOf(quest, 'Knight Guy'); // 30
+```
+
+```ts
+import { questContext, questType, initialQuest } from './quest-world.js';
+
+const talked = questType(initialQuest(), 'hi'); // the Priest replies
+questContext(talked.quest); // ["[Quest world] Tabs: Games / Custom Game / Char 5 / Start Game; …", …], the planner's context lines
+```
+
+```ts
+const engine = useAssist();
+engine.useQuestWorld(); // the demo source with the quest scene shown, ready to plan → ground → click → verify
+```
+
 ## Persona portfolios and AI play
 
 The **Personas** panel keeps one portfolio per character (persisted in `localStorage` under `droid-assist.personas`). Each AI play turn asks the model, as the selected persona, what it sees and for one action (click, double-click, drag, scroll, key or type), which runs through the mirror path above. The turn's outcome is added to the portfolio as `did`, plus any `learned` and `achieved` notes; the panel shows the level (1 + achievements + one per three lessons) and the newest entries. A turn without a selected persona is refused.
