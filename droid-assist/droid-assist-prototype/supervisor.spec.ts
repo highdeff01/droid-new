@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowStep } from './types.js';
 import { AiError, type AskRequest } from './ai.js';
-import { SUPERVISOR_REPLAN_LIMIT, applyFixes, executorBusy, habitPatterns, haltText, isConfident, opportunityNotes, parseReview, replanFeedback, reviewDecision, reviewRun, staleFixes, supervisorDigest, type SupervisorInput, type SupervisorReview } from './supervisor.js';
-import { NO_ASSESSMENT, applyFixes, executorBusy, habitPatterns, isConfident, parseReview, reviewRun, staleFixes, supervisorDigest, type SupervisorInput } from './supervisor.js';
+import { NO_ASSESSMENT, SUPERVISOR_REPLAN_LIMIT, applyFixes, executorBusy, habitPatterns, haltText, isConfident, opportunityNotes, parseReview, replanFeedback, reviewDecision, reviewRun, staleFixes, supervisorDigest, type SupervisorInput, type SupervisorReview } from './supervisor.js';
 
 const step = (id: string, patch: Partial<WorkflowStep> = {}): WorkflowStep => ({ id, name: `Step ${id}`, action: 'click', x: 0.1, y: 0.1, status: 'pending', ...patch });
 

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Frame } from './types.js';
-import { CHANGE_HITS, IDENTIFY_SYSTEM, PROSE_FEEDBACK, characteristics, identifyAndVerify, identifyRequest, iou, mappedDistances, noteChange, parseIdentification, recentlySent, regionStats, type IdentifyInput, type IdentifyLoop } from './identify.js';
+import { CHANGE_HITS, IDENTIFY_EXAMPLE, IDENTIFY_SCHEMA, IDENTIFY_SYSTEM, characteristics, identifyAndVerify, identifyRequest, iou, mappedDistances, noteChange, parseIdentification, recentlySent, regionStats, type IdentifyInput, type IdentifyLoop } from './identify.js';
 import type { MappedElement } from './element-map-studio.js';
-import { AiParseError, SAMPLE_VIEW, systemText } from './ai.js';
+import { AiParseError, AiSchemaError, SAMPLE_VIEW, systemText } from './ai.js';
 
 /** A w x h buffer filled with one colour, with an optional coloured rectangle (pixel coords). */
 function buffer(w: number, h: number, bg: [number, number, number], rect?: { x: number; y: number; w: number; h: number; c: [number, number, number] }): ImageData {
@@ -107,10 +107,32 @@ describe('parseIdentification', () => {
     expect(parseIdentification(reply('{"found":false,"cell":null,"x":null,"y":null,"confidence":0}'), 'x')).toEqual({ found: false, reason: '', thinking: null });
   });
 
-  it('rejects prose, JSON inside prose and replies missing found or confidence as AiParseError', () => {
-    for (const content of ['The element is the red button in cell C5, behind a popup.', 'Sure: {"found":true,"cell":"C5","x":null,"y":null,"confidence":0.9}', '[1,2]', '{"found":true,"cell":"C5"}', '{"cell":"C5","confidence":0.9}']) {
+  it('rejects a reply holding no JSON object as AiParseError that never says "prose"', () => {
+    for (const content of ['The element is the red button in cell C5, behind a popup.', '[1,2]']) {
       expect(() => parseIdentification(reply(content), 'x')).toThrow(AiParseError);
+      expect(() => parseIdentification(reply(content), 'x')).toThrow(/not a JSON object/);
+      expect(() => parseIdentification(reply(content), 'x')).not.toThrow(/prose/);
     }
+  });
+
+  it('accepts a JSON object after prose', () => {
+    expect(parseIdentification(reply('Sure: {"found":true,"cell":"C5","x":null,"y":null,"confidence":0.9}'), 'x').found).toBe(true);
+  });
+
+  it('names the wrong field in an AiSchemaError', () => {
+    const error = (content: string) => {
+      try {
+        parseIdentification(reply(content), 'x');
+      } catch (e) {
+        return e as AiSchemaError;
+      }
+      throw new Error('expected a schema error');
+    };
+    expect(error('{"found":true,"cell":"C5"}')).toMatchObject({ field: 'confidence', name: 'AiSchemaError' });
+    expect(error('{"found":true,"cell":"C5"}').message).toMatch(/"confidence" must be a number/);
+    expect(error('{"confidence":0.2}')).toMatchObject({ field: 'found' });
+    expect(error('{"found":true,"cell":"Z99","x":"abc","confidence":0.9}').message).toMatch(/"cell" must be A1..H12 \(got "Z99"\).*"x","y" numbers \(got "abc"/);
+    expect(error('{"cell":"C5","confidence":"high"}').message).toMatch(/got "high"/);
   });
 
   it('accepts a fenced JSON object', () => {
@@ -119,6 +141,97 @@ describe('parseIdentification', () => {
 
   it('rejects found=true with neither a valid cell nor x,y', () => {
     expect(() => parseIdentification(reply('{"found":true,"cell":null,"x":null,"y":null,"confidence":0.95}'), 'x')).toThrow(/no valid cell/);
+  });
+});
+
+describe('parseIdentification: missing "found"', () => {
+  const reply = (content: string) => ({ content, thinking: null });
+
+  it('infers found=true from a cell with fractional x,y (the live-log reply)', () => {
+    const r = parseIdentification(reply('{ "cell": "B5", "x": 0.37, "y": 0.2, "confidence": 0.99 }'), 'Files');
+    expect(r).toMatchObject({ found: true, name: 'Files', x: 0.37, y: 0.2, confidence: 0.99 });
+    const live = parseIdentification(reply('{ "cell": "B5", "x": 0.083, "y": 0.458, "confidence": 0.99 }'), 'Files');
+    expect(live).toMatchObject({ found: true, x: 4.5 / 12, y: 1.5 / 8 });
+  });
+
+  it('infers found=true from x,y alone', () => {
+    expect(parseIdentification(reply('{"x":0.6,"y":0.7,"confidence":0.8}'), 'n')).toMatchObject({ found: true, x: 0.6, y: 0.7 });
+  });
+
+  it('reads yes/no words and recognized not-found shapes as found=false', () => {
+    expect(parseIdentification(reply('{"found":"no","confidence":0}'), 'n').found).toBe(false);
+    expect(parseIdentification(reply('{"status":"not_found","reason":"gone"}'), 'n')).toEqual({ found: false, reason: 'gone', thinking: null });
+    expect(parseIdentification(reply('{"cell":null,"x":null,"y":null}'), 'n').found).toBe(false);
+    expect(parseIdentification(reply('{"found":"yes","cell":"A1","confidence":0.7}'), 'n').found).toBe(true);
+  });
+
+  it('keeps an explicit found=false even when a location is present', () => {
+    expect(parseIdentification(reply('{"found":false,"cell":"C5","confidence":0.1}'), 'n').found).toBe(false);
+  });
+});
+
+describe('parseIdentification: coordinate normalization', () => {
+  const reply = (content: string) => ({ content, thinking: null });
+  const point = (content: string) => {
+    const r = parseIdentification(reply(content), 'n');
+    if (!r.found) throw new Error('expected found');
+    return r;
+  };
+
+  it('reads values up to the grid size as grid units (x/12, y/8)', () => {
+    const r = point('{"x":3.78,"y":6.4,"confidence":1}');
+    expect(r.x).toBeCloseTo(3.78 / 12);
+    expect(r.y).toBeCloseTo(0.8);
+  });
+
+  it('reads values above the grid size up to 100 as percent', () => {
+    const r = point('{"x":56,"y":40,"confidence":0.9}');
+    expect(r.x).toBeCloseTo(0.56);
+    expect(r.y).toBeCloseTo(0.4);
+  });
+
+  it('reads values above 100 as pixels of the view the model saw', () => {
+    expect(point('{"x":150,"y":135,"confidence":0.9}')).toMatchObject({ x: 150 / 480, y: 0.5 });
+    expect(parseIdentification({ ...reply('{"x":640,"y":180,"confidence":0.9}'), view: { w: 1280, h: 720 } }, 'n')).toMatchObject({ x: 0.5, y: 0.25 });
+  });
+
+  it('normalizes each axis on its own', () => {
+    const r = point('{"x":0.5,"y":6.4,"confidence":0.9}');
+    expect(r.x).toBe(0.5);
+    expect(r.y).toBeCloseTo(0.8);
+  });
+
+  it('uses the converted point when it lies in the named cell', () => {
+    const r = point('{"cell":"G4","x":3.78,"y":6.4,"confidence":1}');
+    expect(r.x).toBeCloseTo(3.78 / 12);
+    expect(r.note).toBeUndefined();
+  });
+
+  it('prefers the named cell centre when the point disagrees, and notes the discrepancy', () => {
+    const r = point('{"cell":"D9","x":3.78,"y":6.4,"confidence":1}');
+    expect(r.x).toBeCloseTo(8.5 / 12);
+    expect(r.y).toBeCloseTo(3.5 / 8);
+    expect(r.note).toMatch(/fall in G4, not the named cell D9/);
+  });
+});
+
+describe('parseIdentification: findings array', () => {
+  const reply = (content: string) => ({ content, thinking: null });
+
+  it('reports a popup finding as the blocker', () => {
+    const r = parseIdentification(reply('{"findings":[{"kind":"popup","label":"Cookie consent","cell":"D6"}]}'), 'n');
+    expect(r).toMatchObject({ found: false, blocker: 'a popup ("Cookie consent") in D6' });
+  });
+
+  it('uses the coordinates of a located target finding', () => {
+    const r = parseIdentification(reply('{"findings":[{"kind":"text","label":"hint"},{"kind":"target","cell":"C5","confidence":0.8}]}'), 'n');
+    expect(r).toMatchObject({ found: true, confidence: 0.8 });
+    if (r.found) expect(r.x).toBeCloseTo(4.5 / 12);
+  });
+
+  it('a popup wins over a located target; findings with nothing located are not found', () => {
+    expect(parseIdentification(reply('{"findings":[{"kind":"target","cell":"C5","confidence":0.9},{"kind":"popup"}]}'), 'n')).toMatchObject({ found: false, blocker: 'a popup' });
+    expect(parseIdentification(reply('{"findings":[{"kind":"text"}]}'), 'n')).toMatchObject({ found: false, reason: 'no finding located the element' });
   });
 });
 
@@ -146,15 +259,41 @@ describe('identifyAndVerify', () => {
     expect(l.logs.join('\n')).not.toMatch(/Could not find/);
   });
 
-  it('retries a prose reply with the stricter JSON-only instruction, then verifies and moves', async () => {
+  it('retries an unparseable reply quoting the exact schema and a filled example, then verifies and moves', async () => {
     const identify = vi.fn().mockRejectedValueOnce(new AiParseError('The button is red, in C5, behind a popup.')).mockResolvedValueOnce(found);
     const move = vi.fn(async () => ({ ok: true, message: 'moved' }));
     const l = loop({ identify, move, verify: vi.fn(async () => ({ ok: true as const, x: 0.4, y: 0.4, message: 'ok' })) });
     const out = await identifyAndVerify(l);
     expect(identify).toHaveBeenCalledTimes(2);
-    expect(identify.mock.calls[1][0]).toContain(PROSE_FEEDBACK);
+    const feedback = identify.mock.calls[1][0] as string;
+    expect(feedback).toContain(IDENTIFY_SCHEMA);
+    expect(feedback).toContain(IDENTIFY_EXAMPLE);
+    expect(feedback).toContain('held no JSON object');
+    expect(feedback).not.toMatch(/prose/);
     expect(out).toMatchObject({ verified: true, tries: 2 });
     expect(move).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the wrong field in the retry after a schema error', async () => {
+    const identify = vi.fn().mockRejectedValueOnce(new AiSchemaError('confidence', '"confidence" must be a number 0..1 (got nothing)')).mockResolvedValueOnce(found);
+    await identifyAndVerify(loop({ identify, verify: vi.fn(async () => ({ ok: true as const, x: 0.4, y: 0.4, message: 'ok' })) }));
+    expect(identify.mock.calls[1][0]).toMatch(/"confidence" field was wrong/);
+    expect(identify.mock.calls[1][0]).toContain(IDENTIFY_SCHEMA);
+  });
+
+  it('stops at once on a popup blocker without burning the remaining tries', async () => {
+    const identify = vi.fn(async () => ({ found: false as const, reason: '', blocker: 'a popup ("Update")', thinking: null }));
+    const l = loop({ identify });
+    const out = await identifyAndVerify(l);
+    expect(identify).toHaveBeenCalledTimes(1);
+    expect(out).toMatchObject({ verified: false, tries: 1, blocker: 'a popup ("Update")' });
+    expect(l.logs.join('\n')).not.toMatch(/Could not find/);
+  });
+
+  it('logs a cell/point discrepancy before verifying', async () => {
+    const l = loop({ identify: vi.fn(async () => ({ ...found, note: 'x,y fall in G4, not the named cell D9' })), verify: vi.fn(async () => ({ ok: true as const, x: 0.4, y: 0.4, message: 'ok' })) });
+    await identifyAndVerify(l);
+    expect(l.logs[0]).toMatch(/not the named cell D9/);
   });
 
   it('never verifies or moves a low-confidence or not-found identification', async () => {

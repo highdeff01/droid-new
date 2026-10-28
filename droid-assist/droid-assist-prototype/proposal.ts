@@ -1,7 +1,7 @@
 import type { StepAction, WorkflowStep, Frame } from './types.js';
 import { POINTER_ACTIONS } from './types.js';
-import { AiError, SAMPLE_VIEW, parseJsonReply, toUnit } from './ai.js';
-import type { AskFn, ViewSize } from './ai.js';
+import { AiSchemaError, SAMPLE_VIEW, askRetryingSchema, parseJsonReply, toUnit } from './ai.js';
+import type { AiReply, AskFn, ViewSize } from './ai.js';
 import type { Thought } from './assist-ai.js';
 import type { ChangeAssessment } from './screen-change.js';
 
@@ -52,8 +52,11 @@ function withChange(change: ChangeAssessment | null, what: string, why: string):
   return change ? `The screen now shows ${change.summary}, so I will ${what}: ${why}` : why;
 }
 
+/** The proposal reply contract, quoted in its prompt and in the schema retry. */
+export const PROPOSAL_SCHEMA = '{"ready":boolean,"x":number,"y":number,"why":string}';
+
 /** The proposal system prompt for a `view`-sized screenshot. */
-export const proposeSystem = (view: ViewSize) => `You are Droid Assist's executor. Before running the next step you state WHAT you will do and WHY. Look at the screenshot. Coordinates are fractions 0..1 of the screenshot (${view.w}x${view.h}) width/height. Reply ONLY with JSON {"ready":boolean,"x":number,"y":number,"why":string}.`;
+export const proposeSystem = (view: ViewSize) => `You are Droid Assist's executor. Before running the next step you state WHAT you will do and WHY. Look at the screenshot. Coordinates are fractions 0..1 of the screenshot (${view.w}x${view.h}) width/height. Reply ONLY with JSON ${PROPOSAL_SCHEMA}.`;
 
 /** The proposal system prompt for a sample-space (480x270) screenshot. */
 export const PROPOSE_SYSTEM = proposeSystem(SAMPLE_VIEW);
@@ -74,16 +77,23 @@ function proposePrompt(step: WorkflowStep, ctx: ProposalContext): string {
   return lines.join('\n');
 }
 
-/** Asks the model for the what/why of `step` on the live frame (null before the first frame is captured). */
+/**
+ * Asks the model for the what/why of `step` on the live frame (null before the first frame is captured).
+ * A reply with no "why" or a non-numeric coordinate is asked once more with the exact schema.
+ */
 export async function proposeStep(ask: AskFn, frame: Frame | null, step: WorkflowStep, ctx: ProposalContext): Promise<Proposal> {
-  const { content, thinking, view = SAMPLE_VIEW } = await ask({ system: proposeSystem, prompt: proposePrompt(step, ctx), frame, json: true });
+  return askRetryingSchema(ask, { system: proposeSystem, prompt: proposePrompt(step, ctx), frame, json: true }, PROPOSAL_SCHEMA, (reply) => readProposal(reply, step, ctx));
+}
+
+/** Reads a proposal reply; a missing "why" or non-numeric x,y throws AiSchemaError naming the field. */
+function readProposal({ content, thinking, view = SAMPLE_VIEW }: AiReply, step: WorkflowStep, ctx: ProposalContext): Proposal {
   const r = parseJsonReply(content);
   const why = typeof r.why === 'string' ? r.why.trim() : '';
-  if (!why) throw new AiError('AI proposal had no "why"');
+  if (!why) throw new AiSchemaError('why', 'AI proposal had no "why"');
   const p = planned(step);
   const pointer = POINTER_ACTIONS.has(step.action);
-  const x = pointer && r.x !== undefined ? toUnit(r.x, view.w) : p.x;
-  const y = pointer && r.y !== undefined ? toUnit(r.y, view.h) : p.y;
+  const x = pointer && r.x !== undefined ? toUnit(r.x, view.w, 'x') : p.x;
+  const y = pointer && r.y !== undefined ? toUnit(r.y, view.h, 'y') : p.y;
   const what = whatText(step.action, targetOf(step), x, y, step.text);
   const waitMs = r.ready !== true && typeof r.waitMs === 'number' && Number.isFinite(r.waitMs) && r.waitMs > 0 ? { waitMs: r.waitMs } : {};
   return { ready: r.ready === true, action: step.action, target: targetOf(step), x, y, what, why: withChange(ctx.change, what, why), source: 'ai', thinking, ...waitMs };

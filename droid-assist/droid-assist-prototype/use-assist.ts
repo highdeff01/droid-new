@@ -23,7 +23,7 @@ import { localProposal, proposalText, proposeStep, type Proposal, type ProposalC
 import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './thinking-timeline.js';
 import { radarStatus, radarStatusText, radarTick, startRadar, type RadarEvent, type RadarState, type RadarTarget } from './radar.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, pointerAction, selfTestBridge, sendNative, type BridgeResult } from './bridge.js';
-import { DRY_RUN, dragEndError, runStep, type Grounding, type SendFn, type StepDeps, type StepOutcome } from './run-step.js';
+import { DRY_RUN, dragEndError, groundTarget, runStep, type Grounding, type SendFn, type StepDeps, type StepOutcome } from './run-step.js';
 import { NO_SOURCE, captureLabel, captureStatus, stepPlan, type FrameProvider, type StepPlan } from './capture-source.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
@@ -1985,22 +1985,6 @@ export function useAssist() {
   const stepDeps = (plan: StepPlan, actor: string, budget: ActionBudget, dryRun: boolean): StepDeps => {
     const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
     return {
-    /** History gets real dispatches and verified dry runs; refused or unverified steps leave nothing. */
-    const record = (out: Performed, via: ActionRecord['via'], w: number, h: number) => {
-      if (out.executed || (dryRun && out.ok)) recordAction(step, out, actor, via, w, h);
-      return out;
-    };
-    if (sourceRef.current === 'main-app') {
-      const frame = framesRef.current[0];
-      return record(await performOnMainApp(step, budget, dryRun), 'main-app', frame?.srcW ?? 1920, frame?.srcH ?? 1080);
-    }
-    if (sourceRef.current === 'demo' && (dryRun || !bridgeUrl)) return record(await performOnDemo(step, dryRun), 'demo', DEMO_W, DEMO_H);
-    if (!bridgeUrl) return refused(step, BRIDGE_REQUIRED);
-    const gate = dryRun ? null : gateRealInput(budget);
-    if (gate) return refused(step, gate);
-    if (!dryRun && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) return performLiveDrag(step, actor);
-    let size = { w: 1920, h: 1080 };
-    const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), {
       bridgeUrl,
       bridgeToken,
       capture: () => stepFrame(plan.frames),
@@ -2019,15 +2003,16 @@ export function useAssist() {
     };
   };
 
+  /** History gets real dispatches and verified dry runs; refused or unverified steps leave nothing. */
+  const historyWorthy = (out: Performed, dryRun: boolean) => out.executed || (dryRun && out.ok);
+
   /** Records a step's result on its route: a main-app failure is a main-app error; a desktop step is history and bridge health. */
-  const noteRoute = (plan: StepPlan, step: WorkflowStep, out: Performed, actor: string) => {
+  const noteRoute = (plan: StepPlan, step: WorkflowStep, out: Performed, actor: string, dryRun: boolean) => {
     if (plan.input === 'main-app') {
       if (out.bridgeFailed) captureError({ kind: 'main-app', message: out.message, goal: goalRef.current, step: step.name });
       return;
     }
-    if (out.executed) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
-    });
-    record(out, 'bridge', size.w, size.h);
+    if (historyWorthy(out, dryRun)) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
     noteBridge(step, out, actor);
   };
 
@@ -2042,7 +2027,7 @@ export function useAssist() {
     if (!plan) return refused(step, NO_SOURCE);
     if (plan.input === 'demo') {
       const out = await performOnDemo(step, dryRun);
-      if (out.executed) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
+      if (historyWorthy(out, dryRun)) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
       return out;
     }
     const local = plan.input === 'main-app' ? LOCAL_ACTIONS[step.action] : undefined;
@@ -2052,7 +2037,7 @@ export function useAssist() {
     if (gate) return refused(step, gate);
     if (!dryRun && plan.input === 'desktop-bridge' && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) return performLiveDrag(step, actor);
     const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), stepDeps(plan, actor, budget, dryRun));
-    noteRoute(plan, step, out, actor);
+    noteRoute(plan, step, out, actor, dryRun);
     return out;
   };
 
@@ -2325,8 +2310,6 @@ export function useAssist() {
     const gated = await gateDispatch(resolved, actor, proposal);
     if ('out' in gated) return gated.out;
     const { step } = gated;
-    const step = resolveMappedStep(planned, elementMapRef.current);
-    if ('error' in step) return refused(planned, `${step.error} — not executed`);
     if (proposal.why.trim()) intentWhyRef.current.set(step.id, proposal.why);
     const before = framesRef.current[0] ?? null;
     const fresh = () => (ladder ? performWithRetries(step, actor, budget, dryRun) : performIdentified(step, actor, budget, dryRun));

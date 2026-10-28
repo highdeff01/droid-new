@@ -237,9 +237,19 @@ describe('reflectStep', () => {
     expect((await reflectStep(ask, null, step, { ok: false, message: 'no change' }, '')).verdict).toEqual({ success: false, pattern_avoid: 'clicking the banner', pattern_add: null, thinking: null });
   });
 
-  it('rejects a verdict whose success is not a boolean', async () => {
-    const ask = askSequence({ content: 'ok', thinking: null }, { content: '{"success":"yes"}', thinking: null });
-    await expect(reflectStep(ask, frame, step, outcome, '')).rejects.toBeInstanceOf(AiError);
+  it('rejects a verdict whose success is still not a boolean after one schema retry', async () => {
+    const ask = askSequence({ content: 'ok', thinking: null }, { content: '{"success":"yes"}', thinking: null }, { content: '{"pattern_avoid":null}', thinking: null });
+    await expect(reflectStep(ask, frame, step, outcome, '')).rejects.toThrow(/no boolean "success"/);
+    expect(ask).toHaveBeenCalledTimes(3);
+  });
+
+  it('asks once more for {"success":boolean,...} when the verdict has no boolean success', async () => {
+    const ask = askSequence({ content: 'ok', thinking: null }, { content: '{"pattern_avoid":null}', thinking: null }, { content: '{"success":true}', thinking: null });
+    const r = await reflectStep(ask, frame, step, outcome, '');
+    expect(r.verdict.success).toBe(true);
+    expect(ask).toHaveBeenCalledTimes(3);
+    expect(ask.mock.calls[2][0].prompt).toContain('{"success":boolean,"pattern_avoid":string|null,"pattern_add":string|null}');
+    expect(ask.mock.calls[2][0].prompt).toContain('no boolean "success"');
   });
 });
 

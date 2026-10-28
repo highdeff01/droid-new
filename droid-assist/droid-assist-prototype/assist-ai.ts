@@ -1,5 +1,5 @@
 import type { Annotation, Frame, WorkflowStep } from './types.js';
-import { AiError, SAMPLE_VIEW, parseJsonReply, stripThinking, viewPoint } from './ai.js';
+import { AiError, AiSchemaError, SAMPLE_VIEW, askRetryingSchema, parseJsonReply, stripThinking, viewPoint } from './ai.js';
 import type { AiReply, AskFn, ViewSize } from './ai.js';
 import { gridPrompt, gridRef, replyPoint } from './grid.js';
 import { uid } from './planner.js';
@@ -161,10 +161,13 @@ export interface StepReflection {
 
 const optionalText = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
-/** Reads the verdict JSON; a missing or non-boolean `success` is an AiError, never a guess. */
+/** The verdict reply contract, quoted in its prompt and in the schema retry. */
+export const VERDICT_SCHEMA = '{"success":boolean,"pattern_avoid":string|null,"pattern_add":string|null}';
+
+/** Reads the verdict JSON; a missing or non-boolean `success` is an AiSchemaError, never a guess. */
 export function parseVerdict(reply: AiReply): StepVerdict {
   const r = parseJsonReply(reply.content);
-  if (typeof r.success !== 'boolean') throw new AiError(`AI verdict had no boolean "success": ${String(r.success)}`);
+  if (typeof r.success !== 'boolean') throw new AiSchemaError('success', `AI verdict had no boolean "success": ${String(r.success)}`);
   return { success: r.success, pattern_avoid: optionalText(r.pattern_avoid), pattern_add: optionalText(r.pattern_add), thinking: reply.thinking };
 }
 
@@ -181,15 +184,15 @@ export async function reflectOn(ask: AskFn, frame: Frame | null, step: WorkflowS
   return { text: stripThinking(first.content), thinking: first.thinking, raw: first.content };
 }
 
-/** The verdict stage: given the reflection, the model gives the final JSON verdict {success, pattern_avoid, pattern_add}. */
+/** The verdict stage: given the reflection, the model gives the final JSON verdict; a reply without boolean success is asked once more. */
 export async function judgeStep(ask: AskFn, frame: Frame | null, step: WorkflowStep, result: StepResult, goal: string, reflection: string): Promise<StepVerdict> {
-  const second = await ask({
-    system: 'You are Droid Assist giving the final verdict on an executed step. Reply ONLY with JSON {"success":boolean,"pattern_avoid":string|null,"pattern_add":string|null} where pattern_avoid is a behaviour to avoid next time and pattern_add a behaviour to add, or null.',
+  const req = {
+    system: `You are Droid Assist giving the final verdict on an executed step. Reply ONLY with JSON ${VERDICT_SCHEMA} where pattern_avoid is a behaviour to avoid next time and pattern_add a behaviour to add, or null.`,
     prompt: `${stepFacts(step, result, goal)}\nYour reflection: ${reflection}`,
     frame,
     json: true,
-  });
-  return parseVerdict(second);
+  };
+  return askRetryingSchema(ask, req, VERDICT_SCHEMA, parseVerdict);
 }
 
 /**
