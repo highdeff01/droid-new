@@ -1,12 +1,13 @@
 import type { WorkflowStep } from './types.js';
 import { POINTER_ACTIONS } from './types.js';
 import { mappedAt } from './element-map-studio.js';
-import { AGREE_DISTANCE, conflictsOf, crossReference, habitsFor, related, type Knowledge } from './cross-reference.js';
+import { conflictsOf, crossReference, related, type Knowledge } from './cross-reference.js';
+import { blockingRule, ruleReason, type AvoidRule } from './blacklist.js';
 import { EXECUTION_MODES, type ExecutionMode } from './execution-mode.js';
 
 type Point = { x: number; y: number };
 
-/** Why a step may not dispatch: a blacklisted target+point, or coordinates the element map shows are stale. */
+/** Why a step may not dispatch: a structured blacklist rule for its action+target+point, or coordinates the element map shows are stale. */
 export interface GateBlock {
   kind: 'avoid' | 'stale';
   reason: string;
@@ -32,7 +33,6 @@ export const MODE_PAUSE = 'paused: Watching mode — pack/workflow dispatches wa
 export const BREAKER_IDLE: Breaker = { strikes: 0, paused: null };
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
-const COORDS = /\((\d+(?:\.\d+)?)%,\s*(\d+(?:\.\d+)?)%\)/g;
 const targetOf = (step: WorkflowStep) => step.target ?? step.name;
 /** Where the step will dispatch: its corrected point, else its planned one. */
 export const dispatchPoint = (step: WorkflowStep): Point => ({ x: step.correctedX ?? step.x, y: step.correctedY ?? step.y });
@@ -43,31 +43,10 @@ export function dispatchKey(step: WorkflowStep): string {
   return `${targetOf(step).trim().toLowerCase()}@${Math.round(p.x * 100)},${Math.round(p.y * 100)}`;
 }
 
-/** The points an avoid entry names, as "(x%, y%)"; empty when it names none. */
-export const avoidPoints = (text: string): Point[] => [...text.matchAll(COORDS)].map((m) => ({ x: Number(m[1]) / 100, y: Number(m[2]) / 100 }));
-
-/** Whether an avoid entry covers `p`: it names no point (the whole target), or one within AGREE_DISTANCE. */
-const covers = (text: string, p: Point) => {
-  const points = avoidPoints(text);
-  return !points.length || points.some((q) => Math.hypot(q.x - p.x, q.y - p.y) <= AGREE_DISTANCE);
-};
-
 /** Folded name: lower case, single spaces. */
 const fold = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
 /** Whether `text` names `target`: a shared meaningful word, or the target's full name (short names like "Click 6" have no meaningful word). */
 const names = (text: string, target: string) => related(target, text) || (!!fold(target) && fold(text).includes(fold(target)));
-
-/** Avoid entries for this target: habit avoid lessons (this target, this context) and learned avoid patterns naming it. */
-const avoidEntries = (target: string, k: Knowledge): string[] => [
-  ...habitsFor(target, k).flatMap((h) => h.lessons.filter((l) => l.kind === 'avoid').map((l) => `Habit avoid: ${l.text}`)),
-  ...k.patterns.filter((pt) => pt.kind === 'avoid' && names(pt.pattern, target)).map((pt) => `Learned avoid: ${pt.pattern}`),
-];
-
-/** The first habit avoid lesson or learned avoid pattern that blacklists this target at this point. */
-function avoidBlock(target: string, p: Point, k: Knowledge): GateBlock | null {
-  const hit = avoidEntries(target, k).find((text) => covers(text, p));
-  return hit ? { kind: 'avoid', reason: `blacklisted — ${hit}` } : null;
-}
 
 /** A mapped element covering the point that is not the step's target: the coordinates are stale. */
 function staleBlock(target: string, p: Point, k: Knowledge): GateBlock | null {
@@ -77,16 +56,15 @@ function staleBlock(target: string, p: Point, k: Knowledge): GateBlock | null {
 }
 
 /**
- * Dispatch-time gate of `step` against what is known: an active avoid entry for its target at its
- * point blocks it; so does, for a pointer step whose point was not re-grounded, a mapped element at
- * the point that is not its target. Null when it may dispatch.
+ * Dispatch-time gate of `step`: only a structured blacklist rule scoped to its action, target and
+ * point blocks it (prose avoid patterns and habit lessons are advisory and never block); so does,
+ * for a pointer step whose point was not re-grounded, a mapped element at the point that is not its
+ * target. Null when it may dispatch.
  */
-export function gateStep(step: WorkflowStep, k: Knowledge, checkStale: boolean): GateBlock | null {
-  const target = targetOf(step);
-  const p = dispatchPoint(step);
-  const avoid = avoidBlock(target, p, k);
-  if (avoid) return avoid;
-  return checkStale && POINTER_ACTIONS.has(step.action) ? staleBlock(target, p, k) : null;
+export function gateStep(step: WorkflowStep, k: Knowledge, rules: AvoidRule[], checkStale: boolean, now = Date.now()): GateBlock | null {
+  const rule = blockingRule(rules, step, now);
+  if (rule) return { kind: 'avoid', reason: ruleReason(rule) };
+  return checkStale && POINTER_ACTIONS.has(step.action) ? staleBlock(targetOf(step), dispatchPoint(step), k) : null;
 }
 
 /** Every conflict the cross-reference finds for the step at its point, as one line for the planner. */

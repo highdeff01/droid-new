@@ -171,6 +171,7 @@ export const LIVE_SETTINGS = {
   watchMs: { type: 'number', description: 'screen watcher cadence (ms)', min: RANGES.watchMs[0], max: RANGES.watchMs[1] },
   stepRetries: { type: 'number', description: 'retries per step', min: RANGES.stepRetries[0], max: RANGES.stepRetries[1] },
   maxIterations: { type: 'number', description: 'auto-continue rounds', min: RANGES.maxIterations[0], max: RANGES.maxIterations[1] },
+  avoidTtlHours: { type: 'number', description: 'blacklist rule lifetime (hours)', min: RANGES.avoidTtlHours[0], max: RANGES.avoidTtlHours[1] },
   monitorMode: { type: 'string', description: 'monitor mode', values: MODES },
   aiView: { type: 'string', description: 'view resolution sent to the AI', values: Object.keys(AI_VIEWS) as AiView[] },
 } as const satisfies Record<string, ParamSpec>;

@@ -20,7 +20,6 @@ import { VariationsPanel } from './variations-panel.js';
 import { InventoryPanel, RetestPanel, RoutesPanel, SelfTestPanel } from './screen-ai-panels.js';
 import { InitiativePanel } from './initiative-panel.js';
 import { GoalsPanel } from './goals-panel.js';
-import { CurrentOperationPanel } from './current-operation-panel.js';
 import { SystemPanel } from './system-panel.js';
 import { NotificationsPanel } from './notifications-panel.js';
 import { DatabasePanel } from './database-panel.js';

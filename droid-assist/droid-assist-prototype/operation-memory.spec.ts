@@ -114,7 +114,8 @@ describe('memoryBlock (injected into every AI turn)', () => {
     expect(block).toContain('Current objective: "Select all" (click)');
     expect(block).toContain('- Use the bulk select checkbox');
     expect(block).toContain('BLACKLISTED');
-    expect(block).toContain('[learned avoid] Never drag mails to the archive icon');
+    expect(block).toContain('ADVISORY lessons (context, not blockers) — weigh them when planning:\n- [learned avoid] Never drag mails to the archive icon');
+    expect(block.indexOf('[learned avoid]')).toBeGreaterThan(block.indexOf('ADVISORY'));
     expect(block).toContain('[failed operation] "Archive" (click) failed in "Archive old newsletters"');
     expect(block).toContain('Similar operations that FAILED before');
     expect(block).toContain('Recent activity (newest first):\n[Replay] step 1 done');
@@ -125,7 +126,19 @@ describe('memoryBlock (injected into every AI turn)', () => {
     const block = memoryBlock({ operation: 'Play the demo video', objective: null, recent: [], targets: [] }, sources({ memory })).join('\n');
     expect(block).toContain('Goal: Play the demo video');
     expect(block).toContain('Current objective: (none — between steps)');
-    expect(block).not.toMatch(/BLACKLISTED|FAILED|Recent activity|Notes:/);
+    expect(block).not.toMatch(/BLACKLISTED|ADVISORY|FAILED|Recent activity|Notes:/);
+  });
+
+  it('lists structured blacklist rules as BLACKLISTED and prose avoid lessons only as ADVISORY', () => {
+    const block = memoryBlock(
+      { operation: 'Open the Files app', objective: null, recent: [], targets: ['Files icon'], blocked: ['click "Files icon" near (10.0%, 20.0%)'] },
+      sources({ patterns: [pattern('avoid', 'Do not wait if clicking a UI element directly', '')] }),
+    );
+    const blacklisted = block.indexOf(block.find((l) => l.startsWith('BLACKLISTED'))!);
+    const advisory = block.findIndex((l) => l.startsWith('ADVISORY'));
+    expect(block[blacklisted + 1]).toBe('- [blacklist rule] click "Files icon" near (10.0%, 20.0%)');
+    expect(block[advisory + 1]).toBe('- [learned avoid] Do not wait if clicking a UI element directly');
+    expect(advisory).toBeGreaterThan(blacklisted);
   });
 });
 
