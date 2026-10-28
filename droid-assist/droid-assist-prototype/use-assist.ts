@@ -855,9 +855,9 @@ export function useAssist() {
    * The operation memory sent with every AI turn: goal, current objective, notes, blacklist, similar
    * failures and recent activity (left out when the turn's context already is the recent log).
    */
-  const operationMemoryBlock = (contextIsLog: boolean) => {
+  const operationMemoryBlock = (contextIsLog: boolean, stage: StageId) => {
     const running = stepsRef.current.find((s) => s.status === 'running');
-    const recent = contextIsLog ? [] : logRef.current.slice(0, RECENT_LINES).map((l) => `[${l.source}] ${l.message}`);
+    const recent = contextIsLog ? [] : scopeAttention(logRef.current.slice(0, RECENT_LINES).map((l) => `[${l.source}] ${l.message}`), stage);
     const targets = stepsRef.current.map((s) => s.target ?? s.name);
     return memoryBlock({ operation: operationNow(), objective: running ? objectiveText(running) : null, recent, targets }, { patterns: patternsRef.current, habits: habitsRef.current, memory: memoryRef.current });
   };
@@ -1087,7 +1087,7 @@ export function useAssist() {
    */
   const askAi = useCallback(async (req: AskRequest, stage: StageId): Promise<AiReply> => {
     if (!settingsRef.current.stages[stage]) throw new AiCancelled(stageOff(stage));
-    const memory = operationMemoryBlock(req.context === undefined);
+    const memory = operationMemoryBlock(req.context === undefined, stage);
     const project = projectId(goalRef.current);
     const injected = pendingNotesFor(userNotesRef.current, project);
     const recent = req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);

@@ -1,7 +1,7 @@
 import type { Frame, LearnedPattern, LogEntry, SyncLevel, WorkflowStep } from './types.js';
 import { SAMPLE_VIEW, parseJsonReply, viewPoint } from './ai.js';
 import type { AskFn, ViewSize } from './ai.js';
-import { isPopupEntry } from './attention.js';
+import { isPopupEntry, isPopupLine } from './attention.js';
 import type { Thought } from './assist-ai.js';
 import type { ThinkingEntry } from './thinking-timeline.js';
 import { uid } from './planner.js';
@@ -84,6 +84,7 @@ function timelineLine(e: ThinkingEntry): string {
 export function supervisorDigest(input: SupervisorInput): string {
   const agentLines = input.log.filter(isAgentLine).slice(0, 12).map((l) => `[${l.source}] ${l.message}`);
   const steps = input.steps.map(stepLine);
+  const thinking = input.timeline.map(timelineLine).filter((l) => !isPopupLine(l)).slice(0, 12);
   return [
     `Goal: ${input.goal || '(none)'}`,
     `Plan (${steps.length} step(s)):`,
@@ -93,7 +94,7 @@ export function supervisorDigest(input: SupervisorInput): string {
     'Agent outputs (drift, goal reviews, watcher notes), newest first:',
     ...(agentLines.length ? agentLines : ['(none)']),
     'Thinking timeline, newest first:',
-    ...(input.timeline.length ? input.timeline.slice(0, 12).map(timelineLine) : ['(none)']),
+    ...(thinking.length ? thinking : ['(none)']),
     `Screenshots attached: the ${Math.min(SUPERVISOR_FRAMES, input.frames.length)} most recent gallery frame(s), newest first.`,
   ].join('\n');
 }

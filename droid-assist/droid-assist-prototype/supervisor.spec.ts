@@ -12,7 +12,10 @@ const input = (steps: WorkflowStep[]): SupervisorInput => ({
     { id: 'l1', time: 1, source: 'Popup watcher', message: 'New content appeared at (40%, 30%)', tone: 'warn' },
     { id: 'l2', time: 1, source: 'You', message: 'clicked', tone: 'info' },
   ],
-  timeline: [{ id: 't1', time: 1, step: 'Step a', kind: 'verdict', text: 'FAILED · avoid: taskbar', thinking: null }],
+  timeline: [
+    { id: 't1', time: 1, step: 'Step a', kind: 'verdict', text: 'FAILED · avoid: taskbar', thinking: null },
+    { id: 't2', time: 1, step: 'Popup', kind: 'thought', text: 'Close the popup at (50%, 50%) PXTL', thinking: null },
+  ],
   frames: [],
   sync: { level: 'red', detail: 'target not found' },
   progress: { done: 2, manual: 1 },
@@ -28,6 +31,7 @@ describe('supervisorDigest', () => {
     expect(text).not.toContain('Popup watcher');
     expect(text).not.toContain('[You]');
     expect(text).toContain('[verdict] Step a: FAILED · avoid: taskbar');
+    expect(text).not.toContain('PXTL');
   });
 });
 
