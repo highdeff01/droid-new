@@ -147,7 +147,9 @@ describe('AI initiative: self-testing and the heavy element tester', () => {
     expect(result.current.initiative.proposals.find((p) => p.id === test.id)!.status).toBe('applied');
     expect(initiativeLog(result).some((m) => m.startsWith('Self-test: accepted "Test that "Play button" still clicks correctly"') && m.includes('dry run — not dispatched'))).toBe(true);
     expect(result.current.highlight).toMatchObject({ label: 'Play button' });
-    expect(result.current.history).toHaveLength(0);
+    // Disarmed: only entries labeled as dry runs — nothing dispatched.
+    expect(result.current.history.length).toBeGreaterThan(0);
+    expect(result.current.history.every((h) => h.dryRun && h.message.includes('dry run — not dispatched'))).toBe(true);
   }, 20_000);
 
   it('refuses to self-test while ABORTED', async () => {
@@ -170,7 +172,9 @@ describe('AI initiative: self-testing and the heavy element tester', () => {
     expect(result.current.runs[0]).toMatchObject({ goal: 'Stress test "Play button"', outcome: 'dry-run', attempted: 6 });
     // Dry-run cycles do not train habits (only real input does).
     expect(result.current.habits.some((h) => h.target === 'Play button')).toBe(false);
-    expect(result.current.history).toHaveLength(0);
+    // Disarmed: only entries labeled as dry runs — nothing dispatched.
+    expect(result.current.history.length).toBeGreaterThan(0);
+    expect(result.current.history.every((h) => h.dryRun && h.message.includes('dry run — not dispatched'))).toBe(true);
   }, 30_000);
 
   it('a guardrail refusal is not measured as unreliability: no report, no run summary', async () => {

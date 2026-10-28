@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, runVerdict, upsertCard } from './flow-memory.js';
 import { AiError } from './ai.js';
+import { FAILURE_PATTERN_SUFFIX } from './operation-memory.js';
 import type { AskFn } from './ai.js';
 import type { Frame, LearnedPattern, SavedCard, WorkflowStep } from './types.js';
 
@@ -66,6 +67,11 @@ describe('failurePattern', () => {
     expect(p).toMatchObject({ kind: 'avoid', context: 'open notepad' });
     expect(p.pattern).toContain('Click Start');
     expect(p.pattern).not.toContain('Step a');
+  });
+
+  it('scopes a pointer step to its element and drift-corrected coordinates, a key step to its name', () => {
+    const p = failurePattern('fill A1', [step('b', 'failed', { name: 'Click 2', target: 'Cell A1', correctedX: 0.125, correctedY: 0.3 }), step('c', 'pending', { name: 'Press Enter', action: 'key', text: 'Enter' })]);
+    expect(p.pattern).toBe(`Step "Click 2" (click on "Cell A1" at (12.5%, 30.0%)), "Press Enter" (key) ${FAILURE_PATTERN_SUFFIX}`);
   });
 });
 

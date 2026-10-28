@@ -82,7 +82,7 @@ describe('scaling model pixels back to the 480x270 sample space', () => {
     const o = await observeScreen(askIn('{"notes":[],"proposals":[{"kind":"familiar","text":"t","target":"Files","x":1280,"y":720}]}'), frame, [], [], '');
     expect(o.proposals[0]).toMatchObject({ x: 1, y: 1 });
     expect(parseReview('{"assessment":"a","step_fixes":[{"step":1,"x":640,"y":360}]}', null, [step], 0, HD).stepFixes[0]).toMatchObject({ x: 0.5, y: 0.5 });
-    const id = parseIdentification({ content: '{"found":true,"name":"n","x":960,"y":180,"reason":"r"}', thinking: null, view: HD }, 'x');
+    const id = parseIdentification({ content: '{"found":true,"name":"n","cell":null,"x":960,"y":180,"confidence":0.9}', thinking: null, view: HD }, 'x');
     expect(id).toMatchObject({ found: true, x: 0.75, y: 0.25 });
   });
 

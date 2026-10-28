@@ -80,7 +80,8 @@ export interface GoalRecord {
 
 /** Everything the tracer reacts to. */
 export type TraceEvent =
-  | { kind: 'plan'; steps: Array<Pick<WorkflowStep, 'id' | 'name'>>; append: boolean }
+  /** A plan event: `append` adds new steps; `keep` replaces the step list but keeps the traces of retained step ids. */
+  | { kind: 'plan'; steps: Array<Pick<WorkflowStep, 'id' | 'name'>>; append: boolean; keep?: boolean }
   | { kind: 'step'; stepId: string; name: string; ok: boolean; executed: boolean; detail: string }
   | { kind: 'verdict'; stepId: string; name: string; success: boolean }
   | { kind: 'retries'; count: number }
@@ -124,6 +125,10 @@ export const goalProgress = (r: Pick<GoalRecord, 'stepIds' | 'steps'>) => (r.ste
 
 const pendingSteps = (steps: Array<Pick<WorkflowStep, 'id' | 'name'>>, now: number): Record<string, StepTrace> =>
   Object.fromEntries(steps.map((s) => [s.id, { name: s.name, state: 'pending', at: now }]));
+
+/** The traces `r` already holds for the given steps (a re-plan keeps the state of the steps it retains). */
+const keptSteps = (r: GoalRecord, steps: Array<Pick<WorkflowStep, 'id'>>): Record<string, StepTrace> =>
+  Object.fromEntries(steps.filter((s) => r.steps[s.id]).map((s) => [s.id, r.steps[s.id]]));
 
 /** A new active goal record for one operation. */
 export function createGoal(init: { goal: string; source: GoalSource; steps: Array<Pick<WorkflowStep, 'id' | 'name'>>; workflowId?: string | null }, now = Date.now()): GoalRecord {
@@ -186,6 +191,7 @@ function complete(r: GoalRecord, why: string): Traced {
 }
 
 function tracePlan(r: GoalRecord, e: Extract<TraceEvent, { kind: 'plan' }>, ctx: TraceContext): Traced {
+  if (e.keep) return unchanged({ ...r, status: 'active', stepIds: e.steps.map((s) => s.id), steps: { ...pendingSteps(e.steps, ctx.now), ...keptSteps(r, e.steps) } });
   if (!e.append) return unchanged({ ...r, status: 'active', stepIds: e.steps.map((s) => s.id), steps: pendingSteps(e.steps, ctx.now) });
   const fresh = e.steps.filter((s) => !r.stepIds.includes(s.id));
   return unchanged({ ...r, status: 'active', stepIds: [...r.stepIds, ...fresh.map((s) => s.id)], steps: { ...r.steps, ...pendingSteps(fresh, ctx.now) } });

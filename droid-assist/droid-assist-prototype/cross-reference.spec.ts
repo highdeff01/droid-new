@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { AGREE_DISTANCE, conflictsOf, crossReference, type CrossCheck, type Knowledge } from './cross-reference.js';
+import { AGREE_DISTANCE, avoidMatches, conflictsOf, crossReference, type CrossCheck, type Knowledge } from './cross-reference.js';
+import { failurePattern } from './flow-memory.js';
 import type { MappedElement } from './element-map-studio.js';
 import type { FamiliarElement, Habit, LearnedPattern } from './types.js';
 import { newFailure } from './operation-memory.js';
@@ -87,10 +88,55 @@ describe('crossReference — habit success rate', () => {
 });
 
 describe('crossReference — avoid patterns', () => {
-  it('marks a learned avoid-pattern sharing a word with the target conflicting', () => {
+  it('marks a learned avoid-pattern covering the target\'s words conflicting', () => {
     const pattern: LearnedPattern = { id: 'p1', kind: 'avoid', pattern: 'Play button double click', context: '', time: 0 };
     const checks = crossReference(target, point, knowledge({ patterns: [pattern] }));
     expect(checks).toContainEqual({ source: 'avoid', status: 'conflicting', text: 'Learned avoid: Play button double click' });
+  });
+
+  it('does not block a target that shares only one word with an unscoped avoid-pattern', () => {
+    const pattern: LearnedPattern = { id: 'p1', kind: 'avoid', pattern: 'Step "Click 1" (click) via the play menu', context: '', time: 0 };
+    expect(crossReference('Play icon on the toolbar', point, knowledge({ patterns: [pattern] })).filter((c) => c.source === 'avoid')).toEqual([]);
+  });
+
+  describe('scoped (failed-run) avoid patterns', () => {
+    const scoped: LearnedPattern = failurePattern('fill the sheet', [{ id: 's1', name: 'Click 1', action: 'click', target: 'Cell A1', x: 0.12, y: 0.3, status: 'failed' }]);
+
+    it('records the failed step\'s element and coordinates', () => {
+      expect(scoped.pattern).toContain('"Click 1" (click on "Cell A1" at (12.0%, 30.0%))');
+    });
+
+    it('conflicts for the same element at the same point', () => {
+      const checks = crossReference('Cell A1', { x: 0.125, y: 0.305 }, knowledge({ patterns: [scoped] }));
+      expect(checks).toContainEqual({ source: 'avoid', status: 'conflicting', text: `Learned avoid: ${scoped.pattern}` });
+    });
+
+    it('allows a retry of the same element at a corrected point and a different element at the same point', () => {
+      expect(crossReference('Cell A1', { x: 0.2, y: 0.4 }, knowledge({ patterns: [scoped] })).filter((c) => c.source === 'avoid')).toEqual([]);
+      expect(crossReference('Close popup', { x: 0.12, y: 0.3 }, knowledge({ patterns: [scoped] })).filter((c) => c.source === 'avoid')).toEqual([]);
+    });
+
+    it('does not block a target named like the step ("Click 1") elsewhere', () => {
+      expect(avoidMatches(scoped.pattern, 'Click 1', { x: 0.6, y: 0.6 })).toBe(false);
+    });
+
+    it('blocks a short-named element ("Click 1", "OK") at its recorded point but not elsewhere', () => {
+      const short = failurePattern('g', [{ id: 'a', name: 'Click 1', action: 'click', x: 0.2, y: 0.3, status: 'failed' }, { id: 'b', name: 'Confirm', action: 'click', target: 'OK', x: 0.7, y: 0.8, status: 'failed' }]);
+      expect(avoidMatches(short.pattern, 'Click 1', { x: 0.2, y: 0.3 })).toBe(true);
+      expect(avoidMatches(short.pattern, 'click 1', { x: 0.5, y: 0.5 })).toBe(false);
+      expect(avoidMatches(short.pattern, 'ok', { x: 0.7, y: 0.8 })).toBe(true);
+      expect(avoidMatches(short.pattern, 'Go', { x: 0.7, y: 0.8 })).toBe(false);
+    });
+
+    it('stays scoped when the element name itself contains quotes', () => {
+      const quoted = failurePattern('g', [{ id: 'a', name: 'Click Save', action: 'click', target: 'The "Save" button', x: 0.2, y: 0.3, status: 'failed' }]);
+      expect(avoidMatches(quoted.pattern, 'Save', { x: 0.9, y: 0.9 })).toBe(false);
+      expect(avoidMatches(quoted.pattern, 'Save', { x: 0.2, y: 0.3 })).toBe(true);
+      const ok = failurePattern('g', [{ id: 'b', name: 'Confirm', action: 'click', target: '"OK"', x: 0.4, y: 0.5, status: 'failed' }, { id: 'c', name: 'Click "1"', action: 'click', x: 0.6, y: 0.6, status: 'failed' }]);
+      expect(avoidMatches(ok.pattern, '"OK"', { x: 0.4, y: 0.5 })).toBe(true);
+      expect(avoidMatches(ok.pattern, 'Click "1"', { x: 0.6, y: 0.6 })).toBe(true);
+      expect(avoidMatches(ok.pattern, '"OK"', { x: 0.9, y: 0.1 })).toBe(false);
+    });
   });
 
   it('ignores an "add" pattern', () => {
