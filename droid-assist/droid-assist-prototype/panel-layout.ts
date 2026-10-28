@@ -5,7 +5,7 @@ export type PanelArea = (typeof PANEL_AREAS)[number];
 /** Panel ids per area, in their default order. */
 const DEFAULT_SIDE = [
   'workflow', 'variations', 'persona', 'ruler', 'elements', 'elementMap', 'snipGallery', 'inventory', 'routes', 'retest',
-  'sections', 'learnedCoords', 'library', 'patterns', 'operationMemory', 'knowledge', 'profile', 'stats', 'memory', 'goals',
+  'sections', 'learnedCoords', 'library', 'patterns', 'blacklist', 'operationMemory', 'knowledge', 'profile', 'stats', 'memory', 'goals',
   'notifications', 'system', 'watcher', 'wake', 'initiative', 'triggers', 'projects', 'approvals', 'artifacts', 'presentation',
   'operations',
 ] as const;
