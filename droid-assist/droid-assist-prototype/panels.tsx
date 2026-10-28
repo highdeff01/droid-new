@@ -552,7 +552,6 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <ErrorForwardingSettings engine={engine} />
       <BackupSettings onExport={() => void engine.invoke('backup.export')} />
       <RelaxSettings engine={engine} />
-      <BackupSettings />
       <RecoverySettings engine={engine} />
     </section>
   );
