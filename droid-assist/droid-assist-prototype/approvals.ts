@@ -212,7 +212,7 @@ export interface CheckContext {
 const NEAR = 0.03;
 /** A history record is the queued step having run. */
 function ranAgain(r: ActionRecord, step: WorkflowStep): boolean {
-  if (!r.ok || r.action !== step.action || (r.text ?? '') !== (step.text ?? '')) return false;
+  if (!r.ok || (r.dryRun && !r.simulated) || r.action !== step.action || (r.text ?? '') !== (step.text ?? '')) return false;
   if (!r.srcW || !r.srcH) return true;
   return Math.abs(r.x / r.srcW - step.x) <= NEAR && Math.abs(r.y / r.srcH - step.y) <= NEAR;
 }

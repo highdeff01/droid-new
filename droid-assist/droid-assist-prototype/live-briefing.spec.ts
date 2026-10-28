@@ -12,6 +12,10 @@ describe('action outcomes', () => {
     expect(outcomeOf(rec({ ok: false }))).toBe('failed');
     expect(outcomeOf(rec({ via: 'demo', ok: false }))).toBe('failed');
     expect(outcomeOf(rec({ via: 'demo' }))).toBe('simulated');
+    expect(outcomeOf(rec({ via: 'demo', dryRun: true, simulated: true }))).toBe('simulated');
+    expect(outcomeOf(rec({ dryRun: true }))).toBe('dry run');
+    expect(outcomeOf(rec({ via: 'main-app', dryRun: true }))).toBe('dry run');
+    expect(outcomeOf(rec({ via: 'main-app' }))).toBe('ok');
     expect(outcomeOf(rec({ dispatched: true, ok: false }))).toBe('dispatched');
   });
 

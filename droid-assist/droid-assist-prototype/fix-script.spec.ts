@@ -6,17 +6,24 @@ import {
   fixMethodFor,
   fixScriptText,
   generateFixScript,
-  localFixScript,
   needsFix,
   noteResult,
   parseFixScript,
   saveFixMethod,
   type FixContext,
+  type FixScript,
 } from './fix-script.js';
 import type { AskFn } from './ai.js';
 
 const ctx: FixContext = { element: 'Export button', flow: 'Export report', problem: 'element not found' };
 const reply = (body: unknown): AskFn => vi.fn(async () => ({ content: JSON.stringify(body), thinking: null }));
+
+/** A fix script the model proposed for `ctx`. */
+async function aiScript(): Promise<FixScript> {
+  const s = await generateFixScript(ctx, [], reply({ reason: 'reopen', steps: [{ action: 'key', text: 'Escape', name: 'Dismiss' }, { action: 'wait', name: 'Settle' }] }), null);
+  if (!s) throw new Error('expected an AI fix script');
+  return s;
+}
 
 describe('failure counting', () => {
   it('needs a fix after FAIL_THRESHOLD consecutive failures and resets on success', () => {
@@ -56,38 +63,39 @@ describe('parseFixScript bounds', () => {
 
 describe('generateFixScript', () => {
   it('uses the model script when it answers', async () => {
-    const s = await generateFixScript(ctx, [], reply({ reason: 'reopen', steps: [{ action: 'key', text: 'Escape' }] }), null);
+    const s = await aiScript();
     expect(s.source).toBe('ai');
-    expect(s.steps).toHaveLength(1);
+    expect(s.steps).toHaveLength(2);
   });
-  it('falls back to the local script when the model fails, answers nothing usable, or is off', async () => {
+  it('proposes nothing — no canned template — when the model fails, answers nothing usable, or is off', async () => {
     const failing: AskFn = vi.fn(async () => { throw new Error('down'); });
-    expect((await generateFixScript(ctx, [], failing, null)).source).toBe('local');
-    expect((await generateFixScript(ctx, [], reply({ steps: [{ action: 'drag' }] }), null)).source).toBe('local');
-    const local = await generateFixScript(ctx, [], null, null);
-    expect(local.source).toBe('local');
-    expect(local.steps[0]).toMatchObject({ action: 'key', text: 'Escape' });
-    expect(local.steps.length).toBeLessThanOrEqual(MAX_FIX_STEPS);
+    expect(await generateFixScript(ctx, [], failing, null)).toBeNull();
+    expect(await generateFixScript(ctx, [], reply({ steps: [{ action: 'drag' }] }), null)).toBeNull();
+    expect(await generateFixScript(ctx, [], null, null)).toBeNull();
   });
   it('offers a saved fix method of the same element and flow first, without asking the model', async () => {
-    const methods = saveFixMethod([], localFixScript(ctx), true, 1);
+    const methods = saveFixMethod([], await aiScript(), true, 1);
     const ask = reply({ steps: [] });
     const s = await generateFixScript({ ...ctx, element: 'EXPORT BUTTON', flow: 'export REPORT' }, methods, ask, null);
-    expect(s.source).toBe('memory');
+    expect(s?.source).toBe('memory');
     expect(ask).not.toHaveBeenCalled();
-    expect(s.steps.map((x) => x.id)).not.toEqual(methods[0].steps.map((x) => x.id));
+    expect(s?.steps.map((x) => x.id)).not.toEqual(methods[0].steps.map((x) => x.id));
+  });
+  it('uses a saved fix method even when the model is off', async () => {
+    const methods = saveFixMethod([], await aiScript(), true, 1);
+    expect((await generateFixScript(ctx, methods, null, null))?.source).toBe('memory');
   });
 });
 
 describe('fix methods', () => {
-  it('saves only a script that worked and counts later uses against the same key', () => {
-    const script = localFixScript(ctx);
+  it('saves only a script that worked and counts later uses against the same key', async () => {
+    const script = await aiScript();
     expect(saveFixMethod([], script, false)).toEqual([]);
     let m = saveFixMethod([], script, true, 1);
     m = saveFixMethod(m, { ...script, context: { ...ctx, flow: 'EXPORT REPORT' } }, false, 2);
     expect(m).toHaveLength(1);
     expect(m[0]).toMatchObject({ uses: 2, successes: 1, element: 'Export button' });
     expect(fixMethodFor(m, 'export button', 'other flow')).toBeNull();
-    expect(fixScriptText(script)).toContain('local fix for "Export button"');
+    expect(fixScriptText(script)).toContain('ai fix for "Export button"');
   });
 });

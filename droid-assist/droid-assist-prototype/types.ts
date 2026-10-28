@@ -7,6 +7,7 @@ import type { AutoApplyMap, SelfTestMode } from './initiative.js';
 import type { AutoActMap } from './notifications.js';
 import type { ExecutionMode } from './execution-mode.js';
 import type { AutoApplyBounds } from './aggressive.js';
+import type { PanelLayout } from './panel-layout.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, the PC via the bridge, or the main Droid app's preview. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge' | 'main-app';
@@ -82,12 +83,16 @@ export interface ActionRecord {
   priorText?: string;
   /** Who performed it: Replay, Auto-Actor, AI help, ... */
   source: string;
-  /** Where it was dispatched: the desktop bridge or the demo desktop. */
-  via: 'bridge' | 'demo';
+  /** Where it ran: the desktop bridge, the main Droid app, or the demo desktop. */
+  via: 'bridge' | 'main-app' | 'demo';
   ok: boolean;
   message: string;
   /** The bridge accepted the input but the step's effect was not confirmed on screen. */
   dispatched?: boolean;
+  /** Nothing was dispatched to the PC or the main app: a disarmed verification or a demo simulation, labeled "dry run — not dispatched". */
+  dryRun?: boolean;
+  /** A dry run whose effect was simulated on the demo desktop (reversible there only). */
+  simulated?: boolean;
 }
 
 /** A lesson learned from a run: something to avoid or to add when planning similar goals. */
@@ -367,4 +372,6 @@ export interface AssistSettings {
   notifyAutoAct: AutoActMap;
   /** Folders (native paths) the System panel reports file specs for. */
   systemFolders: string[];
+  /** User arrangement of the workspace panels, per area; validated on load so no panel is ever lost. */
+  panelLayout: PanelLayout;
 }
