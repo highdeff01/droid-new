@@ -6,7 +6,7 @@ import { runSubagents, type SubagentOutcome, type SubagentResult, type SubagentT
 import type { RunOutcome } from './triggers.js';
 import { loadPacks, savePacks } from './storage.js';
 import {
-  PACK_MOVE_LIMIT, addMove, appendTestResult, combinePacks, crossRunSelection, generateGoal, isFull, moveStep, newPack, packTestResult, packTestTasks, runnable,
+  PACK_MOVE_LIMIT, addMove, appendTestResult, combinePacks, crossRunSelection, generateGoal, isFull, moveStep, newPack, packTestResult, packTestTasks, runGoalFor, runnable,
   similarGoal, similarReport, stepLine, withGoal, type PackSelection, type SimilarReport, type StepRun, type WorkflowPack,
 } from './packs.js';
 
@@ -167,12 +167,12 @@ export function usePacks(deps: PackDeps, recording: boolean) {
     commit(moved.packs);
   };
 
-  /** Runs `steps` through the replay pipeline under the label `what`. */
+  /** Runs `steps` through the replay pipeline under the label `what`; with no goal, one derived from the label and steps. */
   const runSteps = async (what: string, steps: WorkflowStep[], goal: string) => {
     if (!steps.length) return log(`${what}: nothing to run — record or select steps first`, 'warn');
     setRunning(what);
     try {
-      await depsRef.current.replay(steps, what, goal || similarGoal(steps));
+      await depsRef.current.replay(steps, what, goal || runGoalFor(what, steps));
     } finally {
       setRunning(null);
     }

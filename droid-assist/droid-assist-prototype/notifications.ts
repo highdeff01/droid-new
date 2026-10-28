@@ -5,7 +5,7 @@ import type { RunSummary } from './run-stats.js';
 import { uid } from './planner.js';
 
 /** Where an important event came from; auto-act is toggled per category. */
-export type NotificationCategory = 'ai' | 'bridge' | 'goal' | 'budget' | 'abort' | 'errors' | 'agents' | 'suggestion' | 'relax';
+export type NotificationCategory = 'ai' | 'bridge' | 'goal' | 'budget' | 'abort' | 'errors' | 'agents' | 'suggestion' | 'relax' | 'intent';
 
 /** Every category with its label, in panel order. */
 export const NOTIFY_CATEGORIES: Record<NotificationCategory, string> = {
@@ -18,6 +18,7 @@ export const NOTIFY_CATEGORIES: Record<NotificationCategory, string> = {
   agents: 'Agent reports',
   suggestion: 'AI suggestions',
   relax: 'Break reminders',
+  intent: 'AI intentions',
 };
 export const CATEGORY_IDS = Object.keys(NOTIFY_CATEGORIES) as NotificationCategory[];
 

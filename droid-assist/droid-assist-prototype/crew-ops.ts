@@ -103,7 +103,7 @@ export function safetyVote(step: WorkflowStep, history: readonly ActionRecord[],
 
 /** Backtrack: one cursor move per recent real action (newest first) to where the pointer was before it. */
 export function backtrackSteps(history: readonly ActionRecord[], n: number): WorkflowStep[] {
-  const recent = history.filter((r) => r.ok && r.source !== REVERSE_ACTOR && r.srcW && r.srcH).slice(0, Math.max(0, Math.floor(n)));
+  const recent = history.filter((r) => r.ok && !(r.dryRun && !r.simulated) && r.source !== REVERSE_ACTOR && r.srcW && r.srcH).slice(0, Math.max(0, Math.floor(n)));
   return recent.map((r, i) => {
     const px = typeof r.prevX === 'number' && typeof r.prevY === 'number' ? { x: r.prevX, y: r.prevY } : { x: r.x, y: r.y };
     return { id: `back-${r.id}-${i}`, name: `Backtrack ${i + 1}: before ${r.action}`, action: 'move', x: px.x / (r.srcW as number), y: px.y / (r.srcH as number), status: 'pending' };

@@ -253,10 +253,14 @@ export function Hud({ engine }: { engine: AssistEngine }) {
           ) : (
             <>
               <button type="button" className={styles.primary} onClick={() => void engine.invoke('replay.run', { selfTest: false })} disabled={recording || !total} title="Performs every step as real input on the PC through the desktop bridge">▶ Replay + drift</button>
-              <button type="button" onClick={() => void engine.invoke('replay.run', { selfTest: true })} disabled={recording || !total} title="Verifies each step on the live desktop; sends no input">🧪 AI self-test (no input)</button>
+              <button type="button" onClick={() => void engine.invoke('selftest.run')} disabled={recording} title="Plans a goal, grounds it on the live frame, executes it (dry run unless armed) and verifies the result — report in the Self-test panel">🧪 AI self-test</button>
             </>
           )}
-          <button type="button" onClick={() => void engine.explainScreen()} disabled={aiOff || aiBusy} title={aiTitle}>👁 Point out</button>
+          {engine.pointOutAuto ? (
+            <button type="button" className={styles.danger} onClick={engine.stopPointOut} title="Stops the automatic point-out">■ Stop point out</button>
+          ) : (
+            <button type="button" onClick={engine.startPointOut} disabled={aiOff || aiBusy} title={aiOff ? aiTitle : 'Points out what matters now, then again every 5 s until stopped'}>👁 Point out</button>
+          )}
           <button type="button" className={engine.ruler.on ? styles.primary : ''} onClick={engine.ruler.toggle} aria-pressed={engine.ruler.on} title="Ruler mode: click points on the screen to measure distances">📏 Ruler{engine.ruler.on ? ' (on)' : ''}</button>
           <button type="button" onClick={() => engine.ruler.recalibrateNow('manual')} title="Re-measure the baseline references on the live frame and rescale stored coordinates on drift">⟲ Recalibrate</button>
           <button type="button" className={engine.snipMode ? styles.primary : ''} onClick={engine.toggleSnipMode} aria-pressed={engine.snipMode} title="Snip: drag a region of the screen to save it to the snip gallery">✂ Snip{engine.snipMode ? ' (drag)' : ''}</button>

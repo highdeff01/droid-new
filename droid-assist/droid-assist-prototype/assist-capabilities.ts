@@ -17,6 +17,8 @@ export type AgentToggle = (typeof AGENT_TOGGLES)[number];
 export interface AssistOps {
   plan: (goal: string) => Promise<boolean>;
   replay: (selfTest: boolean) => Promise<void>;
+  /** The end-to-end AI self-test (plan → ground → execute → verify on the live frame); resolves its report line. */
+  selfTest: () => Promise<string>;
   stop: () => void;
   toggleRecording: () => void;
   setStage: (id: StageId, on: boolean) => void;
@@ -76,6 +78,7 @@ function pipelineCaps(ops: Ops): Capability[] {
       await ops().replay(p.selfTest === true);
       return `${p.selfTest ? 'self-test' : 'playback'} finished — see the log`;
     }, { realInput: true }),
+    cap('selftest.run', 'AI self-test: plan → ground → execute → verify a goal end to end on the live frame (dry run unless armed)', {}, () => ops().selfTest(), { realInput: true, stage: 'selfTest' }),
     cap('replay.stop', 'Stop the running replay', {}, () => {
       ops().stop();
       return 'stopped';

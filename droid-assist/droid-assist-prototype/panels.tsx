@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
+import { DRY_RUN } from './run-step.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import { AiStatusBadge, InsecureBridgeWarning, MainBridgeBadge } from './hud.js';
 import { ModelPicker } from './model-picker.js';
@@ -41,6 +42,8 @@ import { sectionMemoryLines } from './sections.js';
 import { replicaLine } from './replicate.js';
 import { SIDE_TEST_MODES, feedbackLine, type SideTestMode } from './side-test.js';
 import { RecoverySettings, RelaxSettings } from './relax-recovery-settings.js';
+import { checkoffSummary, checkoffText } from './workflow-progress.js';
+import { latestReports } from './agent-cadence.js';
 import styles from './droid-assist.module.css';
 
 const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity', wake: 'Wake', decision: 'Decision', error: 'Error' };
@@ -200,7 +203,7 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
   const { steps, setSteps, draftCard, setDraftCard } = engine;
   return (
     <section className={styles.panel}>
-      <h3>Workflow <small>{steps.length} step(s)</small></h3>
+      <h3>Workflow <small>{steps.length} step(s){steps.length > 0 && ` · ${checkoffText(checkoffSummary(steps))}`}</small></h3>
       {!steps.length && <p className={styles.muted}>Record, or type a goal and press ✨ AI plan.</p>}
       <ol className={styles.steps}>
         {steps.map((s, i) => (
@@ -210,6 +213,7 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
               <input value={s.name} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} onFocus={(e) => { e.currentTarget.dataset.was = e.currentTarget.value; }} onBlur={(e) => { const name = e.currentTarget.value.trim(); if (name !== (e.currentTarget.dataset.was ?? '').trim()) engine.knowledge.noteSignal('correction', `renamed step to "${name}"`); }} aria-label={`Step ${i + 1} name`} />
               <small>
                 {s.action}{s.target ? ` "${s.target}"` : ''}{(s.action === 'key' || s.action === 'scroll') && s.text ? ` ${s.text}` : ''} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}%{s.endX !== undefined && s.endY !== undefined ? ` → ${s.endTarget ? `"${s.endTarget}" ` : ''}${(s.endX * 100).toFixed(0)}%,${(s.endY * 100).toFixed(0)}%` : ''} · {s.status}
+                {s.verifiedAt !== undefined && <b aria-label={`Step ${i + 1} checked off`}> · ✓ {clock(s.verifiedAt)}</b>}
                 {s.delayMs !== undefined && ` · after ${s.delayMs}ms`}
                 {s.driftPx !== undefined && ` · drift ${s.driftPx}px`}
                 {s.drift !== undefined && ` · match ${s.drift.toFixed(3)}`}
@@ -366,13 +370,15 @@ export function LoopControlPanel({ engine }: { engine: AssistEngine }) {
  */
 export function AgentsPanel({ engine }: { engine: AssistEngine }) {
   const { agents } = engine;
+  // The panel's Screen watcher is the cadence's screenWatcher agent.
+  const live = new Map(latestReports(engine.agentReports).map((r) => [r.agent === 'screenWatcher' ? 'screen' : r.agent, r.text]));
   return (
     <section className={styles.panel}>
       <h3>Agents</h3>
       {agents.map((a) => (
         <label key={a.id} className={styles.agent}>
           <input type="checkbox" checked={a.on} onChange={(e) => void engine.invoke(`agent.${a.id}`, { on: e.target.checked })} />
-          <span><strong>{a.name}</strong><small>{a.description}</small>{a.id === 'goalTracer' && <small aria-label="Goal tracer status">Live: {engine.tracerStatus}</small>}</span>
+          <span><strong>{a.name}</strong><small>{a.description}</small>{a.id === 'goalTracer' && <small aria-label="Goal tracer status">Live: {engine.tracerStatus}</small>}{live.has(a.id) && <small aria-label={`${a.name} live report`}>Now: {live.get(a.id)}</small>}</span>
         </label>
       ))}
     </section>
@@ -676,8 +682,8 @@ export function ActionHistoryPanel({ engine }: { engine: AssistEngine }) {
       </div>
       <ul className={styles.log}>
         {history.slice(0, 200).map((a) => (
-          <li key={a.id} data-tone={a.ok ? 'ok' : 'error'}>
-            <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.endX !== undefined ? ` → (${a.endX}, ${a.endY})` : ''}{a.text ? ` "${a.text}"` : ''} · {a.via}
+          <li key={a.id} data-tone={a.ok ? (a.dryRun ? 'info' : 'ok') : 'error'}>
+            <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.endX !== undefined ? ` → (${a.endX}, ${a.endY})` : ''}{a.text ? ` "${a.text}"` : ''} · {a.via}{a.dryRun ? ` · ${DRY_RUN}` : ''}
           </li>
         ))}
       </ul>
@@ -866,7 +872,7 @@ export function LearnedCoordsPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement', attempt: '🔄 Attempt', snip: '✂️ Snip' };
+const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement', attempt: '🔄 Attempt', snip: '✂️ Snip', reply: '📨 Agent reply', test: '🧪 Test result' };
 
 /** Tone of an entry: failures as errors, verdicts and checks by their outcome, unready proposals as warnings, the rest informational. */
 function entryTone(e: ThinkingEntry): LogEntry['tone'] {
@@ -934,9 +940,10 @@ function BriefingComparison({ b }: { b: Briefing }) {
 function BriefingItem({ b }: { b: Briefing }) {
   const o = b.objectives;
   return (
-    <li data-tone={b.outcome === 'unresolved' ? 'warn' : 'ok'}>
+    <li data-tone={b.outcome === 'unresolved' || b.outcome === 'blocked' ? 'warn' : 'ok'}>
       <small>{clock(b.time)}</small> <b>{b.stepName}</b> <small>· {b.outcome}</small>
       {b.aiNote && <p role="alert">{b.aiNote}</p>}
+      {b.blocked && <p role="alert"><b>Blocked:</b> {b.blocked}</p>}
       {b.mode && <p><b>Mode:</b> {b.mode}</p>}
       <h4>Objectives</h4>
       <p><b>Goal:</b> {o.goal || '(none)'}</p>

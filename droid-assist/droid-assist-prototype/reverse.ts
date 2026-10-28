@@ -98,14 +98,15 @@ const MAPPERS: Record<InputAction, Mapper> = {
 /** The inverse of one performed action as steps in normalized coordinates, or why it cannot be reversed. */
 export function reverseAction(rec: ActionRecord): Reversal {
   if (!rec.ok) return cannot('the action did not complete');
+  if (rec.dryRun && !rec.simulated) return cannot('it was a dry run — nothing was dispatched');
   const { srcW, srcH } = rec;
   if (!srcW || !srcH) return cannot('the screen size of the action was not recorded');
   return MAPPERS[rec.action](rec, (x, y) => ({ x: x / srcW, y: y / srcH }));
 }
 
-/** The newest history record when it is a real action (not itself a reversal), with its reversal; null when there is nothing to offer. */
+/** The newest history record that had an effect (not a dry run, not itself a reversal), with its reversal; null when there is nothing to offer. */
 export function reverseOffer(history: readonly ActionRecord[]): ReverseOffer | null {
-  const record = history[0];
+  const record = history.find((r) => !r.dryRun || r.simulated);
   if (!record || record.source === REVERSE_ACTOR) return null;
   return { record, reversal: reverseAction(record) };
 }
