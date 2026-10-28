@@ -49,6 +49,7 @@ import { OPERATION_LIMIT, OPERATION_SOURCES, type OperationSource, type SavedOpe
 import { OPERATION_RETRIES_MAX, OPERATION_RETRIES_MIN } from './operation-retry.js';
 import { PLAYBACK_WINDOW_SEC_MAX, PLAYBACK_WINDOW_SEC_MIN } from './playback.js';
 import { readOpsState, type OpsState } from './operations.js';
+import { sanitizePanelLayout } from './panel-layout.js';
 
 /** Most folders the System panel reports on. */
 export const SYSTEM_FOLDER_LIMIT = 10;
@@ -210,6 +211,7 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
   if (typeof stored.selfTestMode === 'string' && SELF_TEST_MODES.includes(stored.selfTestMode as SelfTestMode)) out.selfTestMode = stored.selfTestMode as SelfTestMode;
   out.notifyAutoAct = sanitizeAutoAct(stored.notifyAutoAct ?? defaults.notifyAutoAct);
   if (Array.isArray(stored.systemFolders)) out.systemFolders = [...new Set(stored.systemFolders.filter(isStr).map((p) => p.trim()))].slice(0, SYSTEM_FOLDER_LIMIT);
+  out.panelLayout = sanitizePanelLayout(stored.panelLayout ?? defaults.panelLayout);
   return out;
 }
 
