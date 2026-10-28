@@ -127,6 +127,12 @@ describe('crossReference — avoid patterns', () => {
       expect(avoidMatches(short.pattern, 'ok', { x: 0.7, y: 0.8 })).toBe(true);
       expect(avoidMatches(short.pattern, 'Go', { x: 0.7, y: 0.8 })).toBe(false);
     });
+
+    it('stays scoped when the element name itself contains quotes', () => {
+      const quoted = failurePattern('g', [{ id: 'a', name: 'Click Save', action: 'click', target: 'The "Save" button', x: 0.2, y: 0.3, status: 'failed' }]);
+      expect(avoidMatches(quoted.pattern, 'Save', { x: 0.9, y: 0.9 })).toBe(false);
+      expect(avoidMatches(quoted.pattern, 'Save', { x: 0.2, y: 0.3 })).toBe(true);
+    });
   });
 
   it('ignores an "add" pattern', () => {

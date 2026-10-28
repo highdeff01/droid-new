@@ -59,7 +59,8 @@ const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
  */
 const scopedStep = (s: WorkflowStep) => {
   if (!POINTER_ACTIONS.has(s.action)) return `"${s.name}" (${s.action})`;
-  return `"${s.name}" (${s.action} on "${s.target ?? s.name}" at (${pct(s.correctedX ?? s.x)}, ${pct(s.correctedY ?? s.y)}))`;
+  const element = (s.target ?? s.name).replace(/"/g, "'");
+  return `"${s.name}" (${s.action} on "${element}" at (${pct(s.correctedX ?? s.x)}, ${pct(s.correctedY ?? s.y)}))`;
 };
 
 /** The lesson a failed run always leaves, with or without the model: avoid its failed steps as planned. */
