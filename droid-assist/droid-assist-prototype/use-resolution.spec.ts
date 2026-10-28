@@ -75,7 +75,9 @@ describe('recovery operations in the engine', () => {
     await act(() => result.current.resolution.runOp('maintenance', 'backup'));
     await act(() => result.current.resolution.approve(result.current.resolution.approvals[0].id));
     expect(result.current.resolution.ops[0]).toMatchObject({ op: 'maintenance', arg: 'backup' });
-    expect(result.current.history).toHaveLength(0);
+    // Disarmed: only entries labeled as dry runs — nothing dispatched.
+    expect(result.current.history.length).toBeGreaterThan(0);
+    expect(result.current.history.every((h) => h.dryRun && h.message.includes('dry run — not dispatched'))).toBe(true);
   });
 
   it('real-input operations refuse while aborted', async () => {

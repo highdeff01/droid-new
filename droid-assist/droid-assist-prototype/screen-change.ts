@@ -1,5 +1,5 @@
 import type { Frame } from './types.js';
-import { AiError, parseJsonReply } from './ai.js';
+import { parseJsonReply } from './ai.js';
 import type { AskFn } from './ai.js';
 import type { Box, Thought } from './assist-ai.js';
 import { boundingBox, diffCells, largestCluster } from './drift.js';
@@ -44,6 +44,9 @@ export interface PlanContext {
   next: string | null;
 }
 
+/** The summary of an assessment whose reply described no change: said plainly, never left blank. */
+export const NO_SUMMARY = 'No summary could be produced — the AI described no change';
+
 const KINDS = new Set(['popup', 'navigation', 'dialog', 'content', 'error', 'other']);
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
 
@@ -63,8 +66,7 @@ export async function assessChange(ask: AskFn, full: Frame, crop: Frame, change:
     json: true,
   });
   const r = parseJsonReply(content);
-  const summary = typeof r.summary === 'string' ? r.summary.trim() : '';
-  if (!summary) throw new AiError('AI change assessment had no summary');
+  const summary = (typeof r.summary === 'string' ? r.summary.trim() : '') || NO_SUMMARY;
   const kind = KINDS.has(String(r.kind)) ? String(r.kind) : 'other';
   return { kind, summary, stale: r.stale === true, effect: String(r.effect ?? '').trim(), thinking };
 }

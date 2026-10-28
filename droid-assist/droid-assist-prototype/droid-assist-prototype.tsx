@@ -12,6 +12,7 @@ import { StatsPanel } from './stats-panel.js';
 import { OperationMemoryPanel, MemoryPanel } from './memory-panel.js';
 import { LiveBriefingPanel } from './live-briefing-panel.js';
 import { AiResponsesPanel } from './ai-responses-panel.js';
+import { CurrentOperationPanel, PopupPanel } from './attention-panels.js';
 import { ArtifactsPanel } from './capabilities-panel.js';
 import { PersonaPanel } from './persona-panel.js';
 import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
@@ -19,6 +20,7 @@ import { VariationsPanel } from './variations-panel.js';
 import { InventoryPanel, RetestPanel, RoutesPanel } from './screen-ai-panels.js';
 import { InitiativePanel } from './initiative-panel.js';
 import { GoalsPanel } from './goals-panel.js';
+import { CurrentOperationPanel } from './current-operation-panel.js';
 import { SystemPanel } from './system-panel.js';
 import { NotificationsPanel } from './notifications-panel.js';
 import { DatabasePanel } from './database-panel.js';
@@ -47,9 +49,12 @@ function AssistScreen() {
       <main className={styles.main}>
         <Hud engine={engine} />
         <LiveBriefingPanel engine={engine} />
+        <CurrentOperationPanel engine={engine} />
+        <PopupPanel engine={engine} />
         <div className={styles.work}>
           <Stage engine={engine} />
           <div className={styles.side}>
+            <CurrentOperationPanel engine={engine} />
             <WorkflowPanel engine={engine} />
             <VariationsPanel engine={engine} />
             <PersonaPanel engine={engine} />
