@@ -866,7 +866,7 @@ export function LearnedCoordsPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement', attempt: '🔄 Attempt', snip: '✂️ Snip' };
+const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement', attempt: '🔄 Attempt', snip: '✂️ Snip', reply: '📨 Agent reply', test: '🧪 Test result' };
 
 /** Tone of an entry: failures as errors, verdicts and checks by their outcome, unready proposals as warnings, the rest informational. */
 function entryTone(e: ThinkingEntry): LogEntry['tone'] {

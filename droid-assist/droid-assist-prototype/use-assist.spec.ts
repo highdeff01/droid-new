@@ -1130,6 +1130,16 @@ describe('useAssist agent forwarding and subagent link tests', () => {
     expect(result.current.annotations.some((a) => a.label === 'Watching: Search box')).toBe(true);
   });
 
+  it('records the agents\' replies to a forwarded element on the thinking timeline', () => {
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.forwardElement('popup', { name: 'Close button', x: 0.9, y: 0.1 }));
+    const reply = result.current.timeline.find((e) => e.kind === 'reply');
+    expect(reply).toMatchObject({ step: 'Popup watcher → "Close button"', thinking: null });
+    const handled = result.current.bus.filter((m) => m.from === 'popup' && m.status === 'handled');
+    expect(reply!.text.split('\n')).toHaveLength(handled.length);
+    expect(reply!.text).toContain(`Habit system: ${handled.find((m) => m.to === 'habits')!.note}`);
+  });
+
   it('/section and /scope seclude the goal to named sections; /scope all lifts it', async () => {
     const { result } = renderHook(() => useAssist());
     await act(async () => {});
