@@ -182,6 +182,14 @@ describe('decidePopup', () => {
   it('leaves it when the model says so, carrying its thinking', async () => {
     await expect(decidePopup(askReturning('{"close":false,"reason":"content"}', 'it is page content'), frame, box)).resolves.toEqual({ close: false, reason: 'content', thinking: 'it is page content' });
   });
+  it('asks once more when close=true comes with no point, then fails on a second bad reply', async () => {
+    const ask = vi.fn<AskFn>().mockResolvedValueOnce({ content: '{"close":true,"reason":"ad"}', thinking: null }).mockResolvedValueOnce({ content: '{"close":true,"cell":"A12","reason":"ad"}', thinking: null });
+    await expect(decidePopup(ask, frame, box)).resolves.toMatchObject({ close: true, reason: 'ad' });
+    expect(ask.mock.calls[1][0].prompt).toContain('non-numeric coordinate');
+    const bad = askReturning('{"close":true,"reason":"ad"}');
+    await expect(decidePopup(bad, frame, box)).rejects.toThrow(/non-numeric coordinate/);
+    expect(bad).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('decideStep', () => {
