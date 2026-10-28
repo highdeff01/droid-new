@@ -135,6 +135,9 @@ import { runLiveDrag, type DragIntervention, type LiveDragResult, type SwarmAgen
 import { OPS_AGENTS, OPS_SYSTEM, addEvidence, addOpsReport, changeKey, changeLine, dedupeLog, enabledOps, loopReport, mapDelta, markEvidence, monitorChange, opsAgent, opsFor, parseOpsTarget, patchOpsAgent, shouldReport, tagLog, type MonitorChange, type OpsAgentId, type OpsState, type TestCandidate } from './operations.js';
 import { createOpsWorkers, type Applied, type OpsWorkResult } from './ops-workers.js';
 import { placeWindow } from './window-placement.js';
+import { CADENCE_MS, CADENCE_TICK_MS, addReports, dueAgents, reportContext, type AgentReport, type CadenceAgent } from './agent-cadence.js';
+import { activityReports } from './agent-activity.js';
+import { IDLE_ATTENTION, focusOn, scopeLines as scopeAttention, type Attention } from './attention.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -466,6 +469,15 @@ export function useAssist() {
   /** The Operations agents: statuses, reports and the before/after evidence trail (persisted), and whether an /ops run is going. */
   const [ops, setOps] = useState<OpsState>(loadOpsState);
   const [opsRunning, setOpsRunning] = useState(false);
+  /** Every agent's live activity reports on the cadence, newest first (kept out of the activity log). */
+  const [agentReports, setAgentReports] = useState<AgentReport[]>([]);
+  const agentReportsRef = useRef<AgentReport[]>([]);
+  /** When each cadence agent last reported. */
+  const reportedAtRef = useRef<Record<string, number>>({});
+  /** What the AI is focused on right now. */
+  const [attention, setAttention] = useState<Attention>(IDLE_ATTENTION);
+  /** Point out runs by itself every CADENCE_MS until stopped. */
+  const [pointOutAuto, setPointOutAuto] = useState(false);
   /** The coordinate agents of the running (or last) live drag. */
   const [swarm, setSwarm] = useState<SwarmAgent[]>([]);
   const [liveDragging, setLiveDragging] = useState(false);
@@ -853,9 +865,9 @@ export function useAssist() {
    * The operation memory sent with every AI turn: goal, current objective, notes, blacklist, similar
    * failures and recent activity (left out when the turn's context already is the recent log).
    */
-  const operationMemoryBlock = (contextIsLog: boolean) => {
+  const operationMemoryBlock = (contextIsLog: boolean, stage: StageId) => {
     const running = stepsRef.current.find((s) => s.status === 'running');
-    const recent = contextIsLog ? [] : logRef.current.slice(0, RECENT_LINES).map((l) => `[${l.source}] ${l.message}`);
+    const recent = contextIsLog ? [] : scopeAttention(logRef.current.slice(0, RECENT_LINES).map((l) => `[${l.source}] ${l.message}`), stage);
     const targets = stepsRef.current.map((s) => s.target ?? s.name);
     return memoryBlock({ operation: operationNow(), objective: running ? objectiveText(running) : null, recent, targets }, { patterns: patternsRef.current, habits: habitsRef.current, memory: memoryRef.current });
   };
@@ -1085,11 +1097,12 @@ export function useAssist() {
    */
   const askAi = useCallback(async (req: AskRequest, stage: StageId): Promise<AiReply> => {
     if (!settingsRef.current.stages[stage]) throw new AiCancelled(stageOff(stage));
-    const memory = operationMemoryBlock(req.context === undefined);
+    const memory = operationMemoryBlock(req.context === undefined, stage);
     const project = projectId(goalRef.current);
     const injected = pendingNotesFor(userNotesRef.current, project);
     const recent = req.context ?? logRef.current.slice(0, 8).map((l) => `[${l.source}] ${l.message}`);
-    const context = [...injected.map(noteLine), ...memoryLines(enhancedMemoryRef.current, currentOperation()), ...recent];
+    const findings = scopeAttention([...reportContext(agentReportsRef.current), ...recent], stage);
+    const context = [...injected.map(noteLine), ...memoryLines(enhancedMemoryRef.current, currentOperation()), ...findings];
     const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage), req.signal);
     const ctxReq = { ...req, context, memory };
     setAiCalls((n) => n + 1);
@@ -1154,6 +1167,7 @@ export function useAssist() {
    * when the call fails (rethrown). `summary` returning null means no model call was made.
    */
   const thought = useCallback(async <T extends Thought>(step: string, call: () => Promise<T>, summary: (r: T) => string | null, kind: ThoughtKind = 'thought'): Promise<T> => {
+    setAttention((a) => focusOn(a, step, 'AI'));
     try {
       const r = await call();
       const text = summary(r);
@@ -4898,6 +4912,52 @@ export function useAssist() {
 
   /** Point out: the default AI-help question. */
   const explainScreen = () => askScreen();
+  const explainRef = useRef(explainScreen);
+  explainRef.current = explainScreen;
+  const agentListRef = useRef(agents);
+  agentListRef.current = agents;
+
+  /** One automatic point-out: skipped while the AI is already answering, so ticks never pile up. */
+  const pointOutTick = useCallback(() => {
+    if (aiBusyRef.current) return;
+    setAttention((a) => focusOn(a, 'Point out (auto)', 'Point out'));
+    void explainRef.current();
+  }, []);
+
+  /** Point out now, then every CADENCE_MS until stopPointOut. */
+  const startPointOut = useCallback(() => {
+    setPointOutAuto(true);
+    pointOutTick();
+  }, [pointOutTick]);
+  const stopPointOut = useCallback(() => setPointOutAuto(false), []);
+
+  useEffect(() => {
+    if (!pointOutAuto) return undefined;
+    const id = setInterval(pointOutTick, CADENCE_MS);
+    return () => clearInterval(id);
+  }, [pointOutAuto, pointOutTick]);
+
+  /** Every due agent reports what it is doing now; reports go to agentReports and every AI call, never the log. */
+  const cadenceTick = useCallback(() => {
+    const now = Date.now();
+    // An agent with an Agents-panel checkbox reports only while that checkbox is on.
+    const panelOn = (a: CadenceAgent) => agentListRef.current.find((x) => x.id === a.id)?.on ?? true;
+    const due = dueAgents(settingsRef.current.stages, reportedAtRef.current, now, settingsRef.current.relaxMode).filter(panelOn);
+    if (!due.length) return;
+    due.forEach((a) => { reportedAtRef.current[a.id] = now; });
+    const reports = activityReports(due, {
+      goal: goalRef.current, steps: stepsRef.current, sync: syncRef.current, progress: progressRef.current, popup: popupRef.current,
+      watcher: watcherRef.current, familiar: familiarRef.current.length, known: knownRef.current.length,
+      supervisor: supervisorRef.current, crew: crewRef.current, ops: opsRef.current.agents,
+    }, now);
+    agentReportsRef.current = addReports(agentReportsRef.current, reports);
+    setAgentReports(agentReportsRef.current);
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(cadenceTick, CADENCE_TICK_MS);
+    return () => clearInterval(id);
+  }, [cadenceTick]);
 
   /** Turns a captured screen image into a Frame and runs the monitor on it. */
   const onScreenImage = (image: CapturedImage) => {
@@ -6272,6 +6332,8 @@ export function useAssist() {
     /** The AI is planning, reflecting, deciding or verifying right now. */
     aiWorking: aiBusy || aiCalls > 0,
     onStageMove, onStageClick, onStageDoubleClick, onStageDrag, onStageType, onStageKey, onStageScroll, toggleRecording, replay, stop, stopAi, autoPlan, submitInput, askScreen, explainScreen,
+    /** Live agent reports on the cadence, the AI's current focus, and the auto point-out toggle. */
+    agentReports, attention, pointOutAuto, startPointOut, stopPointOut,
     knowledge: kb, removeStep, variations,
     shareScreen, connectBridge, connectAi, useDemo, saveCard, loadCard, addLog, toggleArmed, triggerAbort, clearAbort, exportHistory, resetHistory,
     bridgeOnline, verifyRealInput,

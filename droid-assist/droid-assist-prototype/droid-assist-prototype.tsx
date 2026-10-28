@@ -11,6 +11,7 @@ import { ApprovalsPanel } from './approvals-panel.js';
 import { StatsPanel } from './stats-panel.js';
 import { OperationMemoryPanel, MemoryPanel } from './memory-panel.js';
 import { LiveBriefingPanel } from './live-briefing-panel.js';
+import { CurrentOperationPanel, PopupPanel } from './attention-panels.js';
 import { ArtifactsPanel } from './capabilities-panel.js';
 import { PersonaPanel } from './persona-panel.js';
 import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
@@ -46,6 +47,8 @@ function AssistScreen() {
       <main className={styles.main}>
         <Hud engine={engine} />
         <LiveBriefingPanel engine={engine} />
+        <CurrentOperationPanel engine={engine} />
+        <PopupPanel engine={engine} />
         <div className={styles.work}>
           <Stage engine={engine} />
           <div className={styles.side}>

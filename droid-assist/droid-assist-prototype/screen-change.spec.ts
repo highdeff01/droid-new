@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { assessChange, changeText, detectChange, type ChangeAssessment } from './screen-change.js';
+import { NO_SUMMARY, assessChange, changeText, detectChange, type ChangeAssessment } from './screen-change.js';
 import { localProposal, proposalText, proposeStep } from './proposal.js';
 import { AiError } from './ai.js';
 import type { AskFn } from './ai.js';
@@ -59,8 +59,10 @@ describe('assessChange', () => {
     expect(a).toMatchObject({ kind: 'other', stale: false, effect: '' });
   });
 
-  it('rejects an assessment without a summary', async () => {
-    await expect(assessChange(askReturning('{"kind":"error","stale":true}'), full, crop, change, { goal: '', next: null })).rejects.toBeInstanceOf(AiError);
+  it('states plainly that no summary could be produced when the reply has none', async () => {
+    const a = await assessChange(askReturning('{"kind":"error","summary":"  ","stale":true}'), full, crop, change, { goal: '', next: null });
+    expect(a).toMatchObject({ kind: 'error', summary: NO_SUMMARY, stale: true });
+    expect(changeText(a)).toBe(`[error] ${NO_SUMMARY} — PLAN STALE`);
   });
 
   it('summarises an assessment in one line', () => {
