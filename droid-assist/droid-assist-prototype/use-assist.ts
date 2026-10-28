@@ -63,7 +63,7 @@ import { REVERSE_ACTOR, reverseOffer } from './reverse.js';
 import { CREW_SIZE_DEFAULT, parseIntercept } from './crew.js';
 import { useCrew } from './use-crew.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, newPattern, runVerdict, upsertCard } from './flow-memory.js';
-import { SUPERVISOR_INTERVAL_MS, SUPERVISOR_REPLAN_LIMIT, SUPERVISOR_TICK_MS, applyFixes, executorBusy as supervisorExecutorBusy, habitPatterns, haltText, isConfident, replanFeedback, reviewDecision, reviewRun, reviewText, staleFixes, type PendingFix, type SupervisorReview, type SupervisorState } from './supervisor.js';
+import { NO_ASSESSMENT, SUPERVISOR_INTERVAL_MS, SUPERVISOR_REPLAN_LIMIT, SUPERVISOR_TICK_MS, applyFixes, executorBusy as supervisorExecutorBusy, habitPatterns, haltText, isConfident, replanFeedback, reviewDecision, reviewRun, reviewText, staleFixes, type PendingFix, type SupervisorReview, type SupervisorState } from './supervisor.js';
 import { BUS_AGENTS, BUS_AGENT_IDS, elementLine, forward, isGridLabel, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
 import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
@@ -149,6 +149,7 @@ import { activityReports } from './agent-activity.js';
 import { IDLE_ATTENTION, focusOn, scopeLines as scopeAttention, type Attention } from './attention.js';
 import { NO_BACKOFF, backoffStatus, backoffText, clearBackoff, noteRepeatLimit, repeatLimitLine, type AiBackoff } from './ai-backoff.js';
 import { ABORT_HINT, ABORTED_REFUSAL, DEFAULT_ABORT_AUTO_CLEAR_MIN, refusedWhileAborted, useAbortAutoClear } from './abort-latch.js';
+import { checkoffSummary, completeText, incompleteText, workflowComplete } from './workflow-progress.js';
 
 const DEMO_W = 960;
 const DEMO_H = 540;
@@ -156,6 +157,8 @@ const DEMO_H = 540;
 const SUGGEST_TICK_MS = 10 * 60_000;
 /** Shortest time between automatic section proposals. */
 const SECTIONS_AUTO_MS = 5 * 60_000;
+/** Most recent ruler measurements given to the planner as context. */
+const MEASURED_CONTEXT = 5;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 /** Log text of a failed model call: a user cancel says so, anything else is the endpoint failure after `what`. */
@@ -1023,6 +1026,14 @@ export function useAssist() {
     notify({ source: 'Calibration', category: 'errors', severity: 'warning', title });
   }, [notify]);
   const ruler = useMeasure({ frames, framesRef, elementMap: measureMap, addLog, rescale: rescaleStored, onNeedBaseline: needBaseline });
+  /** Recent measurement lines (newest last) the planner reads as context. */
+  const measuredRef = useRef<string[]>([]);
+  /** Measures via the ruler (logged by it) and keeps the result line for planning context; throws loudly. */
+  const measureFor = useCallback((text: string, by: string): string => {
+    const line = ruler.measureQuery(text, by);
+    measuredRef.current = [...measuredRef.current, `Measured (${by}): ${line}`].slice(-MEASURED_CONTEXT);
+    return line;
+  }, [ruler.measureQuery]);
 
   const aiCheckSeqRef = useRef(0);
   /** Pings `url`+`model` with the health check and shows the result; a result overtaken by a newer check is dropped. */
@@ -2041,7 +2052,7 @@ export function useAssist() {
   const measureStep = (step: WorkflowStep, actor: string): Performed => {
     const target = { x: step.x, y: step.y };
     try {
-      return { ok: true, executed: true, message: ruler.measureQuery(step.text ?? step.target ?? step.name, actor), target };
+      return { ok: true, executed: true, message: measureFor(step.text ?? step.target ?? step.name, actor), target };
     } catch (error) {
       return { ok: false, executed: false, message: `Measurement failed — ${errorText(error)}`, target };
     }
@@ -2091,7 +2102,6 @@ export function useAssist() {
   };
 
   /** History gets real dispatches and verified dry runs; refused or unverified steps leave nothing. */
-  const recorded = (out: Performed, dryRun: boolean) => out.executed || (dryRun && out.ok);
   const historyWorthy = (out: Performed, dryRun: boolean) => out.executed || (dryRun && out.ok);
 
   /** Records a step's result on its route: a main-app failure is a main-app error; a desktop step is history and bridge health. */
@@ -2100,8 +2110,6 @@ export function useAssist() {
       if (out.bridgeFailed) captureError({ kind: 'main-app', message: out.message, goal: goalRef.current, step: step.name });
       return;
     }
-    if (out.executed) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
-    if (recorded(out, dryRun)) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
     if (historyWorthy(out, dryRun)) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
     noteBridge(step, out, actor);
   };
@@ -2117,7 +2125,6 @@ export function useAssist() {
     if (!plan) return refused(step, NO_SOURCE);
     if (plan.input === 'demo') {
       const out = await performOnDemo(step, dryRun);
-      if (recorded(out, dryRun)) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
       if (historyWorthy(out, dryRun)) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
       return out;
     }
@@ -3249,6 +3256,13 @@ export function useAssist() {
     setSteps(stepsRef.current);
   };
 
+  /** Workflow checkoff: "workflow complete" when the verified step checks off the last one, a red report when a step failed. */
+  const reportCheckoff = (index: number, out: Performed, verified: boolean) => {
+    const summary = checkoffSummary(stepsRef.current);
+    if (verified && workflowComplete(summary)) addLog('Workflow', completeText(summary), 'ok');
+    else if (!out.ok) addLog('Workflow', incompleteText(stepsRef.current, index, out.message), 'error');
+  };
+
   /** Writes a real outcome onto its step: done only when executed, failed otherwise; the tracer sees the step, then its screenshot verdict. */
   const applyOutcome = (index: number, out: Performed & { verdict?: StepVerdict | null }, dryRun: boolean, before: Frame | null = null) => {
     const c = out.correction;
@@ -3260,6 +3274,7 @@ export function useAssist() {
     const evidence = out.executed ? { beforeFrame: before ?? undefined, afterFrame: out.shot ?? framesRef.current[0] } : {};
     const verifiedAt = out.executed && out.verdict?.success ? Date.now() : undefined;
     updateStep(index, { status: out.executed ? 'done' : 'failed', verifiedAt, ...measured, ...(out.shot ? { shot: out.shot } : {}), ...evidence });
+    reportCheckoff(index, out, verifiedAt !== undefined);
     const step = stepsRef.current[index];
     if (step) {
       tracer.emit({ kind: 'step', stepId: step.id, name: step.name, ok: out.ok, executed: out.executed, detail: out.message });
@@ -3356,8 +3371,9 @@ export function useAssist() {
     addLog('Supervisor', `${text}. Run stopped — make a new plan to continue.`, 'error');
   };
 
-  /** Acts on a review: an OK plan resets the guard and takes its opportunities; a rejection re-plans or halts. */
+  /** Acts on a review: an OK plan resets the guard and takes its opportunities; a rejection re-plans or halts; an unassessed review acts on nothing. */
   const actOnReview = async (review: SupervisorReview, applied: boolean) => {
+    if (review.assessment === NO_ASSESSMENT) return;
     if (review.planOk) {
       replansRef.current = 0;
       return proposeOpportunities(review);
@@ -4456,7 +4472,9 @@ export function useAssist() {
     }
     applyPlan(text, routeToSteps(route), `Route ${routeText(route)}`);
     const out = await runReplay(false, { label: 'Route', goal: text });
-    if (!out || out.dryRun) return;
+    if (!out) return;
+    autoRouteTest(route);
+    if (out.dryRun) return;
     const ok = !out.stopped && out.total > 0 && out.ok === out.total;
     commitProfiles(ok ? recordProfileResult(saveProfile(routeProfilesRef.current, text, route.hops), text, true) : recordProfileResult(routeProfilesRef.current, text, false));
     addLog('Routes', ok ? `Route reached "${text}" — saved as its access-path profile` : `Route did not reach "${text}" — its profile records the miss`, ok ? 'ok' : 'warn');
@@ -4985,7 +5003,7 @@ export function useAssist() {
     planningRef.current = true;
     await withAi(async () => {
       try {
-        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [EXECUTION_MODES[settingsRef.current.executionMode].hint, ...knownInScope(), ...sectionContext(), ...trackingContext(elementMapRef.current), ...inventoryLines(inventoryRef.current), ...applied.map(habitLine), ...tracer.memory(text)], patternsRef.current, capabilityPrompt(capabilities.registry.list, AI)), planSummary);
+        const plan = await thought(`Plan: ${text}`, () => planFromGoal(text, cardsRef.current, framesRef.current[0] ?? null, askFor('planner'), [EXECUTION_MODES[settingsRef.current.executionMode].hint, ...knownInScope(), ...sectionContext(), ...trackingContext(elementMapRef.current), ...inventoryLines(inventoryRef.current), ...measuredRef.current, ...applied.map(habitLine), ...tracer.memory(text)], patternsRef.current, capabilityPrompt(capabilities.registry.list, AI)), planSummary);
         requested = plan.capabilities;
         if (!plan.steps.length) return;
         if (planGuardRef.current.after(plan.steps) === 'duplicate') {
@@ -5303,6 +5321,7 @@ export function useAssist() {
         const results = await runSubagents(tasks, (t) => runSubagent(t, dryRun), () => abortRef.current || abortedRef.current, (r) => setSubReport(report(r, false)), crew);
         setSubReport(report(results, true));
         addPatterns(reportPatterns(results, req.goal));
+        learnTestHabits(results, req.kind);
         results.forEach((r) => {
           if (r.status === 'pass' && r.point) forwardElement('supervisor', { name: r.target, x: r.point.x, y: r.point.y });
         });
@@ -5316,6 +5335,25 @@ export function useAssist() {
       subRunningRef.current = false;
       setSubRunning(false);
     }
+  };
+
+  /** A link/route test's passed and failed slices as habit outcomes on their targets (coordinate learner stage). */
+  const learnTestHabits = (results: SubagentReport['results'], kind: TestRequest['kind']) => {
+    if (!stageOn('coords')) return;
+    const context = `${kind}-test:${habitContext()}`;
+    const tested = results.filter((r) => r.status === 'pass' || r.status === 'fail');
+    commitHabits(tested.reduce((h, r) => recordOutcome(h, { target: r.target, context, success: r.status === 'pass', avoid: r.avoid, add: r.add }), habitsRef.current));
+  };
+
+  /**
+   * Automatic route test after a workflow used a route: its stops are tested by subagents in the
+   * background (never awaited by the run); skipped while another link/route test is running.
+   */
+  const autoRouteTest = (route: Route) => {
+    const stops = route.hops.map((h) => h.name);
+    if (stops.length < 2 || subRunningRef.current) return;
+    addLog('Supervisor', `Route used — testing ${stops.join(' > ')} in the background; results go into habits`, 'info');
+    void testRoutes({ kind: 'route', items: stops, goal: `Auto route test: ${stops.join(' > ')}` });
   };
 
   /** The step a wake decision concerns: the first pending one. */
@@ -5799,7 +5837,7 @@ export function useAssist() {
   /** "/measure A to B [to C…]": measured on the live frame, drawn, kept and logged; an unknown element is a loud error. */
   const measureCommand = async (query: string) => {
     try {
-      ruler.measureQuery(query, '/measure');
+      measureFor(query, '/measure');
     } catch (error) {
       addLog('/measure', `Measurement failed — ${errorText(error)}`, 'error');
     }
@@ -6801,7 +6839,7 @@ export function useAssist() {
     },
     exportHistory, snip: snipToLog, rulerToggle: ruler.toggle,
     recalibrate: () => (ruler.recalibrateNow('manual') ? 'recalibrated' : 'no baseline to recalibrate against'),
-    measure: ruler.measureQuery, toggleMapMode,
+    measure: measureFor, toggleMapMode,
     elements: () => [...elements.map((e) => `${e.name} at ${at(e.x, e.y)} (${e.source})`), ...elementMap.map((e) => `${e.name} at ${at(boxCenter(e.box).x, boxCenter(e.box).y)} (mapped)`)],
     testElement: (name, x, y) => testClick({ id: uid('el'), name, x, y, source: 'familiar' }),
     testRoutes: (spec) => testRoutes(parseTestSpec(spec)), supervise: superviseRun,
@@ -6862,8 +6900,7 @@ export function useAssist() {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
-    armed, aborted, abortedAt, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
-    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, avoidRules, clearBlacklist, supervisor, superviseRun,
+    armed, aborted, abortedAt, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, avoidRules, clearBlacklist, supervisor, superviseRun,
     ruler, continuing, habits, deleteHabit, pinHabit, runs, dossiers, preferPosition,
     /** The cross-referenced memory view: methods, element usage, paths, goals and positions. */
     memory: enhancedMemory,
