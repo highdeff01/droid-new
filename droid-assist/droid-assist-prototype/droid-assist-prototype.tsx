@@ -11,6 +11,8 @@ import { ApprovalsPanel } from './approvals-panel.js';
 import { StatsPanel } from './stats-panel.js';
 import { OperationMemoryPanel, MemoryPanel } from './memory-panel.js';
 import { LiveBriefingPanel } from './live-briefing-panel.js';
+import { AiResponsesPanel } from './ai-responses-panel.js';
+import { CurrentOperationPanel, PopupPanel } from './attention-panels.js';
 import { ArtifactsPanel } from './capabilities-panel.js';
 import { PersonaPanel } from './persona-panel.js';
 import { KnowledgePanel, PortfoliosPanel, ProfilePanel } from './knowledge-panel.js';
@@ -18,6 +20,7 @@ import { VariationsPanel } from './variations-panel.js';
 import { InventoryPanel, RetestPanel, RoutesPanel } from './screen-ai-panels.js';
 import { InitiativePanel } from './initiative-panel.js';
 import { GoalsPanel } from './goals-panel.js';
+import { CurrentOperationPanel } from './current-operation-panel.js';
 import { SystemPanel } from './system-panel.js';
 import { NotificationsPanel } from './notifications-panel.js';
 import { DatabasePanel } from './database-panel.js';
@@ -72,9 +75,69 @@ function AssistScreen() {
       <main className={styles.main}>
         <Hud engine={engine} />
         <LiveBriefingPanel engine={engine} />
+        <CurrentOperationPanel engine={engine} />
+        <PopupPanel engine={engine} />
         <div className={styles.work}>
           <Stage engine={engine} />
           <PanelBoard area="side" ids={layout.side} className={styles.side} renderPanel={renderPanel} onMove={onMove} />
+          <div className={styles.side}>
+            <CurrentOperationPanel engine={engine} />
+            <WorkflowPanel engine={engine} />
+            <VariationsPanel engine={engine} />
+            <PersonaPanel engine={engine} />
+            <RulerPanel engine={engine} />
+            <ElementsPanel engine={engine} />
+            <ElementMapPanel engine={engine} />
+            <SnipGalleryPanel engine={engine} />
+            <InventoryPanel engine={engine} />
+            <RoutesPanel engine={engine} />
+            <RetestPanel engine={engine} />
+            <SectionsPanel engine={engine} />
+            <LearnedCoordsPanel engine={engine} />
+            <LibraryPanel engine={engine} />
+            <PatternsPanel engine={engine} />
+            <OperationMemoryPanel engine={engine} />
+            <KnowledgePanel engine={engine} />
+            <ProfilePanel engine={engine} />
+            <StatsPanel engine={engine} />
+            <MemoryPanel engine={engine} />
+            <GoalsPanel engine={engine} />
+            <NotificationsPanel engine={engine} />
+            <SystemPanel engine={engine} />
+            <WatcherPanel engine={engine} />
+            <WakePanel engine={engine} />
+            <InitiativePanel engine={engine} />
+            <TriggersPanel engine={engine} />
+            <ProjectsPanel engine={engine} />
+            <ApprovalsPanel engine={engine} />
+            <ArtifactsPanel engine={engine} />
+            <PresentationPanel engine={engine} />
+            <OperationsPanel engine={engine} />
+          </div>
+        </div>
+        <div className={styles.bottom}>
+          <ComparisonGallery engine={engine} />
+          <AiHelpPanel engine={engine} />
+          <BriefingPanel engine={engine} />
+          <AiHistoryPanel engine={engine} />
+          <QwenThinkingPanel engine={engine} />
+          <AiResponsesPanel engine={engine} />
+          <SupervisorPanel engine={engine} />
+          <AgentsPanel engine={engine} />
+          <PortfoliosPanel engine={engine} />
+          <LoopControlPanel engine={engine} />
+          <CapabilitiesPanel engine={engine} />
+          <SettingsPanel engine={engine} />
+          <AgentBusPanel engine={engine} />
+          <CrewPanel engine={engine} />
+          <AgentCrewPanel engine={engine} />
+          <OpsAgentsPanel engine={engine} />
+          <SubagentReportPanel engine={engine} />
+          <ResolutionPanel engine={engine} />
+          <LogPanel engine={engine} />
+          <ErrorsPanel engine={engine} />
+          <ActionHistoryPanel engine={engine} />
+          <DatabasePanel engine={engine} />
         </div>
         <PanelBoard area="bottom" ids={layout.bottom} className={styles.bottom} renderPanel={renderPanel} onMove={onMove} />
       </main>

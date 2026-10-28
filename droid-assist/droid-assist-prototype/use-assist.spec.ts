@@ -331,7 +331,7 @@ describe('useAssist Qwen thinking timeline', () => {
     expect(kinds).toEqual(['check', 'verdict', 'reflection', 'proposal']);
     expect(result.current.timeline.find((e) => e.kind === 'check' && e.step === 'Drag Report to Archive')?.text).toMatch(/^PASS — "Report file"/);
     expect(result.current.timeline.some((e) => e.kind === 'thought' && e.thinking === 'Report is top-right.')).toBe(true);
-    expect(result.current.history[0]).toMatchObject({ action: 'drag', via: 'demo', ok: true, x: 864, y: 108, endX: 864, endY: 378 });
+    expect(result.current.history[0]).toMatchObject({ action: 'drag', via: 'demo', ok: true, x: 864, y: 108, endX: 864, endY: 378, dryRun: true, simulated: true });
   });
 });
 
@@ -356,7 +356,8 @@ describe('useAssist drag recorder and guardrails', () => {
     act(() => result.current.toggleArmed());
     await act(() => result.current.replay());
     expect(result.current.steps[0].status).toBe('done');
-    expect(result.current.history[0]).toMatchObject({ action: 'drag', via: 'demo', x: 864, y: 108, endX: 384, endY: 270 });
+    expect(result.current.history[0]).toMatchObject({ action: 'drag', via: 'demo', x: 864, y: 108, endX: 384, endY: 270, dryRun: true, simulated: true });
+    expect(result.current.history[0].message).toMatch(/^dry run — not dispatched/);
     expect(result.current.log.some((l) => /Dragged "Report"/.test(l.message))).toBe(true);
   });
 
@@ -392,7 +393,9 @@ describe('useAssist reverse of the last real action', () => {
     const result = await draggedOnDemo();
     act(() => result.current.toggleArmed());
     await act(() => result.current.reverseLast());
-    expect(result.current.history).toHaveLength(1);
+    expect(result.current.history).toHaveLength(2);
+    expect(result.current.history[0]).toMatchObject({ source: 'Reverse', dryRun: true });
+    expect(result.current.history[0].message).toMatch(/dry run — not dispatched/);
     expect(result.current.log.some((l) => l.source === 'Reverse' && /dry run/.test(l.message))).toBe(true);
     expect(result.current.reverse).not.toBeNull();
   });
@@ -481,7 +484,9 @@ describe('useAssist key and scroll recorder with human timing', () => {
   it('a disarmed replay of a key step sends nothing', async () => {
     const result = await recordKeys();
     await act(() => result.current.replay());
-    expect(result.current.history).toHaveLength(0);
+    // Disarmed: only entries labeled as dry runs — nothing dispatched.
+    expect(result.current.history.length).toBeGreaterThan(0);
+    expect(result.current.history.every((h) => h.dryRun && h.message.includes('dry run — not dispatched'))).toBe(true);
   });
 
   it('a key step is refused when aborted or when loop control has the executor unchecked', async () => {
@@ -643,7 +648,9 @@ describe('useAssist rearrangement on the demo desktop', () => {
   it('disarmed: a dry run sends nothing and runs no verification pass', async () => {
     stubAi(plan(0.55), replan(0, 0));
     const result = await arrange(false);
-    expect(result.current.history).toHaveLength(0);
+    // Disarmed: only entries labeled as dry runs — nothing dispatched.
+    expect(result.current.history.length).toBeGreaterThan(0);
+    expect(result.current.history.every((h) => h.dryRun && h.message.includes('dry run — not dispatched'))).toBe(true);
     expect(result.current.log.some((l) => l.source === 'Verify')).toBe(false);
   });
 
@@ -1130,6 +1137,16 @@ describe('useAssist agent forwarding and subagent link tests', () => {
     expect(result.current.annotations.some((a) => a.label === 'Watching: Search box')).toBe(true);
   });
 
+  it('records the agents\' replies to a forwarded element on the thinking timeline', () => {
+    const { result } = renderHook(() => useAssist());
+    act(() => result.current.forwardElement('popup', { name: 'Close button', x: 0.9, y: 0.1 }));
+    const reply = result.current.timeline.find((e) => e.kind === 'reply');
+    expect(reply).toMatchObject({ step: 'Popup watcher → "Close button"', thinking: null });
+    const handled = result.current.bus.filter((m) => m.from === 'popup' && m.status === 'handled');
+    expect(reply!.text.split('\n')).toHaveLength(handled.length);
+    expect(reply!.text).toContain(`Habit system: ${handled.find((m) => m.to === 'habits')!.note}`);
+  });
+
   it('/section and /scope seclude the goal to named sections; /scope all lifts it', async () => {
     const { result } = renderHook(() => useAssist());
     await act(async () => {});
@@ -1381,7 +1398,9 @@ describe('useAssist Screen watcher', () => {
     expect(result.current.watcher.tests[0]).toMatchObject({ proposalId: 'p1', verdict: 'passed', dryRun: true });
     expect(result.current.watcher.tests[0].happened).toMatch(/dry run — not dispatched/);
     expect(result.current.log.some((l) => l.source === 'Screen watcher' && /Test passed: Dry-run click/.test(l.message))).toBe(true);
-    expect(result.current.history).toHaveLength(0);
+    // Disarmed: only entries labeled as dry runs — nothing dispatched.
+    expect(result.current.history.length).toBeGreaterThan(0);
+    expect(result.current.history.every((h) => h.dryRun && h.message.includes('dry run — not dispatched'))).toBe(true);
     // A dry run shows the same visuals as a real one: the AI cursor travels to the verified target.
     expect(result.current.cursor).toEqual({ x: 0.42, y: 0.5 });
     expect(result.current.trail.length).toBeGreaterThanOrEqual(12);

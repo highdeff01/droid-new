@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowStep } from './types.js';
 import { AiError, type AskRequest } from './ai.js';
-import { applyFixes, executorBusy, habitPatterns, isConfident, parseReview, reviewRun, staleFixes, supervisorDigest, type SupervisorInput } from './supervisor.js';
+import { NO_ASSESSMENT, applyFixes, executorBusy, habitPatterns, isConfident, parseReview, reviewRun, staleFixes, supervisorDigest, type SupervisorInput } from './supervisor.js';
 
 const step = (id: string, patch: Partial<WorkflowStep> = {}): WorkflowStep => ({ id, name: `Step ${id}`, action: 'click', x: 0.1, y: 0.1, status: 'pending', ...patch });
 
@@ -12,7 +12,10 @@ const input = (steps: WorkflowStep[]): SupervisorInput => ({
     { id: 'l1', time: 1, source: 'Popup watcher', message: 'New content appeared at (40%, 30%)', tone: 'warn' },
     { id: 'l2', time: 1, source: 'You', message: 'clicked', tone: 'info' },
   ],
-  timeline: [{ id: 't1', time: 1, step: 'Step a', kind: 'verdict', text: 'FAILED · avoid: taskbar', thinking: null }],
+  timeline: [
+    { id: 't1', time: 1, step: 'Step a', kind: 'verdict', text: 'FAILED · avoid: taskbar', thinking: null },
+    { id: 't2', time: 1, step: 'Popup', kind: 'thought', text: 'Close the popup at (50%, 50%) PXTL', thinking: null },
+  ],
   frames: [],
   sync: { level: 'red', detail: 'target not found' },
   progress: { done: 2, manual: 1 },
@@ -25,9 +28,10 @@ describe('supervisorDigest', () => {
     expect(text).toContain('1. click "Step a" at (10.0%, 10.0%) — failed, drift 0.200');
     expect(text).toContain('Drift monitor sync: red — target not found');
     expect(text).toContain('Progress tracker: 2 verified step(s), 1 manual');
-    expect(text).toContain('[Popup watcher] New content appeared');
+    expect(text).not.toContain('Popup watcher');
     expect(text).not.toContain('[You]');
     expect(text).toContain('[verdict] Step a: FAILED · avoid: taskbar');
+    expect(text).not.toContain('PXTL');
   });
 });
 
@@ -41,9 +45,9 @@ describe('parseReview', () => {
     expect(r.habits).toEqual([{ kind: 'avoid', pattern: 'clicking the taskbar' }]);
   });
 
-  it('treats a missing confidence as 0 and never invents an assessment', () => {
+  it('treats a missing confidence as 0 and states plainly when no assessment could be produced', () => {
     expect(parseReview('{"plan_ok":true,"assessment":"fine"}', null, steps).confidence).toBe(0);
-    expect(() => parseReview('{"plan_ok":true}', null, steps)).toThrow(AiError);
+    expect(parseReview('{"plan_ok":true,"confidence":0.95,"step_fixes":[{"step":1,"x":0.2,"y":0.2}]}', null, steps)).toMatchObject({ assessment: NO_ASSESSMENT, confidence: 0 });
   });
 });
 
