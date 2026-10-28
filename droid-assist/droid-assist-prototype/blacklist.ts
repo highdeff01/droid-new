@@ -93,6 +93,8 @@ export interface FailureEvent {
   source: Exclude<AvoidSource, 'dismissal'>;
   ttl: number;
   now?: number;
+  /** The flagged popup/overlay box, when one is shown: a click inside it is a dismissal. */
+  obstacle?: ObstacleBox;
 }
 
 /** When a rule with these strikes expires: dismissal cooldown, the TTL once blocking, else the re-learn window. */
@@ -111,8 +113,8 @@ export function recordFailure(rules: AvoidRule[], e: FailureEvent): AvoidRule[] 
   if (isBlockOutcome(e.message) || !targetOf(e.step).trim()) return rules;
   const live = pruneRules(rules, now);
   const found = live.find((r) => scopeOf(r, e.step));
-  const source: AvoidSource = isDismissal(e.step) ? 'dismissal' : e.source;
   const p = pointOf(e.step);
+  const source: AvoidSource = isDismissal(e.step) || insideBox(e.obstacle, p?.x ?? null, p?.y ?? null) ? 'dismissal' : e.source;
   // One failure event (a whole retry ladder or test) is one strike, however many attempts it made.
   const strikes = (found?.strikes ?? 0) + 1;
   const rule: AvoidRule = {
@@ -124,17 +126,27 @@ export function recordFailure(rules: AvoidRule[], e: FailureEvent): AvoidRule[] 
 
 const related = (a: string, b: string) => similarity(a, b) > 0 || similarity(b, a) > 0;
 
+/** A flagged popup/overlay box, normalised like step points. */
+export interface ObstacleBox { x: number; y: number; w: number; h: number }
+const insideBox = (b: ObstacleBox | undefined, x: number | null, y: number | null) =>
+  !!b && x !== null && y !== null && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
+
+/** Whether `r` is about the obstacle: a dismissal cooldown, or a rule whose point lies inside the flagged box. */
+const onObstacle = (r: AvoidRule, box?: ObstacleBox) => r.source === 'dismissal' || insideBox(box, r.x, r.y);
+
 /**
  * The deadlock check of a blocked step: with a blocking obstacle detected on screen (the popup
- * watcher's flag) every blocking dismissal rule for that obstacle is returned to clear — for a step
- * that dismisses it, the rules of the same or a related target; for a step the obstacle covers, every
- * dismissal. Empty when no obstacle is detected or nothing of its dismissal is blacklisted.
+ * watcher's flag) every blocking rule for that obstacle (dismissal cooldowns and any rule whose point
+ * lies inside its box) is returned to clear — for a step that dismisses it, the rules of the same or
+ * a related target or inside the box; for a step the obstacle covers, every such rule. Empty when no
+ * obstacle is detected or nothing of its dismissal is blacklisted.
  */
-export function deadlockRules(rules: AvoidRule[], step: WorkflowStep, obstacleShown: boolean, now = Date.now()): AvoidRule[] {
+export function deadlockRules(rules: AvoidRule[], step: WorkflowStep, obstacleShown: boolean, now = Date.now(), box?: ObstacleBox): AvoidRule[] {
   if (!obstacleShown) return [];
   const dismissing = isDismissal(step);
   const target = targetOf(step);
-  return rules.filter((r) => r.source === 'dismissal' && isBlocking(r, now) && (!dismissing || sameTarget(r.target, target) || related(r.target, target)));
+  return rules.filter((r) => onObstacle(r, box) && isBlocking(r, now)
+    && (!dismissing || insideBox(box, r.x, r.y) || sameTarget(r.target, target) || related(r.target, target)));
 }
 
 /** `rules` without the given ones. */

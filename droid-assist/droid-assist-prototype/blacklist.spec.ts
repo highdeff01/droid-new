@@ -136,3 +136,20 @@ describe('single decisive reason', () => {
     expect(isAvoidRule({ ...rule, target: ' ' })).toBe(false);
   });
 });
+
+describe('popup button without a dismissal word', () => {
+  const box = { x: 0.3, y: 0.3, w: 0.4, h: 0.4 };
+  const ok = step({ id: 'ok', name: 'Click OK', target: 'OK', x: 0.5, y: 0.5 });
+  it('a failed click inside the flagged popup box is only a short cooldown', () => {
+    const rules = fail(fail([], ok, 0, { obstacle: box }), ok, 0, { obstacle: box });
+    expect(rules[0].source).toBe('dismissal');
+    expect(rules[0].expiresAt).toBe(DISMISS_COOLDOWN_MS);
+  });
+  it('a deadlock clears a blocking rule inside the popup box', () => {
+    const rules = learned(ok);
+    expect(rules[0].source).toBe('habit');
+    expect(deadlockRules(rules, step(), true, 0, box).map((r) => r.id)).toEqual([rules[0].id]);
+    expect(deadlockRules(rules, ok, true, 0, box)).toHaveLength(1);
+    expect(deadlockRules(rules, step(), false, 0, box)).toEqual([]);
+  });
+});

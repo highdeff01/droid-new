@@ -1367,7 +1367,7 @@ export function useAssist() {
 
   /** One fresh on-screen failure of `step` struck on its structured blacklist rule (a dismissal only ever gets a cooldown). */
   const strikeAvoid = (step: WorkflowStep, message: string, source: 'habit' | 'test') => {
-    commitAvoidRules(recordFailure(avoidRulesRef.current, { step, message, source, ttl: ttlMs(settingsRef.current.avoidTtlHours) }));
+    commitAvoidRules(recordFailure(avoidRulesRef.current, { step, message, source, ttl: ttlMs(settingsRef.current.avoidTtlHours), obstacle: popupRef.current ?? undefined }));
   };
 
   /** Clears one blacklist rule by id, or every rule for 'all'; the result says what was cleared. */
@@ -1386,7 +1386,7 @@ export function useAssist() {
    * dismissal rules for it are expired so the dismissal is re-attempted with fresh grounding.
    */
   const breakDeadlock = (step: WorkflowStep, actor: string) => {
-    const stuck = deadlockRules(avoidRulesRef.current, step, !!popupRef.current);
+    const stuck = deadlockRules(avoidRulesRef.current, step, !!popupRef.current, Date.now(), popupRef.current ?? undefined);
     if (!stuck.length) return;
     commitAvoidRules(withoutRules(avoidRulesRef.current, stuck));
     addLog(actor, `Deadlock cleared — a popup/overlay blocks the screen and its dismissal was blacklisted; expired ${stuck.map(ruleScope).join(', ')} — "${step.name}" re-attempts with fresh grounding`, 'warn');
