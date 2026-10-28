@@ -1230,6 +1230,7 @@ export function useAssist() {
         const text = thinkingOnlyNotice(reply.content);
         setTimeline((t) => addEntry(t, { step: `AI (${stage})`, kind: 'thought', text, thinking: reply.thinking }));
         addLog('AI', text, 'warn');
+        captureError({ kind: 'ai', message: `AI returned empty content for this ${stage} call — ${text}`, goal: goalRef.current });
       }
       return reply;
     } catch (error) {

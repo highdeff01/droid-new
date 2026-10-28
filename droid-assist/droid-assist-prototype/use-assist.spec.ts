@@ -311,6 +311,11 @@ describe('useAssist Qwen thinking timeline', () => {
     expect(result.current.timeline[0].error).toMatch(/unreachable.*Failed to fetch/);
   });
 
+  it('lists an empty-content (thinking-only) AI reply in the Errors panel', async () => {
+    const result = await askWith(chatReply({ content: '', thinking: 'just musing, nothing structured' }));
+    await vi.waitFor(() => expect(result.current.errors.some((e) => e.report.kind === 'ai' && /empty content/.test(e.report.message))).toBe(true));
+  });
+
   it('lists an AI-down failure in the Errors panel with forwarding off', async () => {
     const result = await askWith(vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
     expect(result.current.settings.errorForwarding).toBe(false);
