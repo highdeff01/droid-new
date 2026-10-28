@@ -41,6 +41,7 @@ import { sectionMemoryLines } from './sections.js';
 import { replicaLine } from './replicate.js';
 import { SIDE_TEST_MODES, feedbackLine, type SideTestMode } from './side-test.js';
 import { RecoverySettings, RelaxSettings } from './relax-recovery-settings.js';
+import { latestReports } from './agent-cadence.js';
 import styles from './droid-assist.module.css';
 
 const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity', wake: 'Wake', decision: 'Decision', error: 'Error' };
@@ -366,13 +367,15 @@ export function LoopControlPanel({ engine }: { engine: AssistEngine }) {
  */
 export function AgentsPanel({ engine }: { engine: AssistEngine }) {
   const { agents } = engine;
+  // The panel's Screen watcher is the cadence's screenWatcher agent.
+  const live = new Map(latestReports(engine.agentReports).map((r) => [r.agent === 'screenWatcher' ? 'screen' : r.agent, r.text]));
   return (
     <section className={styles.panel}>
       <h3>Agents</h3>
       {agents.map((a) => (
         <label key={a.id} className={styles.agent}>
           <input type="checkbox" checked={a.on} onChange={(e) => void engine.invoke(`agent.${a.id}`, { on: e.target.checked })} />
-          <span><strong>{a.name}</strong><small>{a.description}</small>{a.id === 'goalTracer' && <small aria-label="Goal tracer status">Live: {engine.tracerStatus}</small>}</span>
+          <span><strong>{a.name}</strong><small>{a.description}</small>{a.id === 'goalTracer' && <small aria-label="Goal tracer status">Live: {engine.tracerStatus}</small>}{live.has(a.id) && <small aria-label={`${a.name} live report`}>Now: {live.get(a.id)}</small>}</span>
         </label>
       ))}
     </section>
