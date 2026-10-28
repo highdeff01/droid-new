@@ -9,12 +9,15 @@ export function toStoredFrame({ id, time, url, srcW, srcH, source }: Frame): Sto
   return { id, time, url, srcW, srcH, source };
 }
 
+/** Every frame source a persisted frame may come from, so a template recorded on one source replays on another. */
+const FRAME_SOURCES: ReadonlySet<unknown> = new Set<Frame['source']>(['demo', 'screen', 'desktop', 'main-app']);
+
 /** True when `v` has the shape of a persisted frame. */
 export function isStoredFrame(v: unknown): v is StoredFrame {
   if (!v || typeof v !== 'object') return false;
   const f = v as Record<string, unknown>;
   return typeof f.id === 'number' && typeof f.time === 'number' && typeof f.url === 'string' && f.url.startsWith('data:image/')
-    && typeof f.srcW === 'number' && typeof f.srcH === 'number' && (f.source === 'demo' || f.source === 'screen');
+    && typeof f.srcW === 'number' && typeof f.srcH === 'number' && FRAME_SOURCES.has(f.source);
 }
 
 /** Rebuilds a full frame by decoding its JPEG into the 320×180 pixel buffer; null when it cannot be decoded. */

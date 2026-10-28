@@ -17,6 +17,8 @@ export type AgentToggle = (typeof AGENT_TOGGLES)[number];
 export interface AssistOps {
   plan: (goal: string) => Promise<boolean>;
   replay: (selfTest: boolean) => Promise<void>;
+  /** The end-to-end AI self-test (plan → ground → execute → verify on the live frame); resolves its report line. */
+  selfTest: () => Promise<string>;
   stop: () => void;
   toggleRecording: () => void;
   setStage: (id: StageId, on: boolean) => void;
@@ -46,12 +48,18 @@ export interface AssistOps {
   sections: (goal: string) => Promise<string[]>;
   ask: (question?: string) => Promise<string>;
   verifyScreen: (goal: string) => Promise<string>;
+  /** Template-matches the next step's target on the current source's live frame: its sync level, or why it cannot. */
+  driftCheck: () => Promise<string>;
   reverseLast: () => Promise<void>;
   setArmed: (on: boolean) => void;
   abort: (reason: string) => void;
   clearAbort: () => void;
   setBudget: (limit: number) => string;
   status: () => AssistStatus;
+  /** Every structured blacklist rule as one line (id, scope, source, state, expiry). */
+  blacklist: () => string[];
+  /** Clears one blacklist rule by id, or all of them for 'all'; the result says what was cleared. */
+  clearBlacklist: (id?: string) => string;
 }
 
 type Ops = () => AssistOps;
@@ -74,6 +82,7 @@ function pipelineCaps(ops: Ops): Capability[] {
       await ops().replay(p.selfTest === true);
       return `${p.selfTest ? 'self-test' : 'playback'} finished — see the log`;
     }, { realInput: true }),
+    cap('selftest.run', 'AI self-test: plan → ground → execute → verify a goal end to end on the live frame (dry run unless armed)', {}, () => ops().selfTest(), { realInput: true, stage: 'selfTest' }),
     cap('replay.stop', 'Stop the running replay', {}, () => {
       ops().stop();
       return 'stopped';
@@ -132,6 +141,8 @@ function libraryCaps(ops: Ops): Capability[] {
       return 'trigger fired — see the log';
     }, { realInput: true }),
     cap('trigger.list', 'List triggers', {}, () => list(ops().triggers(), 'no triggers'), { readOnly: true }),
+    cap('blacklist.list', 'List the active blacklist (structured avoid rules: scope, source, state, expiry)', {}, () => list(ops().blacklist(), 'blacklist empty'), { readOnly: true }),
+    cap('blacklist.clear', 'Clear one blacklist entry by id, or every entry with "all"', { id: str('rule id, or "all" (default)', false) }, (p) => ops().clearBlacklist(typeof p.id === 'string' && p.id.trim() ? p.id.trim() : 'all')),
   ];
 }
 
@@ -144,6 +155,7 @@ function readCaps(ops: Ops): Capability[] {
     cap('sections.list', 'Screen sections the AI sees for a goal', { goal: str('what to list (e.g. "the nav links")') }, async (p) => list(await ops().sections(String(p.goal)), 'no sections found'), { readOnly: true }),
     cap('research.ask', 'Side research: ask the AI about the live screen', { question: str('question (default: what needs attention)', false) }, (p) => ops().ask(p.question as string | undefined), { readOnly: true }),
     cap('screen.verify', 'Screenshot verification: is the goal complete on the live screen?', { goal: str('goal (default: the current one)', false) }, (p) => ops().verifyScreen(String(p.goal ?? '')), { readOnly: true }),
+    cap('drift.check', 'Drift check: is the next step\'s target where it was recorded on the live screen (any capture source)?', {}, () => ops().driftCheck(), { readOnly: true }),
     cap('ruler.measure', 'Measure distances, e.g. "Files icon to left edge"', { text: str('endpoints joined by " to "') }, (p, r) => ops().measure(String(p.text), r.kind), { readOnly: true }),
     cap('snip.capture', 'Snip tool: crop a box of the live frame into the log', { x: unit('left'), y: unit('top'), w: unit('width'), h: unit('height') }, (p) => ops().snip({ x: Number(p.x), y: Number(p.y), w: Number(p.w), h: Number(p.h) }), { readOnly: true }),
   ];

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { failurePattern, flowCard, learnPatterns, mergePatterns, runVerdict, upsertCard } from './flow-memory.js';
+import { AVOID_PER_GOAL, failurePattern, flowCard, learnPatterns, mergePatterns, runVerdict, upsertCard } from './flow-memory.js';
 import { AiError } from './ai.js';
+import { FAILURE_PATTERN_SUFFIX } from './operation-memory.js';
 import type { AskFn } from './ai.js';
 import type { Frame, LearnedPattern, SavedCard, WorkflowStep } from './types.js';
 
@@ -67,6 +68,11 @@ describe('failurePattern', () => {
     expect(p.pattern).toContain('Click Start');
     expect(p.pattern).not.toContain('Step a');
   });
+
+  it('scopes a pointer step to its element and drift-corrected coordinates, a key step to its name', () => {
+    const p = failurePattern('fill A1', [step('b', 'failed', { name: 'Click 2', target: 'Cell A1', correctedX: 0.125, correctedY: 0.3 }), step('c', 'pending', { name: 'Press Enter', action: 'key', text: 'Enter' })]);
+    expect(p.pattern).toBe(`Step "Click 2" (click on "Cell A1" at (12.5%, 30.0%)), "Press Enter" (key) ${FAILURE_PATTERN_SUFFIX}`);
+  });
 });
 
 describe('learnPatterns', () => {
@@ -89,5 +95,25 @@ describe('mergePatterns', () => {
     const p = (id: string, kind: LearnedPattern['kind'], pattern: string): LearnedPattern => ({ id, kind, pattern, context: '', time: 0 });
     const merged = mergePatterns([p('1', 'avoid', 'Close popup first'), p('2', 'add', 'wait')], [p('3', 'avoid', 'close popup first'), p('4', 'add', 'close popup first')]);
     expect(merged.map((x) => x.id)).toEqual(['3', '4', '2']);
+  });
+
+  const avoid = (id: string, pattern: string, context = 'move mouse to file icon'): LearnedPattern => ({ id, kind: 'avoid', pattern, context, time: 0 });
+
+  it('merges a near-duplicate avoid lesson of the same goal into the newest', () => {
+    const merged = mergePatterns([avoid('old', 'Do not click the files icon before the popup closes')], [avoid('new', 'Never click the files icon before the popup is closed')]);
+    expect(merged.map((x) => x.id)).toEqual(['new']);
+  });
+
+  it('keeps a similar lesson of another goal and distinct lessons of one goal', () => {
+    const merged = mergePatterns([avoid('a', 'Do not click the files icon before the popup closes', 'open mail')], [avoid('b', 'Never click the files icon before the popup is closed'), avoid('c', 'Dragging the taskbar resizes it')]);
+    expect(merged.map((x) => x.id)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('caps avoid lessons at AVOID_PER_GOAL per goal, newest kept; add lessons are not capped', () => {
+    const lessons = ['alpha clicks fail', 'bravo scroll overshoots', 'charlie drag misses', 'delta typing lost', 'echo hover flickers'].map((t, i) => avoid(`${i}`, t));
+    const merged = mergePatterns([{ id: 'add', kind: 'add', pattern: 'wait', context: 'move mouse to file icon', time: 0 }], lessons);
+    expect(merged.filter((x) => x.kind === 'avoid').map((x) => x.id)).toEqual(['0', '1', '2']);
+    expect(AVOID_PER_GOAL).toBe(3);
+    expect(merged.some((x) => x.id === 'add')).toBe(true);
   });
 });

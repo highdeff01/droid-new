@@ -109,6 +109,7 @@ describe('main app bridge — connection lifecycle', () => {
   });
 
   it('listen mode in a plain browser (no desktop listener) reports the plain error instead of waiting', async () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ mainBridgeMode: 'listen' }));
     const { result } = renderHook(() => useAssist());
     await act(async () => {});
     expect(result.current.mainBridge).toMatchObject({ status: 'error', lastError: LISTEN_NEEDS_DESKTOP });
@@ -191,6 +192,13 @@ describe('main app bridge — frames as a capture source', () => {
 
 describe('main app bridge — commands and intercept routing', () => {
   const el = { id: 'el1', name: 'Save button', x: 0.3, y: 0.6, source: 'familiar' as const };
+  /** Connected with one mirrored frame: steps are verified on the mirror like any captured source. */
+  async function mirrored(reply: (env: Sent) => Record<string, unknown> | null) {
+    const c = await connected(reply);
+    act(() => c.bridge.handlers!.onMessage(inbound('frame', { image: 'data:image/jpeg;base64,AA', width: 1280, height: 720 })));
+    await settle();
+    return c;
+  }
 
   it('dry-runs a replay on the connected main-app frame without the desktop bridge', async () => {
     const calls: string[] = [];
@@ -206,13 +214,13 @@ describe('main app bridge — commands and intercept routing', () => {
     await act(() => result.current.replay());
 
     expect(result.current.steps[0].status).toBe('pending');
-    expect(result.current.log.some((l) => l.message.includes('verified on the main-app frame'))).toBe(true);
+    expect(result.current.log.some((l) => l.message.includes('verified on the last captured frame'))).toBe(true);
     expect(calls.some((url) => url.includes('/api/health') || url.includes('/api/replay'))).toBe(false);
     expect(sentOf(bridge.sent, 'run_script')).toHaveLength(0);
   });
 
   it('armed: a click on the main-app source is sent as run_script and the main app result is the outcome', async () => {
-    const { bridge, result } = await connected((env) => (env.type === 'run_script' ? { ok: true, message: 'clicked Save' } : null));
+    const { bridge, result } = await mirrored((env) => (env.type === 'run_script' ? { ok: true, message: 'clicked Save' } : null));
     act(() => result.current.toggleArmed());
     await act(() => result.current.testClick(el));
     const scripts = sentOf(bridge.sent, 'run_script');
@@ -222,11 +230,36 @@ describe('main app bridge — commands and intercept routing', () => {
   });
 
   it('a failed run_script fails the step loudly and is forwarded as a main-app error', async () => {
-    const { result } = await connected((env) => (env.type === 'run_script' ? { ok: false, message: 'preview not focused' } : null));
+    const { result } = await mirrored((env) => (env.type === 'run_script' ? { ok: false, message: 'preview not focused' } : null));
     act(() => result.current.toggleArmed());
     await act(() => result.current.testClick(el));
     expect(result.current.log.find((l) => l.source === 'Test click')?.message).toMatch(/preview not focused/);
     expect(result.current.errors.find((e) => e.report.kind === 'main-app')?.report.message).toMatch(/preview not focused/);
+  });
+
+  it('replay on the mirror runs the step pipeline: dry run verifies on the mirrored frame, armed sends run_script — no desktop bridge needed', async () => {
+    const { bridge, result } = await mirrored((env) => (env.type === 'run_script' ? { ok: true, message: 'clicked Save' } : null));
+    act(() => result.current.setSteps([{ id: 's1', name: 'Click Save', action: 'click', x: 0.3, y: 0.6, refFrame: result.current.frames[0], status: 'pending' }]));
+    await act(() => result.current.replay(true));
+    const selfTest = result.current.log.filter((l) => l.source === 'Self-test').map((l) => l.message);
+    expect(selfTest.some((m) => /"Click Save": drift 0px/.test(m))).toBe(true);
+    expect(selfTest.some((m) => /Click Save: verified on the last captured frame — dry run — not dispatched/.test(m))).toBe(true);
+    expect(sentOf(bridge.sent, 'run_script')).toHaveLength(0);
+    act(() => result.current.toggleArmed());
+    await act(() => result.current.replay());
+    expect(sentOf(bridge.sent, 'run_script').map((s) => s.payload)).toEqual([expect.objectContaining({ action: 'click', x: 0.3, y: 0.6 })]);
+    expect(result.current.log.some((l) => l.source === 'Replay' && /Click Save: Main app: clicked Save/.test(l.message))).toBe(true);
+  });
+
+  it('replay on the mirror while the main app is disconnected is refused before any step', async () => {
+    const { bridge, result } = await mirrored(() => null);
+    act(() => result.current.setSteps([{ id: 's1', name: 'Click Save', action: 'click', x: 0.3, y: 0.6, status: 'pending' }]));
+    act(() => bridge.handlers!.onClose('socket closed'));
+    act(() => {
+      result.current.selectMainApp();
+    });
+    await act(() => result.current.replay(true));
+    expect(result.current.log.some((l) => l.source === 'Self-test' && /no step was executed/.test(l.message))).toBe(true);
   });
 
   it('reports state to the main app when arming changes', async () => {

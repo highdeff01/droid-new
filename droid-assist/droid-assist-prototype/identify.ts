@@ -1,7 +1,7 @@
 import type { Frame } from './types.js';
 import type { Box, Thought } from './assist-ai.js';
-import { gridPrompt, gridRef, replyPoint } from './grid.js';
-import { SAMPLE_VIEW, parseJsonReply, type ViewSize } from './ai.js';
+import { GRID_COLS, GRID_ROWS, axisFraction, cellAt, cellLabel, gridPrompt, gridRef, numberOf, parseCell, resolveCell } from './grid.js';
+import { AiParseError, AiSchemaError, SAMPLE_VIEW, parseJsonReply, type ViewSize } from './ai.js';
 import { fullUrl } from './grounding.js';
 import type { AiReply, AskRequest } from './ai.js';
 import { boxCenter, mapCell, mapCells, type MappedElement } from './element-map-studio.js';
@@ -135,14 +135,27 @@ export function characteristics(input: IdentifyInput): string[] {
   ];
 }
 
-/** System prompt of the identification request for a `view`-sized screenshot: the reply contract. */
+/** The only reply shape the identifier accepts. */
+export const IDENTIFY_SCHEMA = '{"found":boolean,"cell":string|null,"x":number|null,"y":number|null,"confidence":number}';
+
+/** System prompt of the identification request for a `view`-sized screenshot: the JSON-only reply contract. */
 export const identifySystem = (view: ViewSize) => `You are Droid Assist's element identifier. The first image is the user's full screen (${view.w}x${view.h}); the second is a zoomed crop of one region of it, taken from the full-resolution screen, followed by that region's measured characteristics.
 ${gridPrompt(view)}
 Identify the element and give its clickable centre on the FULL screen. Use the boundary box, the grid cells and the distances from the user's mapped elements to measure it.
-Reply ONLY with JSON {"found":boolean,"name":string,"cell":string,"cx":number,"cy":number,"reason":string}. Set found=false if the element cannot be identified.`;
+Reply with ONLY this JSON object and nothing else — no prose, no markdown: ${IDENTIFY_SCHEMA}.
+"cell" is the grid cell holding the element's centre (e.g. "C5"); "x","y" are that centre as fractions 0..1 of the screenshot's width and height (null when you give only the cell); "confidence" is 0..1. Set found=false with null cell/x/y when the element cannot be identified.`;
 
 /** The identification system prompt for a sample-space (480x270) screenshot. */
 export const IDENTIFY_SYSTEM = identifySystem(SAMPLE_VIEW);
+
+/** One filled example of IDENTIFY_SCHEMA, quoted in every retry. */
+export const IDENTIFY_EXAMPLE = '{"found":true,"cell":"C5","x":0.375,"y":0.3125,"confidence":0.9}';
+
+/** The correction a retry carries after an unusable reply: what was wrong, the exact schema and one filled example. */
+export const retryFeedback = (problem: string) => `${problem}. Reply with ONLY this JSON object: ${IDENTIFY_SCHEMA} — for example ${IDENTIFY_EXAMPLE}`;
+
+/** Below this confidence a found element is retried instead of verified and moved to. */
+export const MIN_IDENTIFY_CONFIDENCE = 0.5;
 
 /** The identification request for one element; `feedback` says why the previous proposal failed. */
 export function identifyRequest(input: IdentifyInput, feedback?: string): AskRequest {
@@ -150,20 +163,106 @@ export function identifyRequest(input: IdentifyInput, feedback?: string): AskReq
   return { system: identifySystem, prompt: lines.join('\n'), frame: input.frame, crops: [input.crop], context: [], json: true };
 }
 
-/** The model's identification: the element's name and a point on the full screen, or not found. */
-export type Identification = ({ found: true; name: string; x: number; y: number; reason: string } | { found: false; reason: string }) & Thought;
+/**
+ * The model's identification: the element's name, a point on the full screen and its confidence
+ * (`note` says when x,y disagreed with the named cell), or not found (`blocker` names what covers it).
+ */
+export type Identification = ({ found: true; name: string; x: number; y: number; confidence: number; reason: string; note?: string } | { found: false; reason: string; blocker?: string }) & Thought;
 
-/** Parses an identification reply; throws AiError on a malformed reply. */
+type Raw = Record<string, unknown>;
+type Located = Pick<Extract<Identification, { found: true }>, 'x' | 'y' | 'note'>;
+
+const BOOL_WORDS: Record<string, boolean> = { true: true, yes: true, false: false, no: false };
+const NOT_FOUND = /not[\s_-]*found|not[\s_-]*visible|missing|absent|none/i;
+
+const textOf = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+const show = (v: unknown) => (v === undefined ? 'nothing' : JSON.stringify(v));
+const isRaw = (v: unknown): v is Raw => !!v && typeof v === 'object' && !Array.isArray(v);
+const hasXY = (r: Raw) => numberOf(r.x) !== null && numberOf(r.y) !== null;
+const hasLocation = (r: Raw) => parseCell(r.cell) !== null || hasXY(r);
+
+/** "found" as given (boolean or yes/no word), else inferred: true with a location, false for a not-found status or an all-null location; null when it cannot be told. */
+function foundOf(r: Raw): boolean | null {
+  if (typeof r.found === 'boolean') return r.found;
+  const word = BOOL_WORDS[textOf(r.found).toLowerCase()];
+  if (word !== undefined) return word;
+  if (hasLocation(r)) return true;
+  if (NOT_FOUND.test(`${textOf(r.status)} ${textOf(r.result)}`)) return false;
+  return r.cell === null && r.x === null && r.y === null ? false : null;
+}
+
+/** A popup finding as the blocker text: its label and cell when given. */
+function popupText(f: Raw): string {
+  const label = textOf(f.label) || textOf(f.title) || textOf(f.name) || textOf(f.text) || textOf(f.description);
+  const cell = parseCell(f.cell) ? ` in ${textOf(f.cell).toUpperCase()}` : '';
+  return `a popup${label ? ` ("${label}")` : ''}${cell}`;
+}
+
+/** The {"findings":[...]} shape as an identification reply: a popup is the blocker, else the first located finding is the target. */
+function fromFindings(findings: unknown[], r: Raw): Raw {
+  const items = findings.filter(isRaw);
+  const popup = items.find((f) => textOf(f.kind).toLowerCase() === 'popup');
+  if (popup) return { found: false, blocker: popupText(popup), reason: `blocked by ${popupText(popup)}` };
+  const target = items.find(hasLocation);
+  return target ? { confidence: r.confidence, ...target, found: true } : { found: false, reason: textOf(r.reason) || 'no finding located the element' };
+}
+
+/** The reply object, with the findings shape mapped onto the identification fields. */
+function identificationRaw(content: string): Raw {
+  const r = parseJsonReply(content);
+  return Array.isArray(r.findings) && typeof r.found !== 'boolean' && !hasLocation(r) ? fromFindings(r.findings, r) : r;
+}
+
+/** Confidence 0..1 (a value above 1 read as a percent); throws AiSchemaError naming "confidence" when it is not a number. */
+function confidenceOf(r: Raw): number {
+  const n = numberOf(r.confidence);
+  if (n === null) throw new AiSchemaError('confidence', `"confidence" must be a number 0..1 (got ${show(r.confidence)})`);
+  return Math.min(1, Math.max(0, n > 1 ? n / 100 : n));
+}
+
+/**
+ * The located point: x,y normalized by magnitude (fraction, grid units, percent or view pixels);
+ * a valid cell wins when x,y are missing or lie outside it (the disagreement is kept as `note`).
+ */
+function locate(r: Raw, view: ViewSize): Located {
+  const x = axisFraction(r.x, GRID_COLS, view.w);
+  const y = axisFraction(r.y, GRID_ROWS, view.h);
+  const xy = x !== null && y !== null ? { x, y } : null;
+  const fromCell = resolveCell(r.cell, r.cx, r.cy);
+  if (!fromCell) {
+    if (xy) return xy;
+    throw new AiSchemaError('cell', `the reply said found=true but gave no valid cell and no x,y: "cell" must be A1..H12 (got ${show(r.cell)}) or "x","y" numbers (got ${show(r.x)}, ${show(r.y)})`);
+  }
+  if (!xy) return fromCell;
+  const named = textOf(r.cell).toUpperCase();
+  const at = cellLabel(cellAt(xy));
+  return at === cellLabel(cellAt(fromCell)) ? xy : { ...fromCell, note: `x,y ${show(r.x)},${show(r.y)} fall in ${at}, not the named cell ${named} — using the cell ${named}` };
+}
+
+/**
+ * Parses an identification reply: any JSON object in it is accepted (only a reply holding none
+ * throws AiParseError). "found" is inferred when missing (see foundOf); found=true needs a numeric
+ * "confidence" and a location, each missing field throwing AiSchemaError that names it.
+ */
 export function parseIdentification(reply: AiReply, fallbackName: string): Identification {
-  const r = parseJsonReply(reply.content);
-  const reason = String(r.reason ?? '');
-  if (r.found !== true) return { found: false, reason, thinking: reply.thinking };
-  const name = typeof r.name === 'string' && r.name.trim() ? r.name.trim() : fallbackName;
-  return { found: true, name, ...replyPoint(r, undefined, reply.view), reason, thinking: reply.thinking };
+  const r = identificationRaw(reply.content);
+  const found = foundOf(r);
+  if (found === null) throw new AiSchemaError('found', `"found" must be a boolean (got ${show(r.found)}) and the reply gave no valid cell or x,y to infer it from`);
+  const reason = textOf(r.reason);
+  if (!found) return { found: false, reason, ...(typeof r.blocker === 'string' ? { blocker: r.blocker } : {}), thinking: reply.thinking };
+  const confidence = confidenceOf(r);
+  const name = textOf(r.name) || fallbackName;
+  return { found: true, name, ...locate(r, reply.view ?? SAMPLE_VIEW), confidence, reason, thinking: reply.thinking };
 }
 
 /** One verification of a proposed point by the agent test. */
 export type AgentCheck = { ok: true; x: number; y: number; message: string } | { ok: false; message: string };
+
+/** The movement dispatched to a verified point. */
+export interface MoveResult {
+  ok: boolean;
+  message: string;
+}
 
 /** What the identify-and-verify loop needs from its host. */
 export interface IdentifyLoop {
@@ -171,16 +270,20 @@ export interface IdentifyLoop {
   identify: (feedback?: string) => Promise<Identification>;
   /** The agent test: dry-run move to the point and verify it against the live frame. */
   verify: (id: Extract<Identification, { found: true }>) => Promise<AgentCheck>;
+  /** Dispatches the movement to the verified point at once (through the host's guardrails); omitted = verify only. */
+  move?: (p: { name: string; x: number; y: number }) => Promise<MoveResult>;
   /** True once the run was aborted: no further try is started. */
   aborted: () => boolean;
   log: (message: string, tone: 'info' | 'ok' | 'warn' | 'error') => void;
   now?: () => number;
   tries?: number;
   windowMs?: number;
+  /** Lowest confidence that is verified and moved to (MIN_IDENTIFY_CONFIDENCE). */
+  minConfidence?: number;
 }
 
-/** The loop's result: the verified, corrected point, or why it gave up. */
-export type IdentifyOutcome = { verified: true; name: string; x: number; y: number; tries: number } | { verified: false; tries: number; reason: string };
+/** The loop's result: the verified, corrected point (and the dispatched move, when the host moves), or why it gave up. */
+export type IdentifyOutcome = { verified: true; name: string; x: number; y: number; tries: number; moved?: MoveResult } | { verified: false; tries: number; reason: string; blocker?: string };
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -193,19 +296,54 @@ function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
-/** One try: identify, then verify; resolves the accepted point or the failure feedback. */
-async function oneTry(loop: IdentifyLoop, feedback: string | undefined): Promise<{ id: Extract<Identification, { found: true }>; check: Extract<AgentCheck, { ok: true }> } | { feedback: string }> {
-  const id = await loop.identify(feedback);
-  if (!id.found) return { feedback: `the element was not identified (${id.reason || 'no reason given'})` };
+type TryResult = { id: Extract<Identification, { found: true }>; check: Extract<AgentCheck, { ok: true }> } | { feedback: string } | { blocker: string };
+
+/** What was wrong with an unusable reply, for the retry: no JSON object at all, or the field that broke the schema. */
+function replyProblem(error: unknown): string | null {
+  if (error instanceof AiParseError) return `your reply held no JSON object (got: ${error.raw})`;
+  if (error instanceof AiSchemaError) return `your reply's "${error.field}" field was wrong: ${error.message}`;
+  return null;
+}
+
+/** The identification, or the feedback for the next try when the reply was unusable (schema and a filled example quoted). */
+async function identifyOnce(loop: IdentifyLoop, feedback: string | undefined): Promise<Identification | { feedback: string }> {
+  try {
+    return await loop.identify(feedback);
+  } catch (error) {
+    const problem = replyProblem(error);
+    if (problem) return { feedback: retryFeedback(problem) };
+    throw error;
+  }
+}
+
+/** One try: identify (JSON only), gate on confidence, then verify; resolves the accepted point, the blocker or the failure feedback. */
+async function oneTry(loop: IdentifyLoop, feedback: string | undefined): Promise<TryResult> {
+  const id = await identifyOnce(loop, feedback);
+  if ('feedback' in id) return id;
+  if (!id.found) return id.blocker ? { blocker: id.blocker } : { feedback: `the element was not identified (${id.reason || 'no reason given'})` };
+  if (id.note) loop.log(`Identify "${id.name}": ${id.note}`, 'warn');
+  const min = loop.minConfidence ?? MIN_IDENTIFY_CONFIDENCE;
+  if (id.confidence < min) return { feedback: `confidence ${id.confidence.toFixed(2)} for "${id.name}" at ${gridRef(id)} is below ${min} — look again and reply with a confident location` };
   const check = await loop.verify(id);
   return check.ok ? { id, check } : { feedback: `"${id.name}" at ${gridRef(id)} failed the agent test: ${check.message}` };
 }
 
+/** Dispatches the move to the verified point (when the host moves) and logs it. */
+async function moveTo(loop: IdentifyLoop, name: string, x: number, y: number): Promise<MoveResult | undefined> {
+  if (!loop.move || loop.aborted()) return undefined;
+  const moved = await loop.move({ name, x, y }).catch((error: unknown) => ({ ok: false, message: errorText(error) }));
+  loop.log(`Move to "${name}" at ${gridRef({ x, y })}: ${moved.message}`, moved.ok ? 'ok' : 'warn');
+  return moved;
+}
+
 /**
  * Identification with an agent test: up to `tries` (3) identify → verify rounds within
- * `windowMs` (30 s), whichever limit is reached first. A verified proposal resolves with the
- * agent's corrected point; otherwise it logs plainly and resolves unverified — it never throws,
- * so the caller continues with its current plan. An abort stops before the next try.
+ * `windowMs` (30 s), whichever limit is reached first. An unusable reply (no JSON object, or a
+ * wrong field) is retried with the exact schema and a filled example; a low-confidence one with a
+ * request to look again; a reported popup stops at once as the blocker. A verified proposal
+ * dispatches the move at once (when the host gives `move`) and resolves with the agent's
+ * corrected point; otherwise it logs plainly and resolves unverified — it never throws, so the
+ * caller continues with its current plan. An abort stops before the next try.
  */
 export async function identifyAndVerify(loop: IdentifyLoop): Promise<IdentifyOutcome> {
   const now = loop.now ?? Date.now;
@@ -219,9 +357,11 @@ export async function identifyAndVerify(loop: IdentifyLoop): Promise<IdentifyOut
     if (left <= 0) break;
     try {
       const r = await withDeadline(oneTry(loop, feedback), left);
+      if ('blocker' in r) return blocked(loop, k + 1, r.blocker);
       if ('id' in r) {
         loop.log(`Identified "${r.id.name}" on try ${k + 1}/${tries} — agent test passed: ${r.check.message}`, 'ok');
-        return { verified: true, name: r.id.name, x: r.check.x, y: r.check.y, tries: k + 1 };
+        const moved = await moveTo(loop, r.id.name, r.check.x, r.check.y);
+        return { verified: true, name: r.id.name, x: r.check.x, y: r.check.y, tries: k + 1, ...(moved ? { moved } : {}) };
       }
       feedback = r.feedback;
       loop.log(`Try ${k + 1}/${tries}: ${feedback}`, 'warn');
@@ -237,6 +377,13 @@ function giveUp(loop: IdentifyLoop, tries: number, last: string): IdentifyOutcom
   const reason = `Could not find or verify the element after ${tries} tries / ${Math.round((loop.windowMs ?? IDENTIFY_WINDOW_MS) / 1000)}s (last: ${last}) — giving up; the main process continues with its current plan`;
   loop.log(reason, 'error');
   return { verified: false, tries, reason };
+}
+
+/** The model reported a popup covering the screen: stop at once and report it as the blocker (no tries burned on it). */
+function blocked(loop: IdentifyLoop, tries: number, blocker: string): IdentifyOutcome {
+  const reason = `Blocked by ${blocker} — the element cannot be reached until it is dismissed`;
+  loop.log(reason, 'warn');
+  return { verified: false, tries, reason, blocker };
 }
 
 /** A changed region seen by the frame-diff watcher and when it changed. */

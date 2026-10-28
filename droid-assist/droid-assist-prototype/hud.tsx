@@ -1,5 +1,6 @@
 import type { AssistEngine } from './use-assist.js';
-import type { MonitorMode, ScreenSource, SyncLevel } from './types.js';
+import type { MonitorMode, SyncLevel } from './types.js';
+import type { CaptureStatus } from './capture-source.js';
 import type { AiConfig, AiStatus } from './ai.js';
 import { MONITOR_MODES } from './capture.js';
 import { insecureBridgeUrl } from './bridge.js';
@@ -9,11 +10,12 @@ import { EXECUTION_MODES, MODE_IDS, type ExecutionMode } from './execution-mode.
 import { MAX_SHIFT_LIMIT, sanitizeAutoApply, type AutoApplyBounds } from './aggressive.js';
 import type { MainBridgeState, MainBridgeStatus } from './main-bridge.js';
 import styles from './droid-assist.module.css';
+import { abortBannerText } from './abort-latch.js';
+import { NEED_BASELINE } from './use-measure.js';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
-const SOURCE_LABEL: Record<ScreenSource, string> = { none: 'None', demo: 'Demo desktop', screen: 'Screen capture', bridge: 'Desktop bridge', 'main-app': 'Main app preview' };
-const AI_LEVEL: Record<AiStatus['state'], SyncLevel> = { online: 'green', checking: 'yellow', offline: 'red' };
-const AI_LABEL: Record<AiStatus['state'], string> = { online: 'AI connected', checking: 'AI connecting…', offline: 'AI unavailable' };
+const AI_LEVEL: Record<AiStatus['state'], SyncLevel> = { online: 'green', checking: 'yellow', offline: 'red', backoff: 'yellow' };
+const AI_LABEL: Record<AiStatus['state'], string> = { online: 'AI connected', checking: 'AI connecting…', offline: 'AI unavailable', backoff: 'AI endpoint erroring — backing off' };
 const MAIN_LEVEL: Record<MainBridgeStatus, SyncLevel> = { off: 'idle', waiting: 'yellow', connecting: 'yellow', connected: 'green', error: 'red' };
 const MAIN_LABEL: Record<MainBridgeStatus, string> = { off: 'Main app bridge off', waiting: 'Waiting for main app', connecting: 'Connecting to main app…', connected: 'Connected', error: 'Error' };
 
@@ -54,9 +56,20 @@ export function InsecureBridgeWarning({ bridgeUrl }: { bridgeUrl: string }) {
   );
 }
 
+/** The active capture source and whether replay/drift are armed for it. */
+export function CaptureSourceBadge({ status }: { status: CaptureStatus }) {
+  return (
+    <div className={styles.sync} data-level={status.armed ? 'green' : 'red'} title={status.detail} aria-live="polite" aria-label="Capture source">
+      <span className={styles.syncDot} />
+      <strong>Capture: {status.label}</strong>
+      <span className={styles.syncDetail}>{status.detail}</span>
+    </div>
+  );
+}
+
 /** Monitor HUD: mode picker, capture interval, screenshot count, source and /use target. */
 export function MonitorStatus({ engine }: { engine: AssistEngine }) {
-  const { settings, intervalMs, shotCount, source, target, aiQueue } = engine;
+  const { settings, intervalMs, shotCount, target, aiQueue, captureSource } = engine;
   return (
     <div className={styles.hud2} aria-label="Monitor status">
       <label>Monitor
@@ -67,7 +80,7 @@ export function MonitorStatus({ engine }: { engine: AssistEngine }) {
       <DisplayPicker engine={engine} compact />
       <span>⏱ every <b>{intervalMs} ms</b></span>
       <span>📸 <b>{shotCount}</b> screenshots</span>
-      <span>Source: <b>{SOURCE_LABEL[source]}</b></span>
+      <CaptureSourceBadge status={captureSource} />
       {target && <span>Using: <b>{target}</b></span>}
       <span aria-label="AI queue" title={`At most ${settings.aiMaxInFlight} AI call(s) run at once; the rest wait by priority`}>🧠 AI <b>{aiQueue.inFlight}/{settings.aiMaxInFlight}</b> in flight · <b>{aiQueue.queued}</b> queued</span>
     </div>
@@ -212,6 +225,33 @@ export function ModeControls({ engine }: { engine: AssistEngine }) {
   );
 }
 
+/** Persistent ABORTED banner: shown for as long as the latch is set, with the one-click way out. */
+export function AbortBanner({ engine }: { engine: AssistEngine }) {
+  if (!engine.aborted) return null;
+  return (
+    <div className={styles.insecure} role="alert" aria-label="ABORTED banner" data-testid="abort-banner">
+      ⛔ {abortBannerText(engine.abortedAt, engine.settings.abortAutoClearMin)}
+      {' '}
+      <button type="button" className={styles.primary} onClick={() => void engine.invoke('guard.clearAbort')}>Clear abort</button>
+    </div>
+  );
+}
+
+/** Shown while automatic coordinate correction is paused for want of a calibration baseline. */
+export function CalibrationPrompt({ engine }: { engine: AssistEngine }) {
+  const { ruler } = engine;
+  if (!ruler.needsBaseline) return null;
+  return (
+    <div className={styles.insecure} role="alert" aria-label="Calibration baseline needed">
+      📏 {NEED_BASELINE} — automatic coordinate correction is paused until it is set.
+      {' '}
+      <button type="button" className={styles.primary} onClick={ruler.openCalibration}>Open calibration</button>
+      {' '}
+      <button type="button" onClick={ruler.setBaseline}>Set baseline now</button>
+    </div>
+  );
+}
+
 /** Primary HUD: screen source, record / replay / self-test, goal + AI plan. */
 export function Hud({ engine }: { engine: AssistEngine }) {
   const { source, recording, replaying, goal, setGoal, settings, setSettings, steps, progress, plays, aiStatus, aiBusy, armed } = engine;
@@ -221,6 +261,8 @@ export function Hud({ engine }: { engine: AssistEngine }) {
   const done = steps.filter((s) => s.status === 'done').length;
   return (
     <>
+      <AbortBanner engine={engine} />
+      <CalibrationPrompt engine={engine} />
       <div className={styles.hud}>
         <div className={styles.group}>
           {source === 'demo' ? (
@@ -242,10 +284,14 @@ export function Hud({ engine }: { engine: AssistEngine }) {
           ) : (
             <>
               <button type="button" className={styles.primary} onClick={() => void engine.invoke('replay.run', { selfTest: false })} disabled={recording || !total} title={armed ? 'Performs every step as real input through the connected bridge' : 'Verifies steps against the available frame; sends no input'}>▶ Replay + drift</button>
-              <button type="button" onClick={() => void engine.invoke('replay.run', { selfTest: true })} disabled={recording || !total} title="Verifies each step against the available frame; sends no input">🧪 AI self-test (no input)</button>
+              <button type="button" onClick={() => void engine.invoke('selftest.run')} disabled={recording} title="Plans a goal, grounds it on the live frame, executes it (dry run unless armed) and verifies the result — report in the Self-test panel">🧪 AI self-test</button>
             </>
           )}
-          <button type="button" onClick={() => void engine.explainScreen()} disabled={aiOff || aiBusy} title={aiTitle}>👁 Point out</button>
+          {engine.pointOutAuto ? (
+            <button type="button" className={styles.danger} onClick={engine.stopPointOut} title="Stops the automatic point-out">■ Stop point out</button>
+          ) : (
+            <button type="button" onClick={engine.startPointOut} disabled={aiOff || aiBusy} title={aiOff ? aiTitle : 'Points out what matters now, then again every 5 s until stopped'}>👁 Point out</button>
+          )}
           <button type="button" className={engine.ruler.on ? styles.primary : ''} onClick={engine.ruler.toggle} aria-pressed={engine.ruler.on} title="Ruler mode: click points on the screen to measure distances">📏 Ruler{engine.ruler.on ? ' (on)' : ''}</button>
           <button type="button" onClick={() => engine.ruler.recalibrateNow('manual')} title="Re-measure the baseline references on the live frame and rescale stored coordinates on drift">⟲ Recalibrate</button>
           <button type="button" className={engine.snipMode ? styles.primary : ''} onClick={engine.toggleSnipMode} aria-pressed={engine.snipMode} title="Snip: drag a region of the screen to save it to the snip gallery">✂ Snip{engine.snipMode ? ' (drag)' : ''}</button>

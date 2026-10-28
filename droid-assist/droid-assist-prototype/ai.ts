@@ -27,7 +27,8 @@ export const AI_TIMEOUT_MS_MAX = 300_000;
 
 /** Live reachability of the model endpoint. */
 export interface AiStatus {
-  state: 'checking' | 'online' | 'offline';
+  /** backoff: the endpoint keeps failing with the repeat-limit 500 and calls wait before retrying. */
+  state: 'checking' | 'online' | 'offline' | 'backoff';
   detail: string;
 }
 
@@ -41,6 +42,30 @@ export interface ChatMessage {
 /** Any failure to get a usable model reply. Never replaced by a canned answer. */
 export class AiError extends Error {
   override name = 'AiError';
+}
+
+/** The endpoint answered with an HTTP error status. */
+export class AiHttpError extends AiError {
+  override name = 'AiHttpError';
+  constructor(readonly status: number, readonly detail: string) {
+    super(`AI endpoint HTTP ${status}${detail ? `: ${detail}` : ''}`);
+  }
+}
+
+/** The text of the 500 the model server sends when generation loops on repeated tokens. */
+export const REPEAT_LIMIT_RE = /repeat limit/i;
+
+/** True for the "prediction aborted, token repeat limit reached" 500: the model looped on repeat tokens. */
+export const isRepeatLimit = (error: unknown): error is AiHttpError => error instanceof AiHttpError && error.status === 500 && REPEAT_LIMIT_RE.test(error.detail);
+
+/** Added to the system turn of the one retry after a repeat-limit 500 (the loop is often prompt-dependent). */
+export const REPEAT_LIMIT_REPHRASE = 'Answer concisely in your own words. Do not repeat any word, phrase or line; stop as soon as the answer is complete.';
+
+/** The conversation reworded for the repeat-limit retry: the rephrase instruction leads the system turn. */
+export function rephraseForRepeatLimit(messages: ChatMessage[]): ChatMessage[] {
+  const i = messages.findIndex((m) => m.role === 'system');
+  if (i < 0) return [{ role: 'system', content: REPEAT_LIMIT_REPHRASE }, ...messages];
+  return messages.map((m, j) => (j === i ? { ...m, content: `${REPEAT_LIMIT_REPHRASE}\n\n${m.content}` } : m));
 }
 
 /** Width/height of the sample space: Frame.url, the UI, the bridge and the drift math. */
@@ -188,7 +213,7 @@ async function fetchReply(cfg: AiConfig, messages: ChatMessage[], json: boolean,
     throw new AiError(`AI endpoint unreachable (${cfg.url}): ${error instanceof Error ? error.message : String(error)}`);
   }
   const body = (await res.json().catch(() => null)) as { message?: { content?: unknown; thinking?: unknown }; error?: unknown } | null;
-  if (!res.ok) throw new AiError(`AI endpoint HTTP ${res.status}${body?.error ? `: ${String(body.error)}` : ''}`);
+  if (!res.ok) throw new AiHttpError(res.status, body?.error ? String(body.error) : '');
   const content = body?.message?.content;
   return { content: typeof content === 'string' ? content.trim() : '', thinking: thinkingOf(body?.message?.thinking) };
 }
@@ -209,7 +234,7 @@ async function fetchReply(cfg: AiConfig, messages: ChatMessage[], json: boolean,
  * @param escalation the session's app-context provider and stage reporter
  */
 export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = DEFAULT_AI_TIMEOUT_MS, cancel?: AbortSignal, escalation?: EscalationHooks): Promise<AiReply> {
-  const first = await post(cfg, messages, json, timeoutMs, cancel);
+  const first = await postOrRephrase(cfg, messages, json, timeoutMs, cancel);
   if (first.content) return first;
   if (!first.thinking) throw new AiError('AI endpoint returned no message content and no thinking');
   if (cfg.think && escalation) return escalate((msgs, signal) => post(cfg, msgs, json, timeoutMs, linkSignals(cancel, signal)), messages, json, first.thinking, escalation);
@@ -225,6 +250,16 @@ export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false,
     if (error instanceof AiCancelled || !(error instanceof AiError)) throw error;
   }
   return { content: thinking, thinking, thinkingOnly: true };
+}
+
+/** One post; a repeat-limit 500 is retried once with the conversation rephrased, and a second one rethrows. */
+async function postOrRephrase(cfg: AiConfig, messages: ChatMessage[], json: boolean, timeoutMs: number, cancel?: AbortSignal): Promise<AiReply> {
+  try {
+    return await post(cfg, messages, json, timeoutMs, cancel);
+  } catch (error) {
+    if (!isRepeatLimit(error)) throw error;
+    return post(cfg, rephraseForRepeatLimit(messages), json, timeoutMs, cancel);
+  }
 }
 
 /** The conversations of the retry ladder in order: each ladder rung appended, then the fallback question. */
@@ -269,7 +304,18 @@ export const RAW_REPLY_MAX = 200;
 export class AiParseError extends AiError {
   override name = 'AiParseError';
   constructor(readonly raw: string) {
-    super('AI reply was not a JSON object (model returned prose)');
+    super('AI reply was not a JSON object: no {...} object found in the reply');
+  }
+}
+
+/** A JSON reply whose `field` is missing or not of the type its contract requires; the message says which and what it held. */
+export class AiSchemaError extends AiError {
+  override name = 'AiSchemaError';
+  constructor(
+    readonly field: string,
+    message: string,
+  ) {
+    super(message);
   }
 }
 
@@ -334,12 +380,30 @@ export function parseJsonReply(raw: string): Record<string, unknown> {
 
 /**
  * A model coordinate as a 0..1 fraction: values above 1 are read as pixels of the
- * `size`-wide image the model saw. Throws AiError when it is not a number.
+ * `size`-wide image the model saw. Throws AiSchemaError naming `field` when it is not a number.
  */
-export function toUnit(value: unknown, size: number): number {
+export function toUnit(value: unknown, size: number, field = 'coordinate'): number {
   const n = typeof value === 'string' ? Number.parseFloat(value) : value;
-  if (typeof n !== 'number' || !Number.isFinite(n)) throw new AiError(`AI gave a non-numeric coordinate: ${String(value)}`);
+  if (typeof n !== 'number' || !Number.isFinite(n)) throw new AiSchemaError(field, `AI gave a non-numeric coordinate "${field}": ${String(value)}`);
   return Math.min(1, Math.max(0, n > 1 ? n / size : n));
+}
+
+/** The correction a schema retry carries: what was wrong with the reply and the exact schema to answer with. */
+export const schemaRetryText = (error: AiSchemaError, schema: string) =>
+  `Your previous reply was rejected — ${error.message}. Reply with ONLY this JSON object and nothing else: ${schema}`;
+
+/**
+ * Asks `req` and parses the reply; when the reply breaks its schema (AiSchemaError) it asks once
+ * more with the error and the exact `schema` appended to the prompt. A second failure throws.
+ */
+export async function askRetryingSchema<T>(ask: AskFn, req: AskRequest, schema: string, parse: (reply: AiReply) => T): Promise<T> {
+  const first = await ask(req);
+  try {
+    return parse(first);
+  } catch (error) {
+    if (!(error instanceof AiSchemaError)) throw error;
+    return parse(await ask({ ...req, prompt: `${req.prompt}\n${schemaRetryText(error, schema)}` }));
+  }
 }
 
 /** One question to the model about the current screen. */

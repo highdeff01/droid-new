@@ -7,6 +7,7 @@ import { stageOff, type StageId } from './loop-control.js';
 import { createBudget, type ActionBudget } from './safety.js';
 import type { StepOutcome } from './run-step.js';
 import { loadInitiative, saveInitiative } from './storage.js';
+import { ABORTED_REFUSAL } from './abort-latch.js';
 import { CATEGORY_NAME, CATEGORY_STAGE, STRESS_LIMIT, addEntry, addProposal, applyEdits, disposition, editsText, nextScanDelay, setStatus, storableStep, type InitiativeCategory, type InitiativeProposal, type InitiativeState, type WorkflowPack } from './initiative.js';
 import { findingProposal, scanScreen, scanSummary } from './initiative-scan.js';
 import { askWorkaround, localWorkaround, type KnownPoint, type Workaround } from './workarounds.js';
@@ -289,7 +290,7 @@ export function useInitiative(d: InitiativeDeps) {
     if (!p) return;
     const stage = CATEGORY_STAGE[p.category];
     if (d.aborted() || !d.stageOn(stage)) {
-      d.addLog(INITIATIVE_SOURCE, `"${p.text}" not applied — ${d.aborted() ? 'ABORTED is active' : stageOff(stage)}`, 'warn');
+      d.addLog(INITIATIVE_SOURCE, `"${p.text}" not applied — ${d.aborted() ? ABORTED_REFUSAL : stageOff(stage)}`, 'warn');
       return;
     }
     await apply(p, 'accepted');
@@ -312,7 +313,7 @@ export function useInitiative(d: InitiativeDeps) {
    */
   const stressTest = async (target: TestTarget) => {
     if (d.aborted() || !d.stageOn('selfTest')) {
-      d.addLog(INITIATIVE_SOURCE, `Stress test of "${target.name}" not started — ${d.aborted() ? 'ABORTED is active' : stageOff('selfTest')}`, 'warn');
+      d.addLog(INITIATIVE_SOURCE, `Stress test of "${target.name}" not started — ${d.aborted() ? ABORTED_REFUSAL : stageOff('selfTest')}`, 'warn');
       return;
     }
     if (busyRef.current || d.executorBusy()) {

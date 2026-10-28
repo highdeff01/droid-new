@@ -2,16 +2,18 @@ import type { ActionRecord, Frame, LogEntry } from './types.js';
 import type { ThinkingEntry } from './thinking-timeline.js';
 
 /** How an executed action ended, as the dashboard labels it. */
-export type ActionOutcome = 'ok' | 'failed' | 'simulated' | 'dispatched';
+export type ActionOutcome = 'ok' | 'failed' | 'simulated' | 'dispatched' | 'dry run';
 
 /**
  * The outcome of an action: dispatched when the bridge accepted it but the effect was not confirmed,
- * failed when it did not succeed, simulated when it ran on the demo desktop, ok otherwise.
+ * failed when it did not succeed, simulated when it ran on the demo desktop, dry run when it was
+ * verified but nothing was dispatched, ok otherwise.
  */
 export function outcomeOf(r: ActionRecord): ActionOutcome {
   if (r.dispatched) return 'dispatched';
   if (!r.ok) return 'failed';
-  return r.via === 'demo' ? 'simulated' : 'ok';
+  if (r.simulated || (r.via === 'demo' && !r.dryRun)) return 'simulated';
+  return r.dryRun ? 'dry run' : 'ok';
 }
 
 /** The action history, most recent first. */

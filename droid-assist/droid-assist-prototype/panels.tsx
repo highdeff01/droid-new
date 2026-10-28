@@ -2,7 +2,10 @@ import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
+import { DRY_RUN } from './run-step.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
+import { ABORT_AUTO_CLEAR_MAX_MIN } from './abort-latch.js';
+import { LISTEN_NEEDS_DESKTOP, inBrowser } from './main-bridge.js';
 import { AiStatusBadge, InsecureBridgeWarning, MainBridgeBadge } from './hud.js';
 import { ModelPicker } from './model-picker.js';
 import type { AssistSettings, FamiliarElement, Frame, Habit, LogEntry } from './types.js';
@@ -13,6 +16,7 @@ import { snipText, type Snip } from './snip.js';
 import { DisplayPicker } from './display-picker.js';
 import { BridgeWizard } from './bridge-wizard.js';
 import { isReliable, successRate } from './habits.js';
+import { RELEARN_STRIKES, durationText, isBlocking, ruleScope } from './blacklist.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
 import type { StepFix } from './supervisor.js';
 import type { DeliveryStatus, EndpointStatus, ForwardedError } from './error-forwarding.js';
@@ -41,6 +45,8 @@ import { sectionMemoryLines } from './sections.js';
 import { replicaLine } from './replicate.js';
 import { SIDE_TEST_MODES, feedbackLine, type SideTestMode } from './side-test.js';
 import { RecoverySettings, RelaxSettings } from './relax-recovery-settings.js';
+import { checkoffSummary, checkoffText } from './workflow-progress.js';
+import { latestReports } from './agent-cadence.js';
 import styles from './droid-assist.module.css';
 
 const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity', wake: 'Wake', decision: 'Decision', error: 'Error' };
@@ -200,7 +206,7 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
   const { steps, setSteps, draftCard, setDraftCard } = engine;
   return (
     <section className={styles.panel}>
-      <h3>Workflow <small>{steps.length} step(s)</small></h3>
+      <h3>Workflow <small>{steps.length} step(s){steps.length > 0 && ` · ${checkoffText(checkoffSummary(steps))}`}</small></h3>
       {!steps.length && <p className={styles.muted}>Record, or type a goal and press ✨ AI plan.</p>}
       <ol className={styles.steps}>
         {steps.map((s, i) => (
@@ -210,6 +216,7 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
               <input value={s.name} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} onFocus={(e) => { e.currentTarget.dataset.was = e.currentTarget.value; }} onBlur={(e) => { const name = e.currentTarget.value.trim(); if (name !== (e.currentTarget.dataset.was ?? '').trim()) engine.knowledge.noteSignal('correction', `renamed step to "${name}"`); }} aria-label={`Step ${i + 1} name`} />
               <small>
                 {s.action}{s.target ? ` "${s.target}"` : ''}{(s.action === 'key' || s.action === 'scroll') && s.text ? ` ${s.text}` : ''} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}%{s.endX !== undefined && s.endY !== undefined ? ` → ${s.endTarget ? `"${s.endTarget}" ` : ''}${(s.endX * 100).toFixed(0)}%,${(s.endY * 100).toFixed(0)}%` : ''} · {s.status}
+                {s.verifiedAt !== undefined && <b aria-label={`Step ${i + 1} checked off`}> · ✓ {clock(s.verifiedAt)}</b>}
                 {s.delayMs !== undefined && ` · after ${s.delayMs}ms`}
                 {s.driftPx !== undefined && ` · drift ${s.driftPx}px`}
                 {s.drift !== undefined && ` · match ${s.drift.toFixed(3)}`}
@@ -303,6 +310,35 @@ export function PatternsPanel({ engine }: { engine: AssistEngine }) {
 }
 
 /**
+ * Blacklist: every structured avoid rule (habit, test and dismissal-cooldown blocks) with its scope,
+ * source, age, expiry and status; one-click clear per rule and clear-all, through the capability registry.
+ */
+export function BlacklistPanel({ engine }: { engine: AssistEngine }) {
+  const rules = engine.avoidRules;
+  const [now, setNow] = useState(() => Date.now());
+  const [shownFor, setShownFor] = useState(rules);
+  if (shownFor !== rules) {
+    setShownFor(rules);
+    setNow(Date.now());
+  }
+  return (
+    <section className={styles.panel} aria-label="Blacklist">
+      <h3>Blacklist <small>{rules.length}</small></h3>
+      {!rules.length && <p className={styles.muted}>Only repeated fresh failures of one action on one target and point block dispatch; they expire on their own.</p>}
+      <ul className={styles.log} aria-label="Blacklist entries">
+        {rules.map((r) => (
+          <li key={r.id} data-tone={isBlocking(r, now) ? 'error' : 'warn'}>
+            <b>{ruleScope(r)}</b> <small>{r.source} · {isBlocking(r, now) ? 'blocking' : `pending ${r.strikes}/${RELEARN_STRIKES}`} · age {durationText(now - r.firstAt)} · expires in {durationText(r.expiresAt - now)}</small> — {r.reason}
+            <button type="button" aria-label={`Clear blacklist entry ${ruleScope(r)}`} onClick={() => void engine.invoke('blacklist.clear', { id: r.id })}>✕</button>
+          </li>
+        ))}
+      </ul>
+      {!!rules.length && <button type="button" onClick={() => void engine.invoke('blacklist.clear', { id: 'all' })}>Clear all</button>}
+    </section>
+  );
+}
+
+/**
  * Capabilities: every registered feature (the single dispatch surface for buttons, the AI, agents
  * and the main app) and the invocation log — requester, parameters and result.
  */
@@ -366,13 +402,15 @@ export function LoopControlPanel({ engine }: { engine: AssistEngine }) {
  */
 export function AgentsPanel({ engine }: { engine: AssistEngine }) {
   const { agents } = engine;
+  // The panel's Screen watcher is the cadence's screenWatcher agent.
+  const live = new Map(latestReports(engine.agentReports).map((r) => [r.agent === 'screenWatcher' ? 'screen' : r.agent, r.text]));
   return (
     <section className={styles.panel}>
       <h3>Agents</h3>
       {agents.map((a) => (
         <label key={a.id} className={styles.agent}>
           <input type="checkbox" checked={a.on} onChange={(e) => void engine.invoke(`agent.${a.id}`, { on: e.target.checked })} />
-          <span><strong>{a.name}</strong><small>{a.description}</small>{a.id === 'goalTracer' && <small aria-label="Goal tracer status">Live: {engine.tracerStatus}</small>}</span>
+          <span><strong>{a.name}</strong><small>{a.description}</small>{a.id === 'goalTracer' && <small aria-label="Goal tracer status">Live: {engine.tracerStatus}</small>}{live.has(a.id) && <small aria-label={`${a.name} live report`}>Now: {live.get(a.id)}</small>}</span>
         </label>
       ))}
     </section>
@@ -396,6 +434,13 @@ function MainBridgeSettings({ engine }: { engine: AssistEngine }) {
           <option value="dial">Dial — connect to the main app URL</option>
         </select>
       </label>
+      {listen && inBrowser() && (
+        <div className={styles.insecure} role="alert" aria-label="Listen mode needs the desktop app">
+          {LISTEN_NEEDS_DESKTOP}.
+          {' '}
+          <button type="button" className={styles.primary} onClick={() => set({ mainBridgeMode: 'dial' })}>Switch to dial mode</button>
+        </div>
+      )}
       {listen ? (
         <span className={styles.row}>
           <input value={settings.mainBridgeHost} onChange={(e) => set({ mainBridgeHost: e.target.value })} aria-label="Main app bridge host" placeholder="127.0.0.1" />
@@ -503,6 +548,10 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         />
         <small>Focus the field and press a new combo (works while this page has focus).</small>
       </label>
+      <label className={styles.setting}>Auto-clear ABORTED after <b>{settings.abortAutoClearMin ? `${settings.abortAutoClearMin} min` : 'never (off)'}</b>
+        <input type="number" min={0} max={ABORT_AUTO_CLEAR_MAX_MIN} step={1} value={settings.abortAutoClearMin} onChange={(e) => setSettings({ ...settings, abortAutoClearMin: Number.isFinite(e.target.valueAsNumber) ? Math.min(ABORT_AUTO_CLEAR_MAX_MIN, Math.max(0, Math.round(e.target.valueAsNumber))) : 0 })} aria-label="Auto-clear ABORTED after (minutes, 0 = off)" />
+        <small>0 keeps ABORTED until you press Clear abort in the HUD.</small>
+      </label>
       <label className={styles.setting}>Desktop bridge URL (pyautogui)
         <span className={styles.row}>
           <input value={settings.bridgeUrl} onChange={(e) => setSettings({ ...settings, bridgeUrl: e.target.value })} placeholder="/bridge or http://127.0.0.1:3000" />
@@ -552,7 +601,6 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <ErrorForwardingSettings engine={engine} />
       <BackupSettings onExport={() => void engine.invoke('backup.export')} />
       <RelaxSettings engine={engine} />
-      <BackupSettings />
       <RecoverySettings engine={engine} />
     </section>
   );
@@ -677,8 +725,8 @@ export function ActionHistoryPanel({ engine }: { engine: AssistEngine }) {
       </div>
       <ul className={styles.log}>
         {history.slice(0, 200).map((a) => (
-          <li key={a.id} data-tone={a.ok ? 'ok' : 'error'}>
-            <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.endX !== undefined ? ` → (${a.endX}, ${a.endY})` : ''}{a.text ? ` "${a.text}"` : ''} · {a.via}
+          <li key={a.id} data-tone={a.ok ? (a.dryRun ? 'info' : 'ok') : 'error'}>
+            <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.endX !== undefined ? ` → (${a.endX}, ${a.endY})` : ''}{a.text ? ` "${a.text}"` : ''} · {a.via}{a.dryRun ? ` · ${DRY_RUN}` : ''}
           </li>
         ))}
       </ul>
@@ -867,7 +915,7 @@ export function LearnedCoordsPanel({ engine }: { engine: AssistEngine }) {
   );
 }
 
-const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement', attempt: '🔄 Attempt', snip: '✂️ Snip' };
+const KIND_LABEL: Record<ThoughtKind, string> = { thought: '💭 Thought', change: '🖥️ Screen change', proposal: '🎯 Proposal', reflection: '🔁 Reflection', verdict: '⚖️ Verdict', check: '🔎 Check', review: '🧭 Supervisor review', movement: '🖱️ Supervisor movement', attempt: '🔄 Attempt', snip: '✂️ Snip', reply: '📨 Agent reply', test: '🧪 Test result' };
 
 /** Tone of an entry: failures as errors, verdicts and checks by their outcome, unready proposals as warnings, the rest informational. */
 function entryTone(e: ThinkingEntry): LogEntry['tone'] {
@@ -935,9 +983,10 @@ function BriefingComparison({ b }: { b: Briefing }) {
 function BriefingItem({ b }: { b: Briefing }) {
   const o = b.objectives;
   return (
-    <li data-tone={b.outcome === 'unresolved' ? 'warn' : 'ok'}>
+    <li data-tone={b.outcome === 'unresolved' || b.outcome === 'blocked' ? 'warn' : 'ok'}>
       <small>{clock(b.time)}</small> <b>{b.stepName}</b> <small>· {b.outcome}</small>
       {b.aiNote && <p role="alert">{b.aiNote}</p>}
+      {b.blocked && <p role="alert"><b>Blocked:</b> {b.blocked}</p>}
       {b.mode && <p><b>Mode:</b> {b.mode}</p>}
       <h4>Objectives</h4>
       <p><b>Goal:</b> {o.goal || '(none)'}</p>

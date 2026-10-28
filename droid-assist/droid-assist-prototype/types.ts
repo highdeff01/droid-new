@@ -7,6 +7,7 @@ import type { AutoApplyMap, SelfTestMode } from './initiative.js';
 import type { AutoActMap } from './notifications.js';
 import type { ExecutionMode } from './execution-mode.js';
 import type { AutoApplyBounds } from './aggressive.js';
+import type { PanelLayout } from './panel-layout.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, the PC via the bridge, or the main Droid app's preview. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge' | 'main-app';
@@ -82,12 +83,16 @@ export interface ActionRecord {
   priorText?: string;
   /** Who performed it: Replay, Auto-Actor, AI help, ... */
   source: string;
-  /** Where it was dispatched: the desktop bridge or the demo desktop. */
-  via: 'bridge' | 'demo';
+  /** Where it ran: the desktop bridge, the main Droid app, or the demo desktop. */
+  via: 'bridge' | 'main-app' | 'demo';
   ok: boolean;
   message: string;
   /** The bridge accepted the input but the step's effect was not confirmed on screen. */
   dispatched?: boolean;
+  /** Nothing was dispatched to the PC or the main app: a disarmed verification or a demo simulation, labeled "dry run — not dispatched". */
+  dryRun?: boolean;
+  /** A dry run whose effect was simulated on the demo desktop (reversible there only). */
+  simulated?: boolean;
 }
 
 /** A lesson learned from a run: something to avoid or to add when planning similar goals. */
@@ -196,6 +201,8 @@ export interface WorkflowStep {
   /** Visual evidence from the last execution: screenshots just before and just after the action. */
   beforeFrame?: Frame;
   afterFrame?: Frame;
+  /** When the step's action was verified complete on the live frame (screenshot verdict success); cleared when it runs again. */
+  verifiedAt?: number;
 }
 
 /** Alignment between the live screen and the active step. */
@@ -301,6 +308,8 @@ export interface AssistSettings {
   mainBridgeBackoffMaxMs: number;
   /** Emergency-stop key combo, e.g. "Shift+Escape". */
   abortHotkey: string;
+  /** Minutes after which an ABORTED latch clears by itself; 0 = never (the default). */
+  abortAutoClearMin: number;
   /** Max real (bridge-dispatched) input actions per Auto Act / replay run. */
   actionBudget: number;
   /** Ollama-compatible /api/chat URL every AI feature calls. */
@@ -319,6 +328,8 @@ export interface AssistSettings {
   maxIterations: number;
   /** Retries of a failed step (re-verify, re-correct, retry) before the planner re-plans it once. */
   stepRetries: number;
+  /** Lifetime of a blocking blacklist rule, hours (structured avoid entries expire on their own). */
+  avoidTtlHours: number;
   /** Retries of a detected recent operation's best variant, each verified by screenshot comparison (0 = off). */
   operationRetries: number;
   /** How far back a playback of the main app's actions reaches, in seconds (30 s .. 10 min). */
@@ -367,4 +378,6 @@ export interface AssistSettings {
   notifyAutoAct: AutoActMap;
   /** Folders (native paths) the System panel reports file specs for. */
   systemFolders: string[];
+  /** User arrangement of the workspace panels, per area; validated on load so no panel is ever lost. */
+  panelLayout: PanelLayout;
 }

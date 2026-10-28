@@ -1,4 +1,5 @@
 import type { LearnedPattern, SavedCard, WorkflowStep } from './types.js';
+import { POINTER_ACTIONS } from './types.js';
 import { parseJsonReply } from './ai.js';
 import type { AskFn } from './ai.js';
 import { generateCard, similarity, uid } from './planner.js';
@@ -50,10 +51,22 @@ export function upsertCard(cards: SavedCard[], card: SavedCard): { cards: SavedC
 /** A new learned pattern. */
 export const newPattern = (kind: LearnedPattern['kind'], pattern: string, context: string): LearnedPattern => ({ id: uid('pat'), kind, pattern: pattern.trim(), context: context.trim(), time: Date.now() });
 
+const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+
+/**
+ * One failed step scoped to what it acted on: `"name" (action on "element" at (x%, y%))` for a pointer
+ * step, `"name" (action)` otherwise — so the avoid lesson blocks that element at that point, not the step name.
+ */
+const scopedStep = (s: WorkflowStep) => {
+  if (!POINTER_ACTIONS.has(s.action)) return `"${s.name}" (${s.action})`;
+  const element = (s.target ?? s.name).replace(/"/g, "'");
+  return `"${s.name}" (${s.action} on "${element}" at (${pct(s.correctedX ?? s.x)}, ${pct(s.correctedY ?? s.y)}))`;
+};
+
 /** The lesson a failed run always leaves, with or without the model: avoid its failed steps as planned. */
 export function failurePattern(goal: string, steps: WorkflowStep[]): LearnedPattern {
   const failed = steps.filter((s) => s.status === 'failed' || s.status === 'pending' || s.status === 'running');
-  const names = failed.map((s) => `"${s.name}" (${s.action})`).join(', ') || 'the planned steps';
+  const names = failed.map(scopedStep).join(', ') || 'the planned steps';
   return newPattern('avoid', `Step ${names} ${FAILURE_PATTERN_SUFFIX}`, goal);
 }
 
@@ -85,13 +98,34 @@ export async function learnPatterns(ask: AskFn, goal: string, steps: WorkflowSte
   });
 }
 
-/** `added` first, then `existing`; a repeated kind+pattern keeps only the newest; capped at PATTERN_LIMIT. */
+/** Most avoid patterns kept per goal context. */
+export const AVOID_PER_GOAL = 3;
+/** How alike two avoid lessons of one goal must be (either covering the other) to merge into the newest. */
+export const SAME_LESSON = 0.6;
+
+const contextKey = (p: LearnedPattern) => p.context.trim().toLowerCase().replace(/\s+/g, ' ');
+const sameLesson = (a: LearnedPattern, b: LearnedPattern) => Math.max(similarity(a.pattern, b.pattern), similarity(b.pattern, a.pattern)) >= SAME_LESSON;
+
+/** True when `p`, an avoid pattern, merges into a newer one of its goal in `kept` or its goal already has AVOID_PER_GOAL. */
+function avoidDropped(p: LearnedPattern, kept: LearnedPattern[]): boolean {
+  if (p.kind !== 'avoid') return false;
+  const goal = kept.filter((k) => k.kind === 'avoid' && contextKey(k) === contextKey(p));
+  return goal.length >= AVOID_PER_GOAL || goal.some((k) => sameLesson(k, p));
+}
+
+/**
+ * `added` first, then `existing`; a repeated kind+pattern keeps only the newest; an avoid pattern
+ * near-duplicating a newer one of the same goal merges into it, at most AVOID_PER_GOAL avoid
+ * patterns per goal; capped at PATTERN_LIMIT.
+ */
 export function mergePatterns(existing: LearnedPattern[], added: LearnedPattern[]): LearnedPattern[] {
   const seen = new Set<string>();
-  return [...added, ...existing].filter((p) => {
+  const kept: LearnedPattern[] = [];
+  [...added, ...existing].forEach((p) => {
     const key = `${p.kind}:${p.pattern.toLowerCase()}`;
-    if (seen.has(key)) return false;
+    if (seen.has(key) || avoidDropped(p, kept)) return;
     seen.add(key);
-    return true;
-  }).slice(0, PATTERN_LIMIT);
+    kept.push(p);
+  });
+  return kept.slice(0, PATTERN_LIMIT);
 }

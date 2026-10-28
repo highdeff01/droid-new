@@ -1,7 +1,7 @@
 import type { Frame, LogEntry, WorkflowStep } from './types.js';
 import { POINTER_ACTIONS } from './types.js';
 import { correctDrift, reverify, type DriftCorrection, type DriftThresholds, type Reverify } from './drift.js';
-import { sendToBridge } from './bridge.js';
+import { sendToBridge, type BridgeResult } from './bridge.js';
 import type { TargetCheck } from './assist-ai.js';
 
 type Point = { x: number; y: number };
@@ -45,7 +45,15 @@ export interface StepDeps {
   onVerified?: (live: Frame, step: WorkflowStep, p: Point) => void;
   /** Shows each point the pipeline tries (planned, drift-corrected, grounded, retried) as an AI cursor movement. */
   aim?: (p: Point) => void;
+  /** Sends the located step's input (frame size and display origin of the live frame); the desktop bridge when omitted. */
+  send?: SendFn;
 }
+
+/** Delivers one located step's input and resolves with the target's real result. */
+export type SendFn = (step: WorkflowStep, srcW: number, srcH: number, origin: Point) => Promise<BridgeResult>;
+
+/** The input route of a step run: the host's `send`, else the desktop bridge. */
+const sender = (deps: StepDeps): SendFn => deps.send ?? ((step, srcW, srcH, origin) => sendToBridge(deps.bridgeUrl, step, srcW, srcH, { token: deps.bridgeToken, origin }));
 
 /** The corrected retry of a missed step: the measured miss offset and the point retried. */
 export interface RetryInfo {
@@ -238,7 +246,7 @@ export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepO
     end = e.point;
   }
   if (!deps.dispatch) return { ok: true, executed: false, message: `verified on the live screen — ${DRY_RUN}`, target, end, correction, live };
-  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, { token: deps.bridgeToken, origin: frameOrigin(live) });
+  const sent = await sender(deps)({ ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, frameOrigin(live));
   if (!sent.ok) return { ok: false, executed: false, bridgeFailed: true, message: sent.message, target, end, correction, live };
   const after = await verifyAfter(step, live, target, deps);
   const done: StepOutcome = { ok: true, executed: true, message: sent.message, target, end, correction, live, ...after };
@@ -276,7 +284,7 @@ async function retryMissed(step: WorkflowStep, out: StepOutcome, deps: StepDeps)
   const shot = out.shot!;
   deps.log(`"${step.name}": missed by ${delta} — retrying once at ${px(miss.at, shot)}`, 'warn');
   deps.aim?.(miss.at);
-  const sent = await sendToBridge(deps.bridgeUrl, { ...step, correctedX: miss.at.x, correctedY: miss.at.y }, shot.srcW, shot.srcH, { token: deps.bridgeToken });
+  const sent = await sender(deps)({ ...step, correctedX: miss.at.x, correctedY: miss.at.y }, shot.srcW, shot.srcH, { x: 0, y: 0 });
   const retry = { dxPx: miss.dxPx, dyPx: miss.dyPx, at: miss.at, ok: sent.ok, message: sent.message };
   if (!sent.ok) return { ...out, retry };
   const after = await verifyAfter(step, shot, miss.at, deps);

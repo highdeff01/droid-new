@@ -157,6 +157,9 @@ export async function generateGoal(ask: AskFn, steps: WorkflowStep[], frame: Fra
   return goal.trim();
 }
 
+/** The goal of a run with no goal of its own, derived from what runs: `Run pack "Click 6" (1 step)`. */
+export const runGoalFor = (what: string, steps: WorkflowStep[]) => `Run ${what.replace(/^Pack /, 'pack ')} (${steps.length} step${steps.length === 1 ? '' : 's'})`;
+
 /** The goal a perform-similar plan is made from: the selected steps as an example to adapt to the live screen. */
 export const similarGoal = (steps: WorkflowStep[]) => `Perform an action similar to these recorded steps on the screen as it is now: ${steps.map(stepLine).join(' → ')}`;
 
