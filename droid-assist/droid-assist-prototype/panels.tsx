@@ -312,8 +312,13 @@ export function PatternsPanel({ engine }: { engine: AssistEngine }) {
  * source, age, expiry and status; one-click clear per rule and clear-all, through the capability registry.
  */
 export function BlacklistPanel({ engine }: { engine: AssistEngine }) {
-  const now = Date.now();
   const rules = engine.avoidRules;
+  const [now, setNow] = useState(() => Date.now());
+  const [shownFor, setShownFor] = useState(rules);
+  if (shownFor !== rules) {
+    setShownFor(rules);
+    setNow(Date.now());
+  }
   return (
     <section className={styles.panel} aria-label="Blacklist">
       <h3>Blacklist <small>{rules.length}</small></h3>

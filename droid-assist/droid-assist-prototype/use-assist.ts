@@ -64,7 +64,7 @@ import { CREW_SIZE_DEFAULT, parseIntercept } from './crew.js';
 import { useCrew } from './use-crew.js';
 import { failurePattern, flowCard, learnPatterns, mergePatterns, newPattern, runVerdict, upsertCard } from './flow-memory.js';
 import { SUPERVISOR_INTERVAL_MS, SUPERVISOR_REPLAN_LIMIT, SUPERVISOR_TICK_MS, applyFixes, executorBusy as supervisorExecutorBusy, habitPatterns, haltText, isConfident, replanFeedback, reviewDecision, reviewRun, reviewText, staleFixes, type PendingFix, type SupervisorReview, type SupervisorState } from './supervisor.js';
-import { BUS_AGENTS, BUS_AGENT_IDS, elementLine, forward, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
+import { BUS_AGENTS, BUS_AGENT_IDS, elementLine, forward, isGridLabel, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
 import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
 import { useApprovals } from './use-approvals.js';
@@ -1261,7 +1261,7 @@ export function useAssist() {
 
   /** A step's reflect verdict updates its habit: attempt, success and the verdict's lessons. */
   const learnHabit = (step: WorkflowStep, verdict: StepVerdict) => {
-    if (!stageOn('coords')) return;
+    if (!stageOn('coords') || isGridLabel(habitTarget(step))) return;
     commitHabits(recordOutcome(habitsRef.current, { target: habitTarget(step), context: habitContext(), success: verdict.success, avoid: verdict.pattern_avoid, add: verdict.pattern_add }));
     const lessons = [verdict.pattern_avoid && `avoid ${verdict.pattern_avoid}`, verdict.pattern_add && `add ${verdict.pattern_add}`].filter(Boolean);
     if (lessons.length) kb.recordFor('coords', 'method', `"${habitTarget(step)}": ${lessons.join('; ')}`);
@@ -1269,7 +1269,7 @@ export function useAssist() {
 
   /** A verified target point strengthens its habit's remembered coordinates. */
   const strengthen = (live: Frame, step: WorkflowStep, p: { x: number; y: number }) => {
-    if (!stageOn('coords')) return;
+    if (!stageOn('coords') || isGridLabel(habitTarget(step))) return;
     commitHabits(strengthenHabit(habitsRef.current, habitTarget(step), habitContext(), live.data, p));
   };
 
@@ -1611,11 +1611,13 @@ export function useAssist() {
   /** What each recipient does with a forwarded element; the returned note is shown on its inbox message. */
   const busHandlers: Record<BusAgentId, (e: ForwardedElement, from: BusAgentId) => string> = {
     coords: (e) => {
+      if (isGridLabel(e.name)) return `Skipped "${e.name}" — an unnamed grid region is never predefined`;
       knownRef.current = predefine(knownRef.current, e);
       setKnownElements(knownRef.current);
       return `Predefined "${e.name}" at ${at(e.x, e.y)} — fed into planning`;
     },
     habits: (e, from) => {
+      if (isGridLabel(e.name)) return `Skipped "${e.name}" — an unnamed grid region is never a habit`;
       addPatterns([newPattern('add', `"${e.name}" is at ${at(e.x, e.y)} (found by ${BUS_AGENTS[from]})`, goalRef.current)]);
       return `Recorded "${e.name}" as a habit`;
     },
