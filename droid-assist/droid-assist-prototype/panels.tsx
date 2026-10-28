@@ -16,6 +16,7 @@ import { snipText, type Snip } from './snip.js';
 import { DisplayPicker } from './display-picker.js';
 import { BridgeWizard } from './bridge-wizard.js';
 import { isReliable, successRate } from './habits.js';
+import { RELEARN_STRIKES, durationText, isBlocking, ruleScope } from './blacklist.js';
 import type { ThinkingEntry, ThoughtKind } from './thinking-timeline.js';
 import type { StepFix } from './supervisor.js';
 import type { DeliveryStatus, EndpointStatus, ForwardedError } from './error-forwarding.js';
@@ -304,6 +305,35 @@ export function PatternsPanel({ engine }: { engine: AssistEngine }) {
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+/**
+ * Blacklist: every structured avoid rule (habit, test and dismissal-cooldown blocks) with its scope,
+ * source, age, expiry and status; one-click clear per rule and clear-all, through the capability registry.
+ */
+export function BlacklistPanel({ engine }: { engine: AssistEngine }) {
+  const rules = engine.avoidRules;
+  const [now, setNow] = useState(() => Date.now());
+  const [shownFor, setShownFor] = useState(rules);
+  if (shownFor !== rules) {
+    setShownFor(rules);
+    setNow(Date.now());
+  }
+  return (
+    <section className={styles.panel} aria-label="Blacklist">
+      <h3>Blacklist <small>{rules.length}</small></h3>
+      {!rules.length && <p className={styles.muted}>Only repeated fresh failures of one action on one target and point block dispatch; they expire on their own.</p>}
+      <ul className={styles.log} aria-label="Blacklist entries">
+        {rules.map((r) => (
+          <li key={r.id} data-tone={isBlocking(r, now) ? 'error' : 'warn'}>
+            <b>{ruleScope(r)}</b> <small>{r.source} · {isBlocking(r, now) ? 'blocking' : `pending ${r.strikes}/${RELEARN_STRIKES}`} · age {durationText(now - r.firstAt)} · expires in {durationText(r.expiresAt - now)}</small> — {r.reason}
+            <button type="button" aria-label={`Clear blacklist entry ${ruleScope(r)}`} onClick={() => void engine.invoke('blacklist.clear', { id: r.id })}>✕</button>
+          </li>
+        ))}
+      </ul>
+      {!!rules.length && <button type="button" onClick={() => void engine.invoke('blacklist.clear', { id: 'all' })}>Clear all</button>}
     </section>
   );
 }

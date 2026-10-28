@@ -1,5 +1,5 @@
 import type { Annotation, Frame, WorkflowStep } from './types.js';
-import { AiError, SAMPLE_VIEW, parseJsonReply, stripThinking, viewPoint } from './ai.js';
+import { AiError, AiSchemaError, SAMPLE_VIEW, askRetryingSchema, parseJsonReply, stripThinking, viewPoint } from './ai.js';
 import type { AiReply, AskFn, ViewSize } from './ai.js';
 import { gridPrompt, gridRef, replyPoint } from './grid.js';
 import { uid } from './planner.js';
@@ -26,37 +26,47 @@ const stepText = (step: WorkflowStep) => `"${step.name}" — action ${step.actio
 /** The model's ruling on a changed region: close it at (x, y), or leave it. */
 export type PopupDecision = ({ close: true; x: number; y: number; reason: string } | { close: false; reason: string }) & Thought;
 
-/** Asks the model whether the flagged region is an intrusive popup and where its close control is. */
+/** The popup reply contract, quoted in its prompt and in the schema retry. */
+const POPUP_SCHEMA = '{"close":boolean,"cell":string,"cx":number,"cy":number,"reason":string}';
+
+/** Asks the model whether the flagged region is an intrusive popup and where its close control is; a non-numeric point is asked once more. */
 export async function decidePopup(ask: AskFn, frame: Frame, box: Box): Promise<PopupDecision> {
-  const { content, thinking, view } = await ask({
-    system: (v) => `You are Droid Assist's popup handler. Look at the screenshot. ${coords(v)} Reply ONLY with JSON {"close":boolean,"cell":string,"cx":number,"cy":number,"reason":string}.`,
+  const req = {
+    system: (v: ViewSize) => `You are Droid Assist's popup handler. Look at the screenshot. ${coords(v)} Reply ONLY with JSON ${POPUP_SCHEMA}.`,
     prompt: `New content appeared in the region ${boxText(box)} (from cell ${gridRef(box)}). If it is an ad, dialog or popup that blocks the user, set close=true and give the center of its close/dismiss control as cell + cx,cy. Otherwise close=false.`,
     frame,
     json: true,
+  };
+  return askRetryingSchema(ask, req, POPUP_SCHEMA, ({ content, thinking, view }): PopupDecision => {
+    const r = parseJsonReply(content);
+    const reason = String(r.reason ?? '');
+    if (r.close !== true) return { close: false, reason, thinking };
+    return { close: true, ...replyPoint(r, undefined, view), reason, thinking };
   });
-  const r = parseJsonReply(content);
-  const reason = String(r.reason ?? '');
-  if (r.close !== true) return { close: false, reason, thinking };
-  return { close: true, ...replyPoint(r, undefined, view), reason, thinking };
 }
 
 /** The model's ruling on the next step: run it now (at a possibly corrected target) or wait. */
 export type StepDecision = ({ run: true; x: number; y: number; reason: string } | { run: false; reason: string }) & Thought;
 
-/** Asks the model whether the screen is ready for `step` and where its target is now. */
+/** The step-decision reply contract, quoted in its prompt and in the schema retry. */
+const STEP_SCHEMA = '{"run":boolean,"cell":string,"cx":number,"cy":number,"reason":string}';
+
+/** Asks the model whether the screen is ready for `step` and where its target is now; a non-numeric point is asked once more. */
 export async function decideStep(ask: AskFn, frame: Frame, step: WorkflowStep, goal: string): Promise<StepDecision> {
   const planned = { x: step.correctedX ?? step.x, y: step.correctedY ?? step.y };
   const target = `cell ${gridRef(planned)} = (${pct(planned.x)}, ${pct(planned.y)})`;
-  const { content, thinking, view } = await ask({
-    system: (v) => `You are Droid Assist's executor. Look at the screenshot and decide whether the next step can run now. ${coords(v)} Reply ONLY with JSON {"run":boolean,"cell":string,"cx":number,"cy":number,"reason":string}.`,
+  const req = {
+    system: (v: ViewSize) => `You are Droid Assist's executor. Look at the screenshot and decide whether the next step can run now. ${coords(v)} Reply ONLY with JSON ${STEP_SCHEMA}.`,
     prompt: `Goal: ${goal || '(none)'}\nNext step: ${stepText(step)}, planned target ${target}.\nSet run=true only if the screen is ready for it, with cell + cx,cy the target's current center. Set run=false if something blocks it or the screen is not ready.`,
     frame,
     json: true,
+  };
+  return askRetryingSchema(ask, req, STEP_SCHEMA, ({ content, thinking, view }): StepDecision => {
+    const r = parseJsonReply(content);
+    const reason = String(r.reason ?? '');
+    if (r.run !== true) return { run: false, reason, thinking };
+    return { run: true, ...replyPoint(r, step, view), reason, thinking };
   });
-  const r = parseJsonReply(content);
-  const reason = String(r.reason ?? '');
-  if (r.run !== true) return { run: false, reason, thinking };
-  return { run: true, ...replyPoint(r, step, view), reason, thinking };
 }
 
 /** The model's ruling on whether a step's named target is under the proposed point. */
@@ -161,10 +171,13 @@ export interface StepReflection {
 
 const optionalText = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
-/** Reads the verdict JSON; a missing or non-boolean `success` is an AiError, never a guess. */
+/** The verdict reply contract, quoted in its prompt and in the schema retry. */
+export const VERDICT_SCHEMA = '{"success":boolean,"pattern_avoid":string|null,"pattern_add":string|null}';
+
+/** Reads the verdict JSON; a missing or non-boolean `success` is an AiSchemaError, never a guess. */
 export function parseVerdict(reply: AiReply): StepVerdict {
   const r = parseJsonReply(reply.content);
-  if (typeof r.success !== 'boolean') throw new AiError(`AI verdict had no boolean "success": ${String(r.success)}`);
+  if (typeof r.success !== 'boolean') throw new AiSchemaError('success', `AI verdict had no boolean "success": ${String(r.success)}`);
   return { success: r.success, pattern_avoid: optionalText(r.pattern_avoid), pattern_add: optionalText(r.pattern_add), thinking: reply.thinking };
 }
 
@@ -181,15 +194,15 @@ export async function reflectOn(ask: AskFn, frame: Frame | null, step: WorkflowS
   return { text: stripThinking(first.content), thinking: first.thinking, raw: first.content };
 }
 
-/** The verdict stage: given the reflection, the model gives the final JSON verdict {success, pattern_avoid, pattern_add}. */
+/** The verdict stage: given the reflection, the model gives the final JSON verdict; a reply without boolean success is asked once more. */
 export async function judgeStep(ask: AskFn, frame: Frame | null, step: WorkflowStep, result: StepResult, goal: string, reflection: string): Promise<StepVerdict> {
-  const second = await ask({
-    system: 'You are Droid Assist giving the final verdict on an executed step. Reply ONLY with JSON {"success":boolean,"pattern_avoid":string|null,"pattern_add":string|null} where pattern_avoid is a behaviour to avoid next time and pattern_add a behaviour to add, or null.',
+  const req = {
+    system: `You are Droid Assist giving the final verdict on an executed step. Reply ONLY with JSON ${VERDICT_SCHEMA} where pattern_avoid is a behaviour to avoid next time and pattern_add a behaviour to add, or null.`,
     prompt: `${stepFacts(step, result, goal)}\nYour reflection: ${reflection}`,
     frame,
     json: true,
-  });
-  return parseVerdict(second);
+  };
+  return askRetryingSchema(ask, req, VERDICT_SCHEMA, parseVerdict);
 }
 
 /**

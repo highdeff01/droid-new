@@ -304,7 +304,18 @@ export const RAW_REPLY_MAX = 200;
 export class AiParseError extends AiError {
   override name = 'AiParseError';
   constructor(readonly raw: string) {
-    super('AI reply was not a JSON object (model returned prose)');
+    super('AI reply was not a JSON object: no {...} object found in the reply');
+  }
+}
+
+/** A JSON reply whose `field` is missing or not of the type its contract requires; the message says which and what it held. */
+export class AiSchemaError extends AiError {
+  override name = 'AiSchemaError';
+  constructor(
+    readonly field: string,
+    message: string,
+  ) {
+    super(message);
   }
 }
 
@@ -369,12 +380,30 @@ export function parseJsonReply(raw: string): Record<string, unknown> {
 
 /**
  * A model coordinate as a 0..1 fraction: values above 1 are read as pixels of the
- * `size`-wide image the model saw. Throws AiError when it is not a number.
+ * `size`-wide image the model saw. Throws AiSchemaError naming `field` when it is not a number.
  */
-export function toUnit(value: unknown, size: number): number {
+export function toUnit(value: unknown, size: number, field = 'coordinate'): number {
   const n = typeof value === 'string' ? Number.parseFloat(value) : value;
-  if (typeof n !== 'number' || !Number.isFinite(n)) throw new AiError(`AI gave a non-numeric coordinate: ${String(value)}`);
+  if (typeof n !== 'number' || !Number.isFinite(n)) throw new AiSchemaError(field, `AI gave a non-numeric coordinate "${field}": ${String(value)}`);
   return Math.min(1, Math.max(0, n > 1 ? n / size : n));
+}
+
+/** The correction a schema retry carries: what was wrong with the reply and the exact schema to answer with. */
+export const schemaRetryText = (error: AiSchemaError, schema: string) =>
+  `Your previous reply was rejected — ${error.message}. Reply with ONLY this JSON object and nothing else: ${schema}`;
+
+/**
+ * Asks `req` and parses the reply; when the reply breaks its schema (AiSchemaError) it asks once
+ * more with the error and the exact `schema` appended to the prompt. A second failure throws.
+ */
+export async function askRetryingSchema<T>(ask: AskFn, req: AskRequest, schema: string, parse: (reply: AiReply) => T): Promise<T> {
+  const first = await ask(req);
+  try {
+    return parse(first);
+  } catch (error) {
+    if (!(error instanceof AiSchemaError)) throw error;
+    return parse(await ask({ ...req, prompt: `${req.prompt}\n${schemaRetryText(error, schema)}` }));
+  }
 }
 
 /** One question to the model about the current screen. */

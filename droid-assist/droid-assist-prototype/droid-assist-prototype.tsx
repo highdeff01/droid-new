@@ -2,7 +2,7 @@ import { Routes, Route } from 'react-router-dom';
 import { useAssist } from './use-assist.js';
 import { Stage } from './stage.js';
 import { Hud } from './hud.js';
-import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BriefingPanel, CapabilitiesPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel, SnipGalleryPanel, SectionsPanel, WakePanel } from './panels.js';
+import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BlacklistPanel, BriefingPanel, CapabilitiesPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel, SnipGalleryPanel, SectionsPanel, WakePanel } from './panels.js';
 import { AgentBusPanel, AgentCrewPanel, SubagentReportPanel, CrewPanel, ResolutionPanel } from './bus-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
 import { ProjectsPanel } from './projects-panel.js';
@@ -37,7 +37,7 @@ import styles from './droid-assist.module.css';
 const PANELS: Record<PanelId, (props: { engine: AssistEngine }) => JSX.Element | null> = {
   workflow: WorkflowPanel, variations: VariationsPanel, persona: PersonaPanel, ruler: RulerPanel, elements: ElementsPanel,
   elementMap: ElementMapPanel, snipGallery: SnipGalleryPanel, inventory: InventoryPanel, routes: RoutesPanel, retest: RetestPanel,
-  sections: SectionsPanel, learnedCoords: LearnedCoordsPanel, library: LibraryPanel, patterns: PatternsPanel,
+  sections: SectionsPanel, learnedCoords: LearnedCoordsPanel, library: LibraryPanel, patterns: PatternsPanel, blacklist: BlacklistPanel,
   operationMemory: OperationMemoryPanel, knowledge: KnowledgePanel, profile: ProfilePanel, stats: StatsPanel, memory: MemoryPanel,
   goals: GoalsPanel, notifications: NotificationsPanel, system: SystemPanel, watcher: WatcherPanel, wake: WakePanel,
   initiative: InitiativePanel, triggers: TriggersPanel, projects: ProjectsPanel, approvals: ApprovalsPanel, artifacts: ArtifactsPanel,
@@ -97,6 +97,7 @@ function AssistScreen() {
             <LearnedCoordsPanel engine={engine} />
             <LibraryPanel engine={engine} />
             <PatternsPanel engine={engine} />
+            <BlacklistPanel engine={engine} />
             <OperationMemoryPanel engine={engine} />
             <KnowledgePanel engine={engine} />
             <ProfilePanel engine={engine} />
