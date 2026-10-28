@@ -192,6 +192,25 @@ describe('main app bridge — frames as a capture source', () => {
 describe('main app bridge — commands and intercept routing', () => {
   const el = { id: 'el1', name: 'Save button', x: 0.3, y: 0.6, source: 'familiar' as const };
 
+  it('dry-runs a replay on the connected main-app frame without the desktop bridge', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(url);
+      throw new TypeError('offline');
+    }));
+    const { bridge, result } = await connected();
+    act(() => bridge.handlers!.onMessage(inbound('frame', { image: 'data:image/jpeg;base64,AA', width: 1280, height: 720 })));
+    await settle();
+    act(() => result.current.loadCard({ id: 'dry', name: 'Dry run', description: '', savedAt: 0, steps: [{ id: 'dry', name: 'Click Save', action: 'click', target: 'Save button', x: 0.3, y: 0.6, status: 'pending' }] }));
+
+    await act(() => result.current.replay());
+
+    expect(result.current.steps[0].status).toBe('pending');
+    expect(result.current.log.some((l) => l.message.includes('verified on the main-app frame'))).toBe(true);
+    expect(calls.some((url) => url.includes('/api/health') || url.includes('/api/replay'))).toBe(false);
+    expect(sentOf(bridge.sent, 'run_script')).toHaveLength(0);
+  });
+
   it('armed: a click on the main-app source is sent as run_script and the main app result is the outcome', async () => {
     const { bridge, result } = await connected((env) => (env.type === 'run_script' ? { ok: true, message: 'clicked Save' } : null));
     act(() => result.current.toggleArmed());

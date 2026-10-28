@@ -1791,9 +1791,8 @@ export function useAssist() {
   };
 
   /**
-   * The one execution path every feature uses. Demo: simulated on the demo canvas. Otherwise
-   * real input via run-step (live desktop frame, drift correction, AI grounding of named
-   * targets, bridge dispatch, re-verify), gated by abort, arm and the run's budget.
+   * The one execution path every feature uses. Dry runs verify against in-app frames without dispatch;
+   * armed external input uses the desktop bridge and stays gated by abort, arm and the run's budget.
    */
   const performStep = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     if (abortedRef.current) return refused(step, 'Aborted — real input not sent');
@@ -1857,7 +1856,10 @@ export function useAssist() {
     const local = LOCAL_ACTIONS[step.action];
     if (local) return { ...(await local(step)), executed: true, target };
     if (POINTER_ACTIONS.has(step.action)) aim(target);
-    if (dryRun) return { ok: true, executed: false, message: `main app — ${DRY_RUN}`, target };
+    if (dryRun) {
+      if (!framesRef.current[0] && !step.refFrame) return { ok: false, executed: false, halt: true, message: 'No captured or saved main-app frame is available for this dry run — wait for a preview frame and retry', target };
+      return { ok: true, executed: false, message: `verified on the main-app frame — ${DRY_RUN}`, target };
+    }
     const gate = gateRealInput(budget);
     if (gate) return refused(step, gate);
     const result = await (mainBridgeRef.current?.request('run_script', runScriptPayload(step)) ?? Promise.resolve({ ok: false, message: NOT_CONNECTED }));
@@ -1873,13 +1875,20 @@ export function useAssist() {
    */
   const dispatchInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
+    const target = { x: step.x, y: step.y };
+    if (dryRun && LOCAL_ACTIONS[step.action]) return { ok: true, executed: false, message: `Local ${step.action} action skipped — ${DRY_RUN}`, target };
     if (sourceRef.current === 'main-app') return performOnMainApp(step, budget, dryRun);
     if (sourceRef.current === 'demo' && (dryRun || !bridgeUrl)) {
       const out = await performOnDemo(step, dryRun);
       if (out.executed) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
       return out;
     }
-    if (!bridgeUrl) return refused(step, BRIDGE_REQUIRED);
+    const lastFrame = framesRef.current[0];
+    const referenceFrame = step.refFrame;
+    if (dryRun && !lastFrame && !referenceFrame) {
+      return { ok: false, executed: false, halt: true, message: 'No captured or saved frame is available for this dry run — share a screen, connect a bridge, or switch to the demo desktop', target };
+    }
+    if (!dryRun && !bridgeUrl) return refused(step, BRIDGE_REQUIRED);
     const gate = dryRun ? null : gateRealInput(budget);
     if (gate) return refused(step, gate);
     if (!dryRun && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) return performLiveDrag(step, actor);
@@ -1888,6 +1897,11 @@ export function useAssist() {
       bridgeUrl,
       bridgeToken,
       capture: async () => {
+        if (dryRun) {
+          const f = lastFrame ?? referenceFrame!;
+          size = { w: f.srcW, h: f.srcH };
+          return f;
+        }
         // Native multi-monitor capture: verify on the chosen display's own frames, which carry
         // its desktop origin so input lands on that display; otherwise the bridge's screenshot.
         const native = sourceRef.current === 'screen' && captureRef.current?.kind === 'native' ? framesRef.current[0] : undefined;
@@ -1900,7 +1914,7 @@ export function useAssist() {
       drift: driftThresholds(),
       dispatch: !dryRun,
       log: (m, tone) => addLog(actor, m, tone),
-      grounding: aiOnline() && stageOn('grounding') ? grounding : undefined,
+      grounding: !dryRun && aiOnline() && stageOn('grounding') ? grounding : undefined,
       seed: habitSeed,
       learned: learnedPoint,
       onVerified: strengthen,
@@ -1909,6 +1923,10 @@ export function useAssist() {
     });
     if (out.executed) recordAction(step, out, actor, 'bridge', size.w, size.h);
     noteBridge(step, out, actor);
+    if (dryRun && out.ok) {
+      const frameLabel = lastFrame ? 'last captured frame' : 'saved reference frame';
+      return { ...out, message: `verified on the ${frameLabel} — ${DRY_RUN}` };
+    }
     return out;
   };
 
@@ -3762,9 +3780,9 @@ export function useAssist() {
       addLog('Safety', `${label} refused — ABORTED is active; clear the abort first`, 'error');
       return null;
     }
-    const viaBridge = sourceRef.current !== 'demo' || (!selfTest && armedRef.current && !!settingsRef.current.bridgeUrl);
-    if (viaBridge && !(await bridgeReady(label))) return null;
     const dryRun = selfTest || !armedRef.current;
+    const viaBridge = !dryRun && sourceRef.current !== 'main-app' && (sourceRef.current !== 'demo' || !!settingsRef.current.bridgeUrl);
+    if (viaBridge && !(await bridgeReady(label))) return null;
     if (dryRun && !selfTest) addLog('Safety', `Real input disarmed — ${label} runs as a ${DRY_RUN}`, 'warn');
     remindFailures(runGoal, label);
     const budget = createBudget(settingsRef.current.actionBudget);
@@ -3811,7 +3829,7 @@ export function useAssist() {
     setSteps(stepsRef.current);
     const moved: MovedElement[] = [];
     let ok = 0;
-    addLog(label, dryRun ? `Verifying ${stepsRef.current.length} step(s) on the live screen — no input is sent` : `Performing ${stepsRef.current.length} step(s) as real input`);
+    addLog(label, dryRun ? `Verifying ${stepsRef.current.length} step(s) against the available screen frame — no input is sent` : `Performing ${stepsRef.current.length} step(s) as real input`);
     for (let i = 0; i < stepsRef.current.length && !abortRef.current; i++) {
       const out = await replayStep(i, budget, dryRun, label);
       if (out.ok) ok++;
@@ -4636,9 +4654,9 @@ export function useAssist() {
     if (!objectives) return;
     publishChain({ goal: text, objectives, report: null });
     applyPlan(text, objectives.map((o) => o.step), 'Chain breakdown');
-    const viaBridge = sourceRef.current !== 'demo' || (armedRef.current && !!settingsRef.current.bridgeUrl);
-    if (viaBridge && !(await bridgeReady(CHAIN))) return;
     const dryRun = !armedRef.current;
+    const viaBridge = !dryRun && sourceRef.current !== 'main-app' && (sourceRef.current !== 'demo' || !!settingsRef.current.bridgeUrl);
+    if (viaBridge && !(await bridgeReady(CHAIN))) return;
     if (dryRun) addLog('Safety', `Real input disarmed — the chain runs as a ${DRY_RUN}`, 'warn');
     const budget = createBudget(settingsRef.current.actionBudget);
     beginRun();

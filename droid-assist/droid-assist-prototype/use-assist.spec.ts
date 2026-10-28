@@ -427,7 +427,10 @@ describe('useAssist reverse of the last real action', () => {
 describe('useAssist key and scroll recorder with human timing', () => {
   const press = (key: string, mods: Partial<{ ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }> = {}) => ({ key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...mods });
 
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   async function recordKeys() {
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -482,6 +485,26 @@ describe('useAssist key and scroll recorder with human timing', () => {
     const result = await recordKeys();
     await act(() => result.current.replay());
     expect(result.current.history).toHaveLength(0);
+  });
+
+  it('dry-runs external screen steps against the latest captured frame without contacting the desktop bridge', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(url);
+      throw new TypeError('offline');
+    }));
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(frame()));
+    act(() => result.current.loadCard({ id: 'dry', name: 'Dry run', description: '', savedAt: 0, steps: [{ id: 'dry', name: 'Click target', action: 'click', x: 0.5, y: 0.5, status: 'pending' }] }));
+
+    await act(() => result.current.replay());
+
+    expect(result.current.steps[0].status).toBe('pending');
+    expect(result.current.log.some((l) => l.message.includes('verified on the last captured frame'))).toBe(true);
+    expect(calls.some((url) => url.includes('/api/health') || url.includes('/api/replay'))).toBe(false);
   });
 
   it('a key step is refused when aborted or when loop control has the executor unchecked', async () => {
@@ -1000,7 +1023,7 @@ describe('useAssist screen-change responder and proposals', () => {
     act(() => result.current.setSettings({ ...result.current.settings, autoAct: true }));
     await act(async () => {
       hooks.onFrame!(changed());
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 1250));
     });
     return result;
   }
