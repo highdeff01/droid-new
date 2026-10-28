@@ -196,6 +196,8 @@ export interface WorkflowStep {
   /** Visual evidence from the last execution: screenshots just before and just after the action. */
   beforeFrame?: Frame;
   afterFrame?: Frame;
+  /** When the step's action was verified complete on the live frame (screenshot verdict success); cleared when it runs again. */
+  verifiedAt?: number;
 }
 
 /** Alignment between the live screen and the active step. */

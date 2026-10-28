@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowStep } from './types.js';
 import { AiError, type AskRequest } from './ai.js';
-import { applyFixes, executorBusy, habitPatterns, isConfident, parseReview, reviewRun, staleFixes, supervisorDigest, type SupervisorInput } from './supervisor.js';
+import { SUPERVISOR_REPLAN_LIMIT, applyFixes, executorBusy, habitPatterns, haltText, isConfident, opportunityNotes, parseReview, replanFeedback, reviewDecision, reviewRun, staleFixes, supervisorDigest, type SupervisorInput, type SupervisorReview } from './supervisor.js';
 
 const step = (id: string, patch: Partial<WorkflowStep> = {}): WorkflowStep => ({ id, name: `Step ${id}`, action: 'click', x: 0.1, y: 0.1, status: 'pending', ...patch });
 
@@ -45,10 +45,54 @@ describe('parseReview', () => {
     expect(parseReview('{"plan_ok":true,"assessment":"fine"}', null, steps).confidence).toBe(0);
     expect(() => parseReview('{"plan_ok":true}', null, steps)).toThrow(AiError);
   });
+
+  it('reads problem, strategy, the avoid list and [Opportunity] notes from every field, once each', () => {
+    const reply = { plan_ok: false, assessment: 'Popup covers the grid. [Opportunity] After closing the popup, re-center the mouse to Cell A1', confidence: 0.4, problem: 'Stale coordinates under a popup', strategy: 'Close the popup first', avoid: ['double-click the cell', ' ', 'Double-click the cell'], opportunities: ['after closing the popup, re-center the mouse to cell A1', 'Press Escape'] };
+    const r = parseReview(JSON.stringify(reply), 'I see [Opportunity] Scroll to the top\nmore', steps);
+    expect(r).toMatchObject({ problem: 'Stale coordinates under a popup', strategy: 'Close the popup first', avoid: ['double-click the cell'] });
+    expect(r.opportunities).toEqual(['after closing the popup, re-center the mouse to cell A1', 'Press Escape', 'Scroll to the top']);
+  });
+
+  it('defaults the feedback fields when the reply has none', () => {
+    expect(parseReview('{"plan_ok":true,"assessment":"fine"}', null, steps)).toMatchObject({ problem: '', strategy: '', avoid: [], opportunities: [] });
+  });
+});
+
+describe('opportunityNotes', () => {
+  it('reads each [Opportunity] note up to the line end or the next tag', () => {
+    expect(opportunityNotes('a [Opportunity] Click Save [Note] x\n[opportunity]  Close tab ')).toEqual(['Click Save', 'Close tab']);
+    expect(opportunityNotes('no notes')).toEqual([]);
+  });
+});
+
+describe('reviewDecision and replanFeedback', () => {
+  const review = (patch: Partial<SupervisorReview>): SupervisorReview => ({ time: 0, planOk: false, assessment: 'Plan is stale', confidence: 0.5, stepFixes: [], habits: [], thinking: null, problem: '', strategy: '', avoid: [], opportunities: [], ...patch });
+
+  it('re-plans a rejection until the limit of rejected re-plans, then halts; an OK review carries on', () => {
+    expect(SUPERVISOR_REPLAN_LIMIT).toBe(3);
+    expect(reviewDecision(review({ planOk: true }), 5)).toBe('ok');
+    expect(reviewDecision(review({}), 0)).toBe('replan');
+    expect(reviewDecision(review({}), 2)).toBe('replan');
+    expect(reviewDecision(review({}), 3)).toBe('halt');
+    expect(reviewDecision(review({}), 1, 1)).toBe('halt');
+  });
+
+  it('injects the diagnosed problem, strategy, blacklisted methods and opportunities', () => {
+    const text = replanFeedback(review({ problem: 'Popup occludes Cell A1', strategy: 'Close the popup, then click', avoid: ['Click 1 at old coordinates'], opportunities: ['Re-center the mouse to Cell A1'] }));
+    expect(text).toContain('Popup occludes Cell A1');
+    expect(text).toContain('Suggested strategy: Close the popup, then click');
+    expect(text).toContain('Blacklisted — do not repeat: Click 1 at old coordinates');
+    expect(text).toContain('Re-center the mouse to Cell A1');
+  });
+
+  it('falls back to the assessment and states why the goal cannot proceed', () => {
+    expect(replanFeedback(review({}))).toBe('Supervisor rejected the plan: Plan is stale');
+    expect(haltText('fill A1', review({ problem: 'Cell A1 is never reachable' }), 3)).toMatch(/^Goal "fill A1" cannot proceed — .*3 consecutive.*Cell A1 is never reachable/);
+  });
 });
 
 describe('isConfident', () => {
-  const base = { time: 0, planOk: false, assessment: 'x', thinking: null, habits: [] };
+  const base = { time: 0, planOk: false, assessment: 'x', thinking: null, habits: [], problem: '', strategy: '', avoid: [], opportunities: [] };
   it('applies only confident reviews that suggest something', () => {
     const fix = { stepId: 'a', index: 1, x: 0.5, y: 0.5, reason: '' };
     expect(isConfident({ ...base, confidence: 0.9, stepFixes: [fix] })).toBe(true);

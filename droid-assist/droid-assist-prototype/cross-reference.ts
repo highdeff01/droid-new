@@ -3,7 +3,7 @@ import { mappedAt, type MappedElement } from './element-map-studio.js';
 import { findFamiliar } from './coords.js';
 import { habitKey, isReliable, successRate } from './habits.js';
 import { similarity } from './planner.js';
-import { failureLine, sameTarget, type FailureRecord } from './operation-memory.js';
+import { FAILURE_PATTERN_SUFFIX, failureLine, sameTarget, type FailureRecord } from './operation-memory.js';
 import { bestPosition, classifyMotion, currentPosition, findDossier, type PositionDossier } from './position-dossier.js';
 import { memoryFor, type MemoryEntry, type MemoryOrigin } from './enhanced-memory.js';
 
@@ -86,9 +86,30 @@ function habitChecks(target: string, _p: Point, k: Knowledge): CrossCheck[] {
   }));
 }
 
+/** An unscoped avoid pattern blocks a target only when it covers at least this share of the target's words. */
+export const AVOID_MATCH = 0.6;
+
+const SCOPED_STEP = /on "([^"]+)" at \((\d+(?:\.\d+)?)%, (\d+(?:\.\d+)?)%\)/g;
+
+/** The element + point entries of a failed run's automatic (scoped) avoid pattern; [] for any other pattern. */
+export function scopedEntries(pattern: string): Array<Point & { element: string }> {
+  if (!pattern.endsWith(FAILURE_PATTERN_SUFFIX)) return [];
+  return [...pattern.matchAll(SCOPED_STEP)].map((m) => ({ element: m[1], x: Number(m[2]) / 100, y: Number(m[3]) / 100 }));
+}
+
+/**
+ * Whether an avoid pattern blocks this target at this point: a scoped pattern only for the same element
+ * within AGREE_DISTANCE of a recorded point; an unscoped one only when it covers the target's words.
+ */
+export function avoidMatches(pattern: string, target: string, p: Point): boolean {
+  const scoped = scopedEntries(pattern);
+  if (!scoped.length) return similarity(target, pattern) >= AVOID_MATCH;
+  return scoped.some((e) => related(target, e.element) && Math.hypot(e.x - p.x, e.y - p.y) <= AGREE_DISTANCE);
+}
+
 /** Learned avoid-patterns and habit avoid-lessons that match the target; a match always conflicts. */
-function avoidChecks(target: string, _p: Point, k: Knowledge): CrossCheck[] {
-  const learned = k.patterns.filter((pt) => pt.kind === 'avoid' && similarity(target, pt.pattern) > 0).map((pt) => `Learned avoid: ${pt.pattern}`);
+function avoidChecks(target: string, p: Point, k: Knowledge): CrossCheck[] {
+  const learned = k.patterns.filter((pt) => pt.kind === 'avoid' && avoidMatches(pt.pattern, target, p)).map((pt) => `Learned avoid: ${pt.pattern}`);
   const lessons = habitsFor(target, k).flatMap((h) => h.lessons.filter((l) => l.kind === 'avoid').map((l) => `Habit avoid: ${l.text}`));
   return [...learned, ...lessons].map((text): CrossCheck => ({ source: 'avoid', status: 'conflicting', text }));
 }

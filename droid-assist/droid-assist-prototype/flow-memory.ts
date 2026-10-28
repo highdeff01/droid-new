@@ -1,4 +1,5 @@
 import type { LearnedPattern, SavedCard, WorkflowStep } from './types.js';
+import { POINTER_ACTIONS } from './types.js';
 import { parseJsonReply } from './ai.js';
 import type { AskFn } from './ai.js';
 import { generateCard, similarity, uid } from './planner.js';
@@ -50,10 +51,21 @@ export function upsertCard(cards: SavedCard[], card: SavedCard): { cards: SavedC
 /** A new learned pattern. */
 export const newPattern = (kind: LearnedPattern['kind'], pattern: string, context: string): LearnedPattern => ({ id: uid('pat'), kind, pattern: pattern.trim(), context: context.trim(), time: Date.now() });
 
+const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+
+/**
+ * One failed step scoped to what it acted on: `"name" (action on "element" at (x%, y%))` for a pointer
+ * step, `"name" (action)` otherwise — so the avoid lesson blocks that element at that point, not the step name.
+ */
+const scopedStep = (s: WorkflowStep) => {
+  if (!POINTER_ACTIONS.has(s.action)) return `"${s.name}" (${s.action})`;
+  return `"${s.name}" (${s.action} on "${s.target ?? s.name}" at (${pct(s.correctedX ?? s.x)}, ${pct(s.correctedY ?? s.y)}))`;
+};
+
 /** The lesson a failed run always leaves, with or without the model: avoid its failed steps as planned. */
 export function failurePattern(goal: string, steps: WorkflowStep[]): LearnedPattern {
   const failed = steps.filter((s) => s.status === 'failed' || s.status === 'pending' || s.status === 'running');
-  const names = failed.map((s) => `"${s.name}" (${s.action})`).join(', ') || 'the planned steps';
+  const names = failed.map(scopedStep).join(', ') || 'the planned steps';
   return newPattern('avoid', `Step ${names} ${FAILURE_PATTERN_SUFFIX}`, goal);
 }
 

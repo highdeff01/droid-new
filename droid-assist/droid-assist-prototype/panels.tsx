@@ -41,6 +41,7 @@ import { sectionMemoryLines } from './sections.js';
 import { replicaLine } from './replicate.js';
 import { SIDE_TEST_MODES, feedbackLine, type SideTestMode } from './side-test.js';
 import { RecoverySettings, RelaxSettings } from './relax-recovery-settings.js';
+import { checkoffSummary, checkoffText } from './workflow-progress.js';
 import styles from './droid-assist.module.css';
 
 const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity', wake: 'Wake', decision: 'Decision', error: 'Error' };
@@ -200,7 +201,7 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
   const { steps, setSteps, draftCard, setDraftCard } = engine;
   return (
     <section className={styles.panel}>
-      <h3>Workflow <small>{steps.length} step(s)</small></h3>
+      <h3>Workflow <small>{steps.length} step(s){steps.length > 0 && ` · ${checkoffText(checkoffSummary(steps))}`}</small></h3>
       {!steps.length && <p className={styles.muted}>Record, or type a goal and press ✨ AI plan.</p>}
       <ol className={styles.steps}>
         {steps.map((s, i) => (
@@ -210,6 +211,7 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
               <input value={s.name} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} onFocus={(e) => { e.currentTarget.dataset.was = e.currentTarget.value; }} onBlur={(e) => { const name = e.currentTarget.value.trim(); if (name !== (e.currentTarget.dataset.was ?? '').trim()) engine.knowledge.noteSignal('correction', `renamed step to "${name}"`); }} aria-label={`Step ${i + 1} name`} />
               <small>
                 {s.action}{s.target ? ` "${s.target}"` : ''}{(s.action === 'key' || s.action === 'scroll') && s.text ? ` ${s.text}` : ''} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}%{s.endX !== undefined && s.endY !== undefined ? ` → ${s.endTarget ? `"${s.endTarget}" ` : ''}${(s.endX * 100).toFixed(0)}%,${(s.endY * 100).toFixed(0)}%` : ''} · {s.status}
+                {s.verifiedAt !== undefined && <b aria-label={`Step ${i + 1} checked off`}> · ✓ {clock(s.verifiedAt)}</b>}
                 {s.delayMs !== undefined && ` · after ${s.delayMs}ms`}
                 {s.driftPx !== undefined && ` · drift ${s.driftPx}px`}
                 {s.drift !== undefined && ` · match ${s.drift.toFixed(3)}`}

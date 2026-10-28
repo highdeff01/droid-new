@@ -44,7 +44,18 @@ export interface SupervisorReview extends Thought {
   confidence: number;
   stepFixes: StepFix[];
   habits: HabitUpdate[];
+  /** The diagnosed reason the plan is invalid; '' when none was given. */
+  problem: string;
+  /** The suggested strategy for the re-plan; '' when none was given. */
+  strategy: string;
+  /** Methods the re-plan must not repeat (blacklisted). */
+  avoid: string[];
+  /** Distinct "[Opportunity]" notes: actions to take as immediate next steps. */
+  opportunities: string[];
 }
+
+/** Rejected re-plans in a row after which the supervisor stops the run (convergence guard). */
+export const SUPERVISOR_REPLAN_LIMIT = 3;
 
 /** Everything the supervisor consolidates for one review. */
 export interface SupervisorInput {
@@ -124,14 +135,56 @@ export function parseReview(content: string, thinking: string | null, steps: Wor
   const c = typeof r.confidence === 'number' && Number.isFinite(r.confidence) ? Math.min(1, Math.max(0, r.confidence)) : 0;
   const stepFixes = (Array.isArray(r.step_fixes) ? r.step_fixes : []).map((f) => toFix(f, steps, view)).filter((f): f is StepFix => f !== null);
   const habits = (Array.isArray(r.habits) ? r.habits : []).map(toHabit).filter((h): h is HabitUpdate => h !== null);
-  return { time: now, planOk: r.plan_ok === true, assessment, confidence: c, stepFixes, habits, thinking };
+  const problem = optionalText(r.problem) ?? '';
+  const strategy = optionalText(r.strategy) ?? '';
+  const opportunities = unique([...textList(r.opportunities), ...[assessment, strategy, thinking ?? ''].flatMap(opportunityNotes)]);
+  return { time: now, planOk: r.plan_ok === true, assessment, confidence: c, stepFixes, habits, thinking, problem, strategy, avoid: unique(textList(r.avoid)), opportunities };
+}
+
+const OPPORTUNITY = /\[Opportunity\]\s*([^\n[]+)/gi;
+
+/** The text of every "[Opportunity] …" note in `text`, up to the line end or the next bracketed tag. */
+export function opportunityNotes(text: string): string[] {
+  return [...text.matchAll(OPPORTUNITY)].map((m) => m[1].trim()).filter(Boolean);
+}
+
+/** The non-empty trimmed strings of a reply array; anything else is []. */
+function textList(v: unknown): string[] {
+  return Array.isArray(v) ? v.map(optionalText).filter((s): s is string => s !== undefined) : [];
+}
+
+/** First occurrence of each entry, compared case-insensitively. */
+function unique(list: string[]): string[] {
+  const seen = new Set<string>();
+  return list.filter((s) => !seen.has(s.toLowerCase()) && Boolean(seen.add(s.toLowerCase())));
+}
+
+/** What the run does with a review: carry on, re-plan with its feedback, or halt after `limit` rejected re-plans. */
+export function reviewDecision(review: SupervisorReview, replans: number, limit = SUPERVISOR_REPLAN_LIMIT): 'ok' | 'replan' | 'halt' {
+  if (review.planOk) return 'ok';
+  return replans >= limit ? 'halt' : 'replan';
+}
+
+/** The review's feedback for the planner: diagnosed problem, strategy, blacklisted methods and opportunities. */
+export function replanFeedback(review: SupervisorReview): string {
+  return [
+    `Supervisor rejected the plan: ${review.problem || review.assessment}`,
+    review.strategy && `Suggested strategy: ${review.strategy}`,
+    review.avoid.length > 0 && `Blacklisted — do not repeat: ${review.avoid.join('; ')}`,
+    review.opportunities.length > 0 && `Opportunities to take as the next steps: ${review.opportunities.join('; ')}`,
+  ].filter(Boolean).join('\n');
+}
+
+/** The stop message when the guard trips: the goal cannot proceed, and the last diagnosed reason why. */
+export function haltText(goal: string, review: SupervisorReview, replans: number): string {
+  return `Goal "${goal}" cannot proceed — the supervisor rejected ${replans} consecutive re-plan(s). Last diagnosis: ${review.problem || review.assessment}`;
 }
 
 /** The one structured supervisor question: is the plan/coordinate set still right, and what should change? */
 export async function reviewRun(ask: AskFn, input: SupervisorInput): Promise<SupervisorReview> {
   const [frame, ...rest] = input.frames.slice(0, SUPERVISOR_FRAMES);
   const reply = await ask({
-    system: (view) => `You are Droid Assist's supervisor. You review every other agent, the screenshots and the model's thinking, then rule on the plan. The first screenshot is the newest. Coordinates are fractions 0..1 of the screenshot (${view.w}x${view.h}). Reply ONLY with JSON {"plan_ok":boolean,"assessment":string,"confidence":number,"step_fixes":[{"step":number,"x":number,"y":number,"target":string,"name":string,"text":string,"reason":string}],"habits":[{"kind":"avoid"|"add","pattern":string}]} where step is the 1-based step number, confidence is 0..1, and you omit any field you would not change.`,
+    system: (view) => `You are Droid Assist's supervisor. You review every other agent, the screenshots and the model's thinking, then rule on the plan. The first screenshot is the newest. Coordinates are fractions 0..1 of the screenshot (${view.w}x${view.h}). Reply ONLY with JSON {"plan_ok":boolean,"assessment":string,"confidence":number,"step_fixes":[{"step":number,"x":number,"y":number,"target":string,"name":string,"text":string,"reason":string}],"habits":[{"kind":"avoid"|"add","pattern":string}],"problem":string,"strategy":string,"avoid":[string],"opportunities":[string]} where step is the 1-based step number, confidence is 0..1, and you omit any field you would not change. When plan_ok is false, problem says why the plan is invalid, strategy how to re-plan, avoid the methods that must not be repeated, and opportunities the actions to take next (also written as "[Opportunity] …" notes).`,
     prompt: `${supervisorDigest(input)}\n\nGiven all this, is the current plan and coordinate set still correct, and what final updates should be applied?`,
     frame: frame ?? null,
     frames: rest,
