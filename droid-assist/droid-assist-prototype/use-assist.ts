@@ -22,6 +22,7 @@ import { DEFAULT_CHANGE_CELLS, assessChange, changeText, detectChange, type Chan
 import { localProposal, proposalText, proposeStep, type Proposal, type ProposalContext } from './proposal.js';
 import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './thinking-timeline.js';
 import { radarStatus, radarStatusText, radarTick, startRadar, type RadarEvent, type RadarState, type RadarTarget } from './radar.js';
+import { predictNextPosition, selfMoveSightings } from './mobility.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, pointerAction, selfTestBridge, sendNative, type BridgeResult } from './bridge.js';
 import { DRY_RUN, dragEndError, groundTarget, runStep, type Grounding, type SendFn, type StepDeps, type StepOutcome } from './run-step.js';
 import { NO_SOURCE, captureLabel, captureStatus, stepPlan, type FrameProvider, type StepPlan } from './capture-source.js';
@@ -1435,14 +1436,20 @@ export function useAssist() {
     addLog(actor, `Deadlock cleared — a popup/overlay blocks the screen and its dismissal was blacklisted; expired ${stuck.map(ruleScope).join(', ')} — "${step.name}" re-attempts with fresh grounding`, 'warn');
   };
 
+  /** Stores `card` in the Library through upsertCard: a near-duplicate of the same flow is replaced in place. */
+  const commitCard = useCallback((card: SavedCard) => {
+    const { cards: next, replaced } = upsertCard(cardsRef.current, card);
+    cardsRef.current = next;
+    setCards(next);
+    return { saved: next[0], replaced };
+  }, []);
+
   /** Saves a successful run as a card, replacing a near-duplicate of the same flow. */
   const autoSaveFlow = useCallback((runGoal: string, runSteps: WorkflowStep[]) => {
-    const { cards: next, replaced } = upsertCard(cardsRef.current, flowCard(runGoal, runSteps));
-    cardsRef.current = next;
-    flowRef.current = next[0].id;
-    setCards(next);
-    addLog('Library', `Flow saved: "${next[0].name}" (${runSteps.length} step(s), drift-corrected)${replaced ? ` — updated the existing "${replaced.name}"` : ''}`, 'ok');
-  }, [addLog]);
+    const { saved, replaced } = commitCard(flowCard(runGoal, runSteps));
+    flowRef.current = saved.id;
+    addLog('Library', `Flow saved: "${saved.name}" (${runSteps.length} step(s), drift-corrected)${replaced ? ` — updated the existing "${replaced.name}"` : ''}`, 'ok');
+  }, [addLog, commitCard]);
 
   /** Appends the finished run's summary (goal, steps, duration, outcome, flow) to the persisted run records. */
   const recordRun = useCallback((runGoal: string, runSteps: WorkflowStep[], opts: { dryRun: boolean; stopped: boolean }) => {
@@ -2092,7 +2099,6 @@ export function useAssist() {
 
   /** History gets real dispatches and verified dry runs; refused or unverified steps leave nothing. */
   const recorded = (out: Performed, dryRun: boolean) => out.executed || (dryRun && out.ok);
-  const historyWorthy = (out: Performed, dryRun: boolean) => out.executed || (dryRun && out.ok);
 
   /** Records a step's result on its route: a main-app failure is a main-app error; a desktop step is history and bridge health. */
   const noteRoute = (plan: StepPlan, step: WorkflowStep, out: Performed, actor: string, dryRun: boolean) => {
@@ -2100,9 +2106,7 @@ export function useAssist() {
       if (out.bridgeFailed) captureError({ kind: 'main-app', message: out.message, goal: goalRef.current, step: step.name });
       return;
     }
-    if (out.executed) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
     if (recorded(out, dryRun)) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
-    if (historyWorthy(out, dryRun)) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
     noteBridge(step, out, actor);
   };
 
@@ -2118,7 +2122,6 @@ export function useAssist() {
     if (plan.input === 'demo') {
       const out = await performOnDemo(step, dryRun);
       if (recorded(out, dryRun)) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
-      if (historyWorthy(out, dryRun)) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
       return out;
     }
     const local = plan.input === 'main-app' ? LOCAL_ACTIONS[step.action] : undefined;
@@ -2258,13 +2261,20 @@ export function useAssist() {
     if (el) recordOp('Familiar elements', 'elementMap', elementDraft('forget', el.name, `id ${id}`, 'forgotten'));
   };
 
-  /** Before a navigate step on an always-in-motion element: waits per its observed timing so it is caught where expected. */
-  const catchOnTime = async (step: WorkflowStep, actor: string) => {
+  /**
+   * Before a navigate step on an always-in-motion element: waits per its observed timing so it is
+   * caught where expected. When it waits for the next move, returns where that move should land
+   * (velocity of its last two self moves extrapolated one move ahead); otherwise null.
+   */
+  const catchOnTime = async (step: WorkflowStep, actor: string): Promise<{ x: number; y: number } | null> => {
     const el = step.mappedId ? elementMapRef.current.find((e) => e.id === step.mappedId) : undefined;
-    if (!el || motionOf(el).kind !== 'in_motion') return;
-    const plan = catchPlan(motionTiming(el), Date.now());
-    addLog(actor, `"${el.name}" is always in motion: ${plan.reason}`, 'info');
+    if (!el || motionOf(el).kind !== 'in_motion') return null;
+    const timing = motionTiming(el);
+    const plan = catchPlan(timing, Date.now());
+    const predicted = plan.waitMs && timing ? predictNextPosition(selfMoveSightings(el), timing.meanMs / 1000) : null;
+    addLog(actor, `"${el.name}" is always in motion: ${plan.reason}${predicted ? ` — aiming at its predicted spot ${gridRef(predicted)}` : ''}`, 'info');
     if (plan.waitMs) await sleep(plan.waitMs);
+    return predicted;
   };
 
   /**
@@ -2396,8 +2406,9 @@ export function useAssist() {
    */
   const perform = async (planned: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null, ladder = true): Promise<Performed & { verdict?: StepVerdict | null }> => {
     if (!proposal?.ready) return refused(planned, `No recorded proposal for "${planned.name}" — not executed`);
-    await catchOnTime(planned, actor);
-    const resolved = resolveMappedStep(planned, elementMapRef.current);
+    const predicted = await catchOnTime(planned, actor);
+    const mapped = resolveMappedStep(planned, elementMapRef.current);
+    const resolved = predicted && !('error' in mapped) ? { ...mapped, ...predicted } : mapped;
     if ('error' in resolved) return refused(planned, `${resolved.error} — not executed`);
     const gated = await gateDispatch(resolved, actor, proposal);
     if ('out' in gated) return gated.out;
@@ -6451,15 +6462,14 @@ export function useAssist() {
     }
   };
 
-  /** Stores `draft` with the current steps as a Library card (a saved operation); returns its id. */
+  /** Stores `draft` with the current steps as a Library card (a saved operation), replacing a near-duplicate flow; returns its id. */
   const storeCard = (draft: { name: string; description: string }) => {
-    const id = uid('card');
-    flowRef.current = id;
-    setCards((c) => [{ id, ...draft, steps: stepsRef.current, savedAt: Date.now() }, ...c]);
-    addLog('Library', `Saved "${draft.name}"`, 'ok');
+    const { saved, replaced } = commitCard({ id: uid('card'), ...draft, steps: stepsRef.current, savedAt: Date.now() });
+    flowRef.current = saved.id;
+    addLog('Library', `Saved "${draft.name}"${replaced ? ` — updated the existing "${replaced.name}"` : ''}`, 'ok');
     kb.noteSignal('saved', draft.name);
     setDraftCard(null);
-    return id;
+    return saved.id;
   };
 
   /** Highlights a point on the preview for 3 s. */
@@ -6492,8 +6502,7 @@ export function useAssist() {
     known: () => familiarRef.current,
     cards: () => cardsRef.current,
     saveCard: (card) => {
-      cardsRef.current = [card, ...cardsRef.current];
-      setCards(cardsRef.current);
+      commitCard(card);
     },
     recordHabit: (habitName, success) => {
       if (stageOn('coords')) commitHabits(recordOutcome(habitsRef.current, { target: habitName, context: habitContext(), success }));
@@ -6862,8 +6871,7 @@ export function useAssist() {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
-    armed, aborted, abortedAt, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, supervisor, superviseRun,
-    armed, aborted, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, avoidRules, clearBlacklist, supervisor, superviseRun,
+    armed, aborted, abortedAt, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, avoidRules, clearBlacklist, supervisor, superviseRun,
     ruler, continuing, habits, deleteHabit, pinHabit, runs, dossiers, preferPosition,
     /** The cross-referenced memory view: methods, element usage, paths, goals and positions. */
     memory: enhancedMemory,

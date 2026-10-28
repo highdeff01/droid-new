@@ -32,7 +32,7 @@ import { proposalStep, recallNotes, type NoteKind, type WatchProposal } from './
 import { WAKE_MS_MAX, WAKE_MS_MIN } from './wake.js';
 import { contextText } from './context-workflow.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
-import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, MASTER_PROMPT_MAX, type AiView } from './ai.js';
+import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, LOCAL_AI_PROXY_URL, MASTER_PROMPT_MAX, type AiView } from './ai.js';
 import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-history.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { OPERATION_RETRIES_MAX, OPERATION_RETRIES_MIN } from './operation-retry.js';
@@ -574,6 +574,8 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <MainBridgeSettings engine={engine} />
       <label className={styles.setting}>AI endpoint (Ollama /api/chat)
         <input value={settings.aiUrl} onChange={(e) => setSettings({ ...settings, aiUrl: e.target.value })} aria-label="AI endpoint URL" />
+        <button type="button" onClick={() => setSettings({ ...settings, aiUrl: LOCAL_AI_PROXY_URL })} disabled={settings.aiUrl === LOCAL_AI_PROXY_URL}>Use local AI proxy</button>
+        <small>The local proxy (npm run server) forwards to the Qwen endpoint from the same origin — no browser CORS; then press Connect.</small>
       </label>
       <label className={styles.setting}>AI view resolution
         <select value={settings.aiView} onChange={(e) => void engine.invoke('setting.aiView', { value: e.target.value })} aria-label="AI view resolution">

@@ -53,6 +53,26 @@ describe('radarTick', () => {
     }
     expect(kinds).toEqual([...Array(SETTLE_TICKS - 1).fill('pulse'), 'settle']);
   });
+
+  it('aims pulses at where an in-motion target will be on the next capture', () => {
+    const cursor = { x: 0.5, y: 0.5 };
+    const first = radarTick(start(), cursor, { x: 0.5, y: 0.5 }, W, H, 1000);
+    const { event } = radarTick(first.state, cursor, { x: 0.52, y: 0.5 }, W, H, 1250);
+    expect(event).toMatchObject({ kind: 'pulse', direction: 'right', distancePx: Math.round(0.04 * W) });
+    if (event.kind === 'pulse') expect(event.predicted!.x).toBeCloseTo(0.54);
+  });
+
+  it('attracts toward the predicted point of a fast target, not its last sighting', () => {
+    const cursor = { x: 0.1, y: 0.5 };
+    const first = radarTick(start(), cursor, { x: 0.7, y: 0.3 }, W, H, 0);
+    const { event } = radarTick(first.state, cursor, { x: 0.7, y: 0.4 }, W, H, 500);
+    expect(event.kind).toBe('attract');
+    if (event.kind === 'attract') {
+      expect(event.predicted).toEqual({ x: expect.closeTo(0.7), y: expect.closeTo(0.5) });
+      expect(event.to.y).toBeCloseTo(0.5);
+      expect(event.to.x).toBeCloseTo(0.1 + ATTRACT_STEP);
+    }
+  });
 });
 
 describe('radarStatus', () => {
