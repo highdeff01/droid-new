@@ -20,7 +20,8 @@ import { DEFAULT_CHANGE_CELLS, assessChange, changeText, detectChange, type Chan
 import { localProposal, proposalText, proposeStep, type Proposal, type ProposalContext } from './proposal.js';
 import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './thinking-timeline.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, pointerAction, selfTestBridge, sendNative, type BridgeResult } from './bridge.js';
-import { DRY_RUN, dragEndError, runStep, type Grounding, type StepOutcome } from './run-step.js';
+import { DRY_RUN, dragEndError, runStep, type Grounding, type SendFn, type StepDeps, type StepOutcome } from './run-step.js';
+import { NO_SOURCE, captureLabel, captureStatus, stepPlan, type FrameProvider, type StepPlan } from './capture-source.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
 import { parseCommand, type CommandName } from './commands.js';
@@ -1848,53 +1849,34 @@ export function useAssist() {
   };
 
   /**
-   * Performs a step on the main Droid app's preview: browser-local actions run here; input is sent
-   * as a run_script command (gated like every real action) and the main app's result is the outcome.
-   * Disarmed it is a dry run and nothing is sent. A failed command is forwarded as a main-app error.
+   * The main Droid app's answer to one located step: sent as a run_script command at the
+   * drift-corrected (and grounded) point, so the mirror runs the same pipeline as the local screen.
    */
-  const performOnMainApp = async (step: WorkflowStep, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
-    const target = { x: step.x, y: step.y };
-    const local = LOCAL_ACTIONS[step.action];
-    if (local) return { ...(await local(step)), executed: true, target };
-    if (POINTER_ACTIONS.has(step.action)) aim(target);
-    if (dryRun) return { ok: true, executed: false, message: `main app — ${DRY_RUN}`, target };
-    const gate = gateRealInput(budget);
-    if (gate) return refused(step, gate);
-    const result = await (mainBridgeRef.current?.request('run_script', runScriptPayload(step)) ?? Promise.resolve({ ok: false, message: NOT_CONNECTED }));
-    const message = `Main app: ${result.message}`;
-    if (!result.ok) captureError({ kind: 'main-app', message, goal: goalRef.current, step: step.name });
-    return { ok: result.ok, executed: result.ok, message, target, shot: framesRef.current[0], bridgeFailed: !result.ok };
+  const sendToMainApp: SendFn = async (step) => {
+    const at = { ...step, x: step.correctedX ?? step.x, y: step.correctedY ?? step.y };
+    const result = await (mainBridgeRef.current?.request('run_script', runScriptPayload(at)) ?? Promise.resolve({ ok: false, message: NOT_CONNECTED }));
+    return { ok: result.ok, message: `Main app: ${result.message}` };
   };
 
   /**
-   * A real-input step on the demo desktop or through the bridge. Armed with a bridge URL, every
-   * step goes to the bridge whatever the screen source; the demo simulates only dry runs or when
-   * no bridge is configured. A bridge failure fails the step loudly, never a simulated success.
+   * The live frame a step is located and re-verified on: the source's own latest captured frame
+   * (Electron, getDisplayMedia or the main-app mirror), else a fresh desktop bridge screenshot.
    */
-  const dispatchInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
+  const stepFrame = async (frames: FrameProvider): Promise<Frame> => {
+    if (frames !== 'captured') return desktopFrame(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken, ++frameId.current);
+    const own = framesRef.current[0];
+    if (!own) throw new Error(`no frame captured yet from the ${captureLabel(sourceRef.current, captureRef.current?.kind)}`);
+    return own;
+  };
+
+  /** The step pipeline's host for the current source: its frames, its input route and the gates. */
+  const stepDeps = (plan: StepPlan, actor: string, budget: ActionBudget, dryRun: boolean): StepDeps => {
     const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
-    if (sourceRef.current === 'main-app') return performOnMainApp(step, budget, dryRun);
-    if (sourceRef.current === 'demo' && (dryRun || !bridgeUrl)) {
-      const out = await performOnDemo(step, dryRun);
-      if (out.executed) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
-      return out;
-    }
-    if (!bridgeUrl) return refused(step, BRIDGE_REQUIRED);
-    const gate = dryRun ? null : gateRealInput(budget);
-    if (gate) return refused(step, gate);
-    if (!dryRun && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) return performLiveDrag(step, actor);
-    let size = { w: 1920, h: 1080 };
-    const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), {
+    return {
       bridgeUrl,
       bridgeToken,
-      capture: async () => {
-        // Native multi-monitor capture: verify on the chosen display's own frames, which carry
-        // its desktop origin so input lands on that display; otherwise the bridge's screenshot.
-        const native = sourceRef.current === 'screen' && captureRef.current?.kind === 'native' ? framesRef.current[0] : undefined;
-        const f = native ?? await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current);
-        size = { w: f.srcW, h: f.srcH };
-        return f;
-      },
+      capture: () => stepFrame(plan.frames),
+      send: plan.input === 'main-app' ? sendToMainApp : undefined,
       attempts: Math.max(1, checkpoints),
       retryMs: 400,
       drift: driftThresholds(),
@@ -1906,9 +1888,41 @@ export function useAssist() {
       onVerified: strengthen,
       aim,
       gateRetry: dryRun ? undefined : () => gateRealInput(budget),
-    });
-    if (out.executed) recordAction(step, out, actor, 'bridge', size.w, size.h);
+    };
+  };
+
+  /** Records a step's result on its route: a main-app failure is a main-app error; a desktop step is history and bridge health. */
+  const noteRoute = (plan: StepPlan, step: WorkflowStep, out: Performed, actor: string) => {
+    if (plan.input === 'main-app') {
+      if (out.bridgeFailed) captureError({ kind: 'main-app', message: out.message, goal: goalRef.current, step: step.name });
+      return;
+    }
+    if (out.executed) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
     noteBridge(step, out, actor);
+  };
+
+  /**
+   * A real-input step on the current capture source. The source only provides the frames and the
+   * input route (see capture-source): every source runs the same pipeline — locate and drift-correct
+   * on its live frames, AI grounding, corrected retry and re-verify. The demo simulates only dry runs
+   * or when no bridge is configured; a dry run on captured frames needs no bridge. A failure is loud.
+   */
+  const dispatchInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
+    const plan = stepPlan(sourceRef.current, { dryRun, bridgeUrl: settingsRef.current.bridgeUrl });
+    if (!plan) return refused(step, NO_SOURCE);
+    if (plan.input === 'demo') {
+      const out = await performOnDemo(step, dryRun);
+      if (out.executed) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
+      return out;
+    }
+    const local = plan.input === 'main-app' ? LOCAL_ACTIONS[step.action] : undefined;
+    if (local) return { ...(await local(step)), executed: true, target: { x: step.x, y: step.y } };
+    if (plan.needsBridge && !settingsRef.current.bridgeUrl) return refused(step, BRIDGE_REQUIRED);
+    const gate = dryRun ? null : gateRealInput(budget);
+    if (gate) return refused(step, gate);
+    if (!dryRun && plan.input === 'desktop-bridge' && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) return performLiveDrag(step, actor);
+    const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), stepDeps(plan, actor, budget, dryRun));
+    noteRoute(plan, step, out, actor);
     return out;
   };
 
@@ -2224,7 +2238,8 @@ export function useAssist() {
    */
   const agentTest = async (input: IdentifyInput, id: Extract<Identification, { found: true }>, budget: ActionBudget, dryRun: boolean): Promise<AgentCheck & { live?: Frame }> => {
     const move: WorkflowStep = { id: uid('agent'), name: `Agent test "${id.name}"`, action: 'move', target: id.name, x: id.x, y: id.y, refFrame: input.frame, status: 'pending' };
-    if (sourceRef.current === 'demo' || (sourceRef.current === 'bridge' && settingsRef.current.bridgeUrl)) {
+    const plan = stepPlan(sourceRef.current, { dryRun, bridgeUrl: settingsRef.current.bridgeUrl });
+    if (plan && (!plan.needsBridge || settingsRef.current.bridgeUrl)) {
       const out = await performStep(move, 'Element identifier', budget, dryRun);
       if (!out.ok) return { ok: false, message: out.message };
       return { ok: true, x: out.target.x, y: out.target.y, message: `${dryRun ? 'dry-run move' : 'move'} verified at ${gridRef(out.target)} — ${out.message}`, live: out.shot ?? framesRef.current[0] };
@@ -2587,11 +2602,13 @@ export function useAssist() {
   /** Runs a step: a drag with its move check and retry, anything else as is. */
   const execute = (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean, proposal: Proposal | null): Promise<Performed & { verdict?: StepVerdict | null }> => (step.action === 'drag' ? performDrag : perform)(step, actor, budget, dryRun, proposal);
 
-  /** A fresh frame for the final verification pass: the demo canvas, or a bridge screenshot (null with the reason logged). */
+  /** A fresh frame for the final verification pass: the demo canvas, the source's own latest frame or a bridge screenshot (null with the reason logged). */
   const finalFrame = async (label: string): Promise<Frame | null> => {
     if (sourceRef.current === 'demo') return demoSnapshot();
     try {
-      return await desktopFrame(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken, ++frameId.current);
+      const frame = await liveFrame();
+      if (!frame) throw new Error(`no frame captured yet from the ${captureLabel(sourceRef.current, captureRef.current?.kind)}`);
+      return frame;
     } catch (error) {
       addLog(label, `Verification has no final screenshot: ${errorText(error)}`, 'error');
       return null;
@@ -3732,6 +3749,19 @@ export function useAssist() {
     return false;
   };
 
+  /**
+   * How the current source runs a run's steps, or null with the refusal logged: no source, or the
+   * main-app mirror without its main app. Whether the desktop bridge must answer is `needsBridge`
+   * (bridge screenshots or real input on the local screen); captured-frame dry runs need no bridge.
+   */
+  const runPlan = (label: string, dryRun: boolean): StepPlan | null => {
+    const plan = stepPlan(sourceRef.current, { dryRun, bridgeUrl: settingsRef.current.bridgeUrl });
+    if (!plan) addLog(label, NO_SOURCE, 'error');
+    else if (plan.input === 'main-app' && mainBridgeRef.current?.state().status !== 'connected') addLog(label, `${NOT_CONNECTED} — no step was executed`, 'error');
+    else return plan;
+    return null;
+  };
+
   /** Starts a run: clears the stop flag and the per-run memory and shows the run as replaying. */
   const beginRun = () => {
     abortRef.current = false;
@@ -3762,9 +3792,9 @@ export function useAssist() {
       addLog('Safety', `${label} refused — ABORTED is active; clear the abort first`, 'error');
       return null;
     }
-    const viaBridge = sourceRef.current !== 'demo' || (!selfTest && armedRef.current && !!settingsRef.current.bridgeUrl);
-    if (viaBridge && !(await bridgeReady(label))) return null;
     const dryRun = selfTest || !armedRef.current;
+    const plan = runPlan(label, dryRun);
+    if (!plan || (plan.needsBridge && !(await bridgeReady(label)))) return null;
     if (dryRun && !selfTest) addLog('Safety', `Real input disarmed — ${label} runs as a ${DRY_RUN}`, 'warn');
     remindFailures(runGoal, label);
     const budget = createBudget(settingsRef.current.actionBudget);
@@ -4636,9 +4666,9 @@ export function useAssist() {
     if (!objectives) return;
     publishChain({ goal: text, objectives, report: null });
     applyPlan(text, objectives.map((o) => o.step), 'Chain breakdown');
-    const viaBridge = sourceRef.current !== 'demo' || (armedRef.current && !!settingsRef.current.bridgeUrl);
-    if (viaBridge && !(await bridgeReady(CHAIN))) return;
     const dryRun = !armedRef.current;
+    const plan = runPlan(CHAIN, dryRun);
+    if (!plan || (plan.needsBridge && !(await bridgeReady(CHAIN)))) return;
     if (dryRun) addLog('Safety', `Real input disarmed — the chain runs as a ${DRY_RUN}`, 'warn');
     const budget = createBudget(settingsRef.current.actionBudget);
     beginRun();
@@ -6075,6 +6105,16 @@ export function useAssist() {
     };
   };
 
+  /** The AI's drift check on its own screen: the next step's template matched on the current source's live frame. */
+  const driftCheckNow = async (): Promise<string> => {
+    const next = stepsRef.current.find((s) => s.status === 'pending' || s.status === 'running') ?? stepsRef.current[0];
+    if (!next?.refFrame) return 'no step with a reference screenshot to check';
+    const live = await evidenceFrame().catch(() => null);
+    if (!live) return `no live frame from the ${captureLabel(sourceRef.current, captureRef.current?.kind)}`;
+    const { r, level } = driftCheck(next, live);
+    return `"${next.name}" on the ${captureLabel(sourceRef.current, captureRef.current?.kind)}: ${level} (region ${r.regionDistance.toFixed(3)}, best ${r.matchDistance.toFixed(3)}, drift (${pct(r.dx)}, ${pct(r.dy)}))`;
+  };
+
   const capabilities = useCapabilityRegistry({
     plan: autoPlan, replay, stop, toggleRecording, setStage: toggleStage,
     setAgent: (id, on) => setAgents((list) => list.map((a) => (a.id === id ? { ...a, on } : a))),
@@ -6097,7 +6137,7 @@ export function useAssist() {
     elements: () => [...elements.map((e) => `${e.name} at ${at(e.x, e.y)} (${e.source})`), ...elementMap.map((e) => `${e.name} at ${at(boxCenter(e.box).x, boxCenter(e.box).y)} (mapped)`)],
     testElement: (name, x, y) => testClick({ id: uid('el'), name, x, y, source: 'familiar' }),
     testRoutes: (spec) => testRoutes(parseTestSpec(spec)), supervise: superviseRun,
-    sections: (g) => sectionsOf(parseTestSpec(g)), ask: askScreen, verifyScreen, reverseLast,
+    sections: (g) => sectionsOf(parseTestSpec(g)), ask: askScreen, verifyScreen, driftCheck: driftCheckNow, reverseLast,
     setArmed: (on) => {
       if (armedRef.current !== on) toggleArmed();
     },
@@ -6189,6 +6229,8 @@ export function useAssist() {
     bridgeOnline, verifyRealInput,
     /** The main Droid app bridge's live state, and selecting its preview as the screen source. */
     mainBridge, selectMainApp,
+    /** The active capture source, its kind and whether replay/drift are armed for it (HUD). */
+    captureSource: captureStatus({ source, kind: captureRef.current?.kind, hasFrame: frames.length > 0, bridgeUrl: settings.bridgeUrl, mainConnected: mainBridge.status === 'connected' }),
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
     dispatch,
     /** What the preview does with input right now: passive, LIVE to the PC, or a labeled dry run. */

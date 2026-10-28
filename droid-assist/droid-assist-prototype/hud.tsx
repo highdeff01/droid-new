@@ -1,5 +1,6 @@
 import type { AssistEngine } from './use-assist.js';
-import type { MonitorMode, ScreenSource, SyncLevel } from './types.js';
+import type { MonitorMode, SyncLevel } from './types.js';
+import type { CaptureStatus } from './capture-source.js';
 import type { AiConfig, AiStatus } from './ai.js';
 import { MONITOR_MODES } from './capture.js';
 import { insecureBridgeUrl } from './bridge.js';
@@ -11,7 +12,6 @@ import type { MainBridgeState, MainBridgeStatus } from './main-bridge.js';
 import styles from './droid-assist.module.css';
 
 const SYNC_LABEL: Record<SyncLevel, string> = { green: 'Aligned', yellow: 'Drift — correcting', red: 'Mismatch', idle: 'Idle' };
-const SOURCE_LABEL: Record<ScreenSource, string> = { none: 'None', demo: 'Demo desktop', screen: 'Screen capture', bridge: 'Desktop bridge', 'main-app': 'Main app preview' };
 const AI_LEVEL: Record<AiStatus['state'], SyncLevel> = { online: 'green', checking: 'yellow', offline: 'red' };
 const AI_LABEL: Record<AiStatus['state'], string> = { online: 'AI connected', checking: 'AI connecting…', offline: 'AI unavailable' };
 const MAIN_LEVEL: Record<MainBridgeStatus, SyncLevel> = { off: 'idle', waiting: 'yellow', connecting: 'yellow', connected: 'green', error: 'red' };
@@ -54,9 +54,20 @@ export function InsecureBridgeWarning({ bridgeUrl }: { bridgeUrl: string }) {
   );
 }
 
+/** The active capture source and whether replay/drift are armed for it. */
+export function CaptureSourceBadge({ status }: { status: CaptureStatus }) {
+  return (
+    <div className={styles.sync} data-level={status.armed ? 'green' : 'red'} title={status.detail} aria-live="polite" aria-label="Capture source">
+      <span className={styles.syncDot} />
+      <strong>Capture: {status.label}</strong>
+      <span className={styles.syncDetail}>{status.detail}</span>
+    </div>
+  );
+}
+
 /** Monitor HUD: mode picker, capture interval, screenshot count, source and /use target. */
 export function MonitorStatus({ engine }: { engine: AssistEngine }) {
-  const { settings, intervalMs, shotCount, source, target, aiQueue } = engine;
+  const { settings, intervalMs, shotCount, target, aiQueue, captureSource } = engine;
   return (
     <div className={styles.hud2} aria-label="Monitor status">
       <label>Monitor
@@ -67,7 +78,7 @@ export function MonitorStatus({ engine }: { engine: AssistEngine }) {
       <DisplayPicker engine={engine} compact />
       <span>⏱ every <b>{intervalMs} ms</b></span>
       <span>📸 <b>{shotCount}</b> screenshots</span>
-      <span>Source: <b>{SOURCE_LABEL[source]}</b></span>
+      <CaptureSourceBadge status={captureSource} />
       {target && <span>Using: <b>{target}</b></span>}
       <span aria-label="AI queue" title={`At most ${settings.aiMaxInFlight} AI call(s) run at once; the rest wait by priority`}>🧠 AI <b>{aiQueue.inFlight}/{settings.aiMaxInFlight}</b> in flight · <b>{aiQueue.queued}</b> queued</span>
     </div>

@@ -327,6 +327,41 @@ describe('runStep learned', () => {
   });
 });
 
+describe('runStep host send (main-app mirror route)', () => {
+  it('sends the drift-corrected point through the host send, never the desktop bridge', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const send = vi.fn(async () => ({ ok: true, message: 'Main app: clicked' }));
+    const { d } = deps([frame(1, image(110, 66)), frame(2, image(200, 120))], { send, bridgeUrl: '' });
+    const out = await runStep(step, d);
+    expect(out).toMatchObject({ ok: true, executed: true, message: 'Main app: clicked' });
+    const [sent, w, h] = send.mock.calls[0] as unknown as [WorkflowStep, number, number];
+    expect(sent.correctedX).toBeCloseTo(110 / W, 3);
+    expect(sent.correctedY).toBeCloseTo(66 / H, 3);
+    expect([w, h]).toEqual([1920, 1080]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('a missed step retries once through the same host send', async () => {
+    const live = frame(1, image(100, 60));
+    const send = vi.fn(async () => ({ ok: true, message: 'Main app: clicked' }));
+    const grounding: Grounding = {
+      confirm: vi.fn<Grounding['confirm']>().mockResolvedValueOnce({ visible: false, reason: 'not here', thinking: null }).mockResolvedValue({ visible: true, reason: 'ok', thinking: null }),
+      relocate: vi.fn(async () => ({ x: 110 / W, y: 66 / H })),
+    };
+    const { d } = deps([live], { send, grounding, gateRetry: () => null });
+    const out = await runStep({ ...step, target: 'Play button' }, d);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(out.retry).toMatchObject({ dxPx: -60, dyPx: -36, ok: true });
+  });
+
+  it('a failed host send fails the step loudly', async () => {
+    const { d } = deps([frame(1, image(100, 60))], { send: async () => ({ ok: false, message: 'Main app: preview not focused' }) });
+    const out = await runStep(step, d);
+    expect(out).toMatchObject({ ok: false, executed: false, bridgeFailed: true, message: 'Main app: preview not focused' });
+  });
+});
+
 describe('runStep corrected retry', () => {
   const live = frame(1, image(100, 60));
   // The AI re-plans the target 60px right / 36px down of where the template really is: the click misses.

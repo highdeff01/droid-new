@@ -1035,6 +1035,8 @@ describe('useAssist screen-change responder and proposals', () => {
   it('assesses a mid-plan change and re-proposes the stale step (what/why referencing it) before it runs', async () => {
     const fetchMock = stub('{"ready":true,"x":0.2,"y":0.8,"why":"hovering Files is the goal"}');
     const result = await changeMidPlan();
+    // The step is verified on the captured screen (drift + AI grounding) before its result is logged.
+    await vi.waitFor(() => expect(result.current.log.some((l) => l.source.startsWith('Auto-Actor') && l.message.startsWith('Hover Files:'))).toBe(true), { timeout: 3000 });
     const change = result.current.timeline.find((e) => e.kind === 'change');
     expect(change?.text).toBe('[navigation] the Settings page — PLAN STALE: the Files icon moved');
     const changeReq = fetchMock.mock.calls.map((c) => JSON.parse(String(c[1].body))).find((b) => b.messages[0].content.includes('screen-change responder. The first image'));
