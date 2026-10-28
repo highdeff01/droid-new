@@ -36,6 +36,11 @@ The **Workflow Packs** section (`PacksPanel`) sits directly below the screen pre
 - Typing a goal that resembles a saved flow (synonyms, plurals and verb forms are folded, e.g. "launch the calculator" ≈ "Open calculator app") reuses it without calling the model, and the log says `Reused saved workflow "<name>"`.
 - After each real run the AI adds lessons (`avoid` / `add`) to the **Learned patterns** panel (`PatternsPanel`). A failed run is never saved as a flow; its failure is recorded as an `avoid` pattern. Patterns persist in `localStorage` and can be deleted with ✕, and the ones relevant to a new goal are sent as planning context.
 
+## Current operation and intentions
+
+- The **Current operation** panel (`CurrentOperationPanel`, first in the side column) shows the active step (the running step, else the step of the newest attempt): its action, target, position, text and stated intention; the main goal (the traced goal, else the goal input); progress toward it from the goal tracer (verified / plan steps); where the AI's attention is (the target of its open attempt, else the cursor); what it plans next (the first later step not yet done); and a small trajectory map of every attempt at the step — the planned straight line from where the cursor was to the target (dashed) against the actual cursor trail drawn during the attempt.
+- Every action the AI performs (any actor other than the user or the recorder, dry runs included) first raises an **AI intentions** notification stating its intention, e.g. `Moving to files icon (12%, 40%) to click it because …` or `Typing "hi" into search box (50%, 10%) because …`. The reason is the planner's recorded proposal, else the step's place toward the goal. Retries name their attempt.
+
 ## Operation memory
 
 - Every AI turn carries an `OPERATION MEMORY` block for the current operation (the goal, or a subagent's slice goal): the goal, the current objective (the step running now), the operation's notes, the **BLACKLISTED** methods it must never repeat (avoid patterns for this kind of operation, habit avoid-lessons for its targets, and failed steps of similar failed operations), similar operations that failed before, and the recent activity. The block is resent each turn and is not stored in the AI session history.

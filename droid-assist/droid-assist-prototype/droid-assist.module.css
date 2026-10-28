@@ -109,3 +109,10 @@
   .side { grid-template-columns: 1fr; }
   .bottom { grid-template-columns: 2fr 1fr 1fr; }
 }
+
+/* User-arrangeable panels: each panel sits in a slot with a drag handle; empty panels hide their slot. */
+.panelSlot { position: relative; min-width: 0; }
+.panelSlot:has(> .panelBody:empty) { display: none; }
+.panelBody { min-width: 0; }
+.panelHandle { position: absolute; top: 2px; left: 50%; transform: translateX(-50%); z-index: 1; padding: 0 4px; border: 0; background: transparent; color: var(--muted); cursor: grab; font-size: 14px; line-height: 1; }
+.panelHandle:active { cursor: grabbing; }

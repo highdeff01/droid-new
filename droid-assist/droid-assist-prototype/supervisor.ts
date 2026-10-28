@@ -1,6 +1,7 @@
 import type { Frame, LearnedPattern, LogEntry, SyncLevel, WorkflowStep } from './types.js';
-import { AiError, SAMPLE_VIEW, parseJsonReply, viewPoint } from './ai.js';
+import { SAMPLE_VIEW, parseJsonReply, viewPoint } from './ai.js';
 import type { AskFn, ViewSize } from './ai.js';
+import { isPopupEntry, isPopupLine } from './attention.js';
 import type { Thought } from './assist-ai.js';
 import type { ThinkingEntry } from './thinking-timeline.js';
 import { uid } from './planner.js';
@@ -75,7 +76,10 @@ export interface PendingFix {
 }
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
-const AGENT_SOURCES = /Popup watcher|Drift|Progress|Goal reviewer|watcher|Auto-Actor|Replay|Patterns/i;
+const AGENT_SOURCES = /Drift|Progress|Goal reviewer|watcher|Auto-Actor|Replay|Patterns/i;
+
+/** Popup lines stay in the popup watcher's scope (attention.ts) and never reach the supervisor's digest. */
+const isAgentLine = (l: LogEntry) => AGENT_SOURCES.test(l.source) && !isPopupEntry(l);
 
 function stepLine(s: WorkflowStep, i: number): string {
   const at = `(${pct(s.correctedX ?? s.x)}, ${pct(s.correctedY ?? s.y)})`;
@@ -89,18 +93,19 @@ function timelineLine(e: ThinkingEntry): string {
 
 /** The consolidated text the supervisor sends: plan, agent outputs, sync, progress and thinking. */
 export function supervisorDigest(input: SupervisorInput): string {
-  const agentLines = input.log.filter((l) => AGENT_SOURCES.test(l.source)).slice(0, 12).map((l) => `[${l.source}] ${l.message}`);
+  const agentLines = input.log.filter(isAgentLine).slice(0, 12).map((l) => `[${l.source}] ${l.message}`);
   const steps = input.steps.map(stepLine);
+  const thinking = input.timeline.map(timelineLine).filter((l) => !isPopupLine(l)).slice(0, 12);
   return [
     `Goal: ${input.goal || '(none)'}`,
     `Plan (${steps.length} step(s)):`,
     ...(steps.length ? steps : ['(empty)']),
     `Drift monitor sync: ${input.sync.level} — ${input.sync.detail}`,
     `Progress tracker: ${input.progress.done} verified step(s), ${input.progress.manual} manual`,
-    'Agent outputs (popup decisions, drift, goal reviews, watcher notes), newest first:',
+    'Agent outputs (drift, goal reviews, watcher notes), newest first:',
     ...(agentLines.length ? agentLines : ['(none)']),
     'Thinking timeline, newest first:',
-    ...(input.timeline.length ? input.timeline.slice(0, 12).map(timelineLine) : ['(none)']),
+    ...(thinking.length ? thinking : ['(none)']),
     `Screenshots attached: the ${Math.min(SUPERVISOR_FRAMES, input.frames.length)} most recent gallery frame(s), newest first.`,
   ].join('\n');
 }
@@ -124,15 +129,18 @@ function toHabit(raw: unknown): HabitUpdate | null {
   return pattern && (r.kind === 'avoid' || r.kind === 'add') ? { kind: r.kind, pattern } : null;
 }
 
+/** The assessment of a review whose reply gave none: said plainly, with confidence 0 so nothing is auto-applied. */
+export const NO_ASSESSMENT = 'No assessment could be produced';
+
 /**
- * Reads the review JSON; a missing assessment is an AiError, never a made-up review. Pixel
- * coordinates in step fixes are read in the `view` the screenshots were sent at.
+ * Reads the review JSON; a missing assessment is stated plainly (NO_ASSESSMENT, confidence 0), never made up.
+ * Pixel coordinates in step fixes are read in the `view` the screenshots were sent at.
  */
 export function parseReview(content: string, thinking: string | null, steps: WorkflowStep[], now = Date.now(), view: ViewSize = SAMPLE_VIEW): SupervisorReview {
   const r = parseJsonReply(content);
-  const assessment = optionalText(r.assessment);
-  if (!assessment) throw new AiError('Supervisor reply had no assessment');
-  const c = typeof r.confidence === 'number' && Number.isFinite(r.confidence) ? Math.min(1, Math.max(0, r.confidence)) : 0;
+  const given = optionalText(r.assessment);
+  const assessment = given ?? NO_ASSESSMENT;
+  const c = given && typeof r.confidence === 'number' && Number.isFinite(r.confidence) ? Math.min(1, Math.max(0, r.confidence)) : 0;
   const stepFixes = (Array.isArray(r.step_fixes) ? r.step_fixes : []).map((f) => toFix(f, steps, view)).filter((f): f is StepFix => f !== null);
   const habits = (Array.isArray(r.habits) ? r.habits : []).map(toHabit).filter((h): h is HabitUpdate => h !== null);
   const problem = optionalText(r.problem) ?? '';

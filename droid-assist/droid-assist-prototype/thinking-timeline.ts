@@ -5,10 +5,11 @@ import { uid } from './planner.js';
 /**
  * What an entry records: the model's initial thought, its assessment of a screen change, the
  * what/why proposal made before a step runs, its follow-up reflection, the final verdict, a
- * verification check, a supervisor review / movement, one attempt of a step's retry ladder, or a
- * screenshot the AI snipped of a screen region.
+ * verification check, a supervisor review / movement, one attempt of a step's retry ladder, a
+ * screenshot the AI snipped of a screen region, a reply the agents gave on the agent bus, or a
+ * test result (crew or side test).
  */
-export type ThoughtKind = 'thought' | 'change' | 'proposal' | 'reflection' | 'verdict' | 'check' | 'review' | 'movement' | 'attempt' | 'snip';
+export type ThoughtKind = 'thought' | 'change' | 'proposal' | 'reflection' | 'verdict' | 'check' | 'review' | 'movement' | 'attempt' | 'snip' | 'reply' | 'test';
 
 /** One timestamped AI call on the per-step thinking timeline. */
 export interface ThinkingEntry {

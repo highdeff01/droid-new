@@ -25,7 +25,7 @@ export interface FixScript {
   context: FixContext;
   steps: WorkflowStep[];
   /** Where it came from: a saved fix method, the model, or the local fallback. */
-  source: 'memory' | 'ai' | 'local';
+  source: 'memory' | 'ai';
   reason: string;
 }
 
@@ -78,12 +78,6 @@ export function parseFixScript(content: string): { steps: WorkflowStep[]; reason
   return { steps, reason: String(r.reason ?? '') };
 }
 
-/** The local repair when the model is unavailable: dismiss whatever covers the screen, wait, go back one view, wait. */
-export function localFixScript(ctx: FixContext): FixScript {
-  const steps = [step('Dismiss obstacle', 'key', { text: 'Escape' }), step('Let it settle', 'wait'), step('Navigate back', 'key', { text: 'Alt+Left' }), step('Let it settle', 'wait')];
-  return { id: uid('fixscript'), context: ctx, steps, source: 'local', reason: `Local repair for "${ctx.element}": dismiss, go back and retry` };
-}
-
 const FIX_SYSTEM = `You are Droid Assist's repair planner. A flow is stuck. Look at the screenshot (480x270) and propose a SHORT repair script (at most ${MAX_FIX_STEPS} steps) that reopens a menu, navigates back or dismisses an obstacle so the failing step can run again. Allowed actions: click (with x,y pixel point and target), type (with text), key (with text, e.g. "Escape" or "Alt+Left"), wait. Reply ONLY with JSON {"reason":string,"steps":[{"action":string,"name":string,"target"?:string,"x"?:number,"y"?:number,"text"?:string}]}.`;
 
 /** Asks the model for a fix script; null when its reply holds no usable step. */
@@ -107,13 +101,12 @@ export const scriptFromMethod = (m: FixMethod, ctx: FixContext): FixScript => ({
 
 /**
  * The fix script for a stuck step: the saved fix method of its element and flow first, else the
- * model's script (when `ask` is given and answers), else the local fallback.
+ * model's script (when `ask` is given and answers). Null when neither exists — no canned template is invented.
  */
-export async function generateFixScript(ctx: FixContext, methods: FixMethod[], ask: AskFn | null, frame: Frame | null, context: string[] = []): Promise<FixScript> {
+export async function generateFixScript(ctx: FixContext, methods: FixMethod[], ask: AskFn | null, frame: Frame | null, context: string[] = []): Promise<FixScript | null> {
   const saved = fixMethodFor(methods, ctx.element, ctx.flow);
   if (saved) return scriptFromMethod(saved, ctx);
-  const fromAi = ask ? await askFixScript(ask, frame, ctx, context).catch(() => null) : null;
-  return fromAi ?? localFixScript(ctx);
+  return ask ? askFixScript(ask, frame, ctx, context).catch(() => null) : null;
 }
 
 /** Records a run fix script: on success it becomes (or refreshes) the fix method of its element and flow; every run counts a use. */

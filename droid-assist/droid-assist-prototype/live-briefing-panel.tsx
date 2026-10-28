@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { currentObjective, nextGoals, runningProjects, type GoalRecord } from './goal-objectives.js';
 import { ALL_PROJECTS } from './knowledge-store.js';
+import { isPopupEntry, isPopupLine } from './attention.js';
 import { NOTE_SECTIONS, filterNotes, noteValues, notesStream, outcomeOf, recentActions, type NoteFilter, type NoteSection, type StreamNote } from './live-briefing.js';
 import styles from './droid-assist.module.css';
 
@@ -110,7 +111,8 @@ function FilterPicker({ label, value, options, onChange }: { label: string; valu
 /** The running notes stream from every agent and the main AI, filterable and clickable to its source entry. */
 function NotesSection({ engine, notify }: { engine: AssistEngine; notify: (text: string) => void }) {
   const [filter, setFilter] = useState<NoteFilter>({});
-  const all = notesStream(engine.log, engine.timeline);
+  // Popup entries stay in the Popups panel (attention quarantine).
+  const all = notesStream(engine.log.filter((l) => !isPopupEntry(l)), engine.timeline.filter((e) => !isPopupLine(`${e.step} ${e.text}`)));
   const shown = filterNotes(all, filter).slice(0, SHOWN);
   const open = (n: StreamNote) => {
     if (!reveal(`${n.ref.kind === 'log' ? 'log' : 'think'}-${n.ref.id}`)) notify(`That ${n.ref.kind === 'log' ? 'log entry' : 'thinking entry'} is no longer kept.`);
