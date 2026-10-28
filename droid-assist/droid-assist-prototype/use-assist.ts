@@ -195,6 +195,15 @@ const NOTE_ONLY_AGENTS: BusAgentId[] = ['progress', 'goal', 'supervisor'];
 /** Workflow actions that are real mouse/keyboard input, as recorded in the action history. */
 const INPUT_ACTIONS: Partial<Record<StepAction, InputAction>> = { click: 'click', double_click: 'double_click', move: 'move', drag: 'drag', scroll: 'scroll', type: 'type', key: 'key' };
 
+/** A history message that says nothing was dispatched: prefixed with DRY_RUN unless the step's message already says it. */
+const dryRunMessage = (message: string, simulated: boolean) => {
+  const label = message.includes(DRY_RUN) ? message : `${DRY_RUN} — ${message}`;
+  return simulated ? `${label} (simulated on the demo desktop)` : label;
+};
+
+/** Where a history record ran, as the reversal error names it. */
+const VIA_LABEL: Record<ActionRecord['via'], string> = { bridge: 'desktop bridge', 'main-app': 'main Droid app', demo: 'demo desktop' };
+
 /** Steps the browser itself answers on the demo desktop (no screen input). */
 const LOCAL_ACTIONS: Partial<Record<StepAction, (step: WorkflowStep) => Promise<{ ok: boolean; message: string }>>> = {
   calc: async (s) => {
@@ -1617,15 +1626,21 @@ export function useAssist() {
     actorInputsRef.current = [...actorInputsRef.current, { time: Date.now(), x: p.x, y: p.y, actor }].slice(-ACTOR_INPUT_LIMIT);
   };
 
-  /** Appends one performed mouse/keyboard action to the persistent history, with the pointer's prior point, screen size and prior text for reversal. */
+  /**
+   * Appends one mouse/keyboard action to the persistent history, with the pointer's prior point, screen size and prior text for reversal.
+   * Only real bridge/main-app dispatches are recorded as such; a verified-but-not-sent step or a demo simulation is a labeled dry run.
+   */
   const recordAction = useCallback((step: WorkflowStep, out: StepOutcome, actor: string, via: ActionRecord['via'], srcW: number, srcH: number) => {
     const kind = INPUT_ACTIONS[step.action];
     if (!kind) return;
+    const simulated = via === 'demo' && out.executed;
+    const dryRun = via === 'demo' || !out.executed;
     const end = kind === 'drag' ? dragEnd(step, srcW, srcH) : null;
     const px = (p: { x: number; y: number }) => ({ x: Math.round(p.x * srcW), y: Math.round(p.y * srcH) });
     const prev = lastPointerRef.current ? px(lastPointerRef.current) : null;
-    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message: out.message, ...(via === 'bridge' && out.check && !out.check.changed ? { dispatched: true } : {}) };
-    if (POINTER_ACTIONS.has(step.action)) lastPointerRef.current = out.end ?? out.target;
+    const message = dryRun ? dryRunMessage(out.message, simulated) : out.message;
+    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message, ...(via === 'bridge' && out.executed && out.check && !out.check.changed ? { dispatched: true } : {}), ...(dryRun ? { dryRun } : {}), ...(simulated ? { simulated } : {}) };
+    if (out.executed && POINTER_ACTIONS.has(step.action)) lastPointerRef.current = out.end ?? out.target;
     if (out.executed) noteInput(out.target, USER_ACTORS.has(actor) ? 'user' : 'ai');
     lastRecordRef.current = rec;
     setHistory((h) => appendHistory(h, rec));
@@ -1873,12 +1888,16 @@ export function useAssist() {
    */
   const dispatchInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
-    if (sourceRef.current === 'main-app') return performOnMainApp(step, budget, dryRun);
-    if (sourceRef.current === 'demo' && (dryRun || !bridgeUrl)) {
-      const out = await performOnDemo(step, dryRun);
-      if (out.executed) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
+    /** History gets real dispatches and verified dry runs; refused or unverified steps leave nothing. */
+    const record = (out: Performed, via: ActionRecord['via'], w: number, h: number) => {
+      if (out.executed || (dryRun && out.ok)) recordAction(step, out, actor, via, w, h);
       return out;
+    };
+    if (sourceRef.current === 'main-app') {
+      const frame = framesRef.current[0];
+      return record(await performOnMainApp(step, budget, dryRun), 'main-app', frame?.srcW ?? 1920, frame?.srcH ?? 1080);
     }
+    if (sourceRef.current === 'demo' && (dryRun || !bridgeUrl)) return record(await performOnDemo(step, dryRun), 'demo', DEMO_W, DEMO_H);
     if (!bridgeUrl) return refused(step, BRIDGE_REQUIRED);
     const gate = dryRun ? null : gateRealInput(budget);
     if (gate) return refused(step, gate);
@@ -1907,7 +1926,7 @@ export function useAssist() {
       aim,
       gateRetry: dryRun ? undefined : () => gateRealInput(budget),
     });
-    if (out.executed) recordAction(step, out, actor, 'bridge', size.w, size.h);
+    record(out, 'bridge', size.w, size.h);
     noteBridge(step, out, actor);
     return out;
   };
@@ -2834,7 +2853,8 @@ export function useAssist() {
     if (!offer) return addLog(REVERSE_ACTOR, 'Nothing to reverse — no real action since the last reversal', 'warn');
     const { record, reversal } = offer;
     if (!reversal.ok) return addLog(REVERSE_ACTOR, `Cannot reverse ${record.action} at (${record.x}, ${record.y})px — ${reversal.reason}`, 'warn');
-    if ((record.via === 'demo') !== (sourceRef.current === 'demo')) return addLog(REVERSE_ACTOR, `Cannot reverse — the ${record.action} ran on the ${record.via === 'demo' ? 'demo desktop' : 'desktop bridge'}, which is not the current screen source`, 'error');
+    const via: ActionRecord['via'] = sourceRef.current === 'demo' || sourceRef.current === 'main-app' ? sourceRef.current : 'bridge';
+    if (record.via !== via) return addLog(REVERSE_ACTOR, `Cannot reverse — the ${record.action} ran on the ${VIA_LABEL[record.via]}, which is not the current screen source`, 'error');
     const dryRun = !armedRef.current;
     setReversing(true);
     try {
@@ -3951,6 +3971,7 @@ export function useAssist() {
   const proposeFix = async (ctx: FixContext) => {
     const ask = aiOnline() && stageOn('executor') ? askFor('executor') : null;
     const script = await generateFixScript(ctx, fixMethodsRef.current, ask, framesRef.current[0] ?? null, inventoryLines(inventoryRef.current));
+    if (!script) return addLog('Fix script', `"${ctx.element}" failed ${FAIL_THRESHOLD}× in a row (${ctx.problem}) — AI unavailable and no saved fix method — no fix script proposed`, 'error');
     showFix(script);
     addLog('Fix script', `"${ctx.element}" failed ${FAIL_THRESHOLD}× in a row (${ctx.problem}) — proposed ${fixScriptText(script)}; review it in the pre-action briefing before it runs`, 'warn');
   };

@@ -5,7 +5,7 @@ export const HISTORY_KEY = 'droid-assist.action-history';
 /** Newest records kept. */
 export const HISTORY_LIMIT = 2000;
 
-const CSV_COLUMNS: Array<keyof ActionRecord> = ['time', 'action', 'x', 'y', 'endX', 'endY', 'text', 'source', 'via', 'ok', 'message'];
+const CSV_COLUMNS: Array<keyof ActionRecord> = ['time', 'action', 'x', 'y', 'endX', 'endY', 'text', 'source', 'via', 'ok', 'message', 'dryRun'];
 
 /** Reads the persisted history, newest first; an unreadable store yields an empty history. */
 export function loadHistory(storage: Pick<Storage, 'getItem'> = localStorage): ActionRecord[] {
