@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Frame } from './types.js';
-import { CHANGE_HITS, IDENTIFY_SYSTEM, characteristics, identifyAndVerify, identifyRequest, iou, mappedDistances, noteChange, parseIdentification, recentlySent, regionStats, type IdentifyInput, type IdentifyLoop } from './identify.js';
+import { CHANGE_HITS, IDENTIFY_SYSTEM, PROSE_FEEDBACK, characteristics, identifyAndVerify, identifyRequest, iou, mappedDistances, noteChange, parseIdentification, recentlySent, regionStats, type IdentifyInput, type IdentifyLoop } from './identify.js';
 import type { MappedElement } from './element-map-studio.js';
-import { SAMPLE_VIEW, systemText } from './ai.js';
+import { AiParseError, SAMPLE_VIEW, systemText } from './ai.js';
 
 /** A w x h buffer filled with one colour, with an optional coloured rectangle (pixel coords). */
 function buffer(w: number, h: number, bg: [number, number, number], rect?: { x: number; y: number; w: number; h: number; c: [number, number, number] }): ImageData {
@@ -79,21 +79,52 @@ describe('identification request', () => {
 });
 
 describe('parseIdentification', () => {
+  const reply = (content: string) => ({ content, thinking: null });
+
   it('resolves the grid point and keeps the thinking', () => {
-    const r = parseIdentification({ content: '{"found":true,"name":"Play","cell":"A1","cx":0.5,"cy":0.5,"reason":"r"}', thinking: 'hmm' }, 'x');
-    expect(r).toMatchObject({ found: true, name: 'Play', thinking: 'hmm' });
+    const r = parseIdentification({ content: '{"found":true,"name":"Play","cell":"A1","cx":0.5,"cy":0.5,"confidence":0.9}', thinking: 'hmm' }, 'x');
+    expect(r).toMatchObject({ found: true, name: 'Play', confidence: 0.9, thinking: 'hmm' });
     if (r.found) expect(r.x).toBeCloseTo(1 / 24);
   });
 
-  it('reports not found and rejects non-JSON', () => {
-    expect(parseIdentification({ content: '{"found":false,"reason":"gone"}', thinking: null }, 'x')).toEqual({ found: false, reason: 'gone', thinking: null });
-    expect(() => parseIdentification({ content: 'nope', thinking: null }, 'x')).toThrow();
+  it('turns a cell with null x,y into the cell centre (H12 is bottom-right)', () => {
+    const r = parseIdentification(reply('{"found":true,"cell":"H12","x":null,"y":null,"confidence":0.8}'), 'Save');
+    expect(r).toMatchObject({ found: true, name: 'Save' });
+    if (r.found) {
+      expect(r.x).toBeCloseTo(23 / 24);
+      expect(r.y).toBeCloseTo(15 / 16);
+    }
+  });
+
+  it('a valid cell wins over x,y; an invalid cell falls back to x,y in view pixels', () => {
+    const both = parseIdentification(reply('{"found":true,"cell":"A1","x":400,"y":200,"confidence":0.9}'), 'n');
+    if (both.found) expect([both.x, both.y]).toEqual([1 / 24, 1 / 16]);
+    const xy = parseIdentification(reply('{"found":true,"cell":"I1","x":240,"y":135,"confidence":0.9}'), 'n');
+    if (xy.found) expect([xy.x, xy.y]).toEqual([0.5, 0.5]);
+  });
+
+  it('reports not found', () => {
+    expect(parseIdentification(reply('{"found":false,"cell":null,"x":null,"y":null,"confidence":0}'), 'x')).toEqual({ found: false, reason: '', thinking: null });
+  });
+
+  it('rejects prose, JSON inside prose and replies missing found or confidence as AiParseError', () => {
+    for (const content of ['The element is the red button in cell C5, behind a popup.', 'Sure: {"found":true,"cell":"C5","x":null,"y":null,"confidence":0.9}', '[1,2]', '{"found":true,"cell":"C5"}', '{"cell":"C5","confidence":0.9}']) {
+      expect(() => parseIdentification(reply(content), 'x')).toThrow(AiParseError);
+    }
+  });
+
+  it('accepts a fenced JSON object', () => {
+    expect(parseIdentification(reply('```json\n{"found":true,"cell":"B2","x":null,"y":null,"confidence":0.7}\n```'), 'x').found).toBe(true);
+  });
+
+  it('rejects found=true with neither a valid cell nor x,y', () => {
+    expect(() => parseIdentification(reply('{"found":true,"cell":null,"x":null,"y":null,"confidence":0.95}'), 'x')).toThrow(/no valid cell/);
   });
 });
 
 describe('identifyAndVerify', () => {
   afterEach(() => vi.useRealTimers());
-  const found = { found: true as const, name: 'Play', x: 0.4, y: 0.4, reason: '', thinking: null };
+  const found = { found: true as const, name: 'Play', x: 0.4, y: 0.4, confidence: 0.9, reason: '', thinking: null };
 
   function loop(over: Partial<IdentifyLoop>): IdentifyLoop & { logs: string[] } {
     const logs: string[] = [];
@@ -103,6 +134,46 @@ describe('identifyAndVerify', () => {
   it('accepts the agent-corrected point, not the raw proposal', async () => {
     const l = loop({ verify: vi.fn(async () => ({ ok: true as const, x: 0.42, y: 0.43, message: 'ok' })) });
     expect(await identifyAndVerify(l)).toEqual({ verified: true, name: 'Play', x: 0.42, y: 0.43, tries: 1 });
+  });
+
+  it('dispatches the move to the verified point at once, in the first try', async () => {
+    const move = vi.fn(async () => ({ ok: true, message: 'moved' }));
+    const l = loop({ verify: vi.fn(async () => ({ ok: true as const, x: 0.42, y: 0.43, message: 'ok' })), move });
+    const out = await identifyAndVerify(l);
+    expect(move).toHaveBeenCalledTimes(1);
+    expect(move).toHaveBeenCalledWith({ name: 'Play', x: 0.42, y: 0.43 });
+    expect(out).toMatchObject({ verified: true, tries: 1, moved: { ok: true } });
+    expect(l.logs.join('\n')).not.toMatch(/Could not find/);
+  });
+
+  it('retries a prose reply with the stricter JSON-only instruction, then verifies and moves', async () => {
+    const identify = vi.fn().mockRejectedValueOnce(new AiParseError('The button is red, in C5, behind a popup.')).mockResolvedValueOnce(found);
+    const move = vi.fn(async () => ({ ok: true, message: 'moved' }));
+    const l = loop({ identify, move, verify: vi.fn(async () => ({ ok: true as const, x: 0.4, y: 0.4, message: 'ok' })) });
+    const out = await identifyAndVerify(l);
+    expect(identify).toHaveBeenCalledTimes(2);
+    expect(identify.mock.calls[1][0]).toContain(PROSE_FEEDBACK);
+    expect(out).toMatchObject({ verified: true, tries: 2 });
+    expect(move).toHaveBeenCalledTimes(1);
+  });
+
+  it('never verifies or moves a low-confidence or not-found identification', async () => {
+    const move = vi.fn(async () => ({ ok: true, message: 'moved' }));
+    const low = loop({ identify: vi.fn(async () => ({ ...found, confidence: 0.05 })), move });
+    expect((await identifyAndVerify(low)).verified).toBe(false);
+    expect(low.verify).not.toHaveBeenCalled();
+    expect(low.logs[0]).toContain('below');
+    const none = loop({ identify: vi.fn(async () => ({ found: false as const, reason: 'gone', thinking: null })), move });
+    expect((await identifyAndVerify(none)).verified).toBe(false);
+    expect(move).not.toHaveBeenCalled();
+  });
+
+  it('does not move once aborted after verification', async () => {
+    let aborted = false;
+    const move = vi.fn(async () => ({ ok: true, message: 'moved' }));
+    const l = loop({ aborted: () => aborted, move, verify: vi.fn(async () => { aborted = true; return { ok: true as const, x: 0.4, y: 0.4, message: 'ok' }; }) });
+    await identifyAndVerify(l);
+    expect(move).not.toHaveBeenCalled();
   });
 
   it('stops after 3 failed tries, logs plainly and resolves unverified', async () => {

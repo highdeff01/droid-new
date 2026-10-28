@@ -1,7 +1,7 @@
 import type { Frame } from './types.js';
 import type { Box, Thought } from './assist-ai.js';
-import { gridPrompt, gridRef, replyPoint } from './grid.js';
-import { SAMPLE_VIEW, parseJsonReply, type ViewSize } from './ai.js';
+import { gridPrompt, gridRef, parseCell, replyPoint } from './grid.js';
+import { AiError, AiParseError, SAMPLE_VIEW, stripThinking, truncateRaw, type ViewSize } from './ai.js';
 import { fullUrl } from './grounding.js';
 import type { AiReply, AskRequest } from './ai.js';
 import { boxCenter, mapCell, mapCells, type MappedElement } from './element-map-studio.js';
@@ -135,14 +135,24 @@ export function characteristics(input: IdentifyInput): string[] {
   ];
 }
 
-/** System prompt of the identification request for a `view`-sized screenshot: the reply contract. */
+/** The only reply shape the identifier accepts. */
+export const IDENTIFY_SCHEMA = '{"found":boolean,"cell":string|null,"x":number|null,"y":number|null,"confidence":number}';
+
+/** System prompt of the identification request for a `view`-sized screenshot: the JSON-only reply contract. */
 export const identifySystem = (view: ViewSize) => `You are Droid Assist's element identifier. The first image is the user's full screen (${view.w}x${view.h}); the second is a zoomed crop of one region of it, taken from the full-resolution screen, followed by that region's measured characteristics.
 ${gridPrompt(view)}
 Identify the element and give its clickable centre on the FULL screen. Use the boundary box, the grid cells and the distances from the user's mapped elements to measure it.
-Reply ONLY with JSON {"found":boolean,"name":string,"cell":string,"cx":number,"cy":number,"reason":string}. Set found=false if the element cannot be identified.`;
+Reply with ONLY this JSON object and nothing else — no prose, no markdown: ${IDENTIFY_SCHEMA}.
+"cell" is the grid cell holding the element's centre (e.g. "C5"); "x","y" are that centre in pixels of the ${view.w}x${view.h} screenshot (null when you give only the cell); "confidence" is 0..1. Set found=false with null cell/x/y when the element cannot be identified.`;
 
 /** The identification system prompt for a sample-space (480x270) screenshot. */
 export const IDENTIFY_SYSTEM = identifySystem(SAMPLE_VIEW);
+
+/** The stricter instruction a retry carries after the model answered in prose. */
+export const PROSE_FEEDBACK = `your reply was prose, not the JSON object. Reply with ONLY ${IDENTIFY_SCHEMA} — the first character must be "{" and the last "}", with no words, explanation or markdown around it`;
+
+/** Below this confidence a found element is retried instead of verified and moved to. */
+export const MIN_IDENTIFY_CONFIDENCE = 0.5;
 
 /** The identification request for one element; `feedback` says why the previous proposal failed. */
 export function identifyRequest(input: IdentifyInput, feedback?: string): AskRequest {
@@ -150,20 +160,47 @@ export function identifyRequest(input: IdentifyInput, feedback?: string): AskReq
   return { system: identifySystem, prompt: lines.join('\n'), frame: input.frame, crops: [input.crop], context: [], json: true };
 }
 
-/** The model's identification: the element's name and a point on the full screen, or not found. */
-export type Identification = ({ found: true; name: string; x: number; y: number; reason: string } | { found: false; reason: string }) & Thought;
+/** The model's identification: the element's name, a point on the full screen and its confidence, or not found. */
+export type Identification = ({ found: true; name: string; x: number; y: number; confidence: number; reason: string } | { found: false; reason: string }) & Thought;
 
-/** Parses an identification reply; throws AiError on a malformed reply. */
+/** The reply as one JSON object (think blocks and a code fence aside); anything else is prose and throws AiParseError. */
+function strictObject(raw: string): Record<string, unknown> {
+  const text = stripThinking(raw).replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  try {
+    const value = JSON.parse(text) as unknown;
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  } catch {
+    // falls through: not a JSON object
+  }
+  throw new AiParseError(truncateRaw(raw));
+}
+
+const isNum = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
+
+/**
+ * Parses an identification reply against IDENTIFY_SCHEMA. Prose, or an object without a boolean
+ * "found" and numeric "confidence", throws AiParseError. A valid "cell" wins over "x","y" (its
+ * centre, refined by optional "cx","cy"); found=true with neither a cell nor numeric x,y throws AiError.
+ */
 export function parseIdentification(reply: AiReply, fallbackName: string): Identification {
-  const r = parseJsonReply(reply.content);
-  const reason = String(r.reason ?? '');
-  if (r.found !== true) return { found: false, reason, thinking: reply.thinking };
+  const r = strictObject(reply.content);
+  if (typeof r.found !== 'boolean' || !isNum(r.confidence)) throw new AiParseError(truncateRaw(reply.content));
+  const reason = typeof r.reason === 'string' ? r.reason : '';
+  if (!r.found) return { found: false, reason, thinking: reply.thinking };
+  if (!parseCell(r.cell) && !(isNum(r.x) && isNum(r.y))) throw new AiError('the reply said found=true but gave no valid cell and no x,y');
   const name = typeof r.name === 'string' && r.name.trim() ? r.name.trim() : fallbackName;
-  return { found: true, name, ...replyPoint(r, undefined, reply.view), reason, thinking: reply.thinking };
+  const confidence = Math.min(1, Math.max(0, r.confidence as number));
+  return { found: true, name, ...replyPoint(r, undefined, reply.view), confidence, reason, thinking: reply.thinking };
 }
 
 /** One verification of a proposed point by the agent test. */
 export type AgentCheck = { ok: true; x: number; y: number; message: string } | { ok: false; message: string };
+
+/** The movement dispatched to a verified point. */
+export interface MoveResult {
+  ok: boolean;
+  message: string;
+}
 
 /** What the identify-and-verify loop needs from its host. */
 export interface IdentifyLoop {
@@ -171,16 +208,20 @@ export interface IdentifyLoop {
   identify: (feedback?: string) => Promise<Identification>;
   /** The agent test: dry-run move to the point and verify it against the live frame. */
   verify: (id: Extract<Identification, { found: true }>) => Promise<AgentCheck>;
+  /** Dispatches the movement to the verified point at once (through the host's guardrails); omitted = verify only. */
+  move?: (p: { name: string; x: number; y: number }) => Promise<MoveResult>;
   /** True once the run was aborted: no further try is started. */
   aborted: () => boolean;
   log: (message: string, tone: 'info' | 'ok' | 'warn' | 'error') => void;
   now?: () => number;
   tries?: number;
   windowMs?: number;
+  /** Lowest confidence that is verified and moved to (MIN_IDENTIFY_CONFIDENCE). */
+  minConfidence?: number;
 }
 
-/** The loop's result: the verified, corrected point, or why it gave up. */
-export type IdentifyOutcome = { verified: true; name: string; x: number; y: number; tries: number } | { verified: false; tries: number; reason: string };
+/** The loop's result: the verified, corrected point (and the dispatched move, when the host moves), or why it gave up. */
+export type IdentifyOutcome = { verified: true; name: string; x: number; y: number; tries: number; moved?: MoveResult } | { verified: false; tries: number; reason: string };
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -193,19 +234,44 @@ function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
-/** One try: identify, then verify; resolves the accepted point or the failure feedback. */
-async function oneTry(loop: IdentifyLoop, feedback: string | undefined): Promise<{ id: Extract<Identification, { found: true }>; check: Extract<AgentCheck, { ok: true }> } | { feedback: string }> {
-  const id = await loop.identify(feedback);
+type TryResult = { id: Extract<Identification, { found: true }>; check: Extract<AgentCheck, { ok: true }> } | { feedback: string };
+
+/** The identification, or the feedback for the next try when the reply was prose or unusable. */
+async function identifyOnce(loop: IdentifyLoop, feedback: string | undefined): Promise<Identification | { feedback: string }> {
+  try {
+    return await loop.identify(feedback);
+  } catch (error) {
+    if (error instanceof AiParseError) return { feedback: `${PROSE_FEEDBACK} (got: ${error.raw})` };
+    throw error;
+  }
+}
+
+/** One try: identify (JSON only), gate on confidence, then verify; resolves the accepted point or the failure feedback. */
+async function oneTry(loop: IdentifyLoop, feedback: string | undefined): Promise<TryResult> {
+  const id = await identifyOnce(loop, feedback);
+  if ('feedback' in id) return id;
   if (!id.found) return { feedback: `the element was not identified (${id.reason || 'no reason given'})` };
+  const min = loop.minConfidence ?? MIN_IDENTIFY_CONFIDENCE;
+  if (id.confidence < min) return { feedback: `confidence ${id.confidence.toFixed(2)} for "${id.name}" at ${gridRef(id)} is below ${min} — look again and reply with a confident location` };
   const check = await loop.verify(id);
   return check.ok ? { id, check } : { feedback: `"${id.name}" at ${gridRef(id)} failed the agent test: ${check.message}` };
 }
 
+/** Dispatches the move to the verified point (when the host moves) and logs it. */
+async function moveTo(loop: IdentifyLoop, name: string, x: number, y: number): Promise<MoveResult | undefined> {
+  if (!loop.move || loop.aborted()) return undefined;
+  const moved = await loop.move({ name, x, y }).catch((error: unknown) => ({ ok: false, message: errorText(error) }));
+  loop.log(`Move to "${name}" at ${gridRef({ x, y })}: ${moved.message}`, moved.ok ? 'ok' : 'warn');
+  return moved;
+}
+
 /**
  * Identification with an agent test: up to `tries` (3) identify → verify rounds within
- * `windowMs` (30 s), whichever limit is reached first. A verified proposal resolves with the
- * agent's corrected point; otherwise it logs plainly and resolves unverified — it never throws,
- * so the caller continues with its current plan. An abort stops before the next try.
+ * `windowMs` (30 s), whichever limit is reached first. A prose reply is retried with a stricter
+ * JSON-only instruction; a low-confidence one with a request to look again. A verified proposal
+ * dispatches the move at once (when the host gives `move`) and resolves with the agent's
+ * corrected point; otherwise it logs plainly and resolves unverified — it never throws, so the
+ * caller continues with its current plan. An abort stops before the next try.
  */
 export async function identifyAndVerify(loop: IdentifyLoop): Promise<IdentifyOutcome> {
   const now = loop.now ?? Date.now;
@@ -221,7 +287,8 @@ export async function identifyAndVerify(loop: IdentifyLoop): Promise<IdentifyOut
       const r = await withDeadline(oneTry(loop, feedback), left);
       if ('id' in r) {
         loop.log(`Identified "${r.id.name}" on try ${k + 1}/${tries} — agent test passed: ${r.check.message}`, 'ok');
-        return { verified: true, name: r.id.name, x: r.check.x, y: r.check.y, tries: k + 1 };
+        const moved = await moveTo(loop, r.id.name, r.check.x, r.check.y);
+        return { verified: true, name: r.id.name, x: r.check.x, y: r.check.y, tries: k + 1, ...(moved ? { moved } : {}) };
       }
       feedback = r.feedback;
       loop.log(`Try ${k + 1}/${tries}: ${feedback}`, 'warn');

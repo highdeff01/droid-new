@@ -19,6 +19,7 @@ import { DEFAULT_MAX_ITERATIONS, autoContinue, judgeCheck, type ContinueStop, ty
 import { DEFAULT_CHANGE_CELLS, assessChange, changeText, detectChange, type ChangeAssessment, type ScreenChange } from './screen-change.js';
 import { localProposal, proposalText, proposeStep, type Proposal, type ProposalContext } from './proposal.js';
 import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './thinking-timeline.js';
+import { radarStatus, radarStatusText, radarTick, startRadar, type RadarEvent, type RadarState, type RadarTarget } from './radar.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, pointerAction, selfTestBridge, sendNative, type BridgeResult } from './bridge.js';
 import { DRY_RUN, dragEndError, runStep, type Grounding, type StepOutcome } from './run-step.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
@@ -197,6 +198,15 @@ const NOTE_ONLY_AGENTS: BusAgentId[] = ['progress', 'goal', 'supervisor'];
 
 /** Workflow actions that are real mouse/keyboard input, as recorded in the action history. */
 const INPUT_ACTIONS: Partial<Record<StepAction, InputAction>> = { click: 'click', double_click: 'double_click', move: 'move', drag: 'drag', scroll: 'scroll', type: 'type', key: 'key' };
+
+/** A history message that says nothing was dispatched: prefixed with DRY_RUN unless the step's message already says it. */
+const dryRunMessage = (message: string, simulated: boolean) => {
+  const label = message.includes(DRY_RUN) ? message : `${DRY_RUN} — ${message}`;
+  return simulated ? `${label} (simulated on the demo desktop)` : label;
+};
+
+/** Where a history record ran, as the reversal error names it. */
+const VIA_LABEL: Record<ActionRecord['via'], string> = { bridge: 'desktop bridge', 'main-app': 'main Droid app', demo: 'demo desktop' };
 
 /** Steps the browser itself answers on the demo desktop (no screen input). */
 const LOCAL_ACTIONS: Partial<Record<StepAction, (step: WorkflowStep) => Promise<{ ok: boolean; message: string }>>> = {
@@ -1631,15 +1641,21 @@ export function useAssist() {
     actorInputsRef.current = [...actorInputsRef.current, { time: Date.now(), x: p.x, y: p.y, actor }].slice(-ACTOR_INPUT_LIMIT);
   };
 
-  /** Appends one performed mouse/keyboard action to the persistent history, with the pointer's prior point, screen size and prior text for reversal. */
+  /**
+   * Appends one mouse/keyboard action to the persistent history, with the pointer's prior point, screen size and prior text for reversal.
+   * Only real bridge/main-app dispatches are recorded as such; a verified-but-not-sent step or a demo simulation is a labeled dry run.
+   */
   const recordAction = useCallback((step: WorkflowStep, out: StepOutcome, actor: string, via: ActionRecord['via'], srcW: number, srcH: number) => {
     const kind = INPUT_ACTIONS[step.action];
     if (!kind) return;
+    const simulated = via === 'demo' && out.executed;
+    const dryRun = via === 'demo' || !out.executed;
     const end = kind === 'drag' ? dragEnd(step, srcW, srcH) : null;
     const px = (p: { x: number; y: number }) => ({ x: Math.round(p.x * srcW), y: Math.round(p.y * srcH) });
     const prev = lastPointerRef.current ? px(lastPointerRef.current) : null;
-    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message: out.message, ...(via === 'bridge' && out.check && !out.check.changed ? { dispatched: true } : {}) };
-    if (POINTER_ACTIONS.has(step.action)) lastPointerRef.current = out.end ?? out.target;
+    const message = dryRun ? dryRunMessage(out.message, simulated) : out.message;
+    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message, ...(via === 'bridge' && out.executed && out.check && !out.check.changed ? { dispatched: true } : {}), ...(dryRun ? { dryRun } : {}), ...(simulated ? { simulated } : {}) };
+    if (out.executed && POINTER_ACTIONS.has(step.action)) lastPointerRef.current = out.end ?? out.target;
     if (out.executed) noteInput(out.target, USER_ACTORS.has(actor) ? 'user' : 'ai');
     lastRecordRef.current = rec;
     setHistory((h) => appendHistory(h, rec));
@@ -1887,12 +1903,16 @@ export function useAssist() {
    */
   const dispatchInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
-    if (sourceRef.current === 'main-app') return performOnMainApp(step, budget, dryRun);
-    if (sourceRef.current === 'demo' && (dryRun || !bridgeUrl)) {
-      const out = await performOnDemo(step, dryRun);
-      if (out.executed) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
+    /** History gets real dispatches and verified dry runs; refused or unverified steps leave nothing. */
+    const record = (out: Performed, via: ActionRecord['via'], w: number, h: number) => {
+      if (out.executed || (dryRun && out.ok)) recordAction(step, out, actor, via, w, h);
       return out;
+    };
+    if (sourceRef.current === 'main-app') {
+      const frame = framesRef.current[0];
+      return record(await performOnMainApp(step, budget, dryRun), 'main-app', frame?.srcW ?? 1920, frame?.srcH ?? 1080);
     }
+    if (sourceRef.current === 'demo' && (dryRun || !bridgeUrl)) return record(await performOnDemo(step, dryRun), 'demo', DEMO_W, DEMO_H);
     if (!bridgeUrl) return refused(step, BRIDGE_REQUIRED);
     const gate = dryRun ? null : gateRealInput(budget);
     if (gate) return refused(step, gate);
@@ -1921,7 +1941,7 @@ export function useAssist() {
       aim,
       gateRetry: dryRun ? undefined : () => gateRealInput(budget),
     });
-    if (out.executed) recordAction(step, out, actor, 'bridge', size.w, size.h);
+    record(out, 'bridge', size.w, size.h);
     noteBridge(step, out, actor);
     return out;
   };
@@ -2256,9 +2276,10 @@ export function useAssist() {
   /**
    * Sends the AI an identification request for `box` (crop, size, colour stats, text, boundary,
    * distances to mapped elements and grid cells) and agent-tests each proposal: at most 3 tries
-   * within 30 s. A verified element is remembered as familiar; a miss is logged plainly.
+   * within 30 s. With `moveDry` set, the verified point is moved to at once through performStep
+   * (a dry run when `moveDry` is true). A verified element is remembered as familiar; a miss is logged plainly.
    */
-  const identifyElement = async (reason: IdentifyReason, box: Box, text: string | undefined, budget: ActionBudget, dryRun: boolean): Promise<(IdentifyOutcome & { live?: Frame }) | null> => {
+  const identifyElement = async (reason: IdentifyReason, box: Box, text: string | undefined, budget: ActionBudget, dryRun: boolean, moveDry?: boolean): Promise<(IdentifyOutcome & { live?: Frame }) | null> => {
     const frame = framesRef.current[0];
     if (!frame) return null;
     const label = text ?? `region at ${gridRef(boxCenter(box))}`;
@@ -2266,13 +2287,16 @@ export function useAssist() {
     const log = (m: string, tone: LogEntry['tone']) => addLog('Element identifier', `"${label}": ${m}`, tone);
     log(`sending an identification request to the AI (${reason.replace('_', ' ')})`, 'info');
     let live: Frame | undefined;
+    const move = moveDry === undefined ? undefined : (p: { name: string; x: number; y: number }) =>
+      performStep({ id: uid('move'), name: `Move to "${p.name}"`, action: 'move', target: p.name, x: p.x, y: p.y, refFrame: live ?? frame, status: 'pending' }, 'Element identifier', budget, moveDry);
     const outcome = await identifyAndVerify({
-      identify: (feedback) => thought(`Identify: ${label}`, async () => parseIdentification(await askFor('identify')(identifyRequest(input, feedback)), label), (r) => (r.found ? `Identified "${r.name}" at ${gridRef(r)} — ${r.reason}` : `Not identified — ${r.reason}`)),
+      identify: (feedback) => thought(`Identify: ${label}`, async () => parseIdentification(await askFor('identify')(identifyRequest(input, feedback)), label), (r) => (r.found ? `Identified "${r.name}" at ${gridRef(r)} (confidence ${r.confidence.toFixed(2)})${r.reason ? ` — ${r.reason}` : ''}` : `Not identified — ${r.reason || 'no reason given'}`)),
       verify: async (id) => {
         const check = await agentTest(input, id, budget, dryRun);
         live = check.live;
         return check;
       },
+      move,
       aborted: () => abortedRef.current,
       log,
     });
@@ -2329,6 +2353,57 @@ export function useAssist() {
     const dry = !(armedRef.current && settingsRef.current.autoAct);
     void identifyElement(noted.kind === 'new' ? 'new_element' : 'changing_element', box, undefined, autoBudgetRef.current, dry).finally(() => {
       identifyBusyRef.current = false;
+    });
+  };
+
+  /** The radar's tracked element and its budget; null when no suggested element is being tracked. */
+  const radarRef = useRef<{ state: RadarState; budget: ActionBudget; busy: boolean } | null>(null);
+
+  /** Starts the radar on a suggested / user-pointed element, replacing any earlier target. */
+  const startTracking = (target: RadarTarget) => {
+    radarRef.current = { state: startRadar(target), budget: createBudget(settingsRef.current.actionBudget), busy: false };
+    addLog('Radar', `tracking "${target.name}" at ${gridRef(target)} until it stops, then ${target.action}`, 'info');
+  };
+
+  /** The radar status of one event goes to the thinking timeline, built from the AI's recent responses. */
+  const noteRadar = (target: RadarTarget, event: RadarEvent) => {
+    const recent = timelineRef.current.filter((e) => !e.step.startsWith('Radar')).slice(0, 5).map((e) => e.error ?? e.text).filter(Boolean);
+    note({ step: `Radar: ${target.name}`, kind: 'movement', text: radarStatusText(radarStatus(target, event, recent)), thinking: null });
+  };
+
+  /** The radar event's movement: attract takes one slow step, settle the adjusted move and then the action. */
+  const radarMove = async (target: RadarTarget, event: RadarEvent, budget: ActionBudget) => {
+    if (event.kind !== 'attract' && event.kind !== 'settle') return;
+    const dry = !armedRef.current;
+    const at = { x: event.to.x, y: event.to.y };
+    const move = await performStep({ id: uid('radar'), name: `Radar ${event.kind} "${target.name}"`, action: 'move', target: target.name, ...at, status: 'pending' }, 'Radar', budget, dry);
+    if (event.kind !== 'settle' || !move.ok || target.action === 'move') return;
+    const act = await performStep({ id: uid('radar'), name: `${target.action} "${target.name}"`, action: target.action, target: target.name, ...at, status: 'pending' }, 'Radar', budget, dry);
+    addLog('Radar', `${target.action} on "${target.name}": ${act.message}`, act.ok ? 'ok' : 'warn');
+  };
+
+  /**
+   * One radar tick per capture: re-finds the tracked element on the new frame (template match
+   * from the previous frame), measures cursor/target distance and acts on the event. Runs only
+   * while armed; stops on disarm, an abort, the identify stage unchecked in Loop control, once settled or expired.
+   */
+  const radarFrame = (prev: Frame, cur: Frame) => {
+    const r = radarRef.current;
+    if (!r || r.busy) return;
+    if (abortedRef.current || !armedRef.current || !stageOn('identify')) {
+      radarRef.current = null;
+      return;
+    }
+    const t = r.state.target;
+    const c = correctDrift(prev.data, cur.data, t.x, t.y, cur.srcW, cur.srcH);
+    const seen = c.level === 'red' ? { x: t.x, y: t.y } : { x: c.x, y: c.y };
+    const tick = radarTick(r.state, lastPointerRef.current ?? seen, seen, cur.srcW, cur.srcH);
+    r.state = tick.state;
+    noteRadar(tick.state.target, tick.event);
+    if (tick.event.kind === 'settle' || tick.event.kind === 'expired') radarRef.current = null;
+    r.busy = true;
+    void radarMove(tick.state.target, tick.event, r.budget).finally(() => {
+      r.busy = false;
     });
   };
 
@@ -2848,7 +2923,8 @@ export function useAssist() {
     if (!offer) return addLog(REVERSE_ACTOR, 'Nothing to reverse — no real action since the last reversal', 'warn');
     const { record, reversal } = offer;
     if (!reversal.ok) return addLog(REVERSE_ACTOR, `Cannot reverse ${record.action} at (${record.x}, ${record.y})px — ${reversal.reason}`, 'warn');
-    if ((record.via === 'demo') !== (sourceRef.current === 'demo')) return addLog(REVERSE_ACTOR, `Cannot reverse — the ${record.action} ran on the ${record.via === 'demo' ? 'demo desktop' : 'desktop bridge'}, which is not the current screen source`, 'error');
+    const via: ActionRecord['via'] = sourceRef.current === 'demo' || sourceRef.current === 'main-app' ? sourceRef.current : 'bridge';
+    if (record.via !== via) return addLog(REVERSE_ACTOR, `Cannot reverse — the ${record.action} ran on the ${VIA_LABEL[record.via]}, which is not the current screen source`, 'error');
     const dryRun = !armedRef.current;
     setReversing(true);
     try {
@@ -3450,6 +3526,7 @@ export function useAssist() {
     void putStoredFrame(toStoredFrame(frame), settingsRef.current.gallerySize).catch(() => undefined);
     if (prev) {
       watchChanges(prev, frame);
+      radarFrame(prev, frame);
       watchScreen(prev, frame);
       if (stageOn('opsMonitor')) monitorFrame(prev, frame);
     }
@@ -3965,6 +4042,7 @@ export function useAssist() {
   const proposeFix = async (ctx: FixContext) => {
     const ask = aiOnline() && stageOn('executor') ? askFor('executor') : null;
     const script = await generateFixScript(ctx, fixMethodsRef.current, ask, framesRef.current[0] ?? null, inventoryLines(inventoryRef.current));
+    if (!script) return addLog('Fix script', `"${ctx.element}" failed ${FAIL_THRESHOLD}× in a row (${ctx.problem}) — AI unavailable and no saved fix method — no fix script proposed`, 'error');
     showFix(script);
     addLog('Fix script', `"${ctx.element}" failed ${FAIL_THRESHOLD}× in a row (${ctx.problem}) — proposed ${fixScriptText(script)}; review it in the pre-action briefing before it runs`, 'warn');
   };
@@ -4485,7 +4563,8 @@ export function useAssist() {
         const { steps: planned } = await thought(`/move ${name}`, () => planFromGoal(`Move the mouse cursor onto the ${name} (hover, do not click)`, [], framesRef.current[0] ?? null, askFor('planner'), [...sectionContext(), ...inventoryLines(inventoryRef.current)]), planSummary);
         const move = planned.find((s) => s.action === 'move');
         if (!move) {
-          addLog('/move', `AI did not plan a mouse move to "${name}" (it proposed ${planned.map((s) => s.action).join(', ')}) — nothing executed`, 'error');
+          addLog('/move', `AI did not plan a mouse move to "${name}" (it proposed ${planned.map((s) => s.action).join(', ')}) — identifying it instead`, 'warn');
+          await identifyAndTrack(name, { x: 0, y: 0, w: 1, h: 1 });
           return;
         }
         const step = { ...move, target: move.target ?? name };
@@ -4500,10 +4579,19 @@ export function useAssist() {
         const out = await perform(j.step, '/move', createBudget(settingsRef.current.actionBudget), !armedRef.current, j.proposal);
         applyOutcome(0, out, !armedRef.current);
         addLog('/move', `${step.name}: ${out.message}`, out.ok ? 'ok' : 'error');
+        if (out.ok) startTracking({ name, x: out.target.x, y: out.target.y, action: 'move' });
+        else if (!out.halt) await identifyAndTrack(name, stepBox(j.step));
       } catch (error) {
         addLog('/move', aiFailure('AI unavailable — nothing executed', error), 'error');
       }
     });
+  };
+
+  /** A suggested element the planner could not move to: identified (JSON only), verified, moved to at once, then tracked by the radar. */
+  const identifyAndTrack = async (name: string, box: Box) => {
+    if (!identifierReady()) return;
+    const found = await identifyElement('not_accepted', box, name, createBudget(settingsRef.current.actionBudget), true, !armedRef.current);
+    if (found?.verified) startTracking({ name, x: found.x, y: found.y, action: 'move' });
   };
 
   /** Shows the chain in the briefing panel. */

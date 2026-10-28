@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
+import { DRY_RUN } from './run-step.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import { AiStatusBadge, InsecureBridgeWarning, MainBridgeBadge } from './hud.js';
 import { ModelPicker } from './model-picker.js';
@@ -679,8 +680,8 @@ export function ActionHistoryPanel({ engine }: { engine: AssistEngine }) {
       </div>
       <ul className={styles.log}>
         {history.slice(0, 200).map((a) => (
-          <li key={a.id} data-tone={a.ok ? 'ok' : 'error'}>
-            <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.endX !== undefined ? ` → (${a.endX}, ${a.endY})` : ''}{a.text ? ` "${a.text}"` : ''} · {a.via}
+          <li key={a.id} data-tone={a.ok ? (a.dryRun ? 'info' : 'ok') : 'error'}>
+            <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.endX !== undefined ? ` → (${a.endX}, ${a.endY})` : ''}{a.text ? ` "${a.text}"` : ''} · {a.via}{a.dryRun ? ` · ${DRY_RUN}` : ''}
           </li>
         ))}
       </ul>
