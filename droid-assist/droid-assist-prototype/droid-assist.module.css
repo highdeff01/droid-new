@@ -47,6 +47,8 @@
 .liveWrite input { width: 100%; box-sizing: border-box; }
 .side { display: grid; gap: 16px; align-content: start; min-width: 0; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; min-width: 0; }
+/* Every tab scrolls inside a fixed 360px height instead of growing the page; content may stretch it by at most 10% before it scrolls. */
+.panel { --panel-h: 360px; box-sizing: border-box; height: auto; max-height: calc(var(--panel-h) * 1.1); overflow-y: auto; overscroll-behavior: contain; }
 .panel h3, .panel h4 { margin: 0 0 10px; font-size: 14px; display: flex; justify-content: space-between; gap: 8px; }
 .panel h4 { margin-top: 12px; color: var(--pink); }
 .panel small { color: var(--muted); font-weight: 400; }
