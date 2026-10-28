@@ -48,6 +48,8 @@ export interface AssistOps {
   sections: (goal: string) => Promise<string[]>;
   ask: (question?: string) => Promise<string>;
   verifyScreen: (goal: string) => Promise<string>;
+  /** Template-matches the next step's target on the current source's live frame: its sync level, or why it cannot. */
+  driftCheck: () => Promise<string>;
   reverseLast: () => Promise<void>;
   setArmed: (on: boolean) => void;
   abort: (reason: string) => void;
@@ -147,6 +149,7 @@ function readCaps(ops: Ops): Capability[] {
     cap('sections.list', 'Screen sections the AI sees for a goal', { goal: str('what to list (e.g. "the nav links")') }, async (p) => list(await ops().sections(String(p.goal)), 'no sections found'), { readOnly: true }),
     cap('research.ask', 'Side research: ask the AI about the live screen', { question: str('question (default: what needs attention)', false) }, (p) => ops().ask(p.question as string | undefined), { readOnly: true }),
     cap('screen.verify', 'Screenshot verification: is the goal complete on the live screen?', { goal: str('goal (default: the current one)', false) }, (p) => ops().verifyScreen(String(p.goal ?? '')), { readOnly: true }),
+    cap('drift.check', 'Drift check: is the next step\'s target where it was recorded on the live screen (any capture source)?', {}, () => ops().driftCheck(), { readOnly: true }),
     cap('ruler.measure', 'Measure distances, e.g. "Files icon to left edge"', { text: str('endpoints joined by " to "') }, (p, r) => ops().measure(String(p.text), r.kind), { readOnly: true }),
     cap('snip.capture', 'Snip tool: crop a box of the live frame into the log', { x: unit('left'), y: unit('top'), w: unit('width'), h: unit('height') }, (p) => ops().snip({ x: Number(p.x), y: Number(p.y), w: Number(p.w), h: Number(p.h) }), { readOnly: true }),
   ];
