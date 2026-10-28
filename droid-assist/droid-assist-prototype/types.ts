@@ -82,12 +82,16 @@ export interface ActionRecord {
   priorText?: string;
   /** Who performed it: Replay, Auto-Actor, AI help, ... */
   source: string;
-  /** Where it was dispatched: the desktop bridge or the demo desktop. */
-  via: 'bridge' | 'demo';
+  /** Where it ran: the desktop bridge, the main Droid app, or the demo desktop. */
+  via: 'bridge' | 'main-app' | 'demo';
   ok: boolean;
   message: string;
   /** The bridge accepted the input but the step's effect was not confirmed on screen. */
   dispatched?: boolean;
+  /** Nothing was dispatched to the PC or the main app: a disarmed verification or a demo simulation, labeled "dry run — not dispatched". */
+  dryRun?: boolean;
+  /** A dry run whose effect was simulated on the demo desktop (reversible there only). */
+  simulated?: boolean;
 }
 
 /** A lesson learned from a run: something to avoid or to add when planning similar goals. */

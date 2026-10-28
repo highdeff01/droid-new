@@ -173,4 +173,16 @@ describe('reverseOffer', () => {
     expect(offer?.record).toBe(newest);
     expect(offer?.reversal).toEqual(reverseAction(newest));
   });
+
+  it('skips dry runs that dispatched nothing and offers the newest real action behind them', () => {
+    const dry = rec({ id: 'd1', dryRun: true, message: 'dry run — not dispatched' });
+    const real = rec({ id: 'r1', x: 200 });
+    expect(reverseOffer([dry, real])?.record).toBe(real);
+    expect(reverseOffer([dry])).toBeNull();
+  });
+
+  it('a dry run cannot be reversed, but a demo simulation can', () => {
+    expect(reverseAction(rec({ dryRun: true }))).toMatchObject({ ok: false });
+    expect(reverseAction(rec({ via: 'demo', dryRun: true, simulated: true })).ok).toBe(true);
+  });
 });

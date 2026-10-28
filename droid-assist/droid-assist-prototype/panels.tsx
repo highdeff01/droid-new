@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
+import { DRY_RUN } from './run-step.js';
 import { hotkeyFromEvent, sanitizeBudget } from './safety.js';
 import { AiStatusBadge, InsecureBridgeWarning, MainBridgeBadge } from './hud.js';
 import { ModelPicker } from './model-picker.js';
@@ -41,6 +42,7 @@ import { sectionMemoryLines } from './sections.js';
 import { replicaLine } from './replicate.js';
 import { SIDE_TEST_MODES, feedbackLine, type SideTestMode } from './side-test.js';
 import { RecoverySettings, RelaxSettings } from './relax-recovery-settings.js';
+import { latestReports } from './agent-cadence.js';
 import styles from './droid-assist.module.css';
 
 const NOTE_LABEL: Record<NoteKind, string> = { element: 'Element', change: 'Change', unusual: 'Unusual', opportunity: 'Opportunity', wake: 'Wake', decision: 'Decision', error: 'Error' };
@@ -366,13 +368,15 @@ export function LoopControlPanel({ engine }: { engine: AssistEngine }) {
  */
 export function AgentsPanel({ engine }: { engine: AssistEngine }) {
   const { agents } = engine;
+  // The panel's Screen watcher is the cadence's screenWatcher agent.
+  const live = new Map(latestReports(engine.agentReports).map((r) => [r.agent === 'screenWatcher' ? 'screen' : r.agent, r.text]));
   return (
     <section className={styles.panel}>
       <h3>Agents</h3>
       {agents.map((a) => (
         <label key={a.id} className={styles.agent}>
           <input type="checkbox" checked={a.on} onChange={(e) => void engine.invoke(`agent.${a.id}`, { on: e.target.checked })} />
-          <span><strong>{a.name}</strong><small>{a.description}</small>{a.id === 'goalTracer' && <small aria-label="Goal tracer status">Live: {engine.tracerStatus}</small>}</span>
+          <span><strong>{a.name}</strong><small>{a.description}</small>{a.id === 'goalTracer' && <small aria-label="Goal tracer status">Live: {engine.tracerStatus}</small>}{live.has(a.id) && <small aria-label={`${a.name} live report`}>Now: {live.get(a.id)}</small>}</span>
         </label>
       ))}
     </section>
@@ -676,8 +680,8 @@ export function ActionHistoryPanel({ engine }: { engine: AssistEngine }) {
       </div>
       <ul className={styles.log}>
         {history.slice(0, 200).map((a) => (
-          <li key={a.id} data-tone={a.ok ? 'ok' : 'error'}>
-            <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.endX !== undefined ? ` → (${a.endX}, ${a.endY})` : ''}{a.text ? ` "${a.text}"` : ''} · {a.via}
+          <li key={a.id} data-tone={a.ok ? (a.dryRun ? 'info' : 'ok') : 'error'}>
+            <time>{new Date(a.time).toLocaleTimeString()}</time> <b>{a.source}</b> {a.action} ({a.x}, {a.y}){a.endX !== undefined ? ` → (${a.endX}, ${a.endY})` : ''}{a.text ? ` "${a.text}"` : ''} · {a.via}{a.dryRun ? ` · ${DRY_RUN}` : ''}
           </li>
         ))}
       </ul>
