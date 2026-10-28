@@ -9,9 +9,19 @@ import type { StepStatus, WorkflowStep } from './types.js';
  * update touches only the variation it names, so sibling variations are never clobbered.
  */
 
-/** running: its steps are worked in the background; paused: held until resumed; done/failed: finished. */
-export type VariationStatus = 'running' | 'paused' | 'done' | 'failed';
-export const VARIATION_STATUSES: readonly VariationStatus[] = ['running', 'paused', 'done', 'failed'];
+/**
+ * running: its steps are worked in the background; paused: held until resumed; done/failed: finished;
+ * merged: folded back into the main project; discarded: dropped by the user. Merged and discarded are closed:
+ * the variation stays listed for the record but never runs or changes again.
+ */
+export type VariationStatus = 'running' | 'paused' | 'done' | 'failed' | 'merged' | 'discarded';
+export const VARIATION_STATUSES: readonly VariationStatus[] = ['running', 'paused', 'done', 'failed', 'merged', 'discarded'];
+
+/** The statuses a variation ends in by a user decision. */
+export type ClosedStatus = Extract<VariationStatus, 'merged' | 'discarded'>;
+
+/** Whether `v` was merged or discarded and so never runs or changes again. */
+export const isClosed = (v: Variation): boolean => v.status === 'merged' || v.status === 'discarded';
 
 export interface Variation {
   id: string;
@@ -44,8 +54,18 @@ export function createVariation(goal: string, steps: WorkflowStep[], reason: str
   return { id: uid('var'), goal: goal.trim(), steps: steps.map(ownStep), status: 'running', reason, created: time, updated: time };
 }
 
-/** Adds `v` newest first, capped at VARIATION_LIMIT. */
-export const addVariation = (list: Variation[], v: Variation): Variation[] => [v, ...list].slice(0, VARIATION_LIMIT);
+/** Adds `v` newest first, capped at VARIATION_LIMIT; the oldest closed variations make room before any open one. */
+export function addVariation(list: Variation[], v: Variation): Variation[] {
+  const all = [v, ...list];
+  const excess = all.length - VARIATION_LIMIT;
+  if (excess <= 0) return all;
+  const dropped = new Set(all.filter(isClosed).slice(-excess).map((x) => x.id));
+  return all.filter((x) => !dropped.has(x.id)).slice(0, VARIATION_LIMIT);
+}
+
+/** Closes `v` as merged or discarded, keeping its steps for the record. */
+export const closeVariation = (v: Variation, status: ClosedStatus, reason: string, time = Date.now()): Variation =>
+  ({ ...v, status, reason, updated: time });
 
 /** Applies `fn` to variation `id` only; every sibling is returned unchanged (same object). */
 export const updateVariation = (list: Variation[], id: string, fn: (v: Variation) => Variation): Variation[] =>
