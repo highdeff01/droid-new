@@ -1302,8 +1302,9 @@ describe('useAssist Screen watcher', () => {
   const model = () => vi.fn(async (_url: string, init: RequestInit) => {
     const body = String(init.body);
     const content = body.includes('screen watcher') ? observation
-      : body.includes('final verdict') ? '{"success":false,"pattern_avoid":null,"pattern_add":null}'
-        : body.includes('reviewing a step') ? 'It did not run.' : 'OK';
+      : body.includes('target checker') ? '{"visible":true,"reason":"target is under the marker"}'
+        : body.includes('final verdict') ? '{"success":false,"pattern_avoid":null,"pattern_add":null}'
+          : body.includes('reviewing a step') ? 'It did not run.' : 'OK';
     return new Response(JSON.stringify({ message: { role: 'assistant', content, thinking: 'watching' } }), { status: 200 });
   });
   const watcherCalls = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.filter(([, init]) => String((init as RequestInit).body).includes('screen watcher')).length;
@@ -1338,11 +1339,12 @@ describe('useAssist Screen watcher', () => {
     expect(result.current.watcher.notes.filter((n) => n.kind !== 'error').map((n) => n.text)).toEqual(['Files sidebar item at the left', 'An ad covers the top right']);
     expect(result.current.watcher.proposals).toHaveLength(1);
     expect(result.current.timeline.some((e) => e.step === 'Screen watcher' && e.thinking === 'watching')).toBe(true);
-    // Its background test ran once (no bridge here, so it failed) and fed the pattern system.
+    // The background test verifies against the captured screen without dispatching input.
     expect(result.current.watcher.tests).toHaveLength(1);
-    expect(result.current.watcher.tests[0]).toMatchObject({ verdict: 'failed', dryRun: true });
+    expect(result.current.watcher.tests[0]).toMatchObject({ verdict: 'passed', dryRun: true });
     expect(result.current.watcher.tests[0].tried).toMatch(/Dry-run click on "Files sidebar item"/);
-    expect(result.current.patterns.some((p) => p.kind === 'avoid' && /Files sidebar item/.test(p.pattern))).toBe(true);
+    expect(result.current.watcher.tests[0].happened).toMatch(/last captured frame.*dry run — not dispatched/);
+    expect(result.current.patterns.some((p) => p.kind === 'avoid' && /Files sidebar item/.test(p.pattern))).toBe(false);
     expect(result.current.history).toHaveLength(0);
     expect(JSON.parse(localStorage.getItem('droid-assist.watcher')!).notes.filter((n: { kind: string }) => n.kind !== 'error')).toHaveLength(2);
   });

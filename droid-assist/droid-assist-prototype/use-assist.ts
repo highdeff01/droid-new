@@ -1876,7 +1876,7 @@ export function useAssist() {
   const dispatchInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
     const target = { x: step.x, y: step.y };
-    if (dryRun && LOCAL_ACTIONS[step.action]) return { ok: true, executed: false, message: `Local ${step.action} action skipped — ${DRY_RUN}`, target };
+    if (dryRun && step.action === 'search') return { ok: true, executed: false, message: `Search "${step.text ?? ''}" would open in a new tab — ${DRY_RUN}`, target };
     if (sourceRef.current === 'main-app') return performOnMainApp(step, budget, dryRun);
     if (sourceRef.current === 'demo' && (dryRun || !bridgeUrl)) {
       const out = await performOnDemo(step, dryRun);
