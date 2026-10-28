@@ -11,6 +11,7 @@ import { ApprovalsPanel } from './approvals-panel.js';
 import { StatsPanel } from './stats-panel.js';
 import { OperationMemoryPanel, MemoryPanel } from './memory-panel.js';
 import { LiveBriefingPanel } from './live-briefing-panel.js';
+import { AiResponsesPanel } from './ai-responses-panel.js';
 import { CurrentOperationPanel, PopupPanel } from './attention-panels.js';
 import { ArtifactsPanel } from './capabilities-panel.js';
 import { PersonaPanel } from './persona-panel.js';
@@ -93,6 +94,7 @@ function AssistScreen() {
           <BriefingPanel engine={engine} />
           <AiHistoryPanel engine={engine} />
           <QwenThinkingPanel engine={engine} />
+          <AiResponsesPanel engine={engine} />
           <SupervisorPanel engine={engine} />
           <AgentsPanel engine={engine} />
           <PortfoliosPanel engine={engine} />

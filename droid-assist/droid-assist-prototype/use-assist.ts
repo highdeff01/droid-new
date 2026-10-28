@@ -1628,19 +1628,23 @@ export function useAssist() {
   const forwardElement = useCallback((from: BusAgentId, element: ForwardedElement, to?: BusAgentId[]) => {
     const { bus: next, queued } = forward(busRef.current, from, element, to);
     let updated = next;
+    const replies: string[] = [];
     queued.forEach((m) => {
       if (!recipientOn(m.to)) return;
-      updated = markHandled(updated, m.id, busHandlers[m.to](element, from));
+      const reply = busHandlers[m.to](element, from);
+      replies.push(`${BUS_AGENTS[m.to]}: ${reply}`);
+      updated = markHandled(updated, m.id, reply);
     });
     busRef.current = updated;
     setBus(updated);
+    if (replies.length) note({ step: `${BUS_AGENTS[from]} → "${element.name}"`, kind: 'reply', text: replies.join('\n'), thinking: null });
     const shot = framesRef.current[0];
     if (shot) preferFrame(shot, BUS_AGENTS[from], `found "${element.name}"`);
     crewApiRef.current?.observeElement(element);
     addLog('Agent bus', `${BUS_AGENTS[from]} forwarded "${element.name}" at ${at(element.x, element.y)} to ${queued.length} agent(s)`, 'info');
     projectInjectRef.current('agent', BUS_AGENTS[from], `Found "${element.name}" at ${at(element.x, element.y)}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addLog, preferFrame]);
+  }, [addLog, note, preferFrame]);
 
   const adDismissed = () => Math.floor(tickRef.current / AD_CYCLE) === dismissedCycleRef.current;
 
@@ -4223,6 +4227,7 @@ export function useAssist() {
       const { bus: next, queued } = forward(busRef.current, 'supervisor', element, [to]);
       busRef.current = queued.reduce((b, m) => markHandled(b, m.id, `Crew test result for ${requester}: ${report}`), next);
       setBus(busRef.current);
+      note({ step: `Crew test for ${requester}: "${element.name}"`, kind: 'test', text: report, thinking: null });
     },
   });
   useEffect(() => {
@@ -5548,6 +5553,7 @@ export function useAssist() {
     const notes = mergeNotes(watcherRef.current.notes, findingsToNotes(r));
     updateWatcher((w) => ({ ...w, notes: notes.notes }));
     forwardElement('sidetest', busFeedback(r));
+    note({ step: `Side test "${r.name}"`, kind: 'test', text: feedbackLine(r), thinking: null });
     sectionEvent({ time: Date.now(), kind: 'log', text: feedbackLine(r) });
     addLog('Side tester', feedbackLine(r), r.status === 'passed' ? 'ok' : 'warn');
   };
