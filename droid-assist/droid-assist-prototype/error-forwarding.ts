@@ -61,6 +61,23 @@ export const RETRY_DELAY_MS = 1_000;
 
 export const ERROR_KINDS: readonly ErrorKind[] = ['ai', 'step', 'drift', 'bridge', 'watcher', 'test', 'main-app'];
 
+/** An error log line this close to an explicit capture is the same failure and is not listed twice. */
+export const LOG_CAPTURE_WINDOW_MS = 250;
+
+/** Error kind of an activity-log line by its source, first match wins; anything else is a step failure. */
+const LOG_KINDS: readonly [RegExp, ErrorKind][] = [
+  [/bridge|desktop/i, 'bridge'],
+  [/main app|main-app/i, 'main-app'],
+  [/drift/i, 'drift'],
+  [/watcher|self-test|sentinel|side test/i, 'watcher'],
+  [/^ai\b|supervisor|planner|ai help/i, 'ai'],
+];
+
+/** The kind an error-tone activity-log line is captured as. */
+export function logErrorKind(source: string): ErrorKind {
+  return LOG_KINDS.find(([re]) => re.test(source))?.[1] ?? 'step';
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 

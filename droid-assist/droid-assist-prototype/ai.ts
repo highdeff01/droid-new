@@ -1,6 +1,6 @@
 import type { Frame } from './types.js';
 import { escalate, type EscalationHooks, type EscalationStage } from './ai-escalation.js';
-import { HISTORY_MAX, STALE_KEEP, STALE_PARSE_LIMIT, trimHistory, type HistoryChange, type HistoryEntry, type TrimReason } from './ai-history.js';
+import { HISTORY_WINDOW_DEFAULT, STALE_KEEP, STALE_PARSE_LIMIT, autoSaveDue, trimHistory, type HistoryChange, type HistoryEntry, type TrimReason } from './ai-history.js';
 
 /** The primary Ollama-compatible chat endpoint and its default model. */
 export const DEFAULT_AI_URL = 'https://quantumclaw.net/ollama/api/chat';
@@ -18,6 +18,8 @@ export interface AiConfig {
   think?: boolean;
   /** The user's Master Prompt Override, appended to every system prompt; blank means none. */
   masterPrompt?: string;
+  /** Newest history messages sent with each ask (Settings' AI history read window); absent means HISTORY_WINDOW_DEFAULT. */
+  historyWindow?: number;
 }
 
 /** Default per-request AI timeout, and the Settings range it is validated against. */
@@ -72,6 +74,8 @@ export function rephraseForRepeatLimit(messages: ChatMessage[]): ChatMessage[] {
 export const VIEW_W = 480;
 export const VIEW_H = 270;
 const HISTORY_KEY = 'droid-assist.ai-history';
+/** Append-only archive of every recorded turn; never trimmed. */
+export const AI_ARCHIVE_KEY = 'droid-assist.ai-history-archive';
 
 /** Pixel size of an image sent to the model. */
 export interface ViewSize {
@@ -449,9 +453,9 @@ export type RenderFn = (frame: Frame, view: ViewSize) => Promise<string>;
 /** Minimal storage the session persists history to (sessionStorage in the browser). */
 export type HistoryStore = Pick<Storage, 'getItem' | 'setItem'>;
 
-function loadHistory(store: HistoryStore | null): HistoryEntry[] {
+function loadHistory(store: HistoryStore | null, key = HISTORY_KEY): HistoryEntry[] {
   try {
-    const parsed = JSON.parse(store?.getItem(HISTORY_KEY) ?? '[]') as unknown;
+    const parsed = JSON.parse(store?.getItem(key) ?? '[]') as unknown;
     return Array.isArray(parsed) ? (parsed as HistoryEntry[]) : [];
   } catch {
     return [];
@@ -475,18 +479,30 @@ export async function screenshots(frames: Frame[], view: ViewSize | undefined, r
 /** Called with every trim or reset of a session's history. */
 export type HistoryChangeFn = (change: HistoryChange) => void;
 
+/** Called with the full archive each time it grows past a multiple of AUTO_SAVE_EVERY messages. */
+export type AutoSaveFn = (archive: HistoryEntry[]) => void;
+
+/** The newest `window` messages of `history` as chat turns; the whole history when no window is set. */
+export function windowTurns(history: HistoryEntry[], window?: number): ChatMessage[] {
+  const sent = window === undefined ? history : trimHistory(history, window);
+  return sent.map(({ role, content }) => ({ role, content }));
+}
+
 /**
- * A per-session conversation: every ask sends system + history + the new user turn
- * (with the frame rendered at cfg.view by `render`), and on success appends the text of both turns
- * (content only, no thinking) with their time to the persisted history, trimmed to HISTORY_MAX.
+ * A per-session conversation: every ask sends system + the newest cfg.historyWindow messages of the
+ * history + the new user turn (with the frame rendered at cfg.view by `render`), and on success appends
+ * the text of both turns (content only, no thinking) with their time to the persisted history, which
+ * is never capped, and to the append-only archive (AI_ARCHIVE_KEY), which no trim, stale guard or
+ * reset ever shrinks, kept in `archiveStore` (a store that outlives the session). Each time the archive crosses a multiple of AUTO_SAVE_EVERY, `onAutoSave` gets it.
  * The reply carries the view its screenshots were sent at. `cancel()` aborts every request in
  * flight (they reject with AiError); `trim(n)` keeps the newest n messages; `reset()` cancels and
- * clears everything; `noteParse(ok)` feeds the stale-context guard, which trims to STALE_KEEP after
+ * clears the live history; `noteParse(ok)` feeds the stale-context guard, which trims to STALE_KEEP after
  * STALE_PARSE_LIMIT unparseable replies in a row. Every trim and reset is reported to `onChange`.
  * With thinking on, a thinking-only reply escalates with `escalation` (app context + stage reports).
  */
-export function createAiSession(store: HistoryStore | null, render?: RenderFn, onChange?: HistoryChangeFn, escalation: EscalationHooks = {}) {
+export function createAiSession(store: HistoryStore | null, render?: RenderFn, onChange?: HistoryChangeFn, escalation: EscalationHooks = {}, onAutoSave?: AutoSaveFn, archiveStore: HistoryStore | null = store) {
   let history = loadHistory(store);
+  let archive = loadHistory(archiveStore, AI_ARCHIVE_KEY);
   let controller = new AbortController();
   let parseFailures = 0;
   const shrink = (keep: number, reason: TrimReason) => {
@@ -494,6 +510,14 @@ export function createAiSession(store: HistoryStore | null, render?: RenderFn, o
     history = trimHistory(history, keep);
     store?.setItem(HISTORY_KEY, JSON.stringify(history));
     onChange?.({ reason, before, after: history.length });
+  };
+  const record = (turns: HistoryEntry[]) => {
+    history = [...history, ...turns];
+    store?.setItem(HISTORY_KEY, JSON.stringify(history));
+    const before = archive.length;
+    archive = [...archive, ...turns];
+    archiveStore?.setItem(AI_ARCHIVE_KEY, JSON.stringify(archive));
+    if (autoSaveDue(before, archive.length)) onAutoSave?.(archive);
   };
   const ask = async (cfg: AiConfig, req: AskRequest): Promise<AiReply> => {
     const signal = linkSignals(controller.signal, req.signal);
@@ -504,12 +528,10 @@ export function createAiSession(store: HistoryStore | null, render?: RenderFn, o
     const images = [...shots.urls, ...(req.crops ?? []).map((c) => c.url)].map(toBase64);
     const user: ChatMessage = { role: 'user', content: `${content}${memory}`, ...(images.length ? { images } : {}) };
     const system = withMasterPrompt(systemText(req.system, shots.view), cfg.masterPrompt);
-    const turns = history.map(({ role, content: text }) => ({ role, content: text }));
+    const turns = windowTurns(history, cfg.historyWindow ?? HISTORY_WINDOW_DEFAULT);
     const reply = await chat(cfg, [{ role: 'system', content: system }, ...turns, user], req.json, cfg.timeoutMs, signal, escalation);
     const time = Date.now();
-    history = [...history, { role: 'user' as const, content, time }, { role: 'assistant' as const, content: reply.content, time }];
-    if (history.length > HISTORY_MAX) shrink(HISTORY_MAX, 'cap');
-    else store?.setItem(HISTORY_KEY, JSON.stringify(history));
+    record([{ role: 'user', content, time }, { role: 'assistant', content: reply.content, time }]);
     return { ...reply, view: shots.view };
   };
   const cancel = () => {
@@ -528,5 +550,5 @@ export function createAiSession(store: HistoryStore | null, render?: RenderFn, o
     parseFailures = 0;
     shrink(STALE_KEEP, 'stale');
   };
-  return { ask, cancel, trim, reset, noteParse, history: () => history };
+  return { ask, cancel, trim, reset, noteParse, history: () => history, archive: () => archive };
 }

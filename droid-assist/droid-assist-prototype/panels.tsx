@@ -32,8 +32,8 @@ import { proposalStep, recallNotes, type NoteKind, type WatchProposal } from './
 import { WAKE_MS_MAX, WAKE_MS_MIN } from './wake.js';
 import { contextText } from './context-workflow.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
-import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, LOCAL_AI_PROXY_URL, MASTER_PROMPT_MAX, type AiView } from './ai.js';
-import { HISTORY_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-history.js';
+import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, MASTER_PROMPT_MAX, type AiView } from './ai.js';
+import { HISTORY_WINDOW_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-history.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { OPERATION_RETRIES_MAX, OPERATION_RETRIES_MIN } from './operation-retry.js';
 import { PLAYBACK_WINDOW_SEC_MAX, PLAYBACK_WINDOW_SEC_MIN } from './playback.js';
@@ -525,6 +525,10 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
         <small>A model call with no reply by then fails; queued calls start their clock when they leave the queue. Stop still cancels at once.</small>
         <input type="range" min={AI_TIMEOUT_MS_MIN} max={AI_TIMEOUT_MS_MAX} step={5000} value={settings.aiTimeoutMs} onChange={(e) => setSettings({ ...settings, aiTimeoutMs: +e.target.value })} aria-label="AI request timeout" />
       </label>
+      <label className={styles.setting}>AI history read window <b>{settings.aiHistoryWindow} message(s)</b>
+        <small>How many of the newest conversation messages are sent with each AI ask (1 to {HISTORY_WINDOW_MAX}). Older history is kept, never discarded.</small>
+        <input type="range" min={1} max={HISTORY_WINDOW_MAX} value={settings.aiHistoryWindow} onChange={(e) => setSettings({ ...settings, aiHistoryWindow: +e.target.value })} aria-label="AI history read window" />
+      </label>
       <label className={styles.setting}>
         <span><input type="checkbox" checked={settings.aiOverlap} onChange={(e) => setSettings({ ...settings, aiOverlap: e.target.checked })} aria-label="AI overlap mode" /> AI overlap mode</span>
         <small>Each AI ask also fires a second, freshly worded call through the same queue; the first valid answer wins and the other is cancelled.</small>
@@ -690,15 +694,15 @@ export function AiHelpPanel({ engine }: { engine: AssistEngine }) {
 
 /** The AI session's conversation history: roles, sizes, times, a token estimate, trim-to-N and reset. */
 export function AiHistoryPanel({ engine }: { engine: AssistEngine }) {
-  const { aiHistory } = engine;
+  const { aiHistory, settings } = engine;
   const [keep, setKeep] = useState(STALE_KEEP);
   const stats = historyStats(aiHistory);
   return (
     <section className={styles.panel}>
-      <h3>AI conversation <small>{stats.messages}/{HISTORY_MAX} message(s) · {stats.chars} chars · ~{stats.tokens} tokens</small></h3>
+      <h3>AI conversation <small>{stats.messages} message(s) · reads last {settings.aiHistoryWindow} · {stats.chars} chars · ~{stats.tokens} tokens</small></h3>
       <div className={styles.row}>
         <label>
-          Keep last <input type="number" min={0} max={HISTORY_MAX} value={keep} onChange={(e) => setKeep(Number(e.target.value))} aria-label="Messages to keep" />
+          Keep last <input type="number" min={0} max={Math.max(aiHistory.length, settings.aiHistoryWindow)} value={keep} onChange={(e) => setKeep(Number(e.target.value))} aria-label="Messages to keep" />
         </label>
         <button type="button" onClick={() => engine.trimAiHistory(keep)} disabled={aiHistory.length <= keep}>Trim</button>
         <button type="button" onClick={engine.resetAiSession}>Reset session</button>

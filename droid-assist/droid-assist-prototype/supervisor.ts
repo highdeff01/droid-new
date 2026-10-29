@@ -10,8 +10,11 @@ import { uid } from './planner.js';
 export const SUPERVISOR_CONFIDENCE = 0.7;
 /** How long the main executor has to apply a correction before the supervisor performs it itself. */
 export const SUPERVISOR_APPLY_WINDOW_MS = 5000;
-/** Cadence of the periodic review while the agent is on and a plan exists. */
-export const SUPERVISOR_INTERVAL_MS = 15_000;
+/**
+ * Cadence of the automatic periodic review while the Supervisor agent and loop-control stage are on
+ * and a plan exists; a tick that finds the AI down or other AI calls queued waits for the next one.
+ */
+export const SUPERVISOR_INTERVAL_MS = 5_000;
 /** How often the supervisor checks for unapplied corrections and a due review. */
 export const SUPERVISOR_TICK_MS = 1000;
 /** Screenshots from the gallery sent with each review. */

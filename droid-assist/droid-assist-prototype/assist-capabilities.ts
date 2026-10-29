@@ -4,7 +4,7 @@
  * main Droid app all reach them only through these entries.
  */
 import type { Capability, ParamSpec, Params, Requester } from './capabilities.js';
-import { AGENT_STAGE, LIVE_SETTINGS, type LiveSetting } from './capabilities.js';
+import { AGENT_STAGE, LIVE_SETTINGS, requesterName, type LiveSetting } from './capabilities.js';
 import { STAGES, type StageId } from './loop-control.js';
 import type { Box } from './assist-ai.js';
 import type { AssistStatus } from './main-app-bridge.js';
@@ -156,7 +156,7 @@ function readCaps(ops: Ops): Capability[] {
     cap('research.ask', 'Side research: ask the AI about the live screen', { question: str('question (default: what needs attention)', false) }, (p) => ops().ask(p.question as string | undefined), { readOnly: true }),
     cap('screen.verify', 'Screenshot verification: is the goal complete on the live screen?', { goal: str('goal (default: the current one)', false) }, (p) => ops().verifyScreen(String(p.goal ?? '')), { readOnly: true }),
     cap('drift.check', 'Drift check: is the next step\'s target where it was recorded on the live screen (any capture source)?', {}, () => ops().driftCheck(), { readOnly: true }),
-    cap('ruler.measure', 'Measure distances, e.g. "Files icon to left edge"', { text: str('endpoints joined by " to "') }, (p, r) => ops().measure(String(p.text), r.kind), { readOnly: true }),
+    cap('ruler.measure', 'Measure distances between named elements or coordinates, e.g. "Files icon to left edge" or "0.2,0.3 to 0.8,0.3"; the result goes into planning context and the log', { text: str('endpoints joined by " to "') }, (p, r) => ops().measure(String(p.text), `Ruler (${requesterName(r)})`), { readOnly: true }),
     cap('snip.capture', 'Snip tool: crop a box of the live frame into the log', { x: unit('left'), y: unit('top'), w: unit('width'), h: unit('height') }, (p) => ops().snip({ x: Number(p.x), y: Number(p.y), w: Number(p.w), h: Number(p.h) }), { readOnly: true }),
   ];
 }

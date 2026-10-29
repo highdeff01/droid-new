@@ -26,5 +26,6 @@ export default defineConfig({
   preview: { proxy: aiProxy },
   test: {
     environment: 'jsdom',
+    setupFiles: ['./vitest.setup.ts'],
   },
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ActionRecord } from './types.js';
-import { HISTORY_KEY, HISTORY_LIMIT, appendHistory, historyToCsv, historyToJson, loadHistory } from './action-history.js';
+import { HISTORY_KEY, appendHistory, historyToCsv, historyToJson, loadHistory } from './action-history.js';
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -19,9 +19,11 @@ describe('action history', () => {
     expect(loadHistory(store).map((r) => r.id)).toEqual(['second', 'first']);
   });
 
-  it('caps the history at HISTORY_LIMIT', () => {
-    const many = Array.from({ length: HISTORY_LIMIT }, (_, i) => rec({ id: String(i) }));
-    expect(appendHistory(many, rec({ id: 'new' }), memory())).toHaveLength(HISTORY_LIMIT);
+  it('keeps every record: nothing old is discarded', () => {
+    const many = Array.from({ length: 2500 }, (_, i) => rec({ id: String(i) }));
+    const next = appendHistory(many, rec({ id: 'new' }), memory());
+    expect(next).toHaveLength(2501);
+    expect(next.at(-1)!.id).toBe('2499');
   });
 
   it('returns an empty history for corrupt storage', () => {

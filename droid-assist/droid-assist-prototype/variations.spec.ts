@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addVariation,
   applyStepResult,
+  closeVariation,
   createVariation,
+  isClosed,
   forgetPortfolio,
   mergeSteps,
   nextRunnable,
@@ -11,6 +14,7 @@ import {
   resumeVariation,
   updateVariation,
   variationActor,
+  VARIATION_LIMIT,
 } from './variations.js';
 import type { PortfolioEntry, PortfolioSource } from './portfolio.js';
 import type { Frame, WorkflowStep } from './types.js';
@@ -169,5 +173,36 @@ describe('discard', () => {
     const other = createVariation('B', [], 'r', 1);
     const entries: PortfolioEntry[] = [pfEntry(variationActor(v.id), 'e1'), pfEntry(variationActor(other.id), 'e2')];
     expect(forgetPortfolio(entries, v.id)).toEqual([entries[1]]);
+  });
+});
+
+describe('closed variations', () => {
+  it('closeVariation marks only the named status and reason, keeping steps', () => {
+    const v = createVariation('A', [step('a1')], 'r', 1);
+    const merged = closeVariation(v, 'merged', 'Merged', 5);
+    expect(merged).toMatchObject({ id: v.id, status: 'merged', reason: 'Merged', updated: 5, steps: v.steps });
+    expect(isClosed(merged)).toBe(true);
+    expect(isClosed(closeVariation(v, 'discarded', 'Discarded', 5))).toBe(true);
+    expect(isClosed(v)).toBe(false);
+  });
+
+  it('nextRunnable never picks a merged or discarded variation even with pending steps', () => {
+    const a = closeVariation(createVariation('A', [step('a1')], 'r', 1), 'merged', 'm', 1);
+    const b = closeVariation(createVariation('B', [step('b1')], 'r', 1), 'discarded', 'd', 1);
+    const c = createVariation('C', [step('c1')], 'r', 9);
+    expect(nextRunnable([a, b, c])?.id).toBe(c.id);
+    expect(nextRunnable([a, b])).toBeNull();
+  });
+
+  it('addVariation past the limit drops the oldest closed variations before any open one', () => {
+    const open = Array.from({ length: VARIATION_LIMIT - 1 }, (_, i) => createVariation(`open ${i}`, [step(`o${i}`)], 'r', i));
+    const closed = closeVariation(createVariation('closed', [step('c')], 'r', 0), 'merged', 'm', 0);
+    const list = [...open, closed];
+    const fresh = createVariation('fresh', [step('f')], 'r', 99);
+    const result = addVariation(list, fresh);
+    expect(result).toHaveLength(VARIATION_LIMIT);
+    expect(result[0].id).toBe(fresh.id);
+    expect(result.some((v) => v.id === closed.id)).toBe(false);
+    expect(open.every((o) => result.some((v) => v.id === o.id))).toBe(true);
   });
 });
