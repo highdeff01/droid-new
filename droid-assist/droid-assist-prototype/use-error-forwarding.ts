@@ -5,8 +5,9 @@ import { loadOutbox, saveOutbox } from './storage.js';
 
 /** Errors listed in the panel. */
 export const ERROR_LIST_LIMIT = 30;
-/** Log source of every forwarding line. */
-const SOURCE = 'Errors';
+/** Log source of every forwarding line (never captured back into the list). */
+export const ERRORS_SOURCE = 'Errors';
+const SOURCE = ERRORS_SOURCE;
 
 /** What a report is built from at the moment of capture. */
 export interface ErrorContext {
