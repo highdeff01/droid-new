@@ -1141,6 +1141,30 @@ describe('useAssist agent forwarding and subagent link tests', () => {
     expect(result.current.log[0].message).toMatch(/ABORTED is active/);
   });
 
+  it('/test route Cart > Checkout > Pay runs one subagent per segment in order and learns habits', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      const body = String(init.body);
+      const step = body.includes('final verdict') || body.includes('reviewing a step');
+      const mentions = [...body.matchAll(step ? /Move to (Cart|Checkout|Pay)/g : /\\"(Cart|Checkout|Pay)\\" is shown/g)];
+      const stop = mentions.at(-1)?.[1] ?? 'Cart';
+      const message = body.includes('final verdict')
+        ? { content: JSON.stringify({ success: stop !== 'Pay', pattern_avoid: null, pattern_add: null }) }
+        : body.includes('reviewing a step')
+          ? { content: `Reached ${stop}.` }
+          : { content: JSON.stringify({ steps: [{ name: `Move to ${stop}`, action: 'move', target: stop, x: 0.3, y: 0.5 }] }) };
+      return new Response(JSON.stringify({ message: { role: 'assistant', thinking: null, ...message } }), { status: 200 });
+    }));
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    act(() => result.current.setGoal('/test route Cart > Checkout > Pay'));
+    await act(() => result.current.submitInput());
+    const report = result.current.subReport!;
+    expect(report).toMatchObject({ kind: 'route', finished: true });
+    expect(report.results.map((r) => [r.label, r.status])).toEqual([['Cart', 'pass'], ['Cart → Checkout', 'pass'], ['Checkout → Pay', 'fail']]);
+    const learned = result.current.habits.filter((h) => h.context.startsWith('route-test:'));
+    expect(learned.map((h) => [h.target, h.successes, h.attempts]).sort()).toEqual([['Cart', 1, 1], ['Checkout', 1, 1], ['Pay', 0, 1]]);
+  });
+
   it('forwards an element from any agent into every other inbox', () => {
     const { result } = renderHook(() => useAssist());
     act(() => result.current.forwardElement('drift', { name: 'Search box', x: 0.5, y: 0.1 }));
@@ -1756,5 +1780,27 @@ describe('useAssist thinking-on escalation', () => {
     const result = await askThinking(false);
     expect(result.current.timeline.some((e) => e.step.startsWith('Escalation:'))).toBe(false);
     expect(result.current.watcher.proposals.some((x) => x.kind === 'workflow')).toBe(false);
+  });
+});
+
+describe('useAssist AI ruler', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('an agent measures through the registry; the result is logged and goes into the planner context', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      bodies.push(String(init?.body ?? ''));
+      return new Response(JSON.stringify({ message: { role: 'assistant', content: JSON.stringify({ steps: [] }) } }), { status: 200 });
+    }));
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(frame()));
+    const r = await act(() => result.current.requestCapability('identify', 'ruler.measure', { text: '0.1,0.5 to 0.6,0.5' }));
+    expect(r.ok).toBe(true);
+    expect(result.current.log.some((l) => /^Ruler \(agent:identify\)$/.test(l.source) && /^Measured /.test(l.message))).toBe(true);
+    act(() => result.current.setGoal('open the settings panel'));
+    await act(() => result.current.autoPlan());
+    expect(bodies.some((b) => b.includes('Measured (Ruler (agent:identify)):'))).toBe(true);
   });
 });
