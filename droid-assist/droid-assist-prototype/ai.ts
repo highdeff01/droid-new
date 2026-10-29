@@ -283,11 +283,26 @@ export function fallbackQuestion(messages: ChatMessage[]): ChatMessage[] {
   return [...system, { ...last, role: 'user', content }];
 }
 
+/** The health-check message; the local AI proxy (ai-proxy.ts) answers it without a model call. */
+export const PING_MESSAGE = 'Reply with OK.';
+
+/** Same-origin route to the optional local AI proxy (`npm run server`, or `npm run dev` proxying to it). */
+export const LOCAL_AI_PROXY_URL = '/api/ai/chat';
+
+/** The host an endpoint URL points at; a relative URL (the local AI proxy) resolves against the page. */
+export function endpointHost(url: string): string {
+  try {
+    return new URL(url, globalThis.location?.href ?? 'http://localhost/').host;
+  } catch {
+    return url;
+  }
+}
+
 /** Startup / settings-change health check: a minimal chat against the configured URL and model. */
 export async function pingAi(cfg: AiConfig): Promise<AiStatus> {
   try {
-    await chat(cfg, [{ role: 'user', content: 'Reply with OK.' }], false, 20_000);
-    return { state: 'online', detail: `Connected · ${cfg.model} @ ${new URL(cfg.url).host}` };
+    await chat(cfg, [{ role: 'user', content: PING_MESSAGE }], false, 20_000);
+    return { state: 'online', detail: `Connected · ${cfg.model} @ ${endpointHost(cfg.url)}` };
   } catch (error) {
     return { state: 'offline', detail: `AI unavailable — ${error instanceof Error ? error.message : String(error)}` };
   }

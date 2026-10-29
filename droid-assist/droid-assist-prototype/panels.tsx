@@ -578,6 +578,8 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <MainBridgeSettings engine={engine} />
       <label className={styles.setting}>AI endpoint (Ollama /api/chat)
         <input value={settings.aiUrl} onChange={(e) => setSettings({ ...settings, aiUrl: e.target.value })} aria-label="AI endpoint URL" />
+        <button type="button" onClick={() => setSettings({ ...settings, aiUrl: LOCAL_AI_PROXY_URL })} disabled={settings.aiUrl === LOCAL_AI_PROXY_URL}>Use local AI proxy</button>
+        <small>The local proxy (npm run server) forwards to the Qwen endpoint from the same origin — no browser CORS; then press Connect.</small>
       </label>
       <label className={styles.setting}>AI view resolution
         <select value={settings.aiView} onChange={(e) => void engine.invoke('setting.aiView', { value: e.target.value })} aria-label="AI view resolution">

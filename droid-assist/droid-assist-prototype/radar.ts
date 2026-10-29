@@ -1,5 +1,6 @@
 import { gridRef } from './grid.js';
 import type { WorkflowStep } from './types.js';
+import { MOBILITY_WINDOW, classifyMobility, predictNextPosition, type Sighting } from './mobility.js';
 
 type Point = { x: number; y: number };
 
@@ -29,17 +30,29 @@ export interface RadarState {
   stillTicks: number;
   /** Cursor-to-target distance in native pixels on the previous tick; null before the first. */
   lastDistancePx: number | null;
+  /** Where the element was seen on recent ticks (oldest first, at most MOBILITY_WINDOW). */
+  sightings: Sighting[];
 }
 
 /** What one tick decided. pulse: close, report; attract: far, slow approach; settle: close and still, move then act; expired: gave up. */
 export type RadarEvent =
-  | { kind: 'pulse'; distancePx: number; direction: string; moving: boolean; closing: boolean }
-  | { kind: 'attract'; distancePx: number; direction: string; to: Point; closing: boolean }
+  | { kind: 'pulse'; distancePx: number; direction: string; moving: boolean; closing: boolean; predicted?: Point }
+  | { kind: 'attract'; distancePx: number; direction: string; to: Point; closing: boolean; predicted?: Point }
   | { kind: 'settle'; distancePx: number; direction: string; to: Point; action: WorkflowStep['action'] }
   | { kind: 'expired'; distancePx: number; direction: string };
 
 /** A fresh tracker for `target`. */
-export const startRadar = (target: RadarTarget): RadarState => ({ target, ticks: 0, stillTicks: 0, lastDistancePx: null });
+export const startRadar = (target: RadarTarget): RadarState => ({ target, ticks: 0, stillTicks: 0, lastDistancePx: null, sightings: [] });
+
+/**
+ * Where an in-motion element will be at the next capture: its velocity between the last two
+ * sightings extrapolated by that same interval. Null while it is not in motion or has fewer than two sightings.
+ */
+export function predictedAim(sightings: Sighting[]): Point | null {
+  if (classifyMobility(sightings).mobility !== 'in-motion') return null;
+  const [a, b] = sightings.slice(-2);
+  return predictNextPosition(sightings, (b.time - a.time) / 1000);
+}
 
 const COMPASS = ['right', 'down-right', 'down', 'down-left', 'left', 'up-left', 'up', 'up-right'];
 
@@ -62,21 +75,27 @@ export function approach(from: Point, to: Point, step = ATTRACT_STEP): Point {
  * One capture tick: `seen` is where the element is on the live frame now, `cursor` the pointer.
  * Close (<= RADAR_NEAR) pulses the live distance and direction until the element has been still
  * SETTLE_TICKS ticks, then settles (adjusted move onto it, then its action). Far attracts: one
- * slow ATTRACT_STEP move toward it. After RADAR_MAX_TICKS the radar expires.
+ * slow ATTRACT_STEP move toward it. After RADAR_MAX_TICKS the radar expires. While the element is
+ * in motion (by its recent sightings at `now`), pulses and attract steps aim at its predicted
+ * position at the next capture instead of where it was last seen.
  */
-export function radarTick(state: RadarState, cursor: Point, seen: Point, srcW: number, srcH: number): { state: RadarState; event: RadarEvent } {
+export function radarTick(state: RadarState, cursor: Point, seen: Point, srcW: number, srcH: number, now = Date.now()): { state: RadarState; event: RadarEvent } {
   const moved = Math.hypot(seen.x - state.target.x, seen.y - state.target.y);
   const stillTicks = state.ticks > 0 && moved < STILL_EPS ? state.stillTicks + 1 : 0;
-  const dxPx = Math.round((seen.x - cursor.x) * srcW);
-  const dyPx = Math.round((seen.y - cursor.y) * srcH);
+  const sightings = [...state.sightings, { x: seen.x, y: seen.y, time: now }].slice(-MOBILITY_WINDOW);
+  const predicted = predictedAim(sightings);
+  const aim = predicted ?? seen;
+  const dxPx = Math.round((aim.x - cursor.x) * srcW);
+  const dyPx = Math.round((aim.y - cursor.y) * srcH);
   const distancePx = Math.round(Math.hypot(dxPx, dyPx));
   const dir = direction(dxPx, dyPx);
   const closing = state.lastDistancePx === null || distancePx <= state.lastDistancePx;
-  const next: RadarState = { target: { ...state.target, x: seen.x, y: seen.y }, ticks: state.ticks + 1, stillTicks, lastDistancePx: distancePx };
+  const lead = predicted ? { predicted } : {};
+  const next: RadarState = { target: { ...state.target, x: seen.x, y: seen.y }, ticks: state.ticks + 1, stillTicks, lastDistancePx: distancePx, sightings };
   if (next.ticks > RADAR_MAX_TICKS) return { state: next, event: { kind: 'expired', distancePx, direction: dir } };
-  if (Math.hypot(seen.x - cursor.x, seen.y - cursor.y) > RADAR_NEAR) return { state: next, event: { kind: 'attract', distancePx, direction: dir, to: approach(cursor, seen), closing } };
+  if (Math.hypot(aim.x - cursor.x, aim.y - cursor.y) > RADAR_NEAR) return { state: next, event: { kind: 'attract', distancePx, direction: dir, to: approach(cursor, aim), closing, ...lead } };
   if (stillTicks >= SETTLE_TICKS) return { state: next, event: { kind: 'settle', distancePx, direction: dir, to: { x: seen.x, y: seen.y }, action: state.target.action } };
-  return { state: next, event: { kind: 'pulse', distancePx, direction: dir, moving: stillTicks === 0, closing } };
+  return { state: next, event: { kind: 'pulse', distancePx, direction: dir, moving: stillTicks === 0, closing, ...lead } };
 }
 
 /** The four-part status the AI gets with every radar event. */
