@@ -52,29 +52,6 @@ function ObjectiveSection({ engine }: { engine: AssistEngine }) {
   );
 }
 
-/** The AI's preferred key frames, each clickable through to the comparison gallery. */
-function PreferredSection({ engine, notify }: { engine: AssistEngine; notify: (text: string) => void }) {
-  const open = (id: number) => {
-    if (!reveal(`frame-${id}`) && !reveal(`pinned-frame-${id}`)) notify(`Frame #${id} is no longer in the gallery.`);
-  };
-  return (
-    <div aria-label="Preferred screenshots">
-      <h4>Preferred screenshots <small>{engine.preferred.length}</small></h4>
-      {!engine.preferred.length && <p className={styles.muted}>The AI and its agents mark key frames here as they work.</p>}
-      <div className={styles.gallery}>
-        {engine.preferred.map((p) => (
-          <figure key={p.frame.id}>
-            <button type="button" onClick={() => open(p.frame.id)} aria-label={`Open frame ${p.frame.id} in the gallery`}>
-              <img src={p.frame.url} alt={`Preferred frame ${p.frame.id}`} />
-            </button>
-            <figcaption>#{p.frame.id} · {p.by} · {p.reason}</figcaption>
-          </figure>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /** Previous actions with their outcome, most recent first. */
 function ActionsSection({ engine }: { engine: AssistEngine }) {
   const actions = recentActions(engine.history).slice(0, SHOWN);
@@ -174,7 +151,6 @@ export function LiveBriefingPanel({ engine }: { engine: AssistEngine }) {
       <h3>Live briefing <small>{engine.aiWorking ? 'AI working' : 'idle'}</small></h3>
       {notice && <p className={styles.muted} role="status">{notice}</p>}
       <ObjectiveSection engine={engine} />
-      <PreferredSection engine={engine} notify={setNotice} />
       <ActionsSection engine={engine} />
       <NotesSection engine={engine} notify={setNotice} />
       <UserNotesSection engine={engine} />
