@@ -49,7 +49,9 @@ export function ArtifactsPanel({ engine }: { engine: AssistEngine }) {
       <ul className={styles.log}>
         {engine.artifactKnowledge.map((k) => (
           <li key={k.id}><b>{k.title}</b>
-            <ol>{k.notes.map((n, i) => <li key={i}>[{timestamp(n.offsetMs)}] {n.text}{n.screenshot && <img src={n.screenshot} alt={`Moment at ${timestamp(n.offsetMs)}`} width={120} />}</li>)}</ol>
+            {k.notes?.length
+              ? <ol>{k.notes.map((n, i) => <li key={i}>[{timestamp(n.offsetMs)}] {n.text}{n.screenshot && <img src={n.screenshot} alt={`Moment at ${timestamp(n.offsetMs)}`} width={120} />}</li>)}</ol>
+              : <p className={styles.muted}>No notes.</p>}
           </li>
         ))}
       </ul>

@@ -65,6 +65,21 @@ describe('Settings Connect button', () => {
   });
 });
 
+describe('Settings Use local AI proxy button', () => {
+  it('sets the endpoint to the local proxy and is disabled only while the proxy is selected', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => okReply()));
+    render(<Harness />);
+    const settings = within(screen.getByTestId('settings'));
+    const button = settings.getByRole('button', { name: 'Use local AI proxy' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    expect((settings.getByLabelText('AI endpoint URL') as HTMLInputElement).value).toBe('/api/ai/chat');
+    expect(button.disabled).toBe(true);
+    fireEvent.change(settings.getByLabelText('AI endpoint URL'), { target: { value: 'http://y.test/api/chat' } });
+    expect(button.disabled).toBe(false);
+  });
+});
+
 describe('HUD AI status summary', () => {
   it('shows the active endpoint and model in every state', () => {
     const config = { url: 'https://quantumclaw.net/ollama/api/chat', model: 'qwen3.5:2b' };

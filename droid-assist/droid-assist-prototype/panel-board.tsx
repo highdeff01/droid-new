@@ -1,4 +1,4 @@
-import type { DragEvent, ReactNode } from 'react';
+import { Component, type DragEvent, type ReactNode } from 'react';
 import { isPanelId, type PanelArea, type PanelId } from './panel-layout.js';
 import styles from './droid-assist.module.css';
 
@@ -60,7 +60,22 @@ function PanelSlot({ id, onDragOver, onDrop, children }: PanelSlotProps) {
   return (
     <div className={styles.panelSlot} data-panel-id={id} onDragOver={onDragOver} onDrop={onDrop}>
       <button type="button" className={styles.panelHandle} draggable onDragStart={start} aria-label={`Move ${id} panel`} title="Drag to move this panel">⠿</button>
-      <div className={styles.panelBody}>{children}</div>
+      <div className={styles.panelBody}><PanelErrorBoundary>{children}</PanelErrorBoundary></div>
     </div>
   );
+}
+
+/** Contains a crash to its one panel: shows an inline error card instead of unmounting the whole tree. */
+export class PanelErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: unknown) {
+    return { error: error instanceof Error ? error : new Error(String(error)) };
+  }
+
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    return <section className={styles.panel} role="alert">Panel crashed: {error.message} — reload to retry</section>;
+  }
 }

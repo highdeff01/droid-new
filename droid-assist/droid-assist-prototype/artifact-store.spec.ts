@@ -22,6 +22,12 @@ describe('loadArtifacts', () => {
     localStorage.setItem('droid-assist.scripts', JSON.stringify([{ id: 'a' }, { name: 'no id' }]));
     expect(loadArtifacts('scripts')).toEqual([{ id: 'a' }]);
   });
+
+  it('gives knowledge entries without a notes array notes: []', () => {
+    const kept = [{ text: 'x', offsetMs: 0 }];
+    localStorage.setItem('droid-assist.knowledge', JSON.stringify([{ id: 'a' }, { id: 'b', notes: null }, { id: 'c', notes: 'bad' }, { id: 'd', notes: kept }]));
+    expect(loadArtifacts('knowledge').map((k) => k.notes)).toEqual([[], [], [], kept]);
+  });
 });
 
 describe('saveArtifacts', () => {
