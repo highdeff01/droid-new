@@ -21,7 +21,7 @@ const engine = (over: Partial<Record<string, unknown>> = {}) =>
 describe('CurrentOperationPanel', () => {
   it('shows the operation, intention, main goal, attention, next step and both attempts with planned and actual paths', () => {
     const { container } = render(<CurrentOperationPanel engine={engine()} />);
-    const panel = screen.getByRole('region', { name: 'Current operation' });
+    const panel = screen.getByRole('region', { name: 'Operation progress' });
     expect(panel.textContent).toContain('click "files icon"');
     expect(panel.textContent).toContain('because the files list is needed');
     expect(panel.textContent).toContain('Rename the file');

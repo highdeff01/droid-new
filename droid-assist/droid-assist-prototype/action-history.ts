@@ -2,8 +2,6 @@ import type { ActionRecord } from './types.js';
 
 /** localStorage key of the persistent action history. */
 export const HISTORY_KEY = 'droid-assist.action-history';
-/** Newest records kept. */
-export const HISTORY_LIMIT = 2000;
 
 const CSV_COLUMNS: Array<keyof ActionRecord> = ['time', 'action', 'x', 'y', 'endX', 'endY', 'text', 'source', 'via', 'ok', 'message', 'dryRun'];
 
@@ -17,9 +15,9 @@ export function loadHistory(storage: Pick<Storage, 'getItem'> = localStorage): A
   }
 }
 
-/** Prepends a record, trims to HISTORY_LIMIT and persists. Returns the new history. */
+/** Prepends a record and persists; nothing old is discarded. Returns the new history. */
 export function appendHistory(history: ActionRecord[], record: ActionRecord, storage: Pick<Storage, 'setItem'> = localStorage): ActionRecord[] {
-  const next = [record, ...history].slice(0, HISTORY_LIMIT);
+  const next = [record, ...history];
   try {
     storage.setItem(HISTORY_KEY, JSON.stringify(next));
   } catch {
