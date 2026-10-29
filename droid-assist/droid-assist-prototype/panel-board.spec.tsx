@@ -63,4 +63,15 @@ describe('PanelBoard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand workflow panel' }));
     expect(screen.getByRole('button', { name: 'Collapse workflow panel' })).toBeTruthy();
   });
+
+  it('contains a crash to the one panel that threw, showing an inline error card', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const Boom = (): never => { throw new Error('boom'); };
+    render(<PanelBoard area="side" ids={ids} className="side" renderPanel={(id) => (id === 'ruler' ? <Boom /> : <section aria-label={`panel ${id}`}>{id}</section>)} onMove={vi.fn()} />);
+    expect(screen.getByRole('alert').textContent).toBe('Panel crashed: boom — reload to retry');
+    expect(screen.getByLabelText('panel workflow')).toBeTruthy();
+    expect(screen.getByLabelText('panel goals')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Move ruler panel' })).toBeTruthy();
+    vi.restoreAllMocks();
+  });
 });

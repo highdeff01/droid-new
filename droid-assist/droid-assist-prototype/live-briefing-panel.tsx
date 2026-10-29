@@ -26,6 +26,26 @@ function reveal(id: string): boolean {
 const GOAL_TONE: Record<GoalRecord['state'], string> = { pending: 'info', active: 'warn', achieved: 'ok', failed: 'error' };
 
 /** Current objective with its traced state, and the queued next goals. */
+function PreferredSection({ engine, notify }: { engine: AssistEngine; notify: (text: string) => void }) {
+  if (!engine.preferred.length) return null;
+  return (
+    <div aria-label="Screenshot references">
+      <h4>Screenshot references</h4>
+      <ul>
+        {engine.preferred.slice(0, SHOWN).map(({ frame, by, reason }) => (
+          <li key={frame.id}>
+            <button type="button" aria-label={`Open frame ${frame.id} in the gallery`} onClick={() => {
+              if (!reveal(`frame-${frame.id}`)) notify(`Frame #${frame.id} is no longer in the gallery.`);
+            }}>
+              Frame #{frame.id} · {by}: {reason}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function ObjectiveSection({ engine }: { engine: AssistEngine }) {
   const [draft, setDraft] = useState('');
   const current = currentObjective(engine.objectives);
@@ -150,6 +170,7 @@ export function LiveBriefingPanel({ engine }: { engine: AssistEngine }) {
     <section className={styles.panel} aria-label="Live briefing">
       <h3>Live briefing <small>{engine.aiWorking ? 'AI working' : 'idle'}</small></h3>
       {notice && <p className={styles.muted} role="status">{notice}</p>}
+      <PreferredSection engine={engine} notify={setNotice} />
       <ObjectiveSection engine={engine} />
       <ActionsSection engine={engine} />
       <NotesSection engine={engine} notify={setNotice} />

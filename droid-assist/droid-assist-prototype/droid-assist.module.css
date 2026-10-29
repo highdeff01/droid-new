@@ -46,7 +46,7 @@
 .captureLost { position: absolute; inset: auto 10px 10px 10px; padding: 10px 14px; border-radius: 8px; font-weight: 700; background: rgba(185, 28, 28, .95); color: #fff; border: 2px solid #fca5a5; }
 .liveWrite input { width: 100%; box-sizing: border-box; }
 .side { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: start; min-width: 0; }
-.panel { background: linear-gradient(160deg, rgba(17, 29, 47, .98), rgba(13, 22, 37, .98)); border: 1px solid var(--line); border-radius: 14px; padding: 14px; min-width: 0; box-shadow: 0 8px 24px rgba(0, 0, 0, .12); }
+.panel { background: linear-gradient(160deg, rgba(17, 29, 47, .98), rgba(13, 22, 37, .98)); border: 1px solid var(--line); border-radius: 14px; padding: 14px; min-width: 0; box-shadow: 0 8px 24px rgba(0, 0, 0, .12); --panel-h: 360px; box-sizing: border-box; height: auto; max-height: calc(var(--panel-h) * 1.1); overflow-y: auto; overscroll-behavior: contain; }
 .panelBody > .panel > h3 { padding-right: 68px; }
 .panel h3, .panel h4 { margin: 0 0 10px; font-size: 14px; display: flex; justify-content: space-between; gap: 8px; }
 .panel h4 { margin-top: 12px; color: var(--pink); }

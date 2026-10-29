@@ -4,13 +4,13 @@ export type PanelArea = (typeof PANEL_AREAS)[number];
 
 /** Panel ids per area, in their default order. */
 const DEFAULT_SIDE = [
-  'workflow', 'operationProgress', 'selfTest', 'variations', 'persona', 'ruler', 'elements', 'elementMap', 'snipGallery', 'inventory', 'routes', 'retest',
+  'operationProgress', 'workflow', 'selfTest', 'variations', 'persona', 'ruler', 'elements', 'elementMap', 'snipGallery', 'inventory', 'routes', 'retest',
   'sections', 'learnedCoords', 'library', 'accessPaths', 'patterns', 'blacklist', 'operationMemory', 'knowledge', 'profile', 'stats', 'memory', 'goals',
   'notifications', 'system', 'watcher', 'wake', 'initiative', 'triggers', 'projects', 'approvals', 'artifacts', 'presentation',
   'operations',
 ] as const;
 const DEFAULT_BOTTOM = [
-  'liveBriefing', 'aiActivity', 'popups', 'comparisonGallery', 'aiHelp', 'briefing', 'aiHistory', 'aiResponses', 'qwenThinking', 'supervisor', 'agents', 'portfolios', 'loopControl',
+  'liveBriefing', 'aiActivity', 'popups', 'comparisonGallery', 'aiHelp', 'briefing', 'aiHistory', 'qwenThinking', 'aiResponses', 'supervisor', 'agents', 'portfolios', 'loopControl',
   'capabilities', 'settings', 'agentBus', 'crew', 'agentCrew', 'opsAgents', 'subagentReport', 'resolution', 'log', 'errors',
   'actionHistory', 'database',
 ] as const;

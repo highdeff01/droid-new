@@ -32,11 +32,19 @@ export type ArtifactKind = keyof Artifacts;
 
 const hasId = (v: unknown): v is { id: string } => !!v && typeof v === 'object' && typeof (v as { id?: unknown }).id === 'string';
 
-/** The stored list of `kind` (entries without an id dropped); empty when missing or corrupt. */
+/** A knowledge entry with a notes array; entries persisted by an earlier shape without one get `notes: []`. */
+const withNotes = (e: { id: string; notes?: unknown }) => (Array.isArray(e.notes) ? e : { ...e, notes: [] });
+
+/** Per-kind repair of stored entries whose shape predates the current store. */
+const NORMALIZE: Partial<Record<ArtifactKind, (e: { id: string }) => { id: string }>> = { knowledge: withNotes };
+
+/** The stored list of `kind` (entries without an id dropped, older shapes repaired); empty when missing or corrupt. */
 export function loadArtifacts<K extends ArtifactKind>(kind: K): Artifacts[K] {
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(KEYS[kind]) ?? '[]');
-    return (Array.isArray(raw) ? raw.filter(hasId) : []) as Artifacts[K];
+    const kept = Array.isArray(raw) ? raw.filter(hasId) : [];
+    const normalize = NORMALIZE[kind];
+    return (normalize ? kept.map(normalize) : kept) as Artifacts[K];
   } catch {
     return [] as Artifacts[K];
   }

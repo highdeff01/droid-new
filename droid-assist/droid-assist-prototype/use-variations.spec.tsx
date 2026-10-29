@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useVariations, type VariationDeps, type VariationStepOutcome, type VariationsApi } from './use-variations.js';
+import { useVariations, type VariationDeps, type VariationsApi } from './use-variations.js';
 import { VariationsPanel } from './variations-panel.js';
 import type { AssistEngine } from './use-assist.js';
 import { variationActor, type Variation } from './variations.js';
@@ -219,7 +219,7 @@ describe('useVariations guardrails', () => {
 });
 
 describe('useVariations merge', () => {
-  it("merge appends the variation's new steps to main, re-attributes its records, and removes only that variation", () => {
+  it("merge appends the variation's new steps to main, re-attributes its records, and keeps it listed as merged", () => {
     const { result } = renderHook(() => useVariations(deps));
     act(() => {
       result.current.supersede('Old goal', [makeStep('Shared step'), makeStep('Variation step')], 'next');
@@ -241,7 +241,28 @@ describe('useVariations merge', () => {
     expect(mainGoal).toBe('Main goal');
     expect(mainSteps.map((s) => s.name)).toEqual(['Shared step', 'Variation step']);
     expect(mergeRecords).toHaveBeenCalledWith(idA, { operation: 'Main goal', opId: null });
-    expect(result.current.variations.map((v) => v.id)).toEqual([idB]);
+    expect(result.current.variations.find((v) => v.id === idA)!.status).toBe('merged');
+    expect(result.current.variations.find((v) => v.id === idB)!.status).toBe('running');
+  });
+
+  it('merge is a no-op on an already merged variation and the merged one never runs again', async () => {
+    const { result } = renderHook(() => useVariations(deps));
+    act(() => {
+      result.current.supersede('Old goal', [makeStep('Only step')], 'next');
+    });
+    const idA = result.current.variations[0].id;
+    mainGoal = 'Main goal';
+    mainSteps = [];
+    act(() => result.current.merge(idA));
+    const afterFirst = mainSteps;
+    act(() => result.current.merge(idA));
+    act(() => result.current.resume(idA));
+    act(() => result.current.discard(idA));
+    expect(mainSteps).toBe(afterFirst);
+    expect(result.current.variations[0].status).toBe('merged');
+    await act(() => result.current.tick());
+    expect(runStep).not.toHaveBeenCalled();
+    expect(loadVariations()[0]).toMatchObject({ id: idA, status: 'merged' });
   });
 
   it('startVariation moves the current main goal and steps into a new variation and clears main', () => {
@@ -280,7 +301,7 @@ describe('useVariations merge', () => {
 });
 
 describe('useVariations discard', () => {
-  it('discard removes only that variation, forgets its records, and leaves the sibling in storage', () => {
+  it('discard keeps that variation listed as discarded, forgets its records, and leaves the sibling running in storage', () => {
     const { result } = renderHook(() => useVariations(deps));
     act(() => {
       result.current.supersede('Goal A', [makeStep('A1')], 'next');
@@ -296,11 +317,11 @@ describe('useVariations discard', () => {
       result.current.discard(idA);
     });
 
-    expect(result.current.variations.map((v) => v.id)).toEqual([idB]);
+    expect(result.current.variations.find((v) => v.id === idA)!.status).toBe('discarded');
     expect(forgetRecords).toHaveBeenCalledWith(idA);
     const persisted = loadVariations();
-    expect(persisted.find((v) => v.id === idA)).toBeUndefined();
-    expect(persisted.find((v) => v.id === idB)).toBeDefined();
+    expect(persisted.find((v) => v.id === idA)!.status).toBe('discarded');
+    expect(persisted.find((v) => v.id === idB)!.status).toBe('running');
   });
 
   it('a fresh renderHook loads persisted variations including step statuses', async () => {
@@ -422,6 +443,47 @@ describe('VariationsPanel', () => {
     const item = within(screen.getByLabelText('Variation Automate reports'));
     fireEvent.click(item.getByText('Discard'));
     expect(discard).toHaveBeenCalledWith('var_running');
+  });
+
+  it('lists merged and discarded variations with their status, counts them, and offers no controls on them', () => {
+    const merged: Variation = { ...pausedVariation, id: 'var_merged', goal: 'Fill form', status: 'merged', reason: 'Merged into the main project — 1 new step(s)' };
+    const discarded: Variation = { ...pausedVariation, id: 'var_discarded', goal: 'Rename files', status: 'discarded', reason: 'Discarded by user' };
+    api = { ...api, variations: [runningVariation, pausedVariation, merged, discarded] } as VariationsApi;
+    renderPanel();
+    expect(screen.getByText(/1 running · 1 paused · 1 merged · 1 discarded · 4 total/)).toBeTruthy();
+    for (const label of ['Variation Fill form', 'Variation Rename files']) {
+      const row = within(screen.getByLabelText(label));
+      expect(row.queryByText('Merge')).toBeNull();
+      expect(row.queryByText('Discard')).toBeNull();
+      expect(row.queryByText('Resume')).toBeNull();
+    }
+    expect(within(screen.getByLabelText('Variation Fill form')).getByText('merged')).toBeTruthy();
+    expect(within(screen.getByLabelText('Variation Rename files')).getByText('discarded')).toBeTruthy();
+  });
+
+  it('reflects the live hook state: supersede, tick, merge and discard show up without a remount', async () => {
+    function Live() {
+      const variations = useVariations(deps);
+      return <VariationsPanel engine={{ variations } as unknown as AssistEngine} />;
+    }
+    render(<Live />);
+    expect(screen.getByText(/0 running/)).toBeTruthy();
+    mainGoal = 'Old goal';
+    mainSteps = [makeStep('First'), makeStep('Second')];
+    act(() => {
+      fireEvent.click(screen.getByText('New variation'));
+    });
+    const row = () => within(screen.getByLabelText('Variation Old goal'));
+    expect(row().getByText('running')).toBeTruthy();
+    expect(row().getByText(/0\/2 step\(s\)/)).toBeTruthy();
+    await act(() => vi.advanceTimersByTimeAsync(1500));
+    expect(row().getByText(/1\/2 step\(s\)/)).toBeTruthy();
+    act(() => {
+      fireEvent.click(row().getByText('Merge'));
+    });
+    expect(row().getByText('merged')).toBeTruthy();
+    expect(screen.getByText(/0 running · 0 paused · 1 merged/)).toBeTruthy();
+    expect(mainSteps.map((s) => s.name)).toEqual(['First', 'Second']);
   });
 
   it('clicking New variation calls startVariation', () => {

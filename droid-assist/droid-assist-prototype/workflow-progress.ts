@@ -16,3 +16,15 @@ export function checkoffSummary(steps: WorkflowStep[]): CheckoffSummary {
 
 /** The Workflow panel's progress line: "n/m checked off (pct%)". */
 export const checkoffText = (s: CheckoffSummary) => `${s.checked}/${s.total} checked off (${s.pct}%)`;
+
+/** Whether every step of a non-empty workflow is checked off. */
+export const workflowComplete = (s: CheckoffSummary) => s.total > 0 && s.checked === s.total;
+
+/** The explicit message when the last step passes verification. */
+export const completeText = (s: CheckoffSummary) => `Workflow complete — all ${s.total}/${s.total} steps checked off`;
+
+/** The incomplete report of a failed step: which step, why, and how far the workflow got. */
+export function incompleteText(steps: WorkflowStep[], index: number, reason: string): string {
+  const s = checkoffSummary(steps);
+  return `Workflow incomplete — step ${index + 1}/${s.total} "${steps[index]?.name ?? '?'}" failed: ${reason}; ${checkoffText(s)}`;
+}

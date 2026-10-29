@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Frame, LogEntry } from './types.js';
-import { DUPLICATE_WINDOW_MS, LOG_CONTEXT, buildReport, deliver, isErrorReport, postReport, redact, suppressDuplicate } from './error-forwarding.js';
+import { DUPLICATE_WINDOW_MS, LOG_CONTEXT, buildReport, deliver, isErrorReport, logErrorKind, postReport, redact, suppressDuplicate } from './error-forwarding.js';
+
+describe('logErrorKind', () => {
+  it('maps an error log line source to its error kind, a step failure by default', () => {
+    expect(logErrorKind('Desktop bridge')).toBe('bridge');
+    expect(logErrorKind('Drift monitor')).toBe('drift');
+    expect(logErrorKind('Screen watcher')).toBe('watcher');
+    expect(logErrorKind('AI')).toBe('ai');
+    expect(logErrorKind('Supervisor')).toBe('ai');
+    expect(logErrorKind('Main retry')).toBe('step');
+  });
+});
 
 const entry = (n: number, message = `line ${n}`): LogEntry => ({ id: `l${n}`, time: n, source: 'Planner', message, tone: 'error' });
 const frame = { url: 'data:image/jpeg;base64,QUJD' } as Frame;

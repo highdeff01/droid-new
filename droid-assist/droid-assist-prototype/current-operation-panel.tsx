@@ -42,8 +42,8 @@ function AttemptItem({ p, n }: { p: AttemptPath; n: number }) {
 export function CurrentOperationPanel({ engine }: { engine: AssistEngine }) {
   const v = operationView({ steps: engine.steps, activeIndex: engine.activeIndex, attempts: engine.attempts, trail: engine.trail, record: engine.activeGoal, goal: engine.goal, cursor: engine.cursor });
   return (
-    <section className={styles.panel} aria-label="Current operation">
-      <h3>Current operation <small>{v.step ? v.step.status : 'idle'}</small></h3>
+    <section className={styles.panel} aria-label="Operation progress">
+      <h3>Operation progress <small>{v.step ? v.step.status : 'idle'}</small></h3>
       {!v.step && <p className={styles.muted}>No operation running — the active step shows here.</p>}
       {v.step && (
         <dl>

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Frame, LearnedPattern, LogEntry, WorkflowStep } from './types.js';
 import type { AskFn } from './ai.js';
 import type { ActionBudget } from './safety.js';
@@ -21,6 +21,8 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 export interface ResolutionDeps {
   steps: WorkflowStep[];
   bus: BusMessage[];
+  /** True while the executor holds the screen (a run or a recording); automatic resolution waits for it. */
+  busy: boolean;
   /** App/window context habits are recorded under. */
   context: () => string;
   goal: () => string;
@@ -64,6 +66,9 @@ export interface ScaffoldRecord {
 
 const cap = <T,>(list: T[]) => list.slice(0, RESOLUTION_LIMIT);
 
+/** One disagreement as of its newest report: a newer report makes it a new disagreement to settle. */
+export const disagreementKey = (d: Disagreement) => `${d.id}@${Math.max(...d.reports.map((r) => r.time))}`;
+
 /**
  * The AI resolution center: detects judgment differences between the main plan and the agents'
  * bus reports, settles each by a model ruling or by tests, applies the winning edit and feeds the
@@ -82,6 +87,10 @@ export function useResolution(deps: ResolutionDeps) {
   const [ops, setOps] = useState<OpRecord[]>([]);
   const [scaffolds, setScaffolds] = useState<ScaffoldRecord[]>([]);
   const [resolving, setResolving] = useState(false);
+  /** Disagreement keys an automatic pass has already taken. */
+  const attemptedRef = useRef(new Set<string>());
+  /** The pass in flight; the next pass chains onto it. */
+  const runRef = useRef<Promise<void>>(Promise.resolve());
 
   const disagreements = openDisagreements(detectDisagreements(deps.steps, deps.bus), resolutions);
 
@@ -150,18 +159,44 @@ export function useResolution(deps: ResolutionDeps) {
     return record(d, tested ? 'test' : 'unresolved', tested, r);
   };
 
-  /** Settles every open disagreement, one at a time. */
-  const resolveAll = async () => {
-    if (resolving) return;
+  /**
+   * Settles the open disagreements one at a time. An automatic pass takes only those not yet
+   * attempted (an unresolved one waits for a newer report); the manual override takes every open one.
+   */
+  const settleOpen = async (auto: boolean) => {
+    const found = openDisagreements(detectDisagreements(depsRef.current.steps, depsRef.current.bus), resolutionsRef.current);
+    const open = auto ? found.filter((d) => !attemptedRef.current.has(disagreementKey(d))) : found;
+    if (!open.length) {
+      if (!auto) depsRef.current.addLog(RESOLUTION_SOURCE, 'No disagreements between the main AI and the agents', 'info');
+      return;
+    }
     setResolving(true);
     try {
-      const open = openDisagreements(detectDisagreements(depsRef.current.steps, depsRef.current.bus), resolutionsRef.current);
-      if (!open.length) depsRef.current.addLog(RESOLUTION_SOURCE, 'No disagreements between the main AI and the agents', 'info');
-      for (const d of open) await resolveOne(d);
+      for (const d of open) {
+        attemptedRef.current.add(disagreementKey(d));
+        await resolveOne(d);
+      }
     } finally {
       setResolving(false);
     }
   };
+
+  /** Queues a pass behind any pass in flight, so automatic and manual passes never overlap. */
+  const queuePass = (auto: boolean): Promise<void> => {
+    const pass = runRef.current.then(() => settleOpen(auto));
+    runRef.current = pass.catch(() => undefined);
+    return pass;
+  };
+
+  /** Manual override: settles every open disagreement (after any automatic pass in flight). */
+  const resolveAll = () => queuePass(false);
+
+  const pendingKey = disagreements.map(disagreementKey).join('|');
+  useEffect(() => {
+    if (!pendingKey || deps.busy) return;
+    queuePass(true).catch((error: unknown) => depsRef.current.addLog(RESOLUTION_SOURCE, `Automatic resolution failed — ${errorText(error)}`, 'error'));
+    // Runs once per new set of disagreements once the executor is idle; queuePass reads everything else through refs.
+  }, [pendingKey, deps.busy]);
 
   /** Element recovery (once) or hard tracking (persistent): the found point is forwarded to the agents. */
   const recoverElement = async (name: string, persistent: boolean): Promise<OpResult> => {
