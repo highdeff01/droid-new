@@ -4,8 +4,8 @@ import type { PortfolioKind, PortfolioSource } from './portfolio.js';
 import type { LogEntry, WorkflowStep } from './types.js';
 import { loadVariations, saveVariations } from './storage.js';
 import {
-  addVariation, applyStepResult, createVariation, learnedMethod, mergeSteps, nextRunnable, nextStepIndex, pauseVariation, removeVariation,
-  resumeVariation, updateVariation, variationActor, variationRecord, variationSource, type Variation,
+  addVariation, applyStepResult, closeVariation, createVariation, isClosed, learnedMethod, mergeSteps, nextRunnable, nextStepIndex, pauseVariation,
+  removeVariation, resumeVariation, updateVariation, variationActor, variationRecord, variationSource, type Variation,
 } from './variations.js';
 
 /** How often a background variation may run its next step. */
@@ -62,6 +62,14 @@ export function useVariations(deps: VariationDeps) {
   }, []);
 
   const find = (id: string) => listRef.current.find((v) => v.id === id) ?? null;
+  /** Variation `id` while it is still open (not merged or discarded), or null. */
+  const findOpen = (id: string) => {
+    const v = find(id);
+    return v && !isClosed(v) ? v : null;
+  };
+  /** Applies `fn` to variation `id` only while it is open; a merged or discarded variation never changes again. */
+  const changeOpen = (id: string, fn: (v: Variation) => Variation) =>
+    change((list) => updateVariation(list, id, (v) => (isClosed(v) ? v : fn(v))));
 
   /** Sends `goal` and `steps` to a new background variation and records it in its own portfolio. */
   const toBackground = useCallback((goal: string, steps: WorkflowStep[], reason: string): Variation => {
@@ -91,7 +99,7 @@ export function useVariations(deps: VariationDeps) {
 
   /** Focuses `id`: it becomes the main project (its records join the main operation) and the current main keeps running in the background. */
   const switchTo = (id: string) => {
-    const v = find(id);
+    const v = findOpen(id);
     if (!v) return;
     const { goal, steps } = depsRef.current.main();
     budgetsRef.current.delete(id);
@@ -102,35 +110,36 @@ export function useVariations(deps: VariationDeps) {
     depsRef.current.log(`Focus switched to variation "${v.goal}"`, 'ok');
   };
 
-  /** Merges `id`'s results into the main project: its new steps are appended and its records join the main operation. */
+  /** Merges `id`'s results into the main project: its new steps are appended, its records join the main operation, and it stays listed as merged. */
   const merge = (id: string) => {
-    const v = find(id);
+    const v = findOpen(id);
     if (!v) return;
     const { goal, steps } = depsRef.current.main();
     const merged = mergeSteps(steps, v.steps);
     depsRef.current.setMain(goal || v.goal, merged);
     depsRef.current.mergeRecords(id, { operation: (goal || v.goal).trim(), opId: null });
     budgetsRef.current.delete(id);
-    change((list) => removeVariation(list, id));
+    const added = merged.length - steps.length;
+    changeOpen(id, (x) => closeVariation(x, 'merged', `Merged into the main project — ${added} new step(s)`));
     depsRef.current.log(`Merged variation "${v.goal}" into the main project — ${merged.length - steps.length} new step(s)`, 'ok');
   };
 
-  /** Discards `id` and its portfolio records; sibling variations are untouched. */
+  /** Discards `id`: it stops for good and stays listed as discarded, its portfolio records are dropped; siblings are untouched. */
   const discard = (id: string) => {
-    const v = find(id);
+    const v = findOpen(id);
     if (!v) return;
     budgetsRef.current.delete(id);
-    change((list) => removeVariation(list, id));
+    changeOpen(id, (x) => closeVariation(x, 'discarded', 'Discarded by user'));
     depsRef.current.forgetRecords(id);
     depsRef.current.log(`Discarded variation "${v.goal}"`, 'warn');
   };
 
-  const pause = (id: string) => change((list) => updateVariation(list, id, (v) => pauseVariation(v, 'Paused by user')));
+  const pause = (id: string) => changeOpen(id, (v) => pauseVariation(v, 'Paused by user'));
 
   /** Resumes `id` with a fresh action budget; failed steps are retried. */
   const resume = (id: string) => {
     budgetsRef.current.delete(id);
-    change((list) => updateVariation(list, id, (v) => resumeVariation(v)));
+    changeOpen(id, (v) => resumeVariation(v));
   };
 
   /** The action budget of `id`, created on its first step. */
@@ -168,8 +177,9 @@ export function useVariations(deps: VariationDeps) {
     busyRef.current = true;
     try {
       const out = await depsRef.current.runStep(step, variationActor(v.id), budgetOf(v.id));
-      change((list) => updateVariation(list, v.id, (x) => applyStepResult(x, index, out.ok, out.message)));
-      if (find(v.id)) recordStep(v, step, out);
+      if (!findOpen(v.id)) return;
+      changeOpen(v.id, (x) => applyStepResult(x, index, out.ok, out.message));
+      recordStep(v, step, out);
     } finally {
       busyRef.current = false;
     }

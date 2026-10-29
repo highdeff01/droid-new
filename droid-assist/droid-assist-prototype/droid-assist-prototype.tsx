@@ -35,7 +35,8 @@ import styles from './droid-assist.module.css';
 
 /** Every user-arrangeable panel by its layout id; the panels themselves render unchanged. */
 const PANELS: Record<PanelId, (props: { engine: AssistEngine }) => JSX.Element | null> = {
-  workflow: WorkflowPanel, variations: VariationsPanel, persona: PersonaPanel, ruler: RulerPanel, elements: ElementsPanel,
+  workflow: WorkflowPanel, operationProgress: OperationProgressPanel, selfTest: SelfTestPanel, aiResponses: AiResponsesPanel,
+  variations: VariationsPanel, persona: PersonaPanel, ruler: RulerPanel, elements: ElementsPanel,
   elementMap: ElementMapPanel, snipGallery: SnipGalleryPanel, inventory: InventoryPanel, routes: RoutesPanel, retest: RetestPanel,
   sections: SectionsPanel, learnedCoords: LearnedCoordsPanel, library: LibraryPanel, patterns: PatternsPanel, blacklist: BlacklistPanel,
   operationMemory: OperationMemoryPanel, knowledge: KnowledgePanel, profile: ProfilePanel, stats: StatsPanel, memory: MemoryPanel,
@@ -80,66 +81,6 @@ function AssistScreen() {
         <div className={styles.work}>
           <Stage engine={engine} />
           <PanelBoard area="side" ids={layout.side} className={styles.side} renderPanel={renderPanel} onMove={onMove} />
-          <div className={styles.side}>
-            <OperationProgressPanel engine={engine} />
-            <WorkflowPanel engine={engine} />
-            <VariationsPanel engine={engine} />
-            <PersonaPanel engine={engine} />
-            <RulerPanel engine={engine} />
-            <ElementsPanel engine={engine} />
-            <ElementMapPanel engine={engine} />
-            <SnipGalleryPanel engine={engine} />
-            <InventoryPanel engine={engine} />
-            <RoutesPanel engine={engine} />
-            <RetestPanel engine={engine} />
-            <SelfTestPanel engine={engine} />
-            <SectionsPanel engine={engine} />
-            <LearnedCoordsPanel engine={engine} />
-            <LibraryPanel engine={engine} />
-            <PatternsPanel engine={engine} />
-            <BlacklistPanel engine={engine} />
-            <OperationMemoryPanel engine={engine} />
-            <KnowledgePanel engine={engine} />
-            <ProfilePanel engine={engine} />
-            <StatsPanel engine={engine} />
-            <MemoryPanel engine={engine} />
-            <GoalsPanel engine={engine} />
-            <NotificationsPanel engine={engine} />
-            <SystemPanel engine={engine} />
-            <WatcherPanel engine={engine} />
-            <WakePanel engine={engine} />
-            <InitiativePanel engine={engine} />
-            <TriggersPanel engine={engine} />
-            <ProjectsPanel engine={engine} />
-            <ApprovalsPanel engine={engine} />
-            <ArtifactsPanel engine={engine} />
-            <PresentationPanel engine={engine} />
-            <OperationsPanel engine={engine} />
-          </div>
-        </div>
-        <div className={styles.bottom}>
-          <ComparisonGallery engine={engine} />
-          <AiHelpPanel engine={engine} />
-          <BriefingPanel engine={engine} />
-          <AiHistoryPanel engine={engine} />
-          <QwenThinkingPanel engine={engine} />
-          <AiResponsesPanel engine={engine} />
-          <SupervisorPanel engine={engine} />
-          <AgentsPanel engine={engine} />
-          <PortfoliosPanel engine={engine} />
-          <LoopControlPanel engine={engine} />
-          <CapabilitiesPanel engine={engine} />
-          <SettingsPanel engine={engine} />
-          <AgentBusPanel engine={engine} />
-          <CrewPanel engine={engine} />
-          <AgentCrewPanel engine={engine} />
-          <OpsAgentsPanel engine={engine} />
-          <SubagentReportPanel engine={engine} />
-          <ResolutionPanel engine={engine} />
-          <LogPanel engine={engine} />
-          <ErrorsPanel engine={engine} />
-          <ActionHistoryPanel engine={engine} />
-          <DatabasePanel engine={engine} />
         </div>
         <PanelBoard area="bottom" ids={layout.bottom} className={styles.bottom} renderPanel={renderPanel} onMove={onMove} />
       </main>

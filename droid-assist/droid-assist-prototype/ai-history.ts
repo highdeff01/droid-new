@@ -6,15 +6,19 @@ export interface HistoryEntry {
   time?: number;
 }
 
-/** Most messages the session keeps; older ones are trimmed after every append. */
-export const HISTORY_MAX = 20;
+/** Default number of newest messages sent to the model with every ask (the read window). */
+export const HISTORY_WINDOW_DEFAULT = 50;
+/** Largest read window Settings allows. */
+export const HISTORY_WINDOW_MAX = 100;
+/** Every time the archive grows past a multiple of this many messages, all data is auto-saved. */
+export const AUTO_SAVE_EVERY = 100;
 /** Consecutive unparseable replies that mark the context as stale. */
 export const STALE_PARSE_LIMIT = 2;
 /** Messages a stale-context trim keeps. */
 export const STALE_KEEP = 4;
 
-/** Why the history shrank: a user trim, the size cap, the stale-context guard, or a full reset. */
-export type TrimReason = 'manual' | 'cap' | 'stale' | 'reset';
+/** Why the history shrank: a user trim, the stale-context guard, or a full reset. */
+export type TrimReason = 'manual' | 'stale' | 'reset';
 
 /** One trim or reset: the message counts before and after it. */
 export interface HistoryChange {
@@ -38,9 +42,11 @@ export function trimHistory(entries: HistoryEntry[], keep: number): HistoryEntry
   return entries.slice(Math.max(0, entries.length - Math.max(0, Math.floor(keep))));
 }
 
+/** True when growing from `before` to `after` messages crosses a multiple of AUTO_SAVE_EVERY. */
+export const autoSaveDue = (before: number, after: number) => Math.floor(after / AUTO_SAVE_EVERY) > Math.floor(before / AUTO_SAVE_EVERY);
+
 const CHANGE_TEXT: Record<TrimReason, (c: HistoryChange) => string> = {
   manual: (c) => `Trimmed AI conversation history to the last ${c.after} message(s) (was ${c.before})`,
-  cap: (c) => `AI conversation history over the ${HISTORY_MAX}-message cap — trimmed ${c.before} → ${c.after} message(s)`,
   stale: (c) => `Stale context: ${STALE_PARSE_LIMIT} unparseable replies in a row — trimmed AI history ${c.before} → ${c.after} message(s)`,
   reset: (c) => `AI session reset — cleared ${c.before} history message(s)`,
 };

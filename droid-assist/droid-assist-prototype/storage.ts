@@ -51,6 +51,7 @@ import { OPERATION_RETRIES_MAX, OPERATION_RETRIES_MIN } from './operation-retry.
 import { PLAYBACK_WINDOW_SEC_MAX, PLAYBACK_WINDOW_SEC_MIN } from './playback.js';
 import { readOpsState, type OpsState } from './operations.js';
 import { sanitizePanelLayout } from './panel-layout.js';
+import { HISTORY_WINDOW_MAX } from './ai-history.js';
 import { AVOID_RULE_LIMIT, AVOID_TTL_HOURS_MAX, AVOID_TTL_HOURS_MIN, isAvoidRule, pruneRules, type AvoidRule } from './blacklist.js';
 
 /** Most folders the System panel reports on. */
@@ -118,8 +119,9 @@ export const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec' | 'abortAutoClearMin' | 'avoidTtlHours', [number, number]> = {
+export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec' | 'abortAutoClearMin' | 'avoidTtlHours' | 'aiHistoryWindow', [number, number]> = {
   abortAutoClearMin: [0, ABORT_AUTO_CLEAR_MAX_MIN],
+  aiHistoryWindow: [1, HISTORY_WINDOW_MAX],
   crewSize: [CREW_SIZE_MIN, CREW_SIZE_MAX],
   gallerySize: [4, 30],
   checkpoints: [1, 20],

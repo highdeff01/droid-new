@@ -124,7 +124,27 @@ describe('useAssist background variations', () => {
     await plan(r, 'multiply nine by nine');
     expect(r.current.variations.variations).toHaveLength(1);
     act(() => r.current.variations.merge(v.id));
-    expect(r.current.variations.variations).toHaveLength(0);
+    expect(r.current.variations.variations).toHaveLength(1);
+    expect(r.current.variations.variations[0]).toMatchObject({ id: v.id, status: 'merged' });
     expect(r.current.steps.map((s) => s.text)).toEqual(['9*9', '2+2', '3+3']);
+    act(() => r.current.variations.merge(v.id));
+    expect(r.current.steps.map((s) => s.text)).toEqual(['9*9', '2+2', '3+3']);
+  });
+
+  it('each superseded goal keeps running as its own variation with its own portfolio actor; discard closes only one', async () => {
+    const r = await mount();
+    await plan(r, 'add two and two');
+    await plan(r, 'multiply nine by nine');
+    act(() => r.current.variations.startVariation());
+    const list = r.current.variations.variations;
+    expect(list.map((v) => [v.goal.toLowerCase(), v.status])).toEqual([['multiply nine by nine', 'running'], ['add two and two', 'running']]);
+    const actors = new Set(r.current.knowledge.portfolios.map((e) => e.actor).filter((a) => a.startsWith('variation:')));
+    expect(actors).toEqual(new Set(list.map((v) => variationActor(v.id))));
+    const [first, second] = list;
+    act(() => r.current.variations.discard(first.id));
+    expect(r.current.variations.variations.map((v) => v.status)).toEqual(['discarded', 'running']);
+    expect(r.current.variations.variations[1]).toBe(second);
+    expect(r.current.knowledge.portfolios.some((e) => e.actor === variationActor(first.id))).toBe(false);
+    expect(r.current.knowledge.portfolios.some((e) => e.actor === variationActor(second.id))).toBe(true);
   });
 });
