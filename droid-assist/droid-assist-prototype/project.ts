@@ -5,8 +5,6 @@ import { uid } from './planner.js';
 
 /** Most projects kept; finished ones are pruned first. */
 export const PROJECT_LIMIT = 30;
-/** Transitions kept per project. */
-export const HISTORY_LIMIT = 120;
 /** Injections kept per project. */
 export const INJECTION_LIMIT = 50;
 /** Goal checks kept per project. */
@@ -164,7 +162,7 @@ export function transition(p: Project, to: ProjectState, note: string, now = Dat
   if (!canTransition(p.state, to)) throw new Error(`Illegal project transition ${p.state} → ${to}`);
   const entry: TurnRecord = { turn: p.turn, time: now, from: p.state, to, note };
   const completion = to === 'complete' || to === 'failed' ? { done: to === 'complete', reason: note, time: now } : p.completion;
-  return { ...p, state: to, completion, history: [entry, ...p.history].slice(0, HISTORY_LIMIT), updatedAt: now };
+  return { ...p, state: to, completion, history: [entry, ...p.history], updatedAt: now };
 }
 
 /** Finished projects: complete or failed. */

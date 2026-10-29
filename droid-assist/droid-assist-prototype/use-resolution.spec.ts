@@ -55,6 +55,35 @@ describe('resolution center in the engine', () => {
     expect(result.current.patterns.some((p) => p.kind === 'avoid' && p.pattern.includes('Notes tab'))).toBe(true);
   });
 
+  it('settles a new disagreement on its own, without the Resolve button, applies the result and logs it', async () => {
+    localStorage.setItem('droid-assist.familiar', JSON.stringify([{ id: 'el1', name: 'Save button', x: 0.31, y: 0.62, lastSeen: 1 }]));
+    const result = await offlineEngine();
+    act(() => result.current.setSteps([{ id: 's1', name: 'Click Save', action: 'click', target: 'Save button', x: 0.9, y: 0.9, status: 'pending' }]));
+    await act(async () => {
+      result.current.forwardElement('drift', { name: 'save button', x: 0.3, y: 0.62 });
+    });
+    await vi.waitFor(() => expect(result.current.resolution.resolutions).toHaveLength(1));
+    expect(result.current.resolution.resolutions[0]).toMatchObject({ via: 'test', element: 'Save button' });
+    expect(result.current.steps[0]).toMatchObject({ x: 0.3, y: 0.62 });
+    expect(result.current.resolution.disagreements).toEqual([]);
+    expect(centerLog(result).some((m) => m.startsWith('Resolved by test: Use "Save button" at x=0.300, y=0.620'))).toBe(true);
+    expect(centerLog(result)).not.toContain('No disagreements between the main AI and the agents');
+  });
+
+  it('does not re-run an unresolved disagreement automatically until a newer report arrives; the button still re-runs it', async () => {
+    const result = await offlineEngine();
+    act(() => result.current.setSteps([{ id: 's1', name: 'Click Notes', action: 'click', target: 'Notes tab', x: 0.5, y: 0.5, status: 'pending' }]));
+    await act(async () => {
+      result.current.forwardElement('screen', { name: 'Notes tab', x: 2.5, y: -3 });
+    });
+    await vi.waitFor(() => expect(result.current.resolution.resolutions).toHaveLength(1));
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    expect(result.current.resolution.resolutions).toHaveLength(1);
+    await act(() => result.current.resolution.resolveAll());
+    expect(result.current.resolution.resolutions).toHaveLength(2);
+    expect(result.current.resolution.resolutions.every((r) => r.via === 'unresolved')).toBe(true);
+  });
+
   it('agreeing reports are no disagreement', async () => {
     const result = await offlineEngine();
     act(() => result.current.setSteps([{ id: 's1', name: 'Click Notes', action: 'click', target: 'Notes tab', x: 0.1, y: 0.1, status: 'pending' }]));
