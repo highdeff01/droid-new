@@ -271,6 +271,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
             <>
               {engine.captureLost && <button type="button" className={styles.danger} onClick={engine.shareScreen}>↻ Restart capture</button>}
               <button type="button" onClick={engine.useDemo}>Use demo desktop</button>
+              <button type="button" onClick={engine.useQuestWorld}>Use quest world</button>
             </>
           )}
           {engine.mainBridge.status === 'connected' && source !== 'main-app' && (
