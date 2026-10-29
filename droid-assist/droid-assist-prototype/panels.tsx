@@ -32,7 +32,7 @@ import { proposalStep, recallNotes, type NoteKind, type WatchProposal } from './
 import { WAKE_MS_MAX, WAKE_MS_MIN } from './wake.js';
 import { contextText } from './context-workflow.js';
 import { STAGES, unverifiedStages, type StageGroup } from './loop-control.js';
-import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, MASTER_PROMPT_MAX, type AiView } from './ai.js';
+import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AI_VIEWS, LOCAL_AI_PROXY_URL, MASTER_PROMPT_MAX, type AiView } from './ai.js';
 import { HISTORY_WINDOW_MAX, STALE_KEEP, estimateTokens, historyStats } from './ai-history.js';
 import { STEP_RETRIES_MAX, STEP_RETRIES_MIN } from './retry-ladder.js';
 import { OPERATION_RETRIES_MAX, OPERATION_RETRIES_MIN } from './operation-retry.js';

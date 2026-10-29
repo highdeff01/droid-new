@@ -18,4 +18,30 @@ describe('ArtifactsPanel', () => {
     fireEvent.click(screen.getByText('Invoke'));
     expect(result.current.log.some((l) => /not valid JSON/.test(l.message))).toBe(true);
   });
+
+  it('loads and renders persisted knowledge entries with missing or null notes without throwing', () => {
+    localStorage.setItem('droid-assist.knowledge', JSON.stringify([
+      { id: 'k1', kind: 'video', title: 'No notes field', time: 1 },
+      { id: 'k2', kind: 'video', title: 'Null notes', time: 2, notes: null },
+    ]));
+    const { result } = renderHook(() => useAssist());
+    expect(result.current.artifactKnowledge.map((k) => k.notes)).toEqual([[], []]);
+    render(<ArtifactsPanel engine={result.current} />);
+    expect(screen.getByText('No notes field')).toBeTruthy();
+    expect(screen.getByText('Null notes')).toBeTruthy();
+    expect(screen.getAllByText('No notes.')).toHaveLength(2);
+  });
+
+  it('renders an entry whose notes are missing at render time without throwing', () => {
+    const { result } = renderHook(() => useAssist());
+    const engine = { ...result.current, artifactKnowledge: [{ id: 'k3', kind: 'video', title: 'Raw', time: 3 }] } as unknown as typeof result.current;
+    render(<ArtifactsPanel engine={engine} />);
+    expect(screen.getByText('No notes.')).toBeTruthy();
+  });
+
+  it('shows the empty state when there is no knowledge', () => {
+    const { result } = renderHook(() => useAssist());
+    render(<ArtifactsPanel engine={result.current} />);
+    expect(screen.getByText('No notes yet.')).toBeTruthy();
+  });
 });
