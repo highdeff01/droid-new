@@ -338,6 +338,8 @@ export interface AssistSettings {
   aiMaxInFlight: number;
   /** Per-request AI timeout in ms; queued calls get it when they start. Cancelling still aborts at once. */
   aiTimeoutMs: number;
+  /** AI history read window: newest conversation messages sent with each ask (1–100, default 50). */
+  aiHistoryWindow: number;
   /** Goal tracer: failed steps / no-progress checks in a row that count as a stalled goal. */
   goalStall: number;
   /** Master Prompt Override: a free-text directive injected into every AI prompt; empty = none. */

@@ -8,8 +8,8 @@ import { checkMoved, sameElement, verifyArrangement, type Expectation, type Move
 import { AI_VIEWS, AiCancelled, AiError, AiParseError, isRepeatLimit, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, DEFAULT_AI_VIEW, createAiSession, linkSignals, pingAi, stripThinking, thinkingOnlyNotice } from './ai.js';
 import { OVERLAP_PREFIX, firstValid } from './ai-overlap.js';
 import { STAGE_LABEL, appContextSections, escalationNotice, suggestedGoal, type EscalationEvent, type EscalationHooks } from './ai-escalation.js';
-import type { AiReply, AiStatus, AskFn, AskRequest, HistoryChangeFn } from './ai.js';
-import { historyChangeText } from './ai-history.js';
+import type { AiReply, AiStatus, AskFn, AskRequest, AutoSaveFn, HistoryChangeFn } from './ai.js';
+import { HISTORY_WINDOW_DEFAULT, historyChangeText } from './ai-history.js';
 import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type StageId } from './loop-control.js';
 import { DEFAULT_AI_MAX_IN_FLIGHT, createAiQueue, type AiQueue, type AiQueueStats } from './ai-queue.js';
 import { confirmTarget, decidePopup, describeScreen, judgeStep, reflectOn, verifyGoal, type GoalCheck, type PopupDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
@@ -346,6 +346,7 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   playbackWindowSec: DEFAULT_PLAYBACK_WINDOW_SEC,
   aiMaxInFlight: DEFAULT_AI_MAX_IN_FLIGHT,
   aiTimeoutMs: DEFAULT_AI_TIMEOUT_MS,
+  aiHistoryWindow: HISTORY_WINDOW_DEFAULT,
   goalStall: DEFAULT_GOAL_STALL,
   masterPrompt: '',
   aiOverlap: false,
@@ -633,12 +634,14 @@ export function useAssist() {
   const mirrorBridgeRef = useRef(false);
   /** Trims and resets of the AI history land here (wired to the log once addLog exists). */
   const historyChangeRef = useRef<HistoryChangeFn>(() => undefined);
+  /** Each 100-message milestone of the AI archive lands here (wired to the auto-save once addLog exists). */
+  const autoSaveRef = useRef<AutoSaveFn>(() => undefined);
   /** The thinking-on escalation hooks of the session, set below once the app-context sources exist. */
   const escalationRef = useRef<Required<EscalationHooks>>({ appContext: async () => ({ sections: [] }), onStage: () => undefined });
   const aiSessionRef = useRef(createAiSession(typeof sessionStorage === 'undefined' ? null : sessionStorage, renderView, (c) => historyChangeRef.current(c), {
     appContext: () => escalationRef.current.appContext(),
     onStage: (e) => escalationRef.current.onStage(e),
-  }));
+  }, (archive) => autoSaveRef.current(archive), typeof localStorage === 'undefined' ? null : localStorage));
   const [aiHistory, setAiHistory] = useState(() => aiSessionRef.current.history());
   /** Cancels every in-flight model call when aborted; replaced by a fresh one after each cancel. */
   const aiCtrlRef = useRef(new AbortController());
@@ -988,6 +991,16 @@ export function useAssist() {
     addLog('AI history', historyChangeText(change), change.reason === 'manual' ? 'info' : 'warn');
   };
 
+  /** Every 100 archived AI messages (the archive itself persists in localStorage across sessions): all data is saved as the last good backup. */
+  autoSaveRef.current = (archive) => {
+    try {
+      snapshotLastGood();
+      addLog('AI history', `Auto-saved all data at ${archive.length} archived AI message(s)`, 'ok');
+    } catch (error) {
+      addLog('AI history', `Auto-save failed at ${archive.length} archived AI message(s): ${errorText(error)}`, 'error');
+    }
+  };
+
   /** Keeps only the newest `keep` messages of the AI conversation. */
   const trimAiHistory = useCallback((keep: number) => aiSessionRef.current.trim(keep), []);
 
@@ -1189,8 +1202,8 @@ export function useAssist() {
 
   /** One model call of `stage` through the shared queue, with the current settings (master prompt included). */
   const queuedAsk = useCallback((req: AskRequest, stage: StageId, signal: AbortSignal): Promise<AiReply> => aiQueueRef.current.run(stage, (timeoutMs) => {
-    const { aiUrl, aiModel, aiView, masterPrompt, aiThink } = settingsRef.current;
-    return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs, masterPrompt, think: aiThink }, { ...req, signal });
+    const { aiUrl, aiModel, aiView, masterPrompt, aiThink, aiHistoryWindow } = settingsRef.current;
+    return aiSessionRef.current.ask({ url: aiUrl, model: aiModel, view: AI_VIEWS[aiView], timeoutMs, masterPrompt, think: aiThink, historyWindow: aiHistoryWindow }, { ...req, signal });
   }, signal), []);
 
   /**
