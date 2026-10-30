@@ -33,6 +33,7 @@ function OperationItem({ engine, op }: { engine: AssistEngine; op: SavedOperatio
       {op.screenshots.at(-1) && <img src={op.screenshots.at(-1)!.url} alt={`${op.name} reference`} width={96} />}
       <button type="button" onClick={() => void engine.runOperation(op.id)}>Run</button>
       <button type="button" onClick={() => void engine.retryBest(op.id)}>Retry best</button>
+      <button type="button" onClick={() => engine.loadAsTemplate(op)}>Use as template</button>
       <button type="button" aria-label={`Delete ${op.name}`} onClick={() => engine.deleteOperation(op.id)}>✕</button>
     </li>
   );
@@ -65,6 +66,36 @@ function PlaybackView({ engine }: { engine: AssistEngine }) {
   );
 }
 
+/** AI-free runs, shipped samples, trace export/import/replay and AI workflow building (droid-main takes over failed steps). */
+function AiFreeView({ engine }: { engine: AssistEngine }) {
+  const [command, setCommand] = useState('');
+  const { aiFreeTrace: trace, aiFreeRunning: running } = engine;
+  return (
+    <>
+      <h4>AI-free · Trace · Takeover</h4>
+      <p className={styles.muted}>Runs match stored reference frames with no AI call; the AI is asked only when a step fails verification, and an unverified step is handed to droid-main.</p>
+      <button type="button" onClick={() => void engine.runAiFreeSteps()} disabled={running}>Run current steps AI-free</button>
+      <button type="button" onClick={engine.installSamples}>Install sample workflows</button>
+      <p className={styles.muted}>{trace ? `Trace "${trace.goal}": ${trace.steps.length} step(s), ${trace.steps.filter((s) => s.verdict === 'verified').length} verified` : 'No trace yet'}</p>
+      <button type="button" onClick={engine.exportTraceFile} disabled={!trace?.steps.length}>Export trace</button>
+      <label>
+        Import trace <input type="file" accept=".json" aria-label="Import trace" onChange={(e) => void e.target.files?.[0]?.text().then(engine.importTraceFile)} />
+      </label>
+      <button type="button" onClick={() => void engine.replayCurrentTrace()} disabled={running || !trace?.steps.length}>Replay trace</button>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void engine.buildFromCommand(command);
+          setCommand('');
+        }}
+      >
+        <input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="Command to build a workflow from (AI)" aria-label="Workflow command" />
+        <button type="submit" disabled={running || !command.trim()}>Build workflow</button>
+      </form>
+    </>
+  );
+}
+
 /** Saved operations, AI suggestions, playback, and the recently performed operations with retry. */
 export function OperationsPanel({ engine }: { engine: AssistEngine }) {
   const { operations, suggested, detected, settings } = engine;
@@ -88,6 +119,7 @@ export function OperationsPanel({ engine }: { engine: AssistEngine }) {
         </ul>
       ) : <p className={styles.muted}>No saved operation detected in the recent runs.</p>}
       <PlaybackView engine={engine} />
+      <AiFreeView engine={engine} />
     </section>
   );
 }
