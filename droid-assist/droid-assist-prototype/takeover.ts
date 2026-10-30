@@ -69,7 +69,7 @@ export function syncAgreements(prev: readonly StepAgreement[], steps: readonly W
   const synced = started.map(({ step, index }) => {
     const a = prev.find((x) => x.index === index) ?? startStep(index, step.name, now);
     const verified = verificationOf(step.status);
-    const local = a.local ?? (verified === null ? undefined : verified && !disputed(step));
+    const local = verified === null ? a.local : verified && !disputed(step);
     return { ...a, verified, ...(local === undefined ? {} : { local }) };
   });
   const untouched = prev.filter((a) => !synced.some((s) => s.index === a.index));

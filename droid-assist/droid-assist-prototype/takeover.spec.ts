@@ -1,6 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RegulatePayload } from './main-bridge-protocol.js';
-import { applyRegulate, arbitrate, shouldHandOff, stepComplete, TAKEOVER_MS, type RegulateTarget, type StepAgreement } from './takeover.js';
+import { agreementState, applyRegulate, arbitrate, shouldHandOff, stepComplete, syncAgreements, TAKEOVER_MS, withRemoteOpinion, type RegulateTarget, type StepAgreement } from './takeover.js';
+import type { StepStatus, WorkflowStep } from './types.js';
+
+describe('syncAgreements — a retried step', () => {
+  const step = (status: StepStatus): WorkflowStep => ({ id: 's0', name: 'Open cart', action: 'click', x: 0.2, y: 0.4, status });
+  it('re-gives droid-new\'s opinion when a failed step is re-run to done, so it can complete', () => {
+    const statuses: StepStatus[] = ['running', 'failed', 'running', 'done'];
+    const synced = statuses.reduce<StepAgreement[]>((prev, s) => syncAgreements(prev, [step(s)], 1000, () => false), []);
+    const a = withRemoteOpinion(synced[0], { index: 0, step: 'Open cart', agree: true });
+    expect(a).toMatchObject({ verified: true, local: true, remote: true });
+    expect(agreementState(a)).toBe('complete');
+    expect(shouldHandOff(a, 1000 + TAKEOVER_MS + 1)).toBe(false);
+  });
+});
 
 const agreement = (over: Partial<StepAgreement> = {}): StepAgreement => ({
   index: 0,

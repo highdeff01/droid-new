@@ -206,7 +206,7 @@ export function useBridgeV2(deps: BridgeV2Deps) {
   /** Background agent-to-agent talk per step, the arbiter on disagreements and the completion line. */
   const reactTo = (a: StepAgreement, connected: boolean) => {
     const state = agreementState(a);
-    if (a.local !== undefined && connected) once(`opinion:${a.index}`, () => void send('step_opinion', { index: a.index, step: a.step, agree: a.local === true }));
+    if (a.local !== undefined && connected) once(`opinion:${a.index}:${a.local}`, () => void send('step_opinion', { index: a.index, step: a.step, agree: a.local === true }));
     if (state === 'disagreement') once(`arbiter:${a.index}`, () => {
       const ruling = arbitrate(a);
       depsRef.current.arbitrate(a.step, ruling.text, ruling.complete);
