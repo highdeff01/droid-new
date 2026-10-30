@@ -140,7 +140,11 @@ import { drawWorldScreen, worldImageAt } from './presentation-project.js';
 import { DEFAULT_EXECUTION_MODE, EXECUTION_MODES, modeCaptureMs, modeChangeText, modeStatus, resolveAiDirective, type ExecutionMode, type ModeActor, type ModeDirective } from './execution-mode.js';
 import { DEFAULT_AUTO_APPLY, autoApplyDecision, bestGrounding, groundGoal, groundedStep, groundingShift, judgeCandidate, judgmentText, type KnownGrounding, type HeldCandidate, type Judgment } from './aggressive.js';
 import { NOT_CONNECTED, createMainBridge, defaultBridgeMode, type MainBridge, type MainBridgeConfig, type MainBridgeState } from './main-bridge.js';
-import type { FramePayload, InboundMessage, InterceptKind, InterceptPayload, RunScriptPayload } from './main-bridge-protocol.js';
+import type { FramePayload, InboundMessage, InterceptKind, InterceptPayload, JointRole, ResultPayload, RunScriptPayload } from './main-bridge-protocol.js';
+import { JOINT_SOURCE, useJoint } from './use-joint.js';
+import { errorApp, interceptError } from './joint-errors.js';
+import { CROSS_REFERENCE_LINES } from './joint-followup.js';
+import { loadOperations } from './operation-db.js';
 import { DEFAULT_OPERATION_RETRIES } from './operation-retry.js';
 import { DEFAULT_PLAYBACK_WINDOW_SEC } from './playback.js';
 import { CREW_AGENTS, createScreenLock, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
@@ -1032,6 +1036,26 @@ export function useAssist() {
     const flow = cardsRef.current.find((c) => c.id === flowRef.current)?.name;
     recordRaw({ project: projectOf(flow, goalRef.current), agent, section }, draft);
   }, [recordRaw]);
+  /** The joint engine over the main app bridge: cross-app error diagnosis, app selection, follow-up and memory. */
+  const joint = useJoint({
+    addLog,
+    bridge: () => mainBridgeRef.current,
+    queue: approvals.queue,
+    fixScript: (ctx) => void proposeFix(ctx),
+    record: (draft) => recordOp(JOINT_SOURCE, 'mainBridge', draft),
+    history: loadOperations,
+    target: () => (sourceRef.current === 'main-app' ? 'droid-main' : 'droid-new'),
+    busy: () => executorBusy(),
+    local: (role, text) => jointLocal(role, text),
+    localFrame: () => framesRef.current[0] ?? null,
+    lines: (app) => logRef.current.filter((l) => (l.source === 'Main app') === (app === 'droid-main')).slice(0, CROSS_REFERENCE_LINES).map((l) => `${l.source}: ${l.message}`),
+    verify: async (action, frame) => {
+      const check = await verifyGoal(askFor('autoContinue'), frame, action.expect, []);
+      return { ok: check.complete, reason: check.reason };
+    },
+    pending: (g) => approvals.items.filter((i) => i.status === 'pending' && i.goal === g).length,
+    halt: () => (abortedRef.current ? ABORTED_REFUSAL : aiOnline() ? null : 'AI offline — joint follow-up cannot verify'),
+  });
   const forwardError = errorForwarding.capture;
   /** When the last explicit capture was made; an error log line close to it is the same failure. */
   const explicitCaptureAt = useRef(0);
@@ -1040,11 +1064,12 @@ export function useAssist() {
     forwardError(input);
     recordOp('Errors', errorSection(input.kind), errorDraft(input));
   }, [forwardError, recordOp]);
-  /** Captures an error for forwarding and records it in the operation database. */
-  const captureError = useCallback((input: CaptureInput) => {
+  /** Captures an error for forwarding, records it in the operation database and diagnoses it for a correction. */
+  const captureError = useCallback((input: CaptureInput & { file?: string }) => {
     explicitCaptureAt.current = Date.now();
     recordError(input);
-  }, [recordError]);
+    joint.onError({ ...input, app: errorApp(input.kind) });
+  }, [recordError, joint]);
   /** Every error-tone log line lands in the Errors list, unless an explicit capture of it was made alongside. */
   logErrorRef.current = (from, message, time) => queueMicrotask(() => {
     if (Math.abs(explicitCaptureAt.current - time) < LOG_CAPTURE_WINDOW_MS) return;
@@ -4357,6 +4382,16 @@ export function useAssist() {
     await runReplay(selfTest, { label: selfTest ? 'Self-test' : 'Replay', goal: runGoalOf() });
   };
 
+  /** droid-new's half of a joint operation: calculate plans the steps, perform runs them as the replay pipeline does. */
+  const jointLocal = async (role: JointRole, text: string): Promise<ResultPayload> => {
+    if (role === 'calculate') {
+      const planned = await autoPlan(text);
+      return { ok: planned, message: planned ? `planned ${stepsText(stepsRef.current)}` : 'no plan made' };
+    }
+    const out = await runReplay(!armedRef.current, { label: JOINT_SOURCE, goal: text });
+    return out ? { ok: !out.stopped && out.ok === out.total, message: `${out.ok}/${out.total} step(s) ${out.dryRun ? 'verified (dry run)' : 'executed'}` } : { ok: false, message: 'run refused before any step' };
+  };
+
   /** Whether the desktop bridge answers its health check; a failure is logged and captured. */
   const bridgeReady = async (label: string): Promise<boolean> => {
     const health = await checkBridge(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken);
@@ -5842,6 +5877,7 @@ export function useAssist() {
   const onMainAppFrame = async ({ image, width, height }: FramePayload) => {
     try {
       const frame = await imageFrame(image, width, height, ++frameId.current, 'main-app');
+      joint.onFrame(frame);
       if (sourceRef.current === 'main-app') processRef.current(frame);
     } catch (error) {
       addLog('Main app', `Main app frame could not be decoded: ${errorText(error)}`, 'error');
@@ -5851,9 +5887,9 @@ export function useAssist() {
   /** What each intercept kind does beyond going on the agent bus. */
   const INTERCEPT_ROUTES: Record<InterceptKind, (p: InterceptPayload) => void> = {
     element_moved: () => void mainBridgeRef.current?.send('request_frame', {}),
-    error_occurred: (p) => captureError({ kind: 'main-app', message: p.message, goal: goalRef.current }),
+    error_occurred: (p) => captureError(interceptError(p, goalRef.current)),
     test_requested: (p) => void testRoutes(parseTestSpec(p.test ?? '')),
-    console_error: (p) => captureError({ kind: 'main-app', message: `Console error: ${p.message}`, goal: goalRef.current }),
+    console_error: (p) => captureError(interceptError(p, goalRef.current)),
   };
 
   /** An intercept from the main app: logged, put on the agent bus from the main app, then routed by kind. */
@@ -5864,7 +5900,7 @@ export function useAssist() {
     INTERCEPT_ROUTES[p.kind](p);
   };
 
-  const mainAppHandlers = { onMainAppFrame, onMainAppIntercept, selectMainApp };
+  const mainAppHandlers = { onMainAppFrame, onMainAppIntercept, selectMainApp, onMainAppStatus: joint.onStatus };
   const mainAppRef = useRef(mainAppHandlers);
   mainAppRef.current = mainAppHandlers;
 
@@ -5875,6 +5911,7 @@ export function useAssist() {
       if (m.type === 'frame') void mainAppRef.current.onMainAppFrame(m.payload);
       else if (m.type === 'intercept') mainAppRef.current.onMainAppIntercept(m.payload);
       else if (m.type === 'hello') addLog('Main app', `Hello from ${m.payload.app}`, 'info');
+      else if (m.type === 'status') mainAppRef.current.onMainAppStatus(m.payload);
     };
     const onState = (state: MainBridgeState) => {
       setMainBridge(state);
@@ -6375,7 +6412,7 @@ export function useAssist() {
   /** Each slash command's runner. */
   const COMMAND_RUNNERS: Record<Exclude<CommandName, 'test'>, (target: string) => Promise<void>> = {
     use: attachTarget, move: moveTo, measure: measureCommand, arrange, scenario: scenarioCommand, do: caps.doCommand, snip: snipCommand,
-    crew: crewCommand, intercept: interceptCommand, backtrack: backtrackCommand, ops: runOps,
+    crew: crewCommand, intercept: interceptCommand, backtrack: backtrackCommand, ops: runOps, joint: joint.run,
     section: sectionCommand, scope: scopeCommand, replicate: replicateCommand, sidetest: sideTestCommand, research: researchCommand,
   };
 
@@ -6619,7 +6656,9 @@ export function useAssist() {
     if (item.proposalId && edit !== undefined) updateWatcher((w) => ({ ...w, proposals: patchProposal(w.proposals, item.proposalId!, { text: edit }) }));
     if (item.proposalId) acceptProposal(item.proposalId);
     const decided = approvals.decide(id, status, edit);
-    if (decided) learnDecision(decided);
+    if (!decided) return;
+    learnDecision(decided);
+    await joint.onDecided(decided);
   };
 
   const approveItem = (id: string) => approveWith(id, 'approved');

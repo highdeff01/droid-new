@@ -25,6 +25,9 @@ export interface JointError extends CaptureInput {
 /** The corrective change for one error. */
 export type Correction = { kind: 'fix_script'; app: 'droid-new'; context: FixContext; reason: string } | { kind: 'code_fix'; app: 'droid-main'; draft: ApprovalDraft; reason: string };
 
+/** The error kinds that get a corrective change: step failures, drift red, bridge errors and main-app (incl. console) errors. */
+export const DIAGNOSED_KINDS: readonly ErrorKind[] = ['step', 'drift', 'bridge', 'main-app'];
+
 /** The app an error kind is raised in: main-app errors are droid-main's, every other kind droid-new's. */
 export const errorApp = (kind: ErrorKind): JointApp => (kind === 'main-app' ? 'droid-main' : 'droid-new');
 

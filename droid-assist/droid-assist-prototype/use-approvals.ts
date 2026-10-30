@@ -104,5 +104,5 @@ export function useApprovals(settings: AssistSettings, patterns: () => LearnedPa
 
   const current = useCallback((id: string) => itemsRef.current.find((i) => i.id === id) ?? null, []);
 
-  return { items, tree: approvalTree(items), gate, route, release, decide, note, check, current };
+  return { items, tree: approvalTree(items), gate, route, queue, release, decide, note, check, current };
 }
