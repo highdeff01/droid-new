@@ -54,6 +54,16 @@ describe('PanelBoard', () => {
     expect(onMove).not.toHaveBeenCalled();
   });
 
+  it('a panel float control reports an undock at the slot position; without onFloat no control is shown', () => {
+    const onFloat = vi.fn();
+    render(<PanelBoard area="side" ids={ids} className="side" renderPanel={(id) => <section>{id}</section>} onMove={vi.fn()} onFloat={onFloat} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Float ruler panel' }));
+    expect(onFloat).toHaveBeenCalledWith('ruler', { x: 0, y: 0, width: 0 });
+    cleanup();
+    renderBoard();
+    expect(screen.queryByRole('button', { name: /^Float / })).toBeNull();
+  });
+
   it('contains a crash to the one panel that threw, showing an inline error card', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const Boom = (): never => { throw new Error('boom'); };

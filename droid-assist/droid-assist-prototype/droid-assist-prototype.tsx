@@ -29,7 +29,8 @@ import { NotificationStack } from './notification-stack.js';
 import { OperationsPanel } from './operations-panel.js';
 import { OperationsPanel as OpsAgentsPanel } from './ops-panel.js';
 import { PanelBoard } from './panel-board.js';
-import { movePanel, type PanelArea, type PanelId } from './panel-layout.js';
+import { FloatingLayer } from './floating-panels.js';
+import { currentViewport, dockPanel, floatPanel, movePanel, raisePanel, type FloatRect, type PanelArea, type PanelId, type PanelLayout } from './panel-layout.js';
 import type { AssistEngine } from './use-assist.js';
 import styles from './droid-assist.module.css';
 
@@ -54,12 +55,17 @@ const PANELS: Record<PanelId, (props: { engine: AssistEngine }) => JSX.Element |
 function AssistScreen() {
   const engine = useAssist();
   const layout = engine.settings.panelLayout;
-  const onMove = (id: PanelId, area: PanelArea, before: PanelId | null) =>
-    engine.setSettings((s) => ({ ...s, panelLayout: movePanel(s.panelLayout, id, area, before) }));
+  const update = (change: (l: PanelLayout) => PanelLayout) => engine.setSettings((s) => ({ ...s, panelLayout: change(s.panelLayout) }));
+  const onMove = (id: PanelId, area: PanelArea, before: PanelId | null) => update((l) => movePanel(l, id, area, before));
+  const onFloat = (id: PanelId, at: Omit<FloatRect, 'z'>) => update((l) => floatPanel(l, id, at, currentViewport()));
   const renderPanel = (id: PanelId) => {
     const Panel = PANELS[id];
     return <Panel engine={engine} />;
   };
+  /** A docked board: its area's panels minus the ones floating as windows. */
+  const board = (area: PanelArea, className: string) => (
+    <PanelBoard area={area} ids={layout[area].filter((id) => !layout.floating[id])} className={className} renderPanel={renderPanel} onMove={onMove} onFloat={onFloat} />
+  );
   return (
     <div className={styles.app}>
       <header className={styles.header}>
@@ -79,11 +85,21 @@ function AssistScreen() {
         <CurrentOperationPanel engine={engine} />
         <PopupPanel engine={engine} />
         <div className={styles.work}>
-          <Stage engine={engine} />
-          <PanelBoard area="side" ids={layout.side} className={styles.side} renderPanel={renderPanel} onMove={onMove} />
+          <div className={styles.workMain}>
+            <Stage engine={engine} />
+            {board('top', styles.top)}
+          </div>
+          {board('side', styles.side)}
         </div>
-        <PanelBoard area="bottom" ids={layout.bottom} className={styles.bottom} renderPanel={renderPanel} onMove={onMove} />
+        {board('bottom', styles.bottom)}
       </main>
+      <FloatingLayer
+        floating={layout.floating}
+        renderPanel={renderPanel}
+        onPlace={onFloat}
+        onRaise={(id) => update((l) => raisePanel(l, id))}
+        onDock={(id) => update((l) => dockPanel(l, id))}
+      />
     </div>
   );
 }
