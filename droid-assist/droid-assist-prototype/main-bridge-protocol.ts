@@ -145,9 +145,12 @@ export interface StepOpinionPayload {
 }
 
 /** v2: one browser console line of an app. */
+/** Severity of a forwarded console line. */
 export type ConsoleLevel = 'error' | 'warn' | 'info';
+/** Every console level, in severity order. */
 export const CONSOLE_LEVELS: readonly ConsoleLevel[] = ['error', 'warn', 'info'];
 
+/** A console line droid-main forwards so droid-new's agents can detect and fix it. */
 export interface ConsoleLogPayload {
   app: string;
   level: ConsoleLevel;

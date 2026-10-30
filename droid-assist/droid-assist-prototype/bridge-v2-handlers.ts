@@ -42,6 +42,7 @@ export async function handleRequest<K extends RequestType>(type: K, payload: Req
   }
 }
 
+/** What routing a v2 request needs: the machinery it lands in and how the answer goes back. */
 export interface V2Router {
   machinery: V2Machinery;
   peers: PeerHandlers;
