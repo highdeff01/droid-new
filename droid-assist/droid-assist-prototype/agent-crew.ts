@@ -74,6 +74,9 @@ export interface CrewDeps {
   work: (command: CrewCommand) => Promise<CrewReport>;
   /** Stop plan, abort or an unchecked stage. */
   shouldStop: () => boolean;
+  /** Automatic follow-ups can guarantee a minimum number of enabled workers receive bounded tasks. */
+  minimumCommands?: number;
+  fallbackTasks?: Readonly<Partial<Record<string, string>>>;
   onAgents: (agents: CrewAgent[]) => void;
   onReport: (report: CrewReport) => void;
   onDecision?: (decision: CrewDecision, round: number) => void;
@@ -169,6 +172,15 @@ export async function runCrew(deps: CrewDeps): Promise<CrewOutcome> {
       throw error;
     }
     if (deps.shouldStop()) return end('stopped', round - 1, 'Stopped before the agents were commanded');
+    if (deps.minimumCommands && !decision.done) {
+      const commands = [...decision.commands];
+      for (const id of deps.agents) {
+        if (commands.length >= deps.minimumCommands) break;
+        const task = deps.fallbackTasks?.[id];
+        if (task && !commands.some((command) => command.agent === id)) commands.push({ agent: id, task });
+      }
+      if (commands.length) decision = { ...decision, done: false, commands };
+    }
     deps.onDecision?.(decision, round);
     if (decision.done) return end('done', round, decision.summary || 'Goal complete');
     if (!decision.commands.length) return end('stalled', round, decision.summary || 'The main AI assigned no work');

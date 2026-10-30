@@ -93,6 +93,25 @@ describe('runCrew command loop', () => {
     expect(stalled).toMatchObject({ stop: 'stalled', rounds: 1, summary: 'nothing to do' });
   });
 
+  it('fills automatic follow-up rounds to the configured minimum with bounded tasks', async () => {
+    const d = deps({
+      minimumCommands: 2,
+      fallbackTasks: { 'agent-2': 'track changes', 'agent-3': 'summarize the run' },
+      decide: async (_reports, round) => round === 1 ? decision([{ agent: 'agent-1', task: 'find the target' }]) : decision([], true, 'review complete'),
+    });
+    const out = await runCrew(d);
+    expect(out.reports.map((r) => [r.agent, r.task])).toEqual([
+      ['agent-1', 'find the target'],
+      ['agent-2', 'track changes'],
+    ]);
+  });
+
+  it('does not override a completed decision to force idle work', async () => {
+    const d = deps({ minimumCommands: 2, fallbackTasks: { 'agent-1': 'track changes' } });
+    const out = await runCrew(d);
+    expect(out).toMatchObject({ stop: 'done', reports: [] });
+  });
+
   it('stop plan mid-round parks every agent and asks the AI nothing more', async () => {
     let stop = false;
     const decide = vi.fn(async () => decision([{ agent: 'agent-1', task: 'find A' }, { agent: 'agent-4', task: 'find D' }]));

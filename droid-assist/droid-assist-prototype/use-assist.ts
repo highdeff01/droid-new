@@ -145,7 +145,8 @@ import { DEFAULT_OPERATION_RETRIES } from './operation-retry.js';
 import { DEFAULT_PLAYBACK_WINDOW_SEC } from './playback.js';
 import { CREW_AGENTS, createScreenLock, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
 import { runLiveDrag, type DragIntervention, type LiveDragResult, type SwarmAgent } from './drag-swarm.js';
-import { OPS_AGENTS, OPS_SYSTEM, addEvidence, addOpsReport, changeKey, changeLine, dedupeLog, enabledOps, loopReport, mapDelta, markEvidence, monitorChange, opsAgent, opsFor, parseOpsTarget, patchOpsAgent, shouldReport, tagLog, type MonitorChange, type OpsAgentId, type OpsState, type TestCandidate } from './operations.js';
+import { AUTO_OPS_SYSTEM, OPS_AGENTS, OPS_SYSTEM, addEvidence, addOpsReport, changeKey, changeLine, dedupeLog, enabledOps, loopReport, mapDelta, markEvidence, monitorChange, opsAgent, opsFor, parseOpsTarget, patchOpsAgent, shouldReport, tagLog, type MonitorChange, type OpsAgentId, type OpsState, type TestCandidate } from './operations.js';
+import { AUTO_OPS_INTERVAL_MS, automaticOpsPlan, type AutomaticOpsPlan } from './agent-autopilot.js';
 import { createOpsWorkers, type Applied, type OpsWorkResult } from './ops-workers.js';
 import { placeWindow } from './window-placement.js';
 import { AI_RECHECK_MS, BREAKER_IDLE, PAUSE_POLL_MS, conflictDetails, dispatchKey, gateStep, modePauseText, pauseReason, strike, type Breaker, type GateBlock } from './dispatch-gate.js';
@@ -731,6 +732,8 @@ export function useAssist() {
   const screenLockRef = useRef(createScreenLock());
   const opsRef = useRef(ops);
   const opsRunningRef = useRef(false);
+  const lastAutoOpsAtRef = useRef(0);
+  const autoOpsTickRef = useRef<(immediate?: boolean) => void>(() => undefined);
   /** The Monitor agent's last seen change, last reported change, and the element-map names it last saw. */
   const opsChangeRef = useRef<MonitorChange | null>(null);
   const opsReportedRef = useRef<{ key: string; time: number } | null>(null);
@@ -4459,7 +4462,10 @@ export function useAssist() {
     const stopped = abortRef.current || (!dryRun && budget.used >= budget.limit && ok < ran.length);
     await learnFromRun(ran, { dryRun, stopped });
     await superviseRun();
-    if (!stopped) await autoSideTests();
+    if (!stopped) {
+      await autoSideTests();
+      if (!selfTest) autoOpsTickRef.current(true);
+    }
     return { ok, total: ran.length, dryRun, stopped };
   };
 
@@ -5001,7 +5007,7 @@ export function useAssist() {
    * assign → work → report → wait — until done, stalled, Max iterations rounds, or Stop plan / abort.
    * "/ops <agent>: <task>" commands one agent directly.
    */
-  const runOps = async (text: string) => {
+  const runOps = async (text: string, automatic?: AutomaticOpsPlan) => {
     if (abortedRef.current) return addLog('Operations', refusedWhileAborted('Operations'), 'error');
     if (opsRunningRef.current) return addLog('Operations', 'An Operations run is already going', 'warn');
     const target = parseOpsTarget(text);
@@ -5011,7 +5017,7 @@ export function useAssist() {
     setOpsRunning(true);
     try {
       if ('agent' in target) await workOps(target.agent, target.task);
-      else await delegateOps(target.goal);
+      else await delegateOps(target.goal, automatic);
     } finally {
       opsRunningRef.current = false;
       setOpsRunning(false);
@@ -5019,8 +5025,8 @@ export function useAssist() {
   };
 
   /** The main AI's command loop over the enabled Operations agents. */
-  const delegateOps = async (goalText: string) => {
-    const roster = enabledOps(settingsRef.current.stages);
+  const delegateOps = async (goalText: string, automatic?: AutomaticOpsPlan) => {
+    const roster = automatic?.agents ?? enabledOps(settingsRef.current.stages);
     if (!stageOn('planner') || !roster.length) return addLog('Operations', `${stageOn('planner') ? 'Every Operations agent is unchecked in Loop control' : stageOff('planner')} — no Operations run`, 'warn');
     operationRef.current = goalText;
     addLog('Operations', `Main AI delegates "${goalText}" to ${roster.length} Operations agent(s)${armedRef.current ? '' : ' (real input disarmed: dry run)'}`, 'info');
@@ -5028,9 +5034,14 @@ export function useAssist() {
       await withAi(async () => {
         const out = await runCrew({
           agents: roster,
-          maxRounds: settingsRef.current.maxIterations,
-          decide: (reports, round) => thought(`Operations round ${round}: ${goalText}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, goalText, opsRef.current.agents.filter((a) => roster.includes(a.id as OpsAgentId)), reports, OPS_SYSTEM), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
-          work: async (c) => ({ agent: c.agent, task: c.task, ...(await opsWorker(c.agent as OpsAgentId, c.task)) }),
+          maxRounds: automatic ? 2 : settingsRef.current.maxIterations,
+          minimumCommands: automatic?.minimumCommands,
+          fallbackTasks: automatic?.fallbackTasks,
+          decide: (reports, round) => thought(`Operations round ${round}: ${goalText}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? (sourceRef.current === 'demo' ? demoSnapshot() : null), goalText, opsRef.current.agents.filter((a) => roster.includes(a.id as OpsAgentId)), reports, automatic ? AUTO_OPS_SYSTEM : OPS_SYSTEM), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
+          work: async (c) => {
+            const task = automatic && c.agent === 'testing' && !/\bbackground-only\b/i.test(c.task) ? `Background-only ${c.task}` : automatic && c.agent === 'loopControl' ? 'Report current stage states without changing any stage' : c.task;
+            return { agent: c.agent, task: c.task, ...(await opsWorker(c.agent as OpsAgentId, task)) };
+          },
           shouldStop: opsStopped,
           onAgents: (agents) => updateOps((s) => ({ ...s, agents: s.agents.map((a) => agents.find((x) => x.id === a.id) ?? a) })),
           onReport: (r) => recordOpsReport(r.agent as OpsAgentId, r.task, r),
@@ -5046,6 +5057,27 @@ export function useAssist() {
       operationRef.current = null;
     }
   };
+
+  const autoOpsTick = (immediate = false) => {
+    const now = Date.now();
+    if (!immediate && now - lastAutoOpsAtRef.current < AUTO_OPS_INTERVAL_MS) return;
+    if (opsRunningRef.current || crewRunningRef.current || executorBusy() || subRunningRef.current || abortRef.current || abortedRef.current || !aiOnline() || !stageOn('planner') || pausedWhileHidden() || !captureLive()) return;
+    const plan = automaticOpsPlan(enabledOps(settingsRef.current.stages), {
+      goal: goalRef.current,
+      hasFrame: !!framesRef.current[0] || (sourceRef.current === 'demo' && !!demoSnapshot()),
+      candidate: testCandidates()[0]?.name ?? null,
+      hasApplied: !!opsAppliedRef.current?.out.executed && opsAppliedRef.current.ok === null,
+    });
+    if (!plan) return;
+    lastAutoOpsAtRef.current = now;
+    void runOps(`Review the active screen session and recent work${goalRef.current.trim() ? ` for "${goalRef.current.trim()}"` : ''}`, plan);
+  };
+  autoOpsTickRef.current = autoOpsTick;
+
+  useEffect(() => {
+    const id = setInterval(() => autoOpsTickRef.current(), AUTO_OPS_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, []);
 
   /**
    * Monitor agent, on every new frame: a material change (DEFAULT_CHANGE_CELLS cells) is recorded and,

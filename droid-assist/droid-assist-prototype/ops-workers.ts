@@ -193,6 +193,7 @@ export function createOpsWorkers(deps: OpsDeps) {
     const point = { x: hit.step.x, y: hit.step.y };
     const bg = await deps.test(hit.step, hit.proposalId, true);
     if (!bg.ok) return fail(`background test of "${hit.step.target}" failed: ${bg.message}`, point);
+    if (/\bbackground-only\b/i.test(task)) return ok(`background test of "${hit.step.target}" passed: ${bg.message} (background-only; no input dispatched)`, point);
     if (!deps.armed()) return ok(`background test of "${hit.step.target}" passed: ${bg.message} (real input disarmed — no foreground test)`, point);
     const fg = await deps.test({ ...hit.step, id: `${hit.step.id}-fg` }, hit.proposalId, false);
     return { ok: fg.ok, found: `background test passed; foreground test of "${hit.step.target}" ${fg.ok ? 'passed' : 'failed'}: ${fg.message}`, point };
