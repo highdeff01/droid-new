@@ -71,14 +71,16 @@ export function captureConsole(target: CaptureTarget, onLog: (level: ConsoleLeve
     original[level].apply(target.console, args);
     onLog(level, consoleText(args));
   };
-  target.console.error = wrap('error');
-  target.console.warn = wrap('warn');
+  const wrapped = { error: wrap('error'), warn: wrap('warn') };
+  target.console.error = wrapped.error;
+  target.console.warn = wrapped.warn;
   const onEvent = (e: Event) => onLog('error', eventText(e));
   target.addEventListener('error', onEvent);
   target.addEventListener('unhandledrejection', onEvent);
   return () => {
-    target.console.error = original.error;
-    target.console.warn = original.warn;
+    // Only undo our own wrapper: something that replaced it since (a test spy) keeps its place.
+    if (target.console.error === wrapped.error) target.console.error = original.error;
+    if (target.console.warn === wrapped.warn) target.console.warn = original.warn;
     target.removeEventListener('error', onEvent);
     target.removeEventListener('unhandledrejection', onEvent);
   };
