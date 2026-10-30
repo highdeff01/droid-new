@@ -6,7 +6,7 @@ import type { HabitOutcome } from './habits.js';
 import { sameElement, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
 import { newPattern } from './flow-memory.js';
 import { uid } from './planner.js';
-import { detectDisagreements, openDisagreements, reporterName, resolveDisagreement, settleByTests, toResolution, winningReport, type Disagreement, type Report, type Resolution, type ResolutionVia, type Ruling } from './resolution-center.js';
+import { VIA_TEXT, arbiterResolution, detectDisagreements, openDisagreements, reporterName, resolveDisagreement, settleByTests, toResolution, winningReport, type Disagreement, type Report, type Resolution, type ResolutionVia, type Ruling } from './resolution-center.js';
 import { RECOVERY_OPS, appRecoverSteps, decide, enqueue, hardTrack, maintenanceSteps, reconnectWithBackoff, rechatSteps, scaffoldApp, splitArg, type Approval, type OpResult, type RecoveryOpKind, type ScaffoldFile } from './recovery-ops.js';
 
 /** Log source of every resolution and recovery line. */
@@ -132,7 +132,7 @@ export function useResolution(deps: ResolutionDeps) {
     const res = toResolution(d, via, winner, ruling);
     resolutionsRef.current = cap([res, ...resolutionsRef.current]);
     setResolutions(resolutionsRef.current);
-    deps2.addLog(RESOLUTION_SOURCE, `${via === 'unresolved' ? 'Unresolved' : `Resolved by ${via === 'ai' ? 'AI ruling' : 'test'}`}: ${res.brief}`, winner ? 'ok' : 'warn');
+    deps2.addLog(RESOLUTION_SOURCE, `${VIA_TEXT[via]}: ${res.brief}`, winner ? 'ok' : 'warn');
     deps2.addPatterns([newPattern(winner ? 'add' : 'avoid', winner ? res.brief : `trusting a disputed position of "${d.element}"`, deps2.goal())]);
     deps2.recordHabit({ target: d.element, context: deps2.context(), success: !!winner, add: winner ? res.brief : null });
     return res;
@@ -285,8 +285,17 @@ export function useResolution(deps: ResolutionDeps) {
     return null;
   };
 
+  /** Records droid-new's arbiter verdict on a step the two apps' agents disputed. */
+  const arbitrate = (step: string, brief: string, complete: boolean): Resolution => {
+    const res = arbiterResolution(step, brief);
+    resolutionsRef.current = cap([res, ...resolutionsRef.current]);
+    setResolutions(resolutionsRef.current);
+    depsRef.current.addLog(RESOLUTION_SOURCE, `${VIA_TEXT.arbiter}: ${brief}`, complete ? 'ok' : 'warn');
+    return res;
+  };
+
   return {
-    disagreements, resolutions, resolving, resolveAll, approvals, ops, scaffolds, runOp,
+    disagreements, resolutions, resolving, resolveAll, arbitrate, approvals, ops, scaffolds, runOp,
     approve: (id: string) => decideApproval(id, true),
     reject: (id: string) => decideApproval(id, false),
   };
