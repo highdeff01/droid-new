@@ -75,6 +75,65 @@ export interface InterceptNoticePayload {
   note?: string;
 }
 
+/** The two apps of a takeover: droid-new (this app, the boss) and droid-main. */
+export type TakeoverSide = 'droid-new' | 'droid-main';
+
+/**
+ * A step handed to droid-main with its full context, so it continues the run rather than restarting:
+ * the goal, the step and every step after it, screenshots, what was tried and why it failed.
+ */
+export interface TakeoverRequestPayload {
+  runId: string;
+  goal: string;
+  /** 0-based index of the handed-over step; droid-main resumes here. */
+  stepIndex: number;
+  step: RunScriptPayload;
+  /** The handed-over step and every step after it, in order. */
+  remaining: RunScriptPayload[];
+  /** JPEG data URLs, oldest first: the latest screens of the step. */
+  screenshots: string[];
+  /** One line per attempt made on the step. */
+  tried: string[];
+  reason: string;
+  /** The handoff in words, for droid-main's AI. */
+  note: string;
+}
+
+/** Per-step report of droid-new's verification, for droid-main's Assist page and its AI. */
+export interface StepReportPayload {
+  runId: string;
+  stepIndex: number;
+  name: string;
+  verified: boolean;
+  message: string;
+}
+
+/** One side's agents' verdict on a step: the background agent-to-agent exchange of every step. */
+export interface AgentVotePayload {
+  runId: string;
+  stepIndex: number;
+  side: TakeoverSide;
+  agree: boolean;
+  /** The agents that voted. */
+  agents: string[];
+  note: string;
+}
+
+/** droid-main detected a step incomplete and takes it over. */
+export interface TakeoverClaimPayload {
+  runId: string;
+  stepIndex: number;
+  reason: string;
+}
+
+/** How droid-main's takeover of a step ended. */
+export interface TakeoverResultPayload {
+  runId: string;
+  stepIndex: number;
+  ok: boolean;
+  message: string;
+}
+
 /** v2: the main app asks droid-new to analyze its screen (an optional question about it). */
 export interface AnalyzePayload {
   question?: string;
@@ -196,6 +255,9 @@ export interface InboundPayloads extends RequestPayloads, PeerPayloads {
   frame: FramePayload;
   intercept: InterceptPayload;
   result: ResultPayload;
+  takeover_claim: TakeoverClaimPayload;
+  takeover_result: TakeoverResultPayload;
+  agent_vote: AgentVotePayload;
 }
 
 /** Payload of every command the assist engine sends. */
@@ -205,6 +267,9 @@ export interface OutboundPayloads extends PeerPayloads {
   report_state: ReportStatePayload;
   request_frame: RequestFramePayload;
   intercept_notice: InterceptNoticePayload;
+  takeover_request: TakeoverRequestPayload;
+  step_report: StepReportPayload;
+  agent_vote: AgentVotePayload;
   result: ResultPayload;
 }
 
@@ -254,12 +319,18 @@ const INTERCEPT_CHECKS: Record<InterceptKind, (p: Record<string, unknown>) => st
   test_requested: (p) => (typeof p.test === 'string' && p.test.trim() ? null : 'test_requested needs a test spec'),
 };
 
+/** Why a takeover payload's run/step reference is invalid; null when valid. */
+const stepRef = (type: string, p: Record<string, unknown>) => (typeof p.runId === 'string' && isNum(p.stepIndex) && p.stepIndex >= 0 ? null : `${type} needs runId and stepIndex`);
+
 /** Why an inbound payload is invalid, per type; null when valid. */
 const INBOUND_CHECKS: Record<InboundType, (p: Record<string, unknown>) => string | null> = {
   hello: (p) => (typeof p.app === 'string' ? null : 'hello needs an app name'),
   frame: (p) => (typeof p.image === 'string' && p.image.startsWith('data:image/jpeg') ? (isNum(p.width) && isNum(p.height) ? null : 'frame needs width and height') : 'frame image must be a data:image/jpeg URL'),
   intercept: (p) => (INTERCEPT_KINDS.includes(p.kind as InterceptKind) && typeof p.message === 'string' ? INTERCEPT_CHECKS[p.kind as InterceptKind](p) : `unknown intercept kind "${String(p.kind)}"`),
   result: (p) => (typeof p.ok === 'boolean' && typeof p.message === 'string' ? null : 'result needs ok and message'),
+  takeover_claim: (p) => stepRef('takeover_claim', p) ?? (typeof p.reason === 'string' ? null : 'takeover_claim needs a reason'),
+  takeover_result: (p) => stepRef('takeover_result', p) ?? (typeof p.ok === 'boolean' && typeof p.message === 'string' ? null : 'takeover_result needs ok and message'),
+  agent_vote: (p) => stepRef('agent_vote', p) ?? (p.side === 'droid-main' && typeof p.agree === 'boolean' ? null : 'agent_vote needs side "droid-main" and agree'),
   analyze: (p) => (optString(p.question) ? null : 'analyze question must be text'),
   plan_workflow: (p) => (isText(p.goal) ? null : 'plan_workflow needs a goal'),
   run_workflow: (p) => (optString(p.goal) && (p.selfTest === undefined || typeof p.selfTest === 'boolean') ? null : 'run_workflow goal must be text'),
