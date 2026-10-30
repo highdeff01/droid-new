@@ -36,8 +36,16 @@ export interface Ruling {
   thinking: string | null;
 }
 
-/** How a disagreement was settled. */
-export type ResolutionVia = 'ai' | 'test' | 'unresolved';
+/** How a disagreement was settled: AI ruling, test, droid-new's arbiter verdict on a disputed step, or not at all. */
+export type ResolutionVia = 'ai' | 'test' | 'arbiter' | 'unresolved';
+
+/** The log wording of each way a disagreement was settled. */
+export const VIA_TEXT: Readonly<Record<ResolutionVia, string>> = {
+  ai: 'Resolved by AI ruling',
+  test: 'Resolved by test',
+  arbiter: 'Resolved by droid-new (arbiter)',
+  unresolved: 'Unresolved',
+};
 
 /** A finished resolution, as listed in the panel. */
 export interface Resolution {
@@ -143,6 +151,11 @@ export function resolutionBrief(d: Disagreement, winner: Report | null, ruling: 
 /** The resolution record of a settled (or unsettled) disagreement. */
 export function toResolution(d: Disagreement, via: ResolutionVia, winner: Report | null, ruling: Ruling | null, now = Date.now()): Resolution {
   return { id: uid('res'), time: now, element: d.element, via, winner, brief: resolutionBrief(d, winner, ruling) };
+}
+
+/** Droid-new's arbiter verdict on a step both apps' agents disputed: its verification is the brief. */
+export function arbiterResolution(step: string, brief: string, now = Date.now()): Resolution {
+  return { id: uid('res'), time: now, element: step, via: 'arbiter', winner: null, brief };
 }
 
 /** The ruling's winning report; null when it named none. */

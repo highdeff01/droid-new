@@ -90,6 +90,7 @@ import { findScenario, progressLines, scenarioComplete } from './test-world-scen
 import { MAX_DISCOVERY, OBJECTIVE_TONE, chainReport, discoverTarget, isChainGoal, locateTarget, objectiveLine, planChain, type ChainObjective, type ChainPlan, type ChainRun, type DiscoveryMove } from './chain.js';
 import { applyReach, currentPath, deletePath, editPath, isHopAction, learnPaths, parseHops, pathLine, pathOutcome, pathSteps, reachTarget, relevantPaths, runPath, usablePath, type AccessProfile, type Reach } from './access-paths.js';
 import { useResolution } from './use-resolution.js';
+import { useBridgeV2 } from './use-bridge-v2.js';
 import { AUTO_RETRY_LABEL, AUTO_RETRY_TICK_MS, countAttempts, retryDue, retryText, type RetryCounts } from './auto-retry.js';
 import { DISAGREEMENT_THRESHOLD } from './resolution-center.js';
 import { dropGoal, loadGoals, projectId, queueGoal, saveGoals, settleGoal, startGoal, type GoalRecord } from './goal-objectives.js';
@@ -5798,6 +5799,75 @@ export function useAssist() {
     connect: () => connectBridge(),
   });
 
+  /** Protocol v2 with droid-main: requests into the machinery, user requests both ways, takeover, regulation, browser logs and the swarm. */
+  const bridgeV2 = useBridgeV2({
+    bridge: () => mainBridgeRef.current,
+    connected: mainBridge.status === 'connected',
+    steps,
+    running: replaying,
+    activeIndex,
+    armed,
+    aiOnline,
+    crewSize: settings.crewSize,
+    knownElements,
+    bus,
+    goal: () => goalRef.current,
+    recentLog: () => logRef.current,
+    addLog,
+    forwardElement,
+    machinery: {
+      analyze: async (question) => {
+        const answer = await askScreen(question || undefined);
+        return answer ? { ok: true, message: answer } : { ok: false, message: 'No analysis — no frame, the screen watcher is off or the AI is unavailable' };
+      },
+      plan: async (planGoal) => {
+        const ok = await autoPlan(planGoal);
+        return { ok, message: ok ? `Planned ${stepsRef.current.length} step(s): ${stepsText(stepsRef.current)}` : `No plan made for "${planGoal}"` };
+      },
+      run: async (runGoal, selfTest) => {
+        if (runGoal && !(await autoPlan(runGoal))) return { ok: false, message: `No plan made for "${runGoal}" — nothing run` };
+        if (!stepsRef.current.length) return { ok: false, message: 'No plan to run' };
+        await replay(selfTest);
+        const ran = stepsRef.current;
+        const ok = ran.every((s) => s.status === 'done');
+        return { ok, message: `${ran.filter((s) => s.status === 'done').length}/${ran.length} step(s) done` };
+      },
+      verify: async (verifyFor) => {
+        if (!aiOnline()) return { ok: false, message: 'AI offline — cannot verify' };
+        const check = await verifyGoal(askFor('autoContinue'), framesRef.current[0] ?? null, verifyFor ?? runGoalOf(), stepsRef.current);
+        return { ok: check.complete, message: check.reason };
+      },
+      watch: async (on, watchTarget) => {
+        if (watchTarget) setTarget(watchTarget);
+        if (on) startPointOut();
+        else stopPointOut();
+        return { ok: true, message: on ? `Watching${watchTarget ? ` "${watchTarget}"` : ' the screen'}` : 'Stopped watching' };
+      },
+      assistError: async (message, errorGoal) => {
+        captureError({ kind: 'main-app', message, goal: errorGoal ?? goalRef.current });
+        return { ok: true, message: 'Error recorded and forwarded to the agents' };
+      },
+    },
+    regulate: {
+      pause: stopPlan,
+      stop,
+      resume: resumeRun,
+      setArmed: (on) => {
+        if (armedRef.current !== on) toggleArmed();
+      },
+      setMode: (mode) => {
+        if (mode in EXECUTION_MODES) setMode(mode as ExecutionMode, 'regulated by droid-main', 'ai');
+        else addLog('Main app v2', `droid-main asked for unknown execution mode "${mode}" — ignored`, 'warn');
+      },
+    },
+    plan: (text) => autoPlan(text),
+    disputedElements: resolution.disagreements.map((d) => d.element),
+    arbitrate: resolution.arbitrate,
+    act: (element) => testClick({ id: uid('swarm'), name: element.name, x: element.x, y: element.y, source: 'familiar' }),
+  });
+  const bridgeV2Ref = useRef(bridgeV2);
+  bridgeV2Ref.current = bridgeV2;
+
   // Bridge takeover: when a configured bridge answers, frames come from the real desktop unless the user chose the demo.
   useEffect(() => {
     const url = settings.bridgeUrl;
@@ -5874,6 +5944,7 @@ export function useAssist() {
       if (m.type === 'frame') void mainAppRef.current.onMainAppFrame(m.payload);
       else if (m.type === 'intercept') mainAppRef.current.onMainAppIntercept(m.payload);
       else if (m.type === 'hello') addLog('Main app', `Hello from ${m.payload.app}`, 'info');
+      else bridgeV2Ref.current.onMessage(m);
     };
     const onState = (state: MainBridgeState) => {
       setMainBridge(state);
@@ -7130,6 +7201,8 @@ export function useAssist() {
     bridgeOnline, verifyRealInput,
     /** The main Droid app bridge's live state, and selecting its preview as the screen source. */
     mainBridge, selectMainApp,
+    /** Protocol v2 with droid-main: agreements, coordination, request flows, browser logs, the swarm, user requests and regulation. */
+    bridgeV2,
     /** The active capture source, its kind and whether replay/drift are armed for it (HUD). */
     captureSource: captureStatus({ source, kind: captureRef.current?.kind, hasFrame: frames.length > 0, bridgeUrl: settings.bridgeUrl, mainConnected: mainBridge.status === 'connected' }),
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
