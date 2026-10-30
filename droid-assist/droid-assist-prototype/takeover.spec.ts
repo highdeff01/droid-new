@@ -133,6 +133,21 @@ describe('step completion', () => {
 });
 
 describe('detectStalledStep', () => {
+  it('lets droid-main claim a step droid-new settled as failed, and the 10 s timer hand over a failed first step', async () => {
+    vi.useFakeTimers();
+    const h = host();
+    const runId = h.takeover.startRun('open files', steps);
+    h.takeover.stepVerified(0, false, 'no change');
+    h.takeover.newAgentsVote(0, false, ['Verifier'], 'no change');
+    h.takeover.stepVerified(2, false, 'no change');
+    h.takeover.newAgentsVote(2, false, ['Verifier'], 'no change');
+    h.takeover.onInbound(inbound('takeover_claim', { runId, stepIndex: 2, reason: 'stuck' }));
+    await vi.advanceTimersByTimeAsync(FIRST_STEP_MS);
+    vi.useRealTimers();
+    expect(h.sent.filter((m) => m.type === 'takeover_request').map((m) => (m.payload as { stepIndex: number }).stepIndex).sort()).toEqual([0, 2]);
+    expect(h.takeover.takenOver()).not.toBeNull();
+  });
+
   it('flags an unverified step past the limit', () => {
     expect(detectStalledStep(0, FIRST_STEP_MS, false)).toBe(true);
     expect(detectStalledStep(0, FIRST_STEP_MS - 1, false)).toBe(false);

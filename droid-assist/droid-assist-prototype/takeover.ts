@@ -92,6 +92,9 @@ export function createTakeover(deps: TakeoverDeps) {
   const handed = new Set<number>();
   const votes = new Map<number, StepVotes>();
   const settled = new Set<number>();
+  /** The step droid-main accepted: it continues the run from there, so droid-new stops acting. */
+  let accepted: number | null = null;
+  const completed = (index: number) => stepCompletion(votes.get(index) ?? {}, deps.connected()).state === 'complete';
 
   const disarm = () => {
     if (timer) clearTimeout(timer);
@@ -114,9 +117,9 @@ export function createTakeover(deps: TakeoverDeps) {
     return c;
   };
 
-  /** Hands step `index` to droid-main with its full context; at most once per step. */
+  /** Hands step `index` to droid-main with its full context; at most once per step, never for a completed step. */
   const handoff = async (index: number, reason: string): Promise<boolean> => {
-    if (!run || handed.has(index) || settled.has(index) || index >= run.steps.length) return false;
+    if (!run || handed.has(index) || completed(index) || index >= run.steps.length) return false;
     handed.add(index);
     if (index === 0) disarm();
     const payload = handoffPayload(run.id, run.goal, run.steps, index, reason, deps.context(index));
@@ -127,6 +130,7 @@ export function createTakeover(deps: TakeoverDeps) {
     }
     const reply = await deps.send('takeover_request', payload).catch((error: unknown) => ({ ok: false, message: error instanceof Error ? error.message : String(error) }));
     deps.log(`Droid-main ${reply.ok ? 'accepted' : 'refused'} step ${index + 1}: ${reply.message}`, reply.ok ? 'info' : 'error');
+    if (reply.ok && accepted === null) accepted = index;
     return reply.ok;
   };
 
@@ -136,6 +140,7 @@ export function createTakeover(deps: TakeoverDeps) {
     handed.clear();
     votes.clear();
     settled.clear();
+    accepted = null;
     run = { id: `run-${Date.now().toString(36)}-${++runSeq}`, goal, steps };
     if (steps.length) timer = setTimeout(() => void handoff(0, `step 1 not verified complete within ${(deps.firstStepMs ?? FIRST_STEP_MS) / 1000} s`), deps.firstStepMs ?? FIRST_STEP_MS);
     return run.id;
@@ -180,6 +185,8 @@ export function createTakeover(deps: TakeoverDeps) {
     },
     completion: (index: number) => stepCompletion(votes.get(index) ?? {}, deps.connected()),
     handedOver: (index: number) => handed.has(index),
+    /** The step droid-main accepted and continues from; null while droid-new keeps the run. */
+    takenOver: () => accepted,
     runId: () => run?.id ?? null,
   };
 }

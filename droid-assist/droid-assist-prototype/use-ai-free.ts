@@ -121,15 +121,17 @@ export function useAiFree(deps: AiFreeHookDeps) {
     takeover.newAgentsVote(i, out.ok, NEW_AGENTS, out.ok ? 'screen verified the step' : `step not verified: ${out.message}`);
   };
 
-  /** Runs `steps` AI-free, one step at a time, tracing every action and reporting it to the takeover controller. */
+  /** Runs `steps` AI-free, one step at a time, tracing every action and reporting it to the takeover controller; stops once droid-main has taken the run over. */
   const runSteps = async (route: AiFreeRoute, goal: string, steps: WorkflowStep[]) => {
-    const host: AiFreeDeps = { ...pipeline(route), consultAi: (step, why) => depsRef.current.replan(step, why) };
+    const send: SendFn = async (...args) => (takeover.takenOver() === null ? route.send(...args) : { ok: false, message: 'droid-main took the step over — droid-new does not dispatch it' });
+    const host: AiFreeDeps = { ...pipeline({ ...route, send }), consultAi: (step, why) => depsRef.current.replan(step, why) };
     let recorded = newTrace(goal);
     let aiCalls = 0;
     triedRef.current = [];
     commitTrace(recorded);
     takeover.startRun(goal, steps);
     for (const [i, step] of steps.entries()) {
+      if (takeover.takenOver() !== null) break;
       const run = await runAiFree([step], host);
       const out = run.results[0];
       aiCalls += run.aiCalls;
@@ -139,7 +141,9 @@ export function useAiFree(deps: AiFreeHookDeps) {
       reportStep(i, out);
       if (!out.ok) await takeover.handoff(i, `droid-new could not verify the step: ${out.message}`);
     }
+    const handedAt = takeover.takenOver();
     takeover.stop();
+    if (handedAt !== null) log(`Droid-main continues \"${goal}\" from step ${handedAt + 1}; droid-new stopped acting`, 'info');
     const ok = recorded.steps.filter((s) => s.verdict === 'verified').length;
     log(`AI-free run of "${goal}": ${ok}/${steps.length} step(s) verified, ${aiCalls} AI call(s)`, ok === steps.length ? 'ok' : 'warn');
   };
