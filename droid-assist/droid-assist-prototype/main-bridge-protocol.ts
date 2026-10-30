@@ -11,8 +11,12 @@ export const EVENTS_PATH = '/api/assist-bridge/events';
 export const COMMANDS_PATH = '/api/assist-bridge/commands';
 
 /** The intercepts the main app raises. */
-export type InterceptKind = 'element_moved' | 'error_occurred' | 'test_requested';
-export const INTERCEPT_KINDS: readonly InterceptKind[] = ['element_moved', 'error_occurred', 'test_requested'];
+export type InterceptKind = 'element_moved' | 'error_occurred' | 'test_requested' | 'console_error';
+export const INTERCEPT_KINDS: readonly InterceptKind[] = ['element_moved', 'error_occurred', 'test_requested', 'console_error'];
+
+/** The two apps of the joint connection: droid-new (this assist app, the arbiter) and droid-main (the main Droid app). */
+export type JointApp = 'droid-new' | 'droid-main';
+export const JOINT_APPS: readonly JointApp[] = ['droid-new', 'droid-main'];
 
 /** A point on the main app's preview, normalized 0..1. */
 export interface WireElement {
@@ -39,6 +43,14 @@ export interface InterceptPayload {
   element?: WireElement;
   /** test_requested: the test spec, one route/link per line (subagents.parseTestSpec). */
   test?: string;
+  /** console_error / error_occurred: the code file the error points at, when known. */
+  file?: string;
+}
+
+/** The main app's current load (0..1) and the joint capabilities it can take on. */
+export interface StatusPayload {
+  load: number;
+  capabilities: string[];
 }
 
 /** The main app's answer to a command (`replyTo` names the command). */
@@ -73,6 +85,25 @@ export interface InterceptNoticePayload {
   from: string;
   element: WireElement;
   note?: string;
+}
+
+/** Which half of a joint operation the receiving app does. */
+export type JointRole = 'calculate' | 'perform';
+
+/** droid-new (arbiter) hands one half of a joint operation to droid-main, with the reasoning of the choice. */
+export interface JointRequestPayload {
+  operation: string;
+  role: JointRole;
+  goal: string;
+  reason: string;
+}
+
+/** An approved code-file fix for droid-main to apply. */
+export interface CodeFixPayload {
+  file: string;
+  problem: string;
+  fix: string;
+  approvalId: string;
 }
 
 /** The two apps of a takeover: droid-new (this app, the boss) and droid-main. */
@@ -255,6 +286,7 @@ export interface InboundPayloads extends RequestPayloads, PeerPayloads {
   frame: FramePayload;
   intercept: InterceptPayload;
   result: ResultPayload;
+  status: StatusPayload;
   takeover_claim: TakeoverClaimPayload;
   takeover_result: TakeoverResultPayload;
   agent_vote: AgentVotePayload;
@@ -267,6 +299,8 @@ export interface OutboundPayloads extends PeerPayloads {
   report_state: ReportStatePayload;
   request_frame: RequestFramePayload;
   intercept_notice: InterceptNoticePayload;
+  joint_request: JointRequestPayload;
+  code_fix: CodeFixPayload;
   takeover_request: TakeoverRequestPayload;
   step_report: StepReportPayload;
   agent_vote: AgentVotePayload;
@@ -313,12 +347,15 @@ const optString = (v: unknown) => v === undefined || typeof v === 'string';
 const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === 'string');
 
 /** Why an intercept payload is invalid, per kind; null when valid. */
-const INTERCEPT_CHECKS: Record<InterceptKind, (p: Record<string, unknown>) => string | null> = {
+const INTERCEPT_CHECKS: Record<InterceptKind, (p: Record<string, unknown> & { message: string }) => string | null> = {
   element_moved: (p) => (isElement(p.element) ? null : 'element_moved needs an element {name, x, y}'),
   error_occurred: () => null,
   test_requested: (p) => (typeof p.test === 'string' && p.test.trim() ? null : 'test_requested needs a test spec'),
+  console_error: (p) => (p.message.trim() ? null : 'console_error needs the console message'),
 };
 
+const isLoad = (v: unknown) => isNum(v) && v >= 0 && v <= 1;
+const isNames = (v: unknown) => Array.isArray(v) && v.every((c) => typeof c === 'string');
 /** Why a takeover payload's run/step reference is invalid; null when valid. */
 const stepRef = (type: string, p: Record<string, unknown>) => (typeof p.runId === 'string' && isNum(p.stepIndex) && p.stepIndex >= 0 ? null : `${type} needs runId and stepIndex`);
 
@@ -326,8 +363,9 @@ const stepRef = (type: string, p: Record<string, unknown>) => (typeof p.runId ==
 const INBOUND_CHECKS: Record<InboundType, (p: Record<string, unknown>) => string | null> = {
   hello: (p) => (typeof p.app === 'string' ? null : 'hello needs an app name'),
   frame: (p) => (typeof p.image === 'string' && p.image.startsWith('data:image/jpeg') ? (isNum(p.width) && isNum(p.height) ? null : 'frame needs width and height') : 'frame image must be a data:image/jpeg URL'),
-  intercept: (p) => (INTERCEPT_KINDS.includes(p.kind as InterceptKind) && typeof p.message === 'string' ? INTERCEPT_CHECKS[p.kind as InterceptKind](p) : `unknown intercept kind "${String(p.kind)}"`),
+  intercept: (p) => (INTERCEPT_KINDS.includes(p.kind as InterceptKind) && typeof p.message === 'string' ? INTERCEPT_CHECKS[p.kind as InterceptKind](p as Record<string, unknown> & { message: string }) : `unknown intercept kind "${String(p.kind)}"`),
   result: (p) => (typeof p.ok === 'boolean' && typeof p.message === 'string' ? null : 'result needs ok and message'),
+  status: (p) => (isLoad(p.load) && isNames(p.capabilities) ? null : 'status needs load 0..1 and a capabilities list'),
   takeover_claim: (p) => stepRef('takeover_claim', p) ?? (typeof p.reason === 'string' ? null : 'takeover_claim needs a reason'),
   takeover_result: (p) => stepRef('takeover_result', p) ?? (typeof p.ok === 'boolean' && typeof p.message === 'string' ? null : 'takeover_result needs ok and message'),
   agent_vote: (p) => stepRef('agent_vote', p) ?? (p.side === 'droid-main' && typeof p.agree === 'boolean' ? null : 'agent_vote needs side "droid-main" and agree'),
