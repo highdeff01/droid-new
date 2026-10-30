@@ -81,6 +81,8 @@ export function AgentCrewPanel({ engine }: { engine: AssistEngine }) {
   const { crewAgents: crew, crewRunning, swarm, liveDragging, stopPlan, interveneDrag } = engine;
   const operations = engine.ops.agents;
   const opsWorking = operations.filter((agent) => agent.status === 'working').length;
+  const [aimX, setAimX] = useState('50');
+  const [aimY, setAimY] = useState('50');
   return (
     <section className={styles.panel} aria-label="Agent crew">
       <h3>Agent crew <small>{crewRunning ? 'running' : 'ready'} · {crew.filter((a) => a.status === 'working').length} delegated · {opsWorking}/{operations.length} operations working</small></h3>
@@ -106,7 +108,22 @@ export function AgentCrewPanel({ engine }: { engine: AssistEngine }) {
       {swarm.length > 0 && (
         <details open={liveDragging}>
           <summary>Live drag swarm <small>{swarm.length} coordinate agents{liveDragging ? ' · dragging' : ''}</small></summary>
-          {liveDragging && <button type="button" onClick={() => interveneDrag(null)}>Release now</button>}
+          {liveDragging && (
+            <>
+              <form className={styles.hud2} aria-label="Steer live drag" onSubmit={(event) => {
+                event.preventDefault();
+                const x = Number(aimX);
+                const y = Number(aimY);
+                if (Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 100 && y >= 0 && y <= 100) interveneDrag({ x: x / 100, y: y / 100 });
+              }}>
+                <label>Re-aim X (%) <input type="number" min="0" max="100" step="1" value={aimX} onChange={(event) => setAimX(event.target.value)} /></label>
+                <label>Y (%) <input type="number" min="0" max="100" step="1" value={aimY} onChange={(event) => setAimY(event.target.value)} /></label>
+                <button type="submit">Re-aim live drag</button>
+                <button type="button" onClick={() => interveneDrag(null)}>Release now</button>
+              </form>
+              <p className={styles.muted}>One shared pointer follows the agent route; re-aiming keeps the drag active, while release safely ends it.</p>
+            </>
+          )}
           <ol className={styles.log}>
             {swarm.map((a) => <li key={a.index}>({(a.point.x * 100).toFixed(1)}%, {(a.point.y * 100).toFixed(1)}%) <small>match {a.match.toFixed(3)}</small></li>)}
           </ol>

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { planSegments, reaim, runLiveDrag, trackWaypoints, SWARM_SIZE, type DragInput, type DragIntervention, type LiveDragDeps } from './drag-swarm.js';
+import { planSegments, planRouteSegments, reaim, runLiveDrag, trackWaypoints, SWARM_SIZE, type DragInput, type DragIntervention, type LiveDragDeps } from './drag-swarm.js';
 import { pointerAction, sendNative } from './bridge.js';
 
 const W = 320;
@@ -82,6 +82,27 @@ describe('trackWaypoints: parallel live correction', () => {
     const out = trackWaypoints(ref, noise(99), planSegments({ x: 0.2, y: 0.3 }, { x: 0.7, y: 0.6 }));
     expect(out.lost).toBe(true);
     expect(out.agents[11].point).toEqual({ x: 0.7, y: 0.6 });
+  });
+});
+
+describe('obstacle-aware routes', () => {
+  it('routes drag waypoints around a detected popup box', () => {
+    const agents = planRouteSegments({ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }, 12, [{ x: 0.4, y: 0.3, w: 0.2, h: 0.4 }]);
+    expect(agents.some((a) => a.point.y <= 0.288 || a.point.y >= 0.712)).toBe(true);
+    for (const a of agents) expect(a.point.x <= 0.388 || a.point.x >= 0.612 || a.point.y <= 0.288 || a.point.y >= 0.712).toBe(true);
+    const dragged = drag({ avoidBoxes: () => [{ x: 0.4, y: 0.3, w: 0.2, h: 0.4 }] });
+    return runLiveDrag(dragged.deps).then((out) => {
+      expect(out.ok).toBe(true);
+      expect(out.path.some((p) => p.y <= 0.288 || p.y >= 0.712)).toBe(true);
+    });
+  });
+
+  it('does not press or continue when the pointer starts inside an avoid region', async () => {
+    const { deps, sent } = drag({ avoidBoxes: () => [{ x: 0.1, y: 0.2, w: 0.2, h: 0.2 }] });
+    const out = await runLiveDrag(deps);
+    expect(out).toMatchObject({ ok: false, pressed: false, halted: true });
+    expect(out.message).toMatch(/no input dispatched/);
+    expect(sent).toEqual([]);
   });
 });
 

@@ -2331,6 +2331,10 @@ export function useAssist() {
         start, end, send,
         ref: step.refFrame?.data ?? before.data,
         drift: driftThresholds(),
+        avoidBoxes: () => {
+          const popup = popupRef.current;
+          return popup ? [{ x: popup.x, y: popup.y, w: popup.w, h: popup.h }] : [];
+        },
         live: () => framesRef.current[0]?.data ?? null,
         halt: liveDragHalt,
         intervention: () => {

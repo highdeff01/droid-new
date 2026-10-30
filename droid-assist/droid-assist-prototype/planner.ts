@@ -64,7 +64,7 @@ const ACTION_LIST = STEP_ACTIONS.map((a) => `"${a}"`).join('|');
 
 /** System prompt for the planner, for a `view`-sized screenshot: the reply contract the model must follow. */
 export const planSystem = (view: ViewSize) => `You are Droid Assist, an agent that controls a computer screen. You see a screenshot (${view.w}x${view.h}) of the user's screen.
-Plan the concrete steps that achieve the user's goal on THIS screen. Look at the screenshot and target real visible controls.
+Plan the concrete steps that achieve the user's goal on THIS screen. Look at the screenshot and target real visible controls. Treat unrelated popups, dialogs and overlays as avoid regions: do not click or dismiss them unless the goal requires it or they block the requested target; prefer a clear route around them. Re-check target location against the latest frame before acting and report measured drift instead of repeating stale coordinates.
 ${gridPrompt(view)}
 Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"cell":string,"cx":number,"cy":number,"text"?:string,"endTarget"?:string,"endCell"?:string,"endCx"?:number,"endCy"?:number,"endX"?:number,"endY"?:number}],"expect"?:[{"element":string,"relation":"below"|"above"|"left_of"|"right_of","anchor":string}]}
 "cell","cx","cy" locate the target's center on the grid. "target" names the on-screen thing the step points at (e.g. "Files icon in the taskbar").

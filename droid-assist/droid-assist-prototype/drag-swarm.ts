@@ -8,6 +8,7 @@ import { DEFAULT_DRIFT, matchTemplate, type DriftThresholds } from './drift.js';
  */
 
 type Point = { x: number; y: number };
+export interface AvoidBox { x: number; y: number; w: number; h: number }
 
 /** Coordinate agents per drag (one per segment). */
 export const SWARM_SIZE = 12;
@@ -27,14 +28,69 @@ export interface SwarmAgent {
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 const lerp = (a: Point, b: Point, t: number): Point => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+
+function routeAround(start: Point, end: Point, boxes: readonly AvoidBox[]): Point[] | null {
+  const obstacles = boxes.map((b) => ({
+    left: clamp01(b.x - 0.012), top: clamp01(b.y - 0.012),
+    right: clamp01(b.x + b.w + 0.012), bottom: clamp01(b.y + b.h + 0.012),
+  })).filter((b) => b.right > b.left && b.bottom > b.top);
+  const inside = (p: Point, b: (typeof obstacles)[number]) => p.x > b.left && p.x < b.right && p.y > b.top && p.y < b.bottom;
+  if (!obstacles.length) return [start, end];
+  if (obstacles.some((b) => inside(start, b))) return null;
+  if (obstacles.some((b) => inside(end, b))) return [start, end];
+  const clear = (a: Point, b: Point) => {
+    const steps = Math.ceil(distance(a, b) / 0.005);
+    return obstacles.every((box) => Array.from({ length: Math.max(1, steps - 1) }, (_, i) => lerp(a, b, (i + 1) / steps)).every((p) => !inside(p, box)));
+  };
+  const nodes = [start, end, ...obstacles.flatMap((b) => [
+    { x: b.left, y: b.top }, { x: b.left, y: b.bottom }, { x: b.right, y: b.top }, { x: b.right, y: b.bottom },
+  ])];
+  const costs = nodes.map(() => Infinity);
+  const previous = nodes.map(() => -1);
+  const visited = new Set<number>();
+  costs[0] = 0;
+  while (visited.size < nodes.length) {
+    let at = -1;
+    for (let i = 0; i < nodes.length; i++) if (!visited.has(i) && (at < 0 || costs[i] < costs[at])) at = i;
+    if (at < 0 || !Number.isFinite(costs[at]) || at === 1) break;
+    visited.add(at);
+    for (let i = 0; i < nodes.length; i++) {
+      if (visited.has(i) || i === at || !clear(nodes[at], nodes[i])) continue;
+      const cost = costs[at] + distance(nodes[at], nodes[i]);
+      if (cost < costs[i]) { costs[i] = cost; previous[i] = at; }
+    }
+  }
+  if (!Number.isFinite(costs[1])) return null;
+  const route: Point[] = [];
+  for (let i = 1; i >= 0; i = previous[i]) {
+    route.unshift(nodes[i]);
+    if (i === 0) break;
+  }
+  return route;
+}
+
+/** Splits a path through each agent's own waypoint, routing around known bounding boxes. */
+export function planRouteSegments(start: Point, end: Point, n = SWARM_SIZE, avoid: readonly AvoidBox[] = []): SwarmAgent[] {
+  const route = routeAround(start, end, avoid);
+  if (!route) return [];
+  const lengths = route.slice(1).map((p, i) => distance(route[i], p));
+  const total = lengths.reduce((sum, value) => sum + value, 0);
+  return Array.from({ length: n }, (_, i) => {
+    const t = (i + 1) / n;
+    let remaining = total * t;
+    let p = t === 1 ? end : route[route.length - 1];
+    for (let j = 0; t < 1 && j < lengths.length; j++) {
+      if (remaining <= lengths[j] || j === lengths.length - 1) { p = lerp(route[j], route[j + 1], lengths[j] ? Math.min(1, remaining / lengths[j]) : 1); break; }
+      remaining -= lengths[j];
+    }
+    return { index: i, t, planned: p, point: p, match: 0 };
+  });
+}
 
 /** Splits the path start → end into `n` agents, each owning the waypoint at the end of its segment. */
 export function planSegments(start: Point, end: Point, n = SWARM_SIZE): SwarmAgent[] {
-  return Array.from({ length: n }, (_, i) => {
-    const t = (i + 1) / n;
-    const p = lerp(start, end, t);
-    return { index: i, t, planned: p, point: p, match: 0 };
-  });
+  return planRouteSegments(start, end, n);
 }
 
 /** One agent's region re-matched on the live frame: its own correction when found, else null. */
@@ -59,13 +115,10 @@ export function trackWaypoints(ref: ImageData, live: ImageData, agents: SwarmAge
 }
 
 /** Re-plans the agents still ahead of `done` from `from` to a new drop point (an intervention or the AI's relocation). */
-export function reaim(agents: SwarmAgent[], done: number, from: Point, end: Point): SwarmAgent[] {
-  const ahead = agents.length - done;
-  return agents.map((a, i) => {
-    if (i < done) return a;
-    const p = lerp(from, end, (i - done + 1) / ahead);
-    return { ...a, planned: p, point: p };
-  });
+export function reaim(agents: SwarmAgent[], done: number, from: Point, end: Point, avoid: readonly AvoidBox[] = []): SwarmAgent[] {
+  const route = planRouteSegments(from, end, agents.length - done, avoid);
+  if (!route.length) return [];
+  return agents.map((a, i) => i < done ? a : { ...a, planned: route[i - done].planned, point: route[i - done].point });
 }
 
 /** A press, a segment move or a release at a normalized point. */
@@ -82,6 +135,8 @@ export interface LiveDragDeps {
   ref: ImageData | null;
   agents?: number;
   drift?: DriftThresholds;
+  /** Current screen regions the pointer should avoid unless they contain the requested endpoint. */
+  avoidBoxes?: () => AvoidBox[];
   /** Sends one input at a normalized point; resolves whether the PC performed it. */
   send: (input: DragInput, p: Point) => Promise<{ ok: boolean; message: string }>;
   /** The newest live frame (drift buffer), or null when none is available. */
@@ -132,7 +187,7 @@ function intervene(deps: LiveDragDeps, run: DragRun, i: number): 'release' | nul
   const ask = deps.intervention();
   if (!ask) return null;
   if (ask.kind === 'release') return 'release';
-  run.agents = reaim(run.agents, i, run.path[run.path.length - 1], ask.point);
+  run.agents = reaim(run.agents, i, run.path[run.path.length - 1], ask.point, deps.avoidBoxes?.() ?? []);
   deps.log?.(`User re-aimed the drop point to ${at(ask.point)}`);
   return null;
 }
@@ -158,14 +213,22 @@ async function track(deps: LiveDragDeps, run: DragRun, i: number) {
  * drop point. Any halt, release request or failed move releases the button where the pointer is.
  */
 export async function runLiveDrag(deps: LiveDragDeps): Promise<LiveDragResult> {
-  const run: DragRun = { agents: planSegments(deps.start, deps.end, deps.agents ?? SWARM_SIZE), path: [deps.start], asked: false };
+  const run: DragRun = { agents: planRouteSegments(deps.start, deps.end, deps.agents ?? SWARM_SIZE, deps.avoidBoxes?.() ?? []), path: [deps.start], asked: false };
+  if (!run.agents.length) return { ok: false, pressed: false, halted: true, message: 'No safe drag route around the detected screen region — no input dispatched', path: run.path, releasedAt: deps.start };
   const down = await deps.send('mouse_down', deps.start);
   if (!down.ok) return { ok: false, pressed: false, halted: true, message: `Press failed: ${down.message}`, path: run.path, releasedAt: deps.start };
   for (let i = 0; i < run.agents.length; i++) {
     const reason = deps.halt();
     if (reason) return release(deps, run, false, true, `${reason} — released after ${i} of ${run.agents.length} segment(s)`);
     if (intervene(deps, run, i) === 'release') return release(deps, run, false, true, `Released by the user after ${i} of ${run.agents.length} segment(s)`);
+    if (!run.agents.length) return release(deps, run, false, true, 'No safe route to the re-aimed target — released without continuing');
     await track(deps, run, i);
+    const avoid = deps.avoidBoxes?.() ?? [];
+    if (avoid.length) {
+      const destination = run.agents[run.agents.length - 1].point;
+      run.agents = reaim(run.agents, i, run.path[run.path.length - 1], destination, avoid);
+      if (!run.agents.length) return release(deps, run, false, true, 'No safe route around the detected screen region — released without continuing');
+    }
     deps.onAgents?.(run.agents);
     const next = run.agents[i].point;
     const moved = await deps.send('move', next);
