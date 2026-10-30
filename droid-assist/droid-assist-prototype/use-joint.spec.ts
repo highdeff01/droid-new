@@ -122,6 +122,15 @@ describe('joint run', () => {
     expect(performed?.app).toBe('droid-main');
   });
 
+  it('never confirms the goal from a stale droid-main mirror frame', async () => {
+    const { engine, deps } = setup({ verify: vi.fn(async () => ({ ok: true, reason: 'mirror says done' })) }, false);
+    engine.onFrame(frame(1, 'data:image/jpeg;base64,old-mirror'));
+    engine.onStatus({ load: 0, capabilities: [JOINT_CAPABILITY] });
+    await engine.run('save file');
+    expect(vi.mocked(deps.verify).mock.calls.some(([, f]) => f?.url === 'data:image/jpeg;base64,old-mirror')).toBe(false);
+    expect(vi.mocked(deps.addLog).mock.calls.some(([, m]) => m.includes('not complete'))).toBe(true);
+  });
+
   it('never chooses a disconnected droid-main, even when it has the capability', async () => {
     const { engine, deps } = setup({ busy: () => false }, false);
     const local = vi.mocked(deps.local);

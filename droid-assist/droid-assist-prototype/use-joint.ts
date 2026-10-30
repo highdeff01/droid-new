@@ -12,7 +12,7 @@ import { ARBITER, decisionText, selectApps, type AppDecision, type AppProfile, t
 import type { CheckResult } from './follow-up.js';
 import type { FixContext } from './fix-script.js';
 import { DIAGNOSED_KINDS, codeFixPayload, diagnose, type JointError } from './joint-errors.js';
-import { continueJoint, verifyJoint, type AppSnapshot, type JointAction, type JointTurn } from './joint-followup.js';
+import { continueJoint, isStale, verifyJoint, type AppSnapshot, type JointAction, type JointTurn } from './joint-followup.js';
 import { appTally, jointDraft, recallLines } from './joint-memory.js';
 import type { MainBridge } from './main-bridge.js';
 import type { JointApp, JointRole, ResultPayload, StatusPayload } from './main-bridge-protocol.js';
@@ -191,10 +191,11 @@ export function createJointEngine(get: () => JointDeps) {
     await doHalf(d, 'perform', `${action.expect} — retry ${pass} after: ${reason}`, `alternative attempt after: ${reason}`);
   };
 
-  /** The goal-completion check on the target app's fresh state. */
-  const checkOf = (target: JointApp, snap: Snapshotter, verify: Verifier) => async (p: Project): Promise<GoalCheck> => {
+  /** The goal-completion check on the target app's state after the turn ended (`since`); a stale frame never confirms it. */
+  const checkOf = (target: JointApp, snap: Snapshotter, verify: Verifier, since: () => number) => async (p: Project): Promise<GoalCheck> => {
     const goal: JointAction = { id: 'goal', app: target, label: p.goal, phase: 'current', expect: p.goal };
-    const shot = await snap(target, now());
+    const shot = await snap(target, since());
+    if (isStale(shot, since())) return { complete: false, progress: false, reason: `${target} state is stale — no frame newer than the operation`, thinking: null };
     const r = await verify(goal, shot, []);
     return { complete: r.ok, progress: r.ok, reason: r.reason, thinking: null };
   };
@@ -208,11 +209,15 @@ export function createJointEngine(get: () => JointDeps) {
     if (!sel.ok) return log(sel.reason, 'warn');
     log(decisionText(sel.decision));
     const snap = snapshotter(recallLines(history, operation));
+    let endedAt = now();
     const result = await continueJoint(createProject(`Joint: ${operation}`, operation), {
       halt: () => get().halt(),
       turn: turnOf(sel.decision),
-      followUp: (t) => verifyJoint(t.actions, t.endedAt, { snapshot: snap, verify: verifier, retry: retryOf(sel.decision), now }),
-      check: checkOf(target, snap, verifier),
+      followUp: (t) => {
+        endedAt = t.endedAt;
+        return verifyJoint(t.actions, t.endedAt, { snapshot: snap, verify: verifier, retry: retryOf(sel.decision), now });
+      },
+      check: checkOf(target, snap, verifier, () => endedAt),
       pending: (p) => get().pending(p.goal),
     });
     const { done, reason } = result.completion;
