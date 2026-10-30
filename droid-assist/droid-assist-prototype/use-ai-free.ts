@@ -127,6 +127,7 @@ export function useAiFree(deps: AiFreeHookDeps) {
     const host: AiFreeDeps = { ...pipeline({ ...route, send }), consultAi: (step, why) => depsRef.current.replan(step, why) };
     let recorded = newTrace(goal);
     let aiCalls = 0;
+    let complete = 0;
     triedRef.current = [];
     commitTrace(recorded);
     takeover.startRun(goal, steps);
@@ -139,13 +140,14 @@ export function useAiFree(deps: AiFreeHookDeps) {
       recorded = recordStep(recorded, step, out);
       commitTrace(recorded);
       reportStep(i, out);
-      if (!out.ok) await takeover.handoff(i, `droid-new could not verify the step: ${out.message}`);
+      const done = await takeover.awaitCompletion(i);
+      if (done.state !== 'complete') await takeover.handoff(i, out.ok ? `step not complete: ${done.why}` : `droid-new could not verify the step: ${out.message}`);
+      else complete++;
     }
     const handedAt = takeover.takenOver();
-    takeover.stop();
-    if (handedAt !== null) log(`Droid-main continues \"${goal}\" from step ${handedAt + 1}; droid-new stopped acting`, 'info');
-    const ok = recorded.steps.filter((s) => s.verdict === 'verified').length;
-    log(`AI-free run of "${goal}": ${ok}/${steps.length} step(s) verified, ${aiCalls} AI call(s)`, ok === steps.length ? 'ok' : 'warn');
+    if (handedAt === null) takeover.stop();
+    else log(`Droid-main continues \"${goal}\" from step ${handedAt + 1}; droid-new stopped acting and awaits its result`, 'info');
+    log(`AI-free run of "${goal}": ${complete}/${steps.length} step(s) complete (verified and agreed by both sides), ${aiCalls} AI call(s)`, complete === steps.length ? 'ok' : 'warn');
   };
 
   /** Runs `steps` (default: the current workflow) AI-free. */

@@ -14,6 +14,8 @@ import type { AgentVotePayload, InboundMessage, OutboundPayloads, OutboundType, 
 export const FIRST_STEP_MS = 10_000;
 /** Most screenshots sent with one handoff. */
 export const HANDOFF_SHOTS = 4;
+/** How long droid-new waits for droid-main's agents to vote on a step. */
+export const VOTE_WAIT_MS = 5_000;
 
 /** What droid-new knows about a step when it hands it over. */
 export interface StepContext {
@@ -50,6 +52,7 @@ export interface TakeoverDeps {
   /** Called when a step's completion settles (complete or failed). */
   onSettled?: (index: number, completion: Completion) => void;
   firstStepMs?: number;
+  voteWaitMs?: number;
 }
 
 /** A step as the run_script payload droid-main performs. */
@@ -95,6 +98,8 @@ export function createTakeover(deps: TakeoverDeps) {
   /** The step droid-main accepted: it continues the run from there, so droid-new stops acting. */
   let accepted: number | null = null;
   const completed = (index: number) => stepCompletion(votes.get(index) ?? {}, deps.connected()).state === 'complete';
+  /** Callers awaiting a step's settled completion. */
+  const waiters = new Map<number, (c: Completion) => void>();
 
   const disarm = () => {
     if (timer) clearTimeout(timer);
@@ -114,7 +119,26 @@ export function createTakeover(deps: TakeoverDeps) {
     settled.add(index);
     note(`Step ${index + 1} ${c.state} — ${c.why}`, c.state === 'complete' ? 'ok' : 'warn');
     deps.onSettled?.(index, c);
+    waiters.get(index)?.(c);
+    waiters.delete(index);
     return c;
+  };
+
+  /** Resolves once step `index` settles; droid-main's agents get VOTE_WAIT_MS to vote, after which their silence counts as disagreement. */
+  const awaitCompletion = (index: number): Promise<Completion> => {
+    const now = stepCompletion(votes.get(index) ?? {}, deps.connected());
+    if (now.state !== 'pending') return Promise.resolve(now);
+    return new Promise((resolve) => {
+      const limit = deps.voteWaitMs ?? VOTE_WAIT_MS;
+      const t = setTimeout(() => {
+        deps.log(`Droid-main's agents did not vote on step ${index + 1} within ${limit / 1000} s`, 'warn');
+        vote(index, { mainAgents: false });
+      }, limit);
+      waiters.set(index, (c) => {
+        clearTimeout(t);
+        resolve(c);
+      });
+    });
   };
 
   /** Hands step `index` to droid-main with its full context; at most once per step, never for a completed step. */
@@ -178,6 +202,7 @@ export function createTakeover(deps: TakeoverDeps) {
     newAgentsVote,
     onInbound,
     handoff,
+    awaitCompletion,
     /** Ends the run: the first-step timer is cancelled. */
     stop: () => {
       disarm();

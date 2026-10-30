@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FIRST_STEP_MS, createTakeover, detectStalledStep, handoffPayload, stepCompletion, type TakeoverDeps } from './takeover.js';
+import { FIRST_STEP_MS, VOTE_WAIT_MS, createTakeover, detectStalledStep, handoffPayload, stepCompletion, type TakeoverDeps } from './takeover.js';
 import { validateInbound, type InboundMessage, type OutboundPayloads, type OutboundType } from './main-bridge-protocol.js';
 import type { WorkflowStep } from './types.js';
 
@@ -133,6 +133,33 @@ describe('step completion', () => {
 });
 
 describe('detectStalledStep', () => {
+  it('waits for droid-main\'s agents before a step completes; a late agree completes it, silence fails it', async () => {
+    vi.useFakeTimers();
+    const h = host();
+    const runId = h.takeover.startRun('open files', steps);
+    h.takeover.stepVerified(0, true, 'ok');
+    h.takeover.newAgentsVote(0, true, ['Verifier'], 'ok');
+    const first = h.takeover.awaitCompletion(0);
+    await vi.advanceTimersByTimeAsync(1000);
+    h.takeover.onInbound(inbound('agent_vote', { runId, stepIndex: 0, side: 'droid-main', agree: true, agents: ['Regulator'] }));
+    expect(await first).toMatchObject({ state: 'complete' });
+    h.takeover.stepVerified(1, true, 'ok');
+    h.takeover.newAgentsVote(1, true, ['Verifier'], 'ok');
+    const second = h.takeover.awaitCompletion(1);
+    await vi.advanceTimersByTimeAsync(VOTE_WAIT_MS);
+    vi.useRealTimers();
+    expect(await second).toMatchObject({ state: 'failed', why: 'droid-main agents disagreed' });
+  });
+
+  it('logs and tells the AI droid-main\'s result after droid-new handed the run over', async () => {
+    const h = host();
+    const runId = h.takeover.startRun('open files', steps);
+    expect(await h.takeover.handoff(0, 'stuck')).toBe(true);
+    expect(h.takeover.onInbound(inbound('takeover_result', { runId, stepIndex: 0, ok: true, message: 'done by main' }))).toBe(true);
+    expect(h.logs.some((l) => l.includes('done by main'))).toBe(true);
+    expect(h.ai.some((l) => l.includes('done by main'))).toBe(true);
+  });
+
   it('lets droid-main claim a step droid-new settled as failed, and the 10 s timer hand over a failed first step', async () => {
     vi.useFakeTimers();
     const h = host();
