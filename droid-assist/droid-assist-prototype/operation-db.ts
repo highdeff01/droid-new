@@ -29,6 +29,8 @@ export interface OperationRecord {
   ok: boolean;
   /** Error kind of an 'error' operation (ai, step, drift, bridge, watcher, test). */
   errorKind?: string;
+  /** The app of the joint connection that did the work; absent for single-app operations. */
+  app?: 'droid-new' | 'droid-main';
 }
 
 const isString = (v: unknown) => typeof v === 'string';

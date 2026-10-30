@@ -5853,11 +5853,12 @@ export function useAssist() {
     element_moved: () => void mainBridgeRef.current?.send('request_frame', {}),
     error_occurred: (p) => captureError({ kind: 'main-app', message: p.message, goal: goalRef.current }),
     test_requested: (p) => void testRoutes(parseTestSpec(p.test ?? '')),
+    console_error: (p) => captureError({ kind: 'main-app', message: `Console error: ${p.message}`, goal: goalRef.current }),
   };
 
   /** An intercept from the main app: logged, put on the agent bus from the main app, then routed by kind. */
   const onMainAppIntercept = (p: InterceptPayload) => {
-    addLog('Main app', `Intercept ${p.kind}: ${p.message}`, p.kind === 'error_occurred' ? 'error' : 'info');
+    addLog('Main app', `Intercept ${p.kind}: ${p.message}`, p.kind === 'error_occurred' || p.kind === 'console_error' ? 'error' : 'info');
     const element = p.element ?? { name: `${p.kind}: ${p.message}`, x: 0.5, y: 0.5 };
     forwardElement('mainApp', element, p.element ? undefined : NOTE_ONLY_AGENTS);
     INTERCEPT_ROUTES[p.kind](p);
