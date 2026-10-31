@@ -18,6 +18,7 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { CREW_SIZE_MAX, CREW_SIZE_MIN } from './crew.js';
+import { VOICE_MODES, VOICE_RATE_RANGE, VOICE_VOLUME_RANGE, type VoiceMode } from './voice.js';
 import { PROJECT_LIMIT, isProject, pruneProjects, type Project } from './project.js';
 import { APPROVAL_LIMIT as APPROVAL_QUEUE_LIMIT, EMPTY_APPROVALS, LEARNED_LIMIT, isApprovalRequest, isLearnedMethod, type ApprovalState } from './approval-queue.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
@@ -53,6 +54,7 @@ import { readOpsState, type OpsState } from './operations.js';
 import { sanitizePanelLayout } from './panel-layout.js';
 import { HISTORY_WINDOW_MAX } from './ai-history.js';
 import { AVOID_RULE_LIMIT, AVOID_TTL_HOURS_MAX, AVOID_TTL_HOURS_MIN, isAvoidRule, pruneRules, type AvoidRule } from './blacklist.js';
+import { SYNC_STORES, mergeDelta, type StoreWatermarks, type SyncEntry, type SyncStore } from './store-sync.js';
 
 /** Most folders the System panel reports on. */
 export const SYSTEM_FOLDER_LIMIT = 10;
@@ -119,7 +121,7 @@ export const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec' | 'abortAutoClearMin' | 'avoidTtlHours' | 'aiHistoryWindow', [number, number]> = {
+export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec' | 'abortAutoClearMin' | 'avoidTtlHours' | 'aiHistoryWindow' | 'phonePort', [number, number]> = {
   abortAutoClearMin: [0, ABORT_AUTO_CLEAR_MAX_MIN],
   aiHistoryWindow: [1, HISTORY_WINDOW_MAX],
   crewSize: [CREW_SIZE_MIN, CREW_SIZE_MAX],
@@ -143,6 +145,7 @@ export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watch
   breakMinutes: BREAK_MINUTES_RANGE,
   systemRefreshSec: SYSTEM_REFRESH_SEC_RANGE,
   mainBridgePort: [MAIN_BRIDGE_PORT_MIN, MAIN_BRIDGE_PORT_MAX],
+  phonePort: [MAIN_BRIDGE_PORT_MIN, MAIN_BRIDGE_PORT_MAX],
   mainBridgeBackoffMinMs: [MAIN_BRIDGE_BACKOFF_MIN_MS, 10000],
   mainBridgeBackoffMaxMs: [1000, MAIN_BRIDGE_BACKOFF_MAX_MS],
   operationRetries: [OPERATION_RETRIES_MIN, OPERATION_RETRIES_MAX],
@@ -190,11 +193,16 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
   out.crewSize = Math.round(out.crewSize);
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'liveDrag', 'showGrid', 'gridLabels', 'autoScan', 'relaxMode', 'aiThink', 'aiOverlap', 'mainBridgeEnabled'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'liveDrag', 'showGrid', 'gridLabels', 'autoScan', 'relaxMode', 'aiThink', 'aiOverlap', 'mainBridgeEnabled', 'autoUpdate', 'voiceEnabled', 'voiceSpeakNotifications', 'voiceSpeakResponses'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
+  if (typeof stored.updateStatus === 'string' && stored.updateStatus.length <= MASTER_PROMPT_MAX) out.updateStatus = stored.updateStatus;
+  if (typeof stored.voiceMode === 'string' && VOICE_MODES.includes(stored.voiceMode as VoiceMode)) out.voiceMode = stored.voiceMode as VoiceMode;
+  if (typeof stored.voiceLang === 'string' && stored.voiceLang.trim()) out.voiceLang = stored.voiceLang.trim();
+  if (isNum(stored.voiceRate) && stored.voiceRate >= VOICE_RATE_RANGE[0] && stored.voiceRate <= VOICE_RATE_RANGE[1]) out.voiceRate = stored.voiceRate;
+  if (isNum(stored.voiceVolume) && stored.voiceVolume >= VOICE_VOLUME_RANGE[0] && stored.voiceVolume <= VOICE_VOLUME_RANGE[1]) out.voiceVolume = stored.voiceVolume;
   if (typeof stored.masterPrompt === 'string' && stored.masterPrompt.length <= MASTER_PROMPT_MAX) out.masterPrompt = stored.masterPrompt;
-  for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken', 'mainBridgeUrl', 'mainBridgeToken'] as const) {
+  for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken', 'mainBridgeUrl', 'mainBridgeToken', 'phoneToken'] as const) {
     const v = stored[key];
     if (typeof v === 'string') out[key] = v;
   }
@@ -921,3 +929,132 @@ export function saveOperations(ops: SavedOperation[]) {
   }));
   if (!writeJson(KEYS.operations, toStored(true))) writeJson(KEYS.operations, toStored(false));
 }
+
+/** Storage key of the store-sync watermarks (which entries have already crossed the bridge). */
+const STORE_SYNC_KEY = 'droid-assist.store-sync';
+
+/** The newest verification time of an access-path profile: its latest version's last use. */
+const pathAt = (p: AccessProfile): number => p.versions.reduce((max, v) => Math.max(max, v.lastUsed || v.savedAt || 0), 0);
+
+/**
+ * How one stored entry becomes a synced entry: its store, its identity within the store, when it was
+ * last verified, and the value as it travels. Null when the stored entry is invalid and so not synced.
+ */
+const SYNC_READERS: Record<SyncStore, (v: unknown) => SyncEntry | null> = {
+  habits: (v) => {
+    const h = parseHabit(v);
+    return h ? { store: 'habits', key: h.id, at: h.lastUsed, value: h as unknown as Record<string, unknown> } : null;
+  },
+  familiar: (v) => (isFamiliar(v) ? { store: 'familiar', key: v.id, at: v.lastSeen, value: v as unknown as Record<string, unknown> } : null),
+  // Element-map frames are local artifacts: they stay here and are re-attached on merge.
+  elementMap: (v) => {
+    const m = parseMapped(v);
+    if (!m) return null;
+    const { frame: _frame, ...value } = m;
+    return { store: 'elementMap', key: m.id, at: m.lastSeen || m.mappedAt, value };
+  },
+  accessPaths: (v) => (isAccessProfile(v) ? { store: 'accessPaths', key: v.id, at: pathAt(v), value: v as unknown as Record<string, unknown> } : null),
+  avoidRules: (v) => (isAvoidRule(v) ? { store: 'avoidRules', key: v.id, at: v.lastAt, value: v as unknown as Record<string, unknown> } : null),
+  patterns: (v) => (isPattern(v) ? { store: 'patterns', key: v.id, at: v.time, value: v as unknown as Record<string, unknown> } : null),
+};
+
+const SYNC_RAW_KEYS: Record<SyncStore, string> = {
+  habits: KEYS.habits, familiar: KEYS.familiar, elementMap: KEYS.elementMap,
+  accessPaths: KEYS.accessPaths, avoidRules: KEYS.avoidRules, patterns: KEYS.patterns,
+};
+
+/** Most entries kept per store after a merge, matching each store's own limit. */
+const SYNC_LIMIT: Record<SyncStore, number> = {
+  habits: Number.MAX_SAFE_INTEGER, familiar: FAMILIAR_LIMIT, elementMap: MAP_LIMIT,
+  accessPaths: ACCESS_PATH_LIMIT, avoidRules: AVOID_RULE_LIMIT, patterns: PATTERN_LIMIT,
+};
+
+/** One store's valid stored entries, as they travel. */
+const readStore = (store: SyncStore): SyncEntry[] => {
+  const raw = readJson(SYNC_RAW_KEYS[store]);
+  return Array.isArray(raw) ? raw.map(SYNC_READERS[store]).filter((e): e is SyncEntry => e !== null) : [];
+};
+
+/** Persists the merged values of one store through its own saver, so its limits and fallbacks still apply. */
+function persistStore(store: SyncStore, values: unknown[]): number {
+  switch (store) {
+    case 'habits': {
+      const list = values.map(parseHabit).filter((h): h is Habit => h !== null);
+      saveHabits(list);
+      return list.length;
+    }
+    case 'familiar': {
+      const list = values.filter(isFamiliar);
+      saveFamiliar(list);
+      return list.length;
+    }
+    case 'accessPaths': {
+      const list = values.filter(isAccessProfile);
+      saveAccessPaths(list);
+      return list.length;
+    }
+    case 'avoidRules': {
+      const list = values.filter(isAvoidRule);
+      saveAvoidRules(list);
+      return list.length;
+    }
+    case 'patterns': {
+      const list = values.filter(isPattern);
+      savePatterns(list);
+      return list.length;
+    }
+    case 'elementMap': {
+      const raw = readJson(KEYS.elementMap);
+      const frames = new Map<string, unknown>();
+      if (Array.isArray(raw)) for (const v of raw) if (isObject(v) && typeof v.id === 'string' && v.frame !== undefined) frames.set(v.id, v.frame);
+      const list = (values as Record<string, unknown>[]).filter((v) => parseMapped(v) !== null).map((v) => (frames.has(v.id as string) ? { ...v, frame: frames.get(v.id as string) } : v));
+      writeJson(KEYS.elementMap, list);
+      return list.length;
+    }
+  }
+}
+
+/** Every entry of every synced store, as it travels: the delta base. */
+export function loadSyncEntries(): SyncEntry[] {
+  return SYNC_STORES.flatMap((store) => readStore(store));
+}
+
+/**
+ * Merges synced entries into the stores they belong to, keeping the most recent verified observation
+ * per entry and dropping nothing (equal timestamps keep the local one). Only stores that actually
+ * gained an entry are written. Returns how many entries were applied.
+ */
+export function applySyncEntries(entries: readonly SyncEntry[]): number {
+  let applied = 0;
+  for (const store of SYNC_STORES) {
+    const incoming = entries.filter((e) => e.store === store && SYNC_READERS[store](e.value) !== null);
+    if (!incoming.length) continue;
+    const local = readStore(store);
+    const { added } = mergeDelta(local, incoming);
+    if (!added.length) continue;
+    const merged = new Map(local.map((e) => [e.key, e.value]));
+    for (const e of added) merged.set(e.key, e.value);
+    applied += persistStore(store, [...merged.values()].slice(0, SYNC_LIMIT[store]));
+  }
+  return applied;
+}
+
+/** The store-sync watermarks: the newest observation already exchanged per store and key. */
+export const loadStoreWatermarks = (): StoreWatermarks => {
+  const raw = readJson(STORE_SYNC_KEY);
+  if (!isObject(raw)) return {};
+  const out: StoreWatermarks = {};
+  for (const store of SYNC_STORES) {
+    const marks = raw[store];
+    if (!isObject(marks)) continue;
+    const kept: Record<string, number> = {};
+    for (const [key, at] of Object.entries(marks)) if (isNum(at)) kept[key] = at;
+    if (Object.keys(kept).length) out[store] = kept;
+  }
+  return out;
+};
+
+/** Persists the store-sync watermarks. */
+export const saveStoreWatermarks = (marks: StoreWatermarks): void => {
+  writeJson(STORE_SYNC_KEY, marks);
+};

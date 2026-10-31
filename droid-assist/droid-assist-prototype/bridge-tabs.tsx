@@ -4,15 +4,19 @@ import { MainBridgeBadge } from './hud.js';
 import { SwarmView } from './swarm-view.js';
 import { busyAgents } from './project-swarm.js';
 import { coordinationTotals } from './coordination.js';
+import { drivingFlag } from './driver.js';
 import { errorLogs } from './browser-logs.js';
+import { healthLine, isFresh } from './health.js';
+import { ledgerLine } from './run-ledger.js';
 import styles from './droid-assist.module.css';
 
-type TabId = 'swarm' | 'status' | 'coordinate' | 'screenshare' | 'browser-logs';
+type TabId = 'swarm' | 'status' | 'coordinate' | 'ledger' | 'screenshare' | 'browser-logs';
 
 /** Both apps' live state: droid-new's own, and droid-main's from the last app_state it reported. */
 function StatusTab({ engine }: { engine: AssistEngine }) {
   const { mainBridge, armed, replaying, bridgeV2 } = engine;
   const remote = bridgeV2.remote;
+  const health = bridgeV2.peerHealth;
   return (
     <div aria-label="Status tab">
       <div>
@@ -21,6 +25,7 @@ function StatusTab({ engine }: { engine: AssistEngine }) {
         <p>{replaying ? 'run in progress' : 'idle'}</p>
         <p>Armed: <b>{armed ? 'yes' : 'no'}</b></p>
         <p>Agents busy: <b>{busyAgents(bridgeV2.swarmRound)}</b></p>
+        <p aria-label="Who is driving">{drivingFlag(bridgeV2.driving)}</p>
       </div>
       <div>
         <h4>droid-main</h4>
@@ -32,18 +37,69 @@ function StatusTab({ engine }: { engine: AssistEngine }) {
         ) : (
           <p className={styles.muted}>No state from droid-main yet</p>
         )}
+        {health ? (
+          <p aria-label="droid-main health" className={isFresh(health) ? undefined : styles.muted}>
+            {healthLine(health)}{isFresh(health) ? '' : ' (stale)'}
+          </p>
+        ) : (
+          <p className={styles.muted}>No health from droid-main yet</p>
+        )}
       </div>
       {bridgeV2.decision && <p aria-label="App selection decision">{bridgeV2.decision.choice}: {bridgeV2.decision.reason}</p>}
     </div>
   );
 }
 
+/** The shared run ledger: one timeline of every step, verdict and handoff, merged from both apps. */
+function LedgerTab({ engine }: { engine: AssistEngine }) {
+  const { ledger, ledgerTotals } = engine.bridgeV2;
+  return (
+    <div aria-label="Run ledger tab">
+      <p aria-label="Ledger totals">
+        droid-new: {ledgerTotals['droid-new'].entries} entries ({ledgerTotals['droid-new'].passed}✓/{ledgerTotals['droid-new'].failed}✗)
+        · droid-main: {ledgerTotals['droid-main'].entries} entries ({ledgerTotals['droid-main'].passed}✓/{ledgerTotals['droid-main'].failed}✗)
+      </p>
+      {!ledger.length ? (
+        <p className={styles.muted}>No run activity yet</p>
+      ) : (
+        <ul className={styles.log} aria-label="Run ledger">
+          {ledger.map((e) => (
+            <li key={e.id} data-tone={e.ok === false ? 'error' : e.ok === true ? 'ok' : 'info'}>
+              {new Date(e.time).toLocaleTimeString()} {ledgerLine(e)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** Planned vs dispatched vs verified, with totals, then the request flows between the apps. */
 function CoordinateTab({ engine }: { engine: AssistEngine }) {
-  const { coordination, flows } = engine.bridgeV2;
+  const { coordination, flows, driving, suggestions, acceptSuggestion, dismissSuggestion } = engine.bridgeV2;
   const totals = coordinationTotals(coordination);
   return (
     <div aria-label="Coordinate tab">
+      <p aria-label="Driving flag">
+        {drivingFlag(driving)} — {driving.reason}
+        {driving.driver === 'droid-main' && (
+          <button type="button" onClick={() => engine.bridgeV2.takeWheelBack()}>Take the wheel back</button>
+        )}
+      </p>
+      {suggestions.length > 0 && (
+        <div aria-label="Queued suggestions">
+          <h4>droid-main's suggestions (droid-new is driving)</h4>
+          <ul>
+            {suggestions.map((s) => (
+              <li key={s.id}>
+                {s.command}{s.mode ? ` → ${s.mode}` : ''}{s.reason ? ` — ${s.reason}` : ''}
+                <button type="button" onClick={() => acceptSuggestion(s.id)}>Accept</button>
+                <button type="button" onClick={() => dismissSuggestion(s.id)}>Dismiss</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <table>
         <thead>
           <tr><th>Step</th><th>Planned</th><th>Dispatched</th><th>Verified</th><th>Agreement</th></tr>
@@ -111,6 +167,7 @@ const TABS: Record<TabId, { label: string; View: (p: { engine: AssistEngine }) =
   swarm: { label: 'Swarm', View: SwarmView },
   status: { label: 'Status', View: StatusTab },
   coordinate: { label: 'Coordinate', View: CoordinateTab },
+  ledger: { label: 'Ledger', View: LedgerTab },
   screenshare: { label: 'Screenshare', View: ScreenshareTab },
   'browser-logs': { label: 'Browser logs', View: BrowserLogsTab },
 };

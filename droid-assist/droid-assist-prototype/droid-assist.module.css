@@ -188,3 +188,13 @@ fieldset.setting { border: 1px solid var(--line); border-radius: 10px; padding: 
 .floatingGrip { flex: 1; min-width: 0; cursor: move; user-select: none; touch-action: none; color: var(--muted); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .floatingWindow .panel { border: 0; border-radius: 0 0 var(--radius) var(--radius); }
 .resizeGrip { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: ew-resize; touch-action: none; background: linear-gradient(135deg, transparent 50%, var(--muted) 50%); border-bottom-right-radius: var(--radius); }
+
+/* Help → User guide: searchable feature list with per-feature walkthroughs. */
+.guideSection { margin-top: var(--sp-3); }
+.guideList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.guideFeature { border: 1px solid var(--line); border-radius: var(--radius-sm); background: #0b1220; overflow: hidden; }
+.guideFeatureHead { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; padding: var(--sp-2); background: transparent; border: 0; color: var(--text); cursor: pointer; }
+.guideFeatureHead:hover { color: var(--accent); }
+.guideFeatureHead small { color: var(--muted); font-weight: 400; }
+.guideSteps { margin: 0; padding: var(--sp-2) var(--sp-3) var(--sp-2) calc(var(--sp-3) + 12px); color: var(--text); font-size: 13px; line-height: 1.5; }
+.guideSteps li { margin: 0 0 var(--sp-1); }

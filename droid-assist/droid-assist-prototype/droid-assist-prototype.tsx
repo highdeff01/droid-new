@@ -29,6 +29,7 @@ import { NotificationsPanel } from './notifications-panel.js';
 import { DatabasePanel } from './database-panel.js';
 import { PresentationPanel } from './presentation-panel.js';
 import { NotificationStack } from './notification-stack.js';
+import { HelpGuide } from './help-guide.js';
 import { OperationsPanel } from './operations-panel.js';
 import { OperationsPanel as OpsAgentsPanel } from './ops-panel.js';
 import { PanelBoard } from './panel-board.js';
@@ -48,6 +49,7 @@ const PANELS: Record<PanelId, (props: { engine: AssistEngine }) => JSX.Element |
   initiative: InitiativePanel, triggers: TriggersPanel, projects: ProjectsPanel, accessPaths: AccessPathsPanel, approvals: ApprovalsPanel, artifacts: ArtifactsPanel,
   presentation: PresentationPanel, operations: OperationsPanel,
   comparisonGallery: ComparisonGallery, aiHelp: AiHelpPanel, briefing: BriefingPanel, aiHistory: AiHistoryPanel,
+  helpGuide: HelpGuide,
   qwenThinking: QwenThinkingPanel, aiResponses: AiResponsesPanel, supervisor: SupervisorPanel, agents: AgentsPanel, portfolios: PortfoliosPanel,
   loopControl: LoopControlPanel, capabilities: CapabilitiesPanel, settings: SettingsPanel, agentBus: AgentBusPanel, crew: CrewPanel,
   agentCrew: AgentCrewPanel, opsAgents: OpsAgentsPanel, subagentReport: SubagentReportPanel, resolution: ResolutionPanel,

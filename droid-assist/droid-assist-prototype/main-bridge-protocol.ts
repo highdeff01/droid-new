@@ -257,6 +257,73 @@ export interface AppStatePayload {
   agentsBusy: number;
 }
 
+/** v2: one learned store entry of a sync delta — its store, its identity within it, and when it was last verified. */
+export interface StoreDelta {
+  /** One of SYNC_STORES: habits, familiar, elementMap, accessPaths, avoidRules, patterns. */
+  store: string;
+  /** Identity within the store (the entry's natural key). */
+  key: string;
+  /** Last verified observation, ms since epoch. */
+  at: number;
+  value: Record<string, unknown>;
+}
+
+/** v2: a delta of learned store entries, so both apps learn from each other. */
+export interface StoreDeltaPayload {
+  entries: StoreDelta[];
+}
+
+/** v2: one entry of the shared run ledger, mirrored on both apps. */
+export interface LedgerEntryPayload {
+  id: string;
+  app: JointApp;
+  time: number;
+  kind: string;
+  stepIndex?: number;
+  text: string;
+  ok?: boolean;
+}
+
+/** v2: a delta of the shared run ledger, so joint operations keep one timeline. */
+export interface LedgerDeltaPayload {
+  entries: LedgerEntryPayload[];
+}
+
+/** v2: one app's live health, so the executor is chosen from facts, not assumptions. */
+export interface HealthPayload {
+  app: string;
+  /** Whether this app's AI endpoint answered recently. */
+  aiUp: boolean;
+  /** Round-trip time of the last bridge exchange, ms. */
+  latencyMs: number;
+  /** Crew agents busy right now. */
+  crewLoad: number;
+  /** Whether real input is armed. */
+  armed: boolean;
+  /** Whether this app can take a step at all right now. */
+  canExecute: boolean;
+}
+
+/** v2: one app's decision on a queued approval, so the queue is answerable from either side. */
+export interface ApprovalDecisionPayload {
+  id: string;
+  decision: 'approved' | 'edited' | 'rejected';
+  /** edited: the corrected text. */
+  text?: string;
+  by: string;
+}
+
+/** v2: one app offers to resume a run the other holds, replaying what happened while it was down. */
+export interface ResumePayload {
+  runId: string;
+  goal: string;
+  steps: string[];
+  /** 0-based index to resume from. */
+  activeIndex: number;
+  /** What happened while the other app was disconnected, oldest first. */
+  replay: string[];
+}
+
 /** The v2 messages both apps send each other. */
 export interface PeerPayloads {
   user_request: UserRequestPayload;
@@ -265,6 +332,11 @@ export interface PeerPayloads {
   step_opinion: StepOpinionPayload;
   console_log: ConsoleLogPayload;
   app_state: AppStatePayload;
+  store_delta: StoreDeltaPayload;
+  ledger_delta: LedgerDeltaPayload;
+  health: HealthPayload;
+  approval_decision: ApprovalDecisionPayload;
+  resume: ResumePayload;
 }
 
 /** The v2 requests the main app sends; each is answered with a `result` replying to it. */
@@ -356,6 +428,17 @@ const INTERCEPT_CHECKS: Record<InterceptKind, (p: Record<string, unknown> & { me
 
 const isLoad = (v: unknown) => isNum(v) && v >= 0 && v <= 1;
 const isNames = (v: unknown) => Array.isArray(v) && v.every((c) => typeof c === 'string');
+/** One store-delta entry: a named store, a key, a finite time and a JSON object value. */
+const isStoreDelta = (v: unknown): v is StoreDelta =>
+  isObject(v) && isText(v.store) && isText(v.key) && isNum(v.at) && v.at >= 0 && isObject(v.value);
+/** A store-delta's entry list. */
+const isStoreDeltas = (v: unknown): v is StoreDelta[] => Array.isArray(v) && v.every(isStoreDelta);
+/** One ledger entry: an id, an app, a finite time, a kind and text, with an optional step and verdict. */
+const isLedgerEntry = (v: unknown): v is LedgerEntryPayload =>
+  isObject(v) && isText(v.id) && (v.app === 'droid-new' || v.app === 'droid-main') && isNum(v.time) && isText(v.kind) && typeof v.text === 'string'
+  && (v.stepIndex === undefined || isNum(v.stepIndex)) && (v.ok === undefined || typeof v.ok === 'boolean');
+/** A ledger-delta's entry list. */
+const isLedgerEntries = (v: unknown): v is LedgerEntryPayload[] => Array.isArray(v) && v.every(isLedgerEntry);
 /** Why a takeover payload's run/step reference is invalid; null when valid. */
 const stepRef = (type: string, p: Record<string, unknown>) => (typeof p.runId === 'string' && isNum(p.stepIndex) && p.stepIndex >= 0 ? null : `${type} needs runId and stepIndex`);
 
@@ -382,6 +465,11 @@ const INBOUND_CHECKS: Record<InboundType, (p: Record<string, unknown>) => string
   step_opinion: (p) => (isNum(p.index) && typeof p.step === 'string' && typeof p.agree === 'boolean' && (p.element === undefined || isElement(p.element)) ? null : 'step_opinion needs index, step and agree'),
   console_log: (p) => (typeof p.app === 'string' && CONSOLE_LEVELS.includes(p.level as ConsoleLevel) && typeof p.message === 'string' ? null : 'console_log needs app, level and message'),
   app_state: (p) => (typeof p.app === 'string' && typeof p.running === 'boolean' && typeof p.goal === 'string' && isNum(p.steps) && isNum(p.activeIndex) && isNum(p.agentsBusy) ? null : 'app_state needs app, running, goal, steps, activeIndex and agentsBusy'),
+  store_delta: (p) => (isStoreDeltas(p.entries) ? null : 'store_delta needs entries of {store, key, at, value}'),
+  ledger_delta: (p) => (isLedgerEntries(p.entries) ? null : 'ledger_delta needs entries of {id, app, time, kind, text}'),
+  health: (p) => (typeof p.app === 'string' && typeof p.aiUp === 'boolean' && isNum(p.latencyMs) && isNum(p.crewLoad) && typeof p.armed === 'boolean' && typeof p.canExecute === 'boolean' ? null : 'health needs app, aiUp, latencyMs, crewLoad, armed and canExecute'),
+  approval_decision: (p) => (isText(p.id) && (p.decision === 'approved' || p.decision === 'edited' || p.decision === 'rejected') && typeof p.by === 'string' && optString(p.text) ? null : 'approval_decision needs id, a decision, by and optional text'),
+  resume: (p) => (isText(p.runId) && typeof p.goal === 'string' && isStrings(p.steps) && isNum(p.activeIndex) && isStrings(p.replay) ? null : 'resume needs runId, goal, steps, activeIndex and replay'),
 };
 
 const REQUEST_TYPES: Record<RequestType, true> = { analyze: true, plan_workflow: true, run_workflow: true, verify: true, watch: true, assist_error: true };

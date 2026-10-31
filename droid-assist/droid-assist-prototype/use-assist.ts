@@ -68,6 +68,10 @@ import { NO_ASSESSMENT, SUPERVISOR_INTERVAL_MS, SUPERVISOR_REPLAN_LIMIT, SUPERVI
 import { BUS_AGENTS, BUS_AGENT_IDS, elementLine, forward, isGridLabel, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
 import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
+import { useAutoUpdate, UPDATE_SOURCE } from './use-update.js';
+import { browserEngines, createVoiceControl } from './voice.js';
+import { usePhoneCompanion } from './use-phone.js';
+import { usePlugins } from './use-plugins.js';
 import { useApprovals } from './use-approvals.js';
 import { DEFAULT_OPERATION_POLICY, decisionLesson, editedStep, type ApprovalItem, type OperationPolicy } from './approvals.js';
 import { buildElementMap } from './element-map.js';
@@ -91,6 +95,8 @@ import { MAX_DISCOVERY, OBJECTIVE_TONE, chainReport, discoverTarget, isChainGoal
 import { applyReach, currentPath, deletePath, editPath, isHopAction, learnPaths, parseHops, pathLine, pathOutcome, pathSteps, reachTarget, relevantPaths, runPath, usablePath, type AccessProfile, type Reach } from './access-paths.js';
 import { useResolution } from './use-resolution.js';
 import { useBridgeV2 } from './use-bridge-v2.js';
+import { planStream, planChanged, streamLine, type FrameConsumer, type StreamPlan } from './frame-stream.js';
+import { crossReference as crossAppContext, crossTestLine, type CrossTest } from './cross-testing.js';
 import { AUTO_RETRY_LABEL, AUTO_RETRY_TICK_MS, countAttempts, retryDue, retryText, type RetryCounts } from './auto-retry.js';
 import { DISAGREEMENT_THRESHOLD } from './resolution-center.js';
 import { dropGoal, loadGoals, projectId, queueGoal, saveGoals, settleGoal, startGoal, type GoalRecord } from './goal-objectives.js';
@@ -380,6 +386,17 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   systemRefreshSec: DEFAULT_SYSTEM_REFRESH_SEC,
   notifyAutoAct: DEFAULT_AUTO_ACT,
   systemFolders: [],
+  autoUpdate: true,
+  updateStatus: '',
+  voiceEnabled: false,
+  voiceMode: 'push-to-talk',
+  voiceLang: 'en-US',
+  voiceSpeakNotifications: false,
+  voiceSpeakResponses: false,
+  voiceRate: 1,
+  voiceVolume: 1,
+  phonePort: 8788,
+  phoneToken: '',
   panelLayout: DEFAULT_PANEL_LAYOUT,
   mainBridgeEnabled: true,
   mainBridgeMode: 'listen',
@@ -481,6 +498,20 @@ export function useAssist() {
   const [replicas, setReplicas] = useState<Replica[]>([]);
   const [sideResults, setSideResults] = useState<SideTestResult[]>([]);
   const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Shows a highlight and clears it 3 s later. The timer is cancelled on unmount so it can never fire after teardown. */
+  const flashHighlight = (h: { x: number; y: number; label: string }) => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    setHighlight(h);
+    highlightTimerRef.current = setTimeout(() => {
+      highlightTimerRef.current = null;
+      setHighlight((cur) => (cur && cur.x === h.x && cur.y === h.y ? null : cur));
+    }, 3000);
+  };
+  useEffect(() => () => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+  }, []);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
   const [progress, setProgress] = useState({ done: 0, manual: 0 });
@@ -861,6 +892,9 @@ export function useAssist() {
   scopeRef.current = scope;
 
   const intervalMs = relaxInterval(monitorInterval(settings.monitorMode, modeCaptureMs(settings.executionMode, settings.captureMs)), settings.relaxMode);
+  /** The frame stream's adaptive rate: faster for verification, lower when several consumers pull. */
+  const [streamInterval, setStreamInterval] = useState(intervalMs);
+  const [frameStream, setFrameStream] = useState<StreamPlan | null>(null);
 
   // Persistence: settings, log and cards.
   useEffect(() => saveSettings(settings), [settings]);
@@ -966,6 +1000,9 @@ export function useAssist() {
       .forEach((f) => addLog('Memory', `${actor} — a similar operation failed before, adjusting: ${failureLine(f)}`, 'warn', f.shots));
   };
 
+  /** Voice control: spoken commands route into runInput; notifications and AI answers can be spoken. */
+  const voiceRef = useRef<ReturnType<typeof createVoiceControl> | null>(null);
+
   /** What runs for every new notification: auto-act (assigned below, once the executor exists). */
   const onNotifiedRef = useRef<(n: AssistNotification) => void>(() => undefined);
   const notifier = useNotifications((n) => onNotifiedRef.current(n));
@@ -1034,6 +1071,8 @@ export function useAssist() {
   /** Error forwarding: reports carry the recent log and the current frame. */
   const errorForwarding = useErrorForwarding(settings, addLog, () => ({ log: logRef.current, frame: framesRef.current[0] ?? null }), (what, ok) =>
     notify({ source: 'Error forwarding', category: 'errors', severity: ok ? 'info' : 'warning', title: `${what} ${ok ? 'delivered' : 'not delivered'}` }));
+  /** Auto-update: on start, check GitHub and pull/rebuild/relaunch when the branch is behind. */
+  const update = useAutoUpdate(settings.autoUpdate, (message, tone) => addLog(UPDATE_SOURCE, message, tone ?? 'info'));
   /** The approval system: the dispatch gate, the point filter, the queue and its run-check. */
   const approvals = useApprovals(settings, () => patternsRef.current, addLog);
   /** The operation database: every element, track, capture, error and idea operation with its input and output. */
@@ -3206,8 +3245,7 @@ export function useAssist() {
    * through the same gated pipeline (abort, arm, a fresh one-click budget). Disarmed is a dry run.
    */
   const testClick = async (el: ScreenElement) => {
-    setHighlight({ x: el.x, y: el.y, label: el.name });
-    setTimeout(() => setHighlight((h) => (h && h.x === el.x && h.y === el.y ? null : h)), 3000);
+    flashHighlight({ x: el.x, y: el.y, label: el.name });
     const where = `${gridRef(el)} (${pct(el.x)}, ${pct(el.y)})`;
     if (!armedRef.current) {
       addLog('Test click', `"${el.name}" highlighted at ${where} — real input disarmed, ${DRY_RUN}`, 'info');
@@ -4172,9 +4210,9 @@ export function useAssist() {
     const id = setInterval(() => {
       const c = demoCanvasRef.current;
       if (c && !pausedWhileHidden()) processRef.current(toFrame(c, DEMO_W, DEMO_H, ++frameId.current, 'demo'));
-    }, intervalMs);
+    }, streamInterval);
     return () => clearInterval(id);
-  }, [intervalMs, source]);
+  }, [streamInterval, source]);
 
   // Bridge monitor: a real desktop screenshot at the mode's interval; failures are logged, never faked.
   useEffect(() => {
@@ -4193,14 +4231,14 @@ export function useAssist() {
         .finally(() => {
           pollBusyRef.current = false;
         });
-    }, intervalMs);
+    }, streamInterval);
     return () => clearInterval(id);
-  }, [addLog, captureError, intervalMs, source]);
+  }, [addLog, captureError, streamInterval, source]);
 
-  // The running screen capture follows the monitor mode's interval live.
+  // The running screen capture follows the adaptive stream rate live.
   useEffect(() => {
-    captureRef.current?.setInterval(intervalMs);
-  }, [intervalMs]);
+    captureRef.current?.setInterval(streamInterval);
+  }, [streamInterval]);
 
   // The running native capture follows the chosen display live (Settings or the HUD quick-switch).
   useEffect(() => {
@@ -5578,12 +5616,27 @@ export function useAssist() {
     }
   };
 
-  /** A link/route test's passed and failed slices as habit outcomes on their targets (coordinate learner stage). */
+  /**
+   * A link/route test's passed and failed slices as habit outcomes on their targets (coordinate
+   * learner stage). The test cross-references both apps' routes — the habits store already holds
+   * droid-main's synced routes — so a method that works in either app strengthens the habit in both
+   * (the strengthened habits then cross the bridge by the store sync).
+   */
   const learnTestHabits = (results: SubagentReport['results'], kind: TestRequest['kind']) => {
     if (!stageOn('coords')) return;
     const context = `${kind}-test:${habitContext()}`;
     const tested = results.filter((r) => r.status === 'pass' || r.status === 'fail');
-    commitHabits(tested.reduce((h, r) => recordOutcome(h, { target: r.target, context, success: r.status === 'pass', avoid: r.avoid, add: r.add }), habitsRef.current));
+    const outcomes = tested.map((r) => ({ target: r.target, context, success: r.status === 'pass', avoid: r.avoid, add: r.add }));
+    commitHabits(outcomes.reduce((h, o) => recordOutcome(h, o), habitsRef.current));
+    const crossTests: CrossTest[] = tested.map((r) => ({ app: 'droid-new', subject: r.target, method: context, ok: r.status === 'pass', evidence: `${r.status}${r.message ? `: ${r.message}` : ''}`, at: Date.now() }));
+    // The habits store already holds droid-main's routes (merged by the store sync), so the context
+    // below cross-references both apps' learned methods even though the store carries no provenance.
+    const prior = habitsRef.current.map((h) => ({ app: 'droid-new' as const, subject: h.target, method: h.context, ok: h.successes > 0, at: h.lastUsed }));
+    for (const subject of new Set(tested.map((r) => r.target))) {
+      const lines = crossAppContext(subject, prior, logRef.current.slice(0, 3).map((l) => l.message));
+      if (lines.length) addLog('Supervisor', `Cross-app context for "${subject}": ${lines.join(' · ')}`, 'info');
+    }
+    if (crossTests.length) addLog('Supervisor', crossTestLine(crossTests), 'info');
   };
 
   /**
@@ -5646,6 +5699,7 @@ export function useAssist() {
         answered = answer;
         setAiAnswer(answer);
         setAnnotations(items);
+        voiceRef.current?.sayAnswer(answer);
         addLog('AI help', answer, 'info');
         items.filter((a) => a.actX !== undefined && a.actY !== undefined).forEach((a) => forwardElement('screen', { name: a.label, x: a.actX!, y: a.actY!, w: a.w, h: a.h }));
       } catch (error) {
@@ -5970,6 +6024,26 @@ export function useAssist() {
     disputedElements: resolution.disagreements.map((d) => d.element),
     arbitrate: resolution.arbitrate,
     act: (element) => testClick({ id: uid('swarm'), name: element.name, x: element.x, y: element.y, source: 'familiar' }),
+    health: () => ({
+      aiUp: aiOnline(),
+      latencyMs: 0,
+      crewLoad: Math.min(1, aiCalls / Math.max(1, settingsRef.current.crewSize)),
+      armed: armedRef.current,
+      canExecute: !abortedRef.current,
+    }),
+    decideApproval: (id, decision, text) => {
+      if (decision === 'rejected') rejectItem(id);
+      else if (decision === 'edited' && text) void editItem(id, text);
+      else void approveItem(id);
+    },
+    snapshot: () => (goalRef.current || stepsRef.current.length
+      ? { runId: flowRef.current ?? goalRef.current, goal: goalRef.current, steps: stepsRef.current.map((s) => s.name), activeIndex: activeIndex ?? 0, replay: logRef.current.slice(0, 40).reverse().map((l) => `[${l.source}] ${l.message}`), at: Date.now() }
+      : null),
+    onResume: (plan) => {
+      addLog('Resume', plan.summary, 'ok');
+      plan.replay.forEach((line) => addLog('Resume (while down)', line));
+      if (activeIndex === null && stepsRef.current.length) setActiveIndex(plan.resumeAt);
+    },
   });
   const bridgeV2Ref = useRef(bridgeV2);
   bridgeV2Ref.current = bridgeV2;
@@ -6125,6 +6199,7 @@ export function useAssist() {
   // Auto-act: a new notification with a proposed action runs it when its category is switched on (default off).
   onNotifiedRef.current = (n) => {
     if (n.action && settingsRef.current.notifyAutoAct[n.category]) void runNotificationAction(n, 'Auto-act');
+    voiceRef.current?.announce(`${n.source}: ${n.title}`);
   };
 
   /** The notification center's "Run" button. */
@@ -6507,6 +6582,8 @@ export function useAssist() {
     if (!bridgeUrl) return { ok: false, reason: 'no desktop / main-app bridge configured' };
     return { ok: true, value: await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current) };
   };
+  /** The plugin host: plugins register capabilities, commands and panels through a sandboxed API. */
+  const plugins = usePlugins((message, tone) => addLog('Plugin', message, tone ?? 'info'));
   /** The presentation studio: slideshows, movies, projects, approvals, rich notifications and the in-world embed. */
   const studio = usePresentations({
     ...capDeps,
@@ -6524,7 +6601,7 @@ export function useAssist() {
       },
     },
   });
-  const caps = useCapabilities(capDeps, studio.capabilities);
+  const caps = useCapabilities(capDeps, [...studio.capabilities, ...plugins.capabilities]);
 
   /** /crew locate <element> asks its sentinel; /crew test <what> runs a background-then-main test; any other /crew text is a goal for the AI-directed crew. */
   const crewCommand = async (text: string) => {
@@ -6559,24 +6636,107 @@ export function useAssist() {
     section: sectionCommand, scope: scopeCommand, replicate: replicateCommand, sidetest: sideTestCommand, research: researchCommand,
   };
 
-  /** Submits the assist input: slash commands run, anything else is planned as a goal. */
-  const submitInput = async () => {
-    const command = parseCommand(goal);
+  /** Runs one line of input as a command or a goal: the shared path for typed input and voice. */
+  const runInput = async (text: string) => {
+    const pluginCmd = plugins.commandFor(text);
+    if (pluginCmd) {
+      kb.noteSignal('command', text.trim());
+      try {
+        await pluginCmd.command.run(pluginCmd.target);
+      } catch (error) {
+        addLog('Plugin', `/${pluginCmd.command.name} failed — ${errorText(error)}`, 'error');
+      }
+      return;
+    }
+    const command = parseCommand(text);
     if (!command) {
-      if (isTestGoal(goal)) await testRoutes(parseTestSpec(goal));
-      else if (isChainGoal(goal)) await runChain(goal);
-      else await autoPlan(goal);
+      if (isTestGoal(text)) await testRoutes(parseTestSpec(text));
+      else if (isChainGoal(text)) await runChain(text);
+      else await autoPlan(text);
       return;
     }
     if (command.kind === 'error') {
       addLog('Command', command.message, 'warn');
       return;
     }
-    setGoal('');
-    kb.noteSignal('command', goal.trim());
+    kb.noteSignal('command', text.trim());
     if (command.kind === 'test') await testRoutes(parseTestSpec(command.target));
     else await COMMAND_RUNNERS[command.kind](command.target);
   };
+
+  /** Submits the assist input: slash commands run, anything else is planned as a goal. */
+  const submitInput = async () => {
+    const text = goal;
+    setGoal('');
+    await runInput(text);
+  };
+
+  /** Voice control: spoken commands route into runInput; notifications and AI answers can be spoken. */
+  voiceRef.current ??= createVoiceControl(browserEngines(), {
+    submit: (text) => void runInput(text),
+    log: (message, tone) => addLog('Voice', message, tone ?? 'info'),
+  });
+  const voice = voiceRef.current;
+  useEffect(() => {
+    voice.configure({
+      enabled: settings.voiceEnabled,
+      mode: settings.voiceMode,
+      lang: settings.voiceLang,
+      speakNotifications: settings.voiceSpeakNotifications,
+      speakResponses: settings.voiceSpeakResponses,
+      rate: settings.voiceRate,
+      volume: settings.voiceVolume,
+    });
+  }, [voice, settings.voiceEnabled, settings.voiceMode, settings.voiceLang, settings.voiceSpeakNotifications, settings.voiceSpeakResponses, settings.voiceRate, settings.voiceVolume]);
+
+  // Push-to-talk: hold Ctrl+Space to talk while voice is on and the mode is push-to-talk.
+  useEffect(() => {
+    if (!settings.voiceEnabled || settings.voiceMode !== 'push-to-talk') return undefined;
+    const down = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && e.ctrlKey && !e.repeat) { e.preventDefault(); voice.press(); }
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.ctrlKey) voice.release();
+    };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); voice.release(); };
+  }, [voice, settings.voiceEnabled, settings.voiceMode]);
+
+  /** The phone companion: the bridge serves a small mobile page over the engine's live state. */
+  const phone = usePhoneCompanion({
+    apps: () => [
+      { name: 'droid-new', status: aiOnline() ? 'connected' : 'offline', detail: aiStatus.detail },
+      { name: 'droid-main', status: mainBridge.status, detail: mainBridge.peer ?? 'the main Droid app' },
+    ],
+    approvals: () => approvals.items.filter((i) => i.status === 'pending').map((i) => ({ id: i.id, title: i.summary, detail: `${i.requestedBy} · ${i.goal || 'no goal'}` })),
+    workflows: () => cardsRef.current.map((c) => ({ id: c.id, name: c.name })),
+    driving: () => bridgeV2.driving.driver,
+    frame: () => framesRef.current[0]?.url ?? '',
+    approve: (id) => void approveItem(id),
+    reject: (id) => rejectItem(id),
+    runWorkflow: (id) => loadWorkflow(id),
+    log: (message, tone) => addLog('Phone', message, tone ?? 'info'),
+  });
+
+  /** Bandwidth-aware frame streaming: verification frames first, quality/rate lowered for many consumers. */
+  useEffect(() => {
+    const consumers: FrameConsumer[] = [];
+    if (phone.view.running) consumers.push({ id: 'phone', budgetBytes: 400_000, use: 'monitoring' });
+    if (replaying) consumers.push({ id: 'verification', budgetBytes: 1_500_000, use: 'verification' });
+    // With no extra consumers the stream keeps the user's configured monitor rate.
+    if (!consumers.length) {
+      setFrameStream(null);
+      setStreamInterval(intervalMs);
+      return;
+    }
+    const plan = planStream(consumers);
+    if (!planChanged(frameStream, plan)) return;
+    setFrameStream(plan);
+    setStreamInterval(plan.intervalMs);
+    addLog('Frame stream', streamLine(plan), 'info');
+    // Re-planned whenever the consumers or the configured rate change.
+  }, [phone.view.running, replaying, intervalMs, frameStream, addLog]);
 
   /** Explicit demo mode. */
   const useDemo = () => {
@@ -6792,6 +6952,7 @@ export function useAssist() {
   const approveWith = async (id: string, status: 'approved' | 'edited', edit?: string) => {
     const item = approvals.current(id);
     if (!item || item.status !== 'pending') return;
+    void bridgeV2Ref.current.sendApprovalDecision(id, status, edit);
     if (item.step) {
       await runApproved(item, edit === undefined ? item.step : editedStep(item.step, edit), status, edit);
       return;
@@ -6810,6 +6971,7 @@ export function useAssist() {
   const rejectItem = (id: string) => {
     const item = approvals.decide(id, 'rejected');
     if (!item) return;
+    void bridgeV2Ref.current.sendApprovalDecision(id, 'rejected');
     if (item.proposalId) dismissProposal(item.proposalId);
     learnDecision(item);
   };
@@ -6874,8 +7036,7 @@ export function useAssist() {
 
   /** Highlights a point on the preview for 3 s. */
   const flash = (h: { x: number; y: number; label: string }) => {
-    setHighlight(h);
-    setTimeout(() => setHighlight((cur) => (cur && cur.x === h.x && cur.y === h.y ? null : cur)), 3000);
+    flashHighlight(h);
   };
 
   const initiativeApi = useInitiative({
@@ -7351,6 +7512,16 @@ export function useAssist() {
     mainBridge, selectMainApp,
     /** Protocol v2 with droid-main: agreements, coordination, request flows, browser logs, the swarm, user requests and regulation. */
     bridgeV2,
+    /** Auto-update: check GitHub on start, pull/rebuild/relaunch when behind, and the manual controls. */
+    update,
+    /** The plugin host: registered capabilities, commands and panels, plus load/unload. */
+    plugins,
+    /** Voice control: spoken commands route into the command parser; notifications and answers can be spoken. */
+    voice,
+    /** The phone companion: the bridge serves a small mobile page over the engine's live state. */
+    phone,
+    /** Bandwidth-aware frame streaming: the current adaptive plan (quality/rate, consumers). */
+    frameStream,
     /** The active capture source, its kind and whether replay/drift are armed for it (HUD). */
     captureSource: captureStatus({ source, kind: captureRef.current?.kind, hasFrame: frames.length > 0, bridgeUrl: settings.bridgeUrl, mainConnected: mainBridge.status === 'connected' }),
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
