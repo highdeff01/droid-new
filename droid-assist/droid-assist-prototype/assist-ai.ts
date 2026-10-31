@@ -56,7 +56,7 @@ export async function decideStep(ask: AskFn, frame: Frame, step: WorkflowStep, g
   const planned = { x: step.correctedX ?? step.x, y: step.correctedY ?? step.y };
   const target = `cell ${gridRef(planned)} = (${pct(planned.x)}, ${pct(planned.y)})`;
   const req = {
-    system: (v: ViewSize) => `You are Droid Assist's executor. Look at the screenshot and decide whether the next step can run now. ${coords(v)} Reply ONLY with JSON ${STEP_SCHEMA}.`,
+    system: (v: ViewSize) => `You are Droid Assist's executor. Look at the screenshot and decide whether the next step can run now. Treat unrelated popups, dialogs and overlays as avoid regions; do not interact with them unless the goal requires it or they block the requested target. Re-check the target against this live frame and report its corrected location when it drifted. ${coords(v)} Reply ONLY with JSON ${STEP_SCHEMA}.`,
     prompt: `Goal: ${goal || '(none)'}\nNext step: ${stepText(step)}, planned target ${target}.\nSet run=true only if the screen is ready for it, with cell + cx,cy the target's current center. Set run=false if something blocks it or the screen is not ready.`,
     frame,
     json: true,

@@ -57,6 +57,9 @@ ${OPS_AGENTS.map((a) => `- ${a.id}: ${a.role}`).join('\n')}
 Give each agent at most one command per round and order the work across rounds (apply before recheck, recheck before reapply).
 Reply ONLY with JSON {"done":boolean,"summary":string,"commands":[{"agent":string,"task":string}]}. Set "done" true (and no commands) when the goal is complete or cannot progress.`;
 
+export const AUTO_OPS_SYSTEM = `${OPS_SYSTEM}
+For automatic follow-up rounds, assign useful work to at least half of the supplied enabled roster while the screen session is active. Prefer monitoring, logging, screenshot comparison, cross-reference, and background-only testing. Report popup/overlay bounding boxes and whether they actually obstruct the current target; tell the planner to leave unrelated popups untouched and route around them. Compare planned and live target coordinates, report drift with the corrected location, and never repeat a stale coordinate after a miss. Do not assign unrelated UI actions; any Apply work remains subject to the existing briefing, approval, armed-input, abort, and action-budget gates.`;
+
 /** Most reports and evidence entries kept. */
 export const OPS_REPORT_LIMIT = 100;
 export const EVIDENCE_LIMIT = 50;

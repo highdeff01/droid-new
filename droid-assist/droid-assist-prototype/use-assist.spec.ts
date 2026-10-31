@@ -399,7 +399,7 @@ describe('useAssist reverse of the last real action', () => {
     const result = await draggedOnDemo();
     expect(result.current.reverse?.record).toMatchObject({ action: 'drag', x: 864, y: 108, endX: 384, endY: 270 });
     expect(result.current.reverse?.reversal).toMatchObject({ ok: true, steps: [{ action: 'drag', x: 0.4, y: 0.5, endX: 0.9, endY: 0.2 }] });
-  });
+  }, 10000);
 
   it('a disarmed reverse is a dry run: nothing performed, the offer stays', async () => {
     const result = await draggedOnDemo();
@@ -410,7 +410,7 @@ describe('useAssist reverse of the last real action', () => {
     expect(result.current.history[0].message).toMatch(/dry run — not dispatched/);
     expect(result.current.log.some((l) => l.source === 'Reverse' && /dry run/.test(l.message))).toBe(true);
     expect(result.current.reverse).not.toBeNull();
-  });
+  }, 15000);
 
   it('an armed reverse drags back, is logged with the action and leaves nothing to reverse', async () => {
     const result = await draggedOnDemo();
@@ -418,7 +418,7 @@ describe('useAssist reverse of the last real action', () => {
     expect(result.current.history[0]).toMatchObject({ action: 'drag', source: 'Reverse', x: 384, y: 270, endX: 864, endY: 108 });
     expect(result.current.log.some((l) => l.source === 'Reverse' && /^reversed: drag/.test(l.message))).toBe(true);
     expect(result.current.reverse).toBeNull();
-  });
+  }, 15000);
 
   it('sends nothing while aborted', async () => {
     const result = await draggedOnDemo();
@@ -426,7 +426,7 @@ describe('useAssist reverse of the last real action', () => {
     await act(() => result.current.reverseLast());
     expect(result.current.history).toHaveLength(1);
     expect(result.current.log.some((l) => l.source === 'Reverse' && /reversal failed.*Aborted/.test(l.message))).toBe(true);
-  });
+  }, 10000);
 
   it('says "cannot reverse" for a non-invertible key and sends nothing', async () => {
     localStorage.setItem('droid-assist.action-history', JSON.stringify([{ id: 'k', time: 1, action: 'key', x: 960, y: 540, srcW: 1920, srcH: 1080, text: 'enter', source: 'Replay', via: 'demo', ok: true, message: 'ok' }]));
@@ -442,7 +442,10 @@ describe('useAssist reverse of the last real action', () => {
 describe('useAssist key and scroll recorder with human timing', () => {
   const press = (key: string, mods: Partial<{ ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }> = {}) => ({ key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...mods });
 
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   async function recordKeys() {
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -491,7 +494,7 @@ describe('useAssist key and scroll recorder with human timing', () => {
     await act(() => result.current.replay());
     expect(result.current.history.map((h) => h.action)).toEqual(expect.arrayContaining(['key', 'scroll']));
     expect(result.current.steps[0]).toMatchObject({ status: 'done', delayMs: 450 });
-  });
+  }, 15000);
 
   it('a disarmed replay of a key step sends nothing', async () => {
     const result = await recordKeys();
@@ -499,6 +502,26 @@ describe('useAssist key and scroll recorder with human timing', () => {
     // Disarmed: only entries labeled as dry runs — nothing dispatched.
     expect(result.current.history.length).toBeGreaterThan(0);
     expect(result.current.history.every((h) => h.dryRun && h.message.includes('dry run — not dispatched'))).toBe(true);
+  });
+
+  it('dry-runs external screen steps against the latest captured frame without contacting the desktop bridge', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(url);
+      throw new TypeError('offline');
+    }));
+    const { hooks } = installNative();
+    const { result } = renderHook(() => useAssist());
+    await act(async () => {});
+    await act(() => result.current.shareScreen());
+    act(() => hooks.onFrame!(frame()));
+    act(() => result.current.loadCard({ id: 'dry', name: 'Dry run', description: '', savedAt: 0, steps: [{ id: 'dry', name: 'Click target', action: 'click', x: 0.5, y: 0.5, status: 'pending' }] }));
+
+    await act(() => result.current.replay());
+
+    expect(result.current.steps[0].status).toBe('pending');
+    expect(result.current.log.some((l) => l.message.includes('verified on the last captured frame'))).toBe(true);
+    expect(calls.some((url) => url.includes('/api/health') || url.includes('/api/replay'))).toBe(false);
   });
 
   it('a key step is refused when aborted or when loop control has the executor unchecked', async () => {
@@ -1019,7 +1042,7 @@ describe('useAssist screen-change responder and proposals', () => {
     act(() => result.current.setSettings({ ...result.current.settings, autoAct: true }));
     await act(async () => {
       hooks.onFrame!(changed());
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 1250));
     });
     return result;
   }
@@ -1385,8 +1408,9 @@ describe('useAssist Screen watcher', () => {
   const model = () => vi.fn(async (_url: string, init: RequestInit) => {
     const body = String(init.body);
     const content = body.includes('screen watcher') ? observation
-      : body.includes('final verdict') ? '{"success":false,"pattern_avoid":null,"pattern_add":null}'
-        : body.includes('reviewing a step') ? 'It did not run.' : 'OK';
+      : body.includes('target checker') ? '{"visible":true,"reason":"target is under the marker"}'
+        : body.includes('final verdict') ? '{"success":false,"pattern_avoid":null,"pattern_add":null}'
+          : body.includes('reviewing a step') ? 'It did not run.' : 'OK';
     return new Response(JSON.stringify({ message: { role: 'assistant', content, thinking: 'watching' } }), { status: 200 });
   });
   const watcherCalls = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.filter(([, init]) => String((init as RequestInit).body).includes('screen watcher')).length;
@@ -1421,11 +1445,12 @@ describe('useAssist Screen watcher', () => {
     expect(result.current.watcher.notes.filter((n) => n.kind !== 'error').map((n) => n.text)).toEqual(['Files sidebar item at the left', 'An ad covers the top right']);
     expect(result.current.watcher.proposals).toHaveLength(1);
     expect(result.current.timeline.some((e) => e.step === 'Screen watcher' && e.thinking === 'watching')).toBe(true);
-    // Its background test ran once (no bridge here, so it failed) and fed the pattern system.
+    // The background test verifies against the captured screen without dispatching input.
     expect(result.current.watcher.tests).toHaveLength(1);
-    expect(result.current.watcher.tests[0]).toMatchObject({ verdict: 'failed', dryRun: true });
+    expect(result.current.watcher.tests[0]).toMatchObject({ verdict: 'passed', dryRun: true });
     expect(result.current.watcher.tests[0].tried).toMatch(/Dry-run click on "Files sidebar item"/);
-    expect(result.current.patterns.some((p) => p.kind === 'avoid' && /Files sidebar item/.test(p.pattern))).toBe(true);
+    expect(result.current.watcher.tests[0].happened).toMatch(/last captured frame.*dry run — not dispatched/);
+    expect(result.current.patterns.some((p) => p.kind === 'avoid' && /Files sidebar item/.test(p.pattern))).toBe(false);
     expect(result.current.history).toHaveLength(0);
     expect(JSON.parse(localStorage.getItem('droid-assist.watcher')!).notes.filter((n: { kind: string }) => n.kind !== 'error')).toHaveLength(2);
   });

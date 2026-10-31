@@ -23,7 +23,7 @@ const engine = (over: Record<string, unknown> = {}) => ({
 describe('CurrentOperationPanel', () => {
   it('shows the AI focus, its latest answer and each agent newest report without popup reports', () => {
     render(<CurrentOperationPanel engine={engine()} />);
-    const panel = screen.getByRole('region', { name: 'Current operation' });
+    const panel = screen.getByRole('region', { name: 'AI activity' });
     expect(screen.getByLabelText('AI attention').textContent).toContain('Plan: open the reports folder');
     expect(panel.textContent).toContain('The Save button is at the top right');
     expect(panel.textContent).toContain('Sync green — on target');
@@ -61,7 +61,7 @@ describe('Point out toggle', () => {
     await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(start);
     const stop = await screen.findByRole('button', { name: '■ Stop point out' });
-    expect(screen.getByRole('region', { name: 'Current operation' }).textContent).toContain('Point out runs every 5 s');
+    expect(screen.getByRole('region', { name: 'AI activity' }).textContent).toContain('Point out runs every 5 s');
     fireEvent.click(stop);
     expect(await screen.findByRole('button', { name: '👁 Point out' })).toBeTruthy();
   });

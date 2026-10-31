@@ -254,7 +254,7 @@ export function CalibrationPrompt({ engine }: { engine: AssistEngine }) {
 
 /** Primary HUD: screen source, record / replay / self-test, goal + AI plan. */
 export function Hud({ engine }: { engine: AssistEngine }) {
-  const { source, recording, replaying, goal, setGoal, settings, setSettings, steps, progress, plays, aiStatus, aiBusy } = engine;
+  const { source, recording, replaying, goal, setGoal, settings, setSettings, steps, progress, plays, aiStatus, aiBusy, armed } = engine;
   const aiOff = aiStatus.state !== 'online';
   const aiTitle = aiOff ? aiStatus.detail : undefined;
   const total = steps.length;
@@ -284,7 +284,7 @@ export function Hud({ engine }: { engine: AssistEngine }) {
             <button type="button" className={styles.danger} onClick={() => void engine.invoke('replay.stop')}>■ Stop</button>
           ) : (
             <>
-              <button type="button" className={styles.primary} onClick={() => void engine.invoke('replay.run', { selfTest: false })} disabled={recording || !total} title="Performs every step as real input on the PC through the desktop bridge">▶ Replay + drift</button>
+              <button type="button" className={styles.primary} onClick={() => void engine.invoke('replay.run', { selfTest: false })} disabled={recording || !total} title={armed ? 'Performs every step as real input through the connected bridge' : 'Verifies steps against the available frame; sends no input'}>▶ Replay + drift</button>
               <button type="button" onClick={() => void engine.invoke('selftest.run')} disabled={recording} title="Plans a goal, grounds it on the live frame, executes it (dry run unless armed) and verifies the result — report in the Self-test panel">🧪 AI self-test</button>
             </>
           )}

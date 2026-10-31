@@ -46,6 +46,9 @@ export const frameProvider = (source: ScreenSource): FrameProvider | null => ROU
 export function stepPlan(source: ScreenSource, { dryRun, bridgeUrl }: { dryRun: boolean; bridgeUrl: string }): StepPlan | null {
   const route = source === 'demo' && !dryRun && bridgeUrl ? DEMO_ON_BRIDGE : ROUTES[source];
   if (!route) return null;
+  if (dryRun && route.input === 'desktop-bridge') {
+    return { ...route, frames: 'captured', needsBridge: false };
+  }
   return { ...route, needsBridge: route.frames === 'bridge' || (!dryRun && route.input === 'desktop-bridge') };
 }
 

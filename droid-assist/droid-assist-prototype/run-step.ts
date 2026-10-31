@@ -19,7 +19,7 @@ export interface StepDeps {
   bridgeUrl: string;
   /** Bridge auth token sent with every bridge call; never logged. */
   bridgeToken: string;
-  /** A fresh real desktop screenshot; throws with the reason when there is none. */
+  /** A frame to verify against; dry-run callers may provide a cached or saved reference frame. */
   capture: () => Promise<Frame>;
   /** Live-frame checks before giving up on a target that cannot be found. */
   attempts: number;

@@ -26,6 +26,26 @@ function reveal(id: string): boolean {
 const GOAL_TONE: Record<GoalRecord['state'], string> = { pending: 'info', active: 'warn', achieved: 'ok', failed: 'error' };
 
 /** Current objective with its traced state, and the queued next goals. */
+function PreferredSection({ engine, notify }: { engine: AssistEngine; notify: (text: string) => void }) {
+  if (!engine.preferred.length) return null;
+  return (
+    <div aria-label="Screenshot references">
+      <h4>Screenshot references</h4>
+      <ul>
+        {engine.preferred.slice(0, SHOWN).map(({ frame, by, reason }) => (
+          <li key={frame.id}>
+            <button type="button" aria-label={`Open frame ${frame.id} in the gallery`} onClick={() => {
+              if (!reveal(`frame-${frame.id}`)) notify(`Frame #${frame.id} is no longer in the gallery.`);
+            }}>
+              Frame #{frame.id} · {by}: {reason}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function ObjectiveSection({ engine }: { engine: AssistEngine }) {
   const [draft, setDraft] = useState('');
   const current = currentObjective(engine.objectives);
@@ -48,29 +68,6 @@ function ObjectiveSection({ engine }: { engine: AssistEngine }) {
         <input value={draft} onChange={(e) => setDraft(e.target.value)} aria-label="Next goal" placeholder="Queue a next goal" />
         <button type="submit" disabled={!draft.trim()}>Queue</button>
       </form>
-    </div>
-  );
-}
-
-/** The AI's preferred key frames, each clickable through to the comparison gallery. */
-function PreferredSection({ engine, notify }: { engine: AssistEngine; notify: (text: string) => void }) {
-  const open = (id: number) => {
-    if (!reveal(`frame-${id}`) && !reveal(`pinned-frame-${id}`)) notify(`Frame #${id} is no longer in the gallery.`);
-  };
-  return (
-    <div aria-label="Preferred screenshots">
-      <h4>Preferred screenshots <small>{engine.preferred.length}</small></h4>
-      {!engine.preferred.length && <p className={styles.muted}>The AI and its agents mark key frames here as they work.</p>}
-      <div className={styles.gallery}>
-        {engine.preferred.map((p) => (
-          <figure key={p.frame.id}>
-            <button type="button" onClick={() => open(p.frame.id)} aria-label={`Open frame ${p.frame.id} in the gallery`}>
-              <img src={p.frame.url} alt={`Preferred frame ${p.frame.id}`} />
-            </button>
-            <figcaption>#{p.frame.id} · {p.by} · {p.reason}</figcaption>
-          </figure>
-        ))}
-      </div>
     </div>
   );
 }
@@ -173,8 +170,8 @@ export function LiveBriefingPanel({ engine }: { engine: AssistEngine }) {
     <section className={styles.panel} aria-label="Live briefing">
       <h3>Live briefing <small>{engine.aiWorking ? 'AI working' : 'idle'}</small></h3>
       {notice && <p className={styles.muted} role="status">{notice}</p>}
-      <ObjectiveSection engine={engine} />
       <PreferredSection engine={engine} notify={setNotice} />
+      <ObjectiveSection engine={engine} />
       <ActionsSection engine={engine} />
       <NotesSection engine={engine} notify={setNotice} />
       <UserNotesSection engine={engine} />

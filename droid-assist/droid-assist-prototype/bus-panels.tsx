@@ -3,6 +3,7 @@ import type { AssistEngine } from './use-assist.js';
 import { BUS_AGENTS, BUS_AGENT_IDS, inbox } from './agent-bus.js';
 import { tally, type SubagentStatus } from './subagents.js';
 import { CREW_ROLES, CREW_ROLE_IDS, statusCounts, type CrewStatus } from './crew.js';
+import { opsAgent, type OpsAgentId } from './operations.js';
 import { reporterName } from './resolution-center.js';
 import { RECOVERY_OPS, RECOVERY_OP_KINDS, type RecoveryOpKind } from './recovery-ops.js';
 import { downloadText } from './action-history.js';
@@ -78,9 +79,13 @@ export function AgentBusPanel({ engine }: { engine: AssistEngine }) {
 /** The agent crew: each agent's status, its last command and report; plus the live drag swarm and its controls. */
 export function AgentCrewPanel({ engine }: { engine: AssistEngine }) {
   const { crewAgents: crew, crewRunning, swarm, liveDragging, stopPlan, interveneDrag } = engine;
+  const operations = engine.ops.agents;
+  const opsWorking = operations.filter((agent) => agent.status === 'working').length;
+  const [aimX, setAimX] = useState('50');
+  const [aimY, setAimY] = useState('50');
   return (
     <section className={styles.panel} aria-label="Agent crew">
-      <h3>Agent crew <small>{crewRunning ? 'running' : 'idle'} · {crew.filter((a) => a.status === 'working').length} working</small></h3>
+      <h3>Agent crew <small>{crewRunning ? 'running' : 'ready'} · {crew.filter((a) => a.status === 'working').length} delegated · {opsWorking}/{operations.length} operations working</small></h3>
       {crewRunning && <button type="button" onClick={stopPlan}>Stop plan</button>}
       {!crewRunning && !crew.some((a) => a.task) && <p className={styles.muted}>Try "/crew find the Save button and the Files icon" — the main AI commands the agents.</p>}
       <ul className={styles.log}>
@@ -90,10 +95,35 @@ export function AgentCrewPanel({ engine }: { engine: AssistEngine }) {
           </li>
         ))}
       </ul>
+      <details open={opsWorking > 0}>
+        <summary>Operations agents <small>{opsWorking} working · {operations.length - opsWorking} ready</small></summary>
+        <ul className={styles.log}>
+          {operations.map((agent) => (
+            <li key={agent.id} data-tone={agent.status === 'working' ? 'info' : agent.status === 'parked' ? 'warn' : 'ok'}>
+              <b>{opsAgent(agent.id as OpsAgentId).name}</b> {agent.status}{agent.task ? ` — ${agent.task}` : ''}{agent.lastReport ? ` → ${agent.lastReport}` : ''}
+            </li>
+          ))}
+        </ul>
+      </details>
       {swarm.length > 0 && (
         <details open={liveDragging}>
           <summary>Live drag swarm <small>{swarm.length} coordinate agents{liveDragging ? ' · dragging' : ''}</small></summary>
-          {liveDragging && <button type="button" onClick={() => interveneDrag(null)}>Release now</button>}
+          {liveDragging && (
+            <>
+              <form className={styles.hud2} aria-label="Steer live drag" onSubmit={(event) => {
+                event.preventDefault();
+                const x = Number(aimX);
+                const y = Number(aimY);
+                if (Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 100 && y >= 0 && y <= 100) interveneDrag({ x: x / 100, y: y / 100 });
+              }}>
+                <label>Re-aim X (%) <input type="number" min="0" max="100" step="1" value={aimX} onChange={(event) => setAimX(event.target.value)} /></label>
+                <label>Y (%) <input type="number" min="0" max="100" step="1" value={aimY} onChange={(event) => setAimY(event.target.value)} /></label>
+                <button type="submit">Re-aim live drag</button>
+                <button type="button" onClick={() => interveneDrag(null)}>Release now</button>
+              </form>
+              <p className={styles.muted}>One shared pointer follows the agent route; re-aiming keeps the drag active, while release safely ends it.</p>
+            </>
+          )}
           <ol className={styles.log}>
             {swarm.map((a) => <li key={a.index}>({(a.point.x * 100).toFixed(1)}%, {(a.point.y * 100).toFixed(1)}%) <small>match {a.match.toFixed(3)}</small></li>)}
           </ol>

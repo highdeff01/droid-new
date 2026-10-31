@@ -113,6 +113,15 @@ describe('createOpsWorkers', () => {
     expect(resultArmed.found).toContain('foreground test of "Login button" passed');
   });
 
+  it('automatic background-only tests never dispatch foreground input even while armed', async () => {
+    const candidate: TestCandidate = { name: 'Save button', x: 0.4, y: 0.6 };
+    const deps = baseDeps({ candidates: () => [candidate], armed: () => true });
+    const result = await createOpsWorkers(deps)('testing', 'Background-only test "Save button"');
+    expect(deps.test).toHaveBeenCalledTimes(1);
+    expect(deps.test).toHaveBeenCalledWith(expect.objectContaining({ target: 'Save button' }), '', true);
+    expect(result.found).toContain('no input dispatched');
+  });
+
   it('placement unsupported message without api', async () => {
     const deps = baseDeps({ place: vi.fn(async () => ({ ok: false, supported: false, state: null, message: PLACEMENT_UNSUPPORTED })) });
     const worker = createOpsWorkers(deps);

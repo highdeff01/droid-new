@@ -1,3 +1,5 @@
+import { Component, useState, type DragEvent, type ReactNode } from 'react';
+import { isPanelId, type PanelArea, type PanelId } from './panel-layout.js';
 import { Component, type DragEvent, type ReactNode } from 'react';
 import { isPanelId, type FloatRect, type PanelArea, type PanelId } from './panel-layout.js';
 import styles from './droid-assist.module.css';
@@ -65,6 +67,15 @@ function PanelSlot({ id, onDragOver, onDrop, onFloat, children }: PanelSlotProps
     onFloat?.(id, { x: box?.left ?? 0, y: box?.top ?? 0, width: box?.width ?? 0 });
   };
   return (
+    <div className={styles.panelSlot} data-panel-id={id} data-collapsed={collapsed} onDragOver={onDragOver} onDrop={onDrop}>
+      <div className={styles.panelTools}>
+        <span className={styles.panelTitle}>{title}</span>
+        <button type="button" className={styles.panelHandle} draggable onDragStart={start} aria-label={`Move ${id} panel`} title="Drag to move this panel">⠿</button>
+        <button type="button" className={styles.panelToggle} onClick={() => setCollapsed((value) => !value)} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${id} panel`} aria-expanded={!collapsed}>
+          {collapsed ? '+' : '−'}
+        </button>
+      </div>
+      <div className={styles.panelBody} hidden={collapsed}><PanelErrorBoundary>{children}</PanelErrorBoundary></div>
     <div className={styles.panelSlot} data-panel-id={id} onDragOver={onDragOver} onDrop={onDrop}>
       <div className={styles.panelControls}>
         <button type="button" className={styles.panelHandle} draggable onDragStart={start} aria-label={`Move ${id} panel`} title="Drag to move this panel">⠿</button>

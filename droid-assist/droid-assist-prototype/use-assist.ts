@@ -152,7 +152,8 @@ import { DEFAULT_OPERATION_RETRIES } from './operation-retry.js';
 import { DEFAULT_PLAYBACK_WINDOW_SEC } from './playback.js';
 import { CREW_AGENTS, createScreenLock, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
 import { runLiveDrag, type DragIntervention, type LiveDragResult, type SwarmAgent } from './drag-swarm.js';
-import { OPS_AGENTS, OPS_SYSTEM, addEvidence, addOpsReport, changeKey, changeLine, dedupeLog, enabledOps, loopReport, mapDelta, markEvidence, monitorChange, opsAgent, opsFor, parseOpsTarget, patchOpsAgent, shouldReport, tagLog, type MonitorChange, type OpsAgentId, type OpsState, type TestCandidate } from './operations.js';
+import { AUTO_OPS_SYSTEM, OPS_AGENTS, OPS_SYSTEM, addEvidence, addOpsReport, changeKey, changeLine, dedupeLog, enabledOps, loopReport, mapDelta, markEvidence, monitorChange, opsAgent, opsFor, parseOpsTarget, patchOpsAgent, shouldReport, tagLog, type MonitorChange, type OpsAgentId, type OpsState, type TestCandidate } from './operations.js';
+import { AUTO_OPS_INTERVAL_MS, automaticOpsPlan, type AutomaticOpsPlan } from './agent-autopilot.js';
 import { createOpsWorkers, type Applied, type OpsWorkResult } from './ops-workers.js';
 import { placeWindow } from './window-placement.js';
 import { AI_RECHECK_MS, BREAKER_IDLE, PAUSE_POLL_MS, conflictDetails, dispatchKey, gateStep, modePauseText, pauseReason, strike, type Breaker, type GateBlock } from './dispatch-gate.js';
@@ -740,6 +741,8 @@ export function useAssist() {
   const screenLockRef = useRef(createScreenLock());
   const opsRef = useRef(ops);
   const opsRunningRef = useRef(false);
+  const lastAutoOpsAtRef = useRef(0);
+  const autoOpsTickRef = useRef<(immediate?: boolean) => void>(() => undefined);
   /** The Monitor agent's last seen change, last reported change, and the element-map names it last saw. */
   const opsChangeRef = useRef<MonitorChange | null>(null);
   const opsReportedRef = useRef<{ key: string; time: number } | null>(null);
@@ -2100,9 +2103,8 @@ export function useAssist() {
   };
 
   /**
-   * The one execution path every feature uses. Demo: simulated on the demo canvas. Otherwise
-   * real input via run-step (live desktop frame, drift correction, AI grounding of named
-   * targets, bridge dispatch, re-verify), gated by abort, arm and the run's budget.
+   * The one execution path every feature uses. Dry runs verify against in-app frames without dispatch;
+   * armed external input uses the desktop bridge and stays gated by abort, arm and the run's budget.
    */
   const performStep = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     if (abortedRef.current) return refused(step, `Aborted — real input not sent; ${ABORT_HINT}`);
@@ -2213,30 +2215,31 @@ export function useAssist() {
   };
 
   /**
-   * The live frame a step is located and re-verified on: the source's own latest captured frame
-   * (Electron, getDisplayMedia or the main-app mirror), else a fresh desktop bridge screenshot.
+   * The live frame a step is located and re-verified on: the source's own latest captured frame,
+   * a saved step frame for a dry run, or a fresh desktop bridge screenshot.
    */
-  const stepFrame = async (frames: FrameProvider): Promise<Frame> => {
+  const stepFrame = async (frames: FrameProvider, reference?: Frame): Promise<Frame> => {
     if (frames !== 'captured') return desktopFrame(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken, ++frameId.current);
     const own = framesRef.current[0];
-    if (!own) throw new Error(`no frame captured yet from the ${captureLabel(sourceRef.current, captureRef.current?.kind)}`);
-    return own;
+    if (own) return own;
+    if (reference) return reference;
+    throw new Error(`no frame captured yet from the ${captureLabel(sourceRef.current, captureRef.current?.kind)}`);
   };
 
   /** The step pipeline's host for the current source: its frames, its input route and the gates. */
-  const stepDeps = (plan: StepPlan, actor: string, budget: ActionBudget, dryRun: boolean): StepDeps => {
+  const stepDeps = (plan: StepPlan, actor: string, budget: ActionBudget, dryRun: boolean, reference?: Frame): StepDeps => {
     const { bridgeUrl, bridgeToken, checkpoints } = settingsRef.current;
     return {
       bridgeUrl,
       bridgeToken,
-      capture: () => stepFrame(plan.frames),
+      capture: () => stepFrame(plan.frames, dryRun ? reference : undefined),
       send: plan.input === 'main-app' ? sendToMainApp : undefined,
       attempts: Math.max(1, checkpoints),
       retryMs: 400,
       drift: driftThresholds(),
       dispatch: !dryRun,
       log: (m, tone) => addLog(actor, m, tone),
-      grounding: aiOnline() && stageOn('grounding') ? grounding : undefined,
+      grounding: !dryRun && aiOnline() && stageOn('grounding') ? grounding : undefined,
       seed: habitSeed,
       learned: learnedPoint,
       onVerified: strengthen,
@@ -2245,7 +2248,7 @@ export function useAssist() {
     };
   };
 
-  /** History gets real dispatches and verified dry runs; refused or unverified steps leave nothing. */
+  /** Demo history includes simulated actions and verified dry-run outcomes. */
   const historyWorthy = (out: Performed, dryRun: boolean) => out.executed || (dryRun && out.ok);
 
   /** The demo desktop's simulated input at a step's aimed point, for AI-free runs. */
@@ -2281,32 +2284,36 @@ export function useAssist() {
       if (out.bridgeFailed) captureError({ kind: 'main-app', message: out.message, goal: goalRef.current, step: step.name });
       return;
     }
-    if (historyWorthy(out, dryRun)) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
-    noteBridge(step, out, actor);
+    if (out.executed) recordAction(step, out, actor, 'bridge', out.live?.srcW ?? 1920, out.live?.srcH ?? 1080);
+    if (!dryRun) noteBridge(step, out, actor);
   };
 
   /**
    * A real-input step on the current capture source. The source only provides the frames and the
-   * input route (see capture-source): every source runs the same pipeline — locate and drift-correct
-   * on its live frames, AI grounding, corrected retry and re-verify. The demo simulates only dry runs
-   * or when no bridge is configured; a dry run on captured frames needs no bridge. A failure is loud.
+   * input route; every source uses the same guarded location, drift-correction and verification pipeline.
    */
   const dispatchInput = async (step: WorkflowStep, actor: string, budget: ActionBudget, dryRun: boolean): Promise<Performed> => {
     const plan = stepPlan(sourceRef.current, { dryRun, bridgeUrl: settingsRef.current.bridgeUrl });
     if (!plan) return refused(step, NO_SOURCE);
+    const target = { x: step.x, y: step.y };
+    if (dryRun && step.action === 'search') return { ok: true, executed: false, message: `Search "${step.text ?? ''}" would open in a new tab — ${DRY_RUN}`, target };
     if (plan.input === 'demo') {
       const out = await performOnDemo(step, dryRun);
       if (historyWorthy(out, dryRun)) recordAction(step, out, actor, 'demo', DEMO_W, DEMO_H);
       return out;
     }
     const local = plan.input === 'main-app' ? LOCAL_ACTIONS[step.action] : undefined;
-    if (local) return { ...(await local(step)), executed: true, target: { x: step.x, y: step.y } };
+    if (local) return { ...(await local(step)), executed: true, target };
     if (plan.needsBridge && !settingsRef.current.bridgeUrl) return refused(step, BRIDGE_REQUIRED);
     const gate = dryRun ? null : gateRealInput(budget);
     if (gate) return refused(step, gate);
     if (!dryRun && plan.input === 'desktop-bridge' && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) return performLiveDrag(step, actor);
-    const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), stepDeps(plan, actor, budget, dryRun));
+    const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), stepDeps(plan, actor, budget, dryRun, step.refFrame));
     noteRoute(plan, step, out, actor, dryRun);
+    if (dryRun && out.ok) {
+      const frameLabel = framesRef.current[0] ? 'last captured frame' : step.refFrame ? 'saved reference frame' : 'available frame';
+      return { ...out, message: `verified on the ${frameLabel} — ${DRY_RUN}` };
+    }
     return out;
   };
 
@@ -2381,6 +2388,10 @@ export function useAssist() {
         start, end, send,
         ref: step.refFrame?.data ?? before.data,
         drift: driftThresholds(),
+        avoidBoxes: () => {
+          const popup = popupRef.current;
+          return popup ? [{ x: popup.x, y: popup.y, w: popup.w, h: popup.h }] : [];
+        },
         live: () => framesRef.current[0]?.data ?? null,
         halt: liveDragHalt,
         intervention: () => {
@@ -4522,7 +4533,10 @@ export function useAssist() {
     const stopped = abortRef.current || (!dryRun && budget.used >= budget.limit && ok < ran.length);
     await learnFromRun(ran, { dryRun, stopped });
     await superviseRun();
-    if (!stopped) await autoSideTests();
+    if (!stopped) {
+      await autoSideTests();
+      if (!selfTest) autoOpsTickRef.current(true);
+    }
     return { ok, total: ran.length, dryRun, stopped };
   };
 
@@ -4548,7 +4562,7 @@ export function useAssist() {
     setSteps(stepsRef.current);
     const moved: MovedElement[] = [];
     let ok = 0;
-    addLog(label, dryRun ? `Verifying ${stepsRef.current.length} step(s) on the live screen — no input is sent` : `Performing ${stepsRef.current.length} step(s) as real input`);
+    addLog(label, dryRun ? `Verifying ${stepsRef.current.length} step(s) against the available screen frame — no input is sent` : `Performing ${stepsRef.current.length} step(s) as real input`);
     for (let i = 0; i < stepsRef.current.length && !abortRef.current; i++) {
       if (!(await waitWhilePaused(label))) break;
       const out = await replayStep(i, budget, dryRun, label);
@@ -5064,7 +5078,7 @@ export function useAssist() {
    * assign → work → report → wait — until done, stalled, Max iterations rounds, or Stop plan / abort.
    * "/ops <agent>: <task>" commands one agent directly.
    */
-  const runOps = async (text: string) => {
+  const runOps = async (text: string, automatic?: AutomaticOpsPlan) => {
     if (abortedRef.current) return addLog('Operations', refusedWhileAborted('Operations'), 'error');
     if (opsRunningRef.current) return addLog('Operations', 'An Operations run is already going', 'warn');
     const target = parseOpsTarget(text);
@@ -5074,7 +5088,7 @@ export function useAssist() {
     setOpsRunning(true);
     try {
       if ('agent' in target) await workOps(target.agent, target.task);
-      else await delegateOps(target.goal);
+      else await delegateOps(target.goal, automatic);
     } finally {
       opsRunningRef.current = false;
       setOpsRunning(false);
@@ -5082,8 +5096,8 @@ export function useAssist() {
   };
 
   /** The main AI's command loop over the enabled Operations agents. */
-  const delegateOps = async (goalText: string) => {
-    const roster = enabledOps(settingsRef.current.stages);
+  const delegateOps = async (goalText: string, automatic?: AutomaticOpsPlan) => {
+    const roster = automatic?.agents ?? enabledOps(settingsRef.current.stages);
     if (!stageOn('planner') || !roster.length) return addLog('Operations', `${stageOn('planner') ? 'Every Operations agent is unchecked in Loop control' : stageOff('planner')} — no Operations run`, 'warn');
     operationRef.current = goalText;
     addLog('Operations', `Main AI delegates "${goalText}" to ${roster.length} Operations agent(s)${armedRef.current ? '' : ' (real input disarmed: dry run)'}`, 'info');
@@ -5091,9 +5105,14 @@ export function useAssist() {
       await withAi(async () => {
         const out = await runCrew({
           agents: roster,
-          maxRounds: settingsRef.current.maxIterations,
-          decide: (reports, round) => thought(`Operations round ${round}: ${goalText}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, goalText, opsRef.current.agents.filter((a) => roster.includes(a.id as OpsAgentId)), reports, OPS_SYSTEM), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
-          work: async (c) => ({ agent: c.agent, task: c.task, ...(await opsWorker(c.agent as OpsAgentId, c.task)) }),
+          maxRounds: automatic ? 2 : settingsRef.current.maxIterations,
+          minimumCommands: automatic?.minimumCommands,
+          fallbackTasks: automatic?.fallbackTasks,
+          decide: (reports, round) => thought(`Operations round ${round}: ${goalText}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? (sourceRef.current === 'demo' ? demoSnapshot() : null), goalText, opsRef.current.agents.filter((a) => roster.includes(a.id as OpsAgentId)), reports, automatic ? AUTO_OPS_SYSTEM : OPS_SYSTEM), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
+          work: async (c) => {
+            const task = automatic && c.agent === 'testing' && !/\bbackground-only\b/i.test(c.task) ? `Background-only ${c.task}` : automatic && c.agent === 'loopControl' ? 'Report current stage states without changing any stage' : c.task;
+            return { agent: c.agent, task: c.task, ...(await opsWorker(c.agent as OpsAgentId, task)) };
+          },
           shouldStop: opsStopped,
           onAgents: (agents) => updateOps((s) => ({ ...s, agents: s.agents.map((a) => agents.find((x) => x.id === a.id) ?? a) })),
           onReport: (r) => recordOpsReport(r.agent as OpsAgentId, r.task, r),
@@ -5109,6 +5128,27 @@ export function useAssist() {
       operationRef.current = null;
     }
   };
+
+  const autoOpsTick = (immediate = false) => {
+    const now = Date.now();
+    if (!immediate && now - lastAutoOpsAtRef.current < AUTO_OPS_INTERVAL_MS) return;
+    if (opsRunningRef.current || crewRunningRef.current || executorBusy() || subRunningRef.current || abortRef.current || abortedRef.current || !aiOnline() || !stageOn('planner') || pausedWhileHidden() || !captureLive()) return;
+    const plan = automaticOpsPlan(enabledOps(settingsRef.current.stages), {
+      goal: goalRef.current,
+      hasFrame: !!framesRef.current[0] || (sourceRef.current === 'demo' && !!demoSnapshot()),
+      candidate: testCandidates()[0]?.name ?? null,
+      hasApplied: !!opsAppliedRef.current?.out.executed && opsAppliedRef.current.ok === null,
+    });
+    if (!plan) return;
+    lastAutoOpsAtRef.current = now;
+    void runOps(`Review the active screen session and recent work${goalRef.current.trim() ? ` for "${goalRef.current.trim()}"` : ''}`, plan);
+  };
+  autoOpsTickRef.current = autoOpsTick;
+
+  useEffect(() => {
+    const id = setInterval(() => autoOpsTickRef.current(), AUTO_OPS_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, []);
 
   /**
    * Monitor agent, on every new frame: a material change (DEFAULT_CHANGE_CELLS cells) is recorded and,

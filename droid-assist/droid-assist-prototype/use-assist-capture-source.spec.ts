@@ -117,7 +117,7 @@ describe.each(['native', 'display-media'] as const)('replay and drift on the loc
     await act(() => result.current.replay(true));
     const lines = logOf(result, 'Self-test');
     expect(lines.some((m) => /drift \d+px .*corrected by \(\+60, \+36\)px/.test(m))).toBe(true);
-    expect(lines.some((m) => /Press play: verified on the live screen — dry run — not dispatched/.test(m))).toBe(true);
+    expect(lines.some((m) => /Press play: verified on the last captured frame — dry run — not dispatched/.test(m))).toBe(true);
     expect(lines.some((m) => /no step was executed/.test(m))).toBe(false);
     expect(calls).toHaveLength(0);
   });

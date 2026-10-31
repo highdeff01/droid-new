@@ -12,15 +12,14 @@ const reportItem = (r: AgentReport) => (
 );
 
 /**
- * The current operation: what the AI is focused on (and who put it there), its latest answer
- * (auto point-out included), and every agent's newest live report except the popup watcher's.
+ * AI activity: what the assistant is focused on, its latest answer and recent agent reports.
  */
 export function CurrentOperationPanel({ engine }: { engine: AssistEngine }) {
   const { attention, aiAnswer, pointOutAuto } = engine;
   const reports = latestReports(engine.agentReports).filter((r) => !isPopupLine(`${r.name} ${r.text}`));
   return (
-    <section className={styles.panel} aria-label="Current operation">
-      <h3>Current operation</h3>
+    <section className={styles.panel} aria-label="AI activity">
+      <h3>AI activity</h3>
       <p aria-label="AI attention"><b>Focus:</b> {attention.focus} <small>· {attention.source}{attention.since ? ` · since ${clock(attention.since)}` : ''}</small></p>
       {pointOutAuto && <p><small>Point out runs every 5 s</small></p>}
       {aiAnswer ? <p aria-label="Latest AI answer">{aiAnswer}</p> : <p className={styles.muted}>No AI answer yet.</p>}

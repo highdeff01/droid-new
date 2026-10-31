@@ -14,8 +14,9 @@ describe('stepPlan', () => {
     expect(stepPlan('main-app', { dryRun: true, bridgeUrl: '' })).toMatchObject({ needsBridge: false });
   });
 
-  it('bridge source always needs the bridge for its screenshots', () => {
-    expect(stepPlan('bridge', { dryRun: true, bridgeUrl: 'http://pc' })).toEqual({ frames: 'bridge', input: 'desktop-bridge', needsBridge: true });
+  it('bridge source uses cached frames for dry runs and the bridge for real input', () => {
+    expect(stepPlan('bridge', { dryRun: true, bridgeUrl: 'http://pc' })).toEqual({ frames: 'captured', input: 'desktop-bridge', needsBridge: false });
+    expect(stepPlan('bridge', { dryRun: false, bridgeUrl: 'http://pc' })).toEqual({ frames: 'bridge', input: 'desktop-bridge', needsBridge: true });
   });
 
   it('demo: simulated unless armed with a bridge URL', () => {
