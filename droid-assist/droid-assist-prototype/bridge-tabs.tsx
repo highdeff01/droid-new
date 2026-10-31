@@ -4,6 +4,7 @@ import { MainBridgeBadge } from './hud.js';
 import { SwarmView } from './swarm-view.js';
 import { busyAgents } from './project-swarm.js';
 import { coordinationTotals } from './coordination.js';
+import { drivingFlag } from './driver.js';
 import { errorLogs } from './browser-logs.js';
 import styles from './droid-assist.module.css';
 
@@ -21,6 +22,7 @@ function StatusTab({ engine }: { engine: AssistEngine }) {
         <p>{replaying ? 'run in progress' : 'idle'}</p>
         <p>Armed: <b>{armed ? 'yes' : 'no'}</b></p>
         <p>Agents busy: <b>{busyAgents(bridgeV2.swarmRound)}</b></p>
+        <p aria-label="Who is driving">{drivingFlag(bridgeV2.driving)}</p>
       </div>
       <div>
         <h4>droid-main</h4>
@@ -40,10 +42,30 @@ function StatusTab({ engine }: { engine: AssistEngine }) {
 
 /** Planned vs dispatched vs verified, with totals, then the request flows between the apps. */
 function CoordinateTab({ engine }: { engine: AssistEngine }) {
-  const { coordination, flows } = engine.bridgeV2;
+  const { coordination, flows, driving, suggestions, acceptSuggestion, dismissSuggestion } = engine.bridgeV2;
   const totals = coordinationTotals(coordination);
   return (
     <div aria-label="Coordinate tab">
+      <p aria-label="Driving flag">
+        {drivingFlag(driving)} — {driving.reason}
+        {driving.driver === 'droid-main' && (
+          <button type="button" onClick={() => engine.bridgeV2.takeWheelBack()}>Take the wheel back</button>
+        )}
+      </p>
+      {suggestions.length > 0 && (
+        <div aria-label="Queued suggestions">
+          <h4>droid-main's suggestions (droid-new is driving)</h4>
+          <ul>
+            {suggestions.map((s) => (
+              <li key={s.id}>
+                {s.command}{s.mode ? ` → ${s.mode}` : ''}{s.reason ? ` — ${s.reason}` : ''}
+                <button type="button" onClick={() => acceptSuggestion(s.id)}>Accept</button>
+                <button type="button" onClick={() => dismissSuggestion(s.id)}>Dismiss</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <table>
         <thead>
           <tr><th>Step</th><th>Planned</th><th>Dispatched</th><th>Verified</th><th>Agreement</th></tr>

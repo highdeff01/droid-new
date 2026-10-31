@@ -104,7 +104,7 @@ describe('useBridgeV2 — user requests both ways', () => {
 });
 
 describe('useBridgeV2 — regulation both ways', () => {
-  it('droid-main regulate commands act on droid-new', () => {
+  it('queues droid-main regulate commands as suggestions while droid-new is driving', () => {
     const { bridge } = fakeBridge();
     const deps = makeDeps(bridge);
     const { result } = renderHook(() => useBridgeV2(deps));
@@ -112,8 +112,45 @@ describe('useBridgeV2 — regulation both ways', () => {
       result.current.onMessage(msg('regulate', { command: 'disarm' }, 'r1'));
       result.current.onMessage(msg('regulate', { command: 'mode', mode: 'aggressive' }, 'r2'));
     });
+    // droid-new is the boss and drives by default: a simultaneous command does not take effect.
+    expect(deps.regulate.setArmed).not.toHaveBeenCalled();
+    expect(deps.regulate.setMode).not.toHaveBeenCalled();
+    expect(result.current.driving.driver).toBe('droid-new');
+    expect(result.current.suggestions.map((s) => s.command)).toEqual(['mode', 'disarm']);
+    expect(result.current.suggestions[0].mode).toBe('aggressive');
+  });
+
+  it('applies a queued suggestion only when droid-new accepts it', () => {
+    const { bridge } = fakeBridge();
+    const deps = makeDeps(bridge);
+    const { result } = renderHook(() => useBridgeV2(deps));
+    act(() => { result.current.onMessage(msg('regulate', { command: 'disarm' }, 'r1')); });
+    const id = result.current.suggestions[0].id;
+    act(() => { result.current.acceptSuggestion(id); });
     expect(deps.regulate.setArmed).toHaveBeenCalledWith(false);
-    expect(deps.regulate.setMode).toHaveBeenCalledWith('aggressive');
+    expect(result.current.suggestions).toHaveLength(0);
+  });
+
+  it('drops a dismissed suggestion without applying it', () => {
+    const { bridge } = fakeBridge();
+    const deps = makeDeps(bridge);
+    const { result } = renderHook(() => useBridgeV2(deps));
+    act(() => { result.current.onMessage(msg('regulate', { command: 'disarm' }, 'r1')); });
+    act(() => { result.current.dismissSuggestion(result.current.suggestions[0].id); });
+    expect(deps.regulate.setArmed).not.toHaveBeenCalled();
+    expect(result.current.suggestions).toHaveLength(0);
+  });
+
+  it('droid-main regulate commands act directly once droid-main is driving', () => {
+    const { bridge } = fakeBridge();
+    const deps = makeDeps(bridge);
+    const { result } = renderHook(() => useBridgeV2(deps));
+    // droid-main takes a step over, so the wheel passes to it.
+    act(() => { result.current.onMessage(msg('takeover', { reason: 'stuck', goal: 'g', index: 0, step: 'Open menu', steps: ['Open menu'], log: [] })); });
+    expect(result.current.driving.driver).toBe('droid-main');
+    act(() => { result.current.onMessage(msg('regulate', { command: 'disarm' }, 'r2')); });
+    expect(deps.regulate.setArmed).toHaveBeenCalledWith(false);
+    expect(result.current.suggestions).toHaveLength(0);
   });
 
   it('droid-new regulates droid-main with a regulate message', async () => {

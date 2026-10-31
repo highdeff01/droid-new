@@ -8,6 +8,7 @@ import { TAKEOVER_MS, TAKEOVER_SOURCE, addRemoteOpinion, addTakeover, agreementS
 import { selectApp, standingCapabilities, type JobDecision } from './app-selection.js';
 import { SYNC_STORES, advanceWatermarks, fromPayload, mergeDelta, mergeLine, outgoingDelta, toPayload, type StoreWatermarks } from './store-sync.js';
 import { applySyncEntries, loadStoreWatermarks, loadSyncEntries, saveStoreWatermarks } from './storage.js';
+import { DRIVING_SOURCE, drivingLine, enqueueSuggestion, handWheel, isDriving, newDriving, suggestionLine, takeSuggestion, takeWheel, type Driving, type Suggestion } from './driver.js';
 import { busyAgents, roundLine, runSwarmRound, conflicts, type SwarmRound } from './project-swarm.js';
 import { buildCrew } from './crew.js';
 import { BROWSER_LOGS_SOURCE, captureConsole, fromConsolePayload, pushBrowserLog, type BrowserLog, type LogApp } from './browser-logs.js';
@@ -97,6 +98,12 @@ export function useBridgeV2(deps: BridgeV2Deps) {
   const doneRef = useRef(new Set<string>());
   /** Store-sync watermarks: the newest learned observation already exchanged with droid-main. */
   const watermarksRef = useRef<StoreWatermarks>(loadStoreWatermarks());
+  /** Who owns execution right now (droid-new by default). */
+  const [driving, setDriving] = useState<Driving>(() => newDriving());
+  const drivingRef = useRef(driving);
+  /** droid-main's simultaneous commands, held for droid-new to accept or dismiss. */
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const suggestionsRef = useRef<Suggestion[]>([]);
 
   const commit = (next: StepAgreement[]) => {
     agreementsRef.current = next;
@@ -105,6 +112,43 @@ export function useBridgeV2(deps: BridgeV2Deps) {
   const log = (message: string, tone: LogEntry['tone'] = 'info', from = BRIDGE_V2_SOURCE) => depsRef.current.addLog(from, message, tone);
   const send = <K extends OutboundType>(type: K, payload: OutboundPayloads[K], replyTo?: string) =>
     depsRef.current.bridge()?.send(type, payload, replyTo) ?? Promise.resolve({ ok: false, message: 'Main app bridge not started' });
+
+  /** Records a new driving flag in both the UI and the ref, and logs the change. */
+  const commitDriving = (next: Driving) => {
+    drivingRef.current = next;
+    setDriving(next);
+    log(drivingLine(next), 'info', DRIVING_SOURCE);
+  };
+
+  /** The wheel passes to droid-main (it took over a step). */
+  const handOverWheel = (reason: string) => commitDriving(handWheel(reason));
+
+  /** droid-new takes the wheel back. */
+  const takeWheelBack = (reason = 'droid-new took the wheel back') => commitDriving(takeWheel(reason));
+
+  const dropSuggestion = (id: string): Suggestion | null => {
+    const { queue, taken } = takeSuggestion(suggestionsRef.current, id);
+    suggestionsRef.current = queue;
+    setSuggestions(queue);
+    return taken;
+  };
+
+  /** droid-new accepts a queued suggestion and applies it (it stays the driver). */
+  const acceptSuggestion = (id: string): boolean => {
+    const taken = dropSuggestion(id);
+    if (!taken) return false;
+    log(applyRegulate(taken, depsRef.current.regulate, 'droid-main'), 'warn');
+    log(`droid-new accepted droid-main's suggestion "${taken.command}${taken.mode ? ` → ${taken.mode}` : ''}"`, 'info', DRIVING_SOURCE);
+    return true;
+  };
+
+  /** droid-new dismisses a queued suggestion without applying it. */
+  const dismissSuggestion = (id: string): boolean => {
+    const taken = dropSuggestion(id);
+    if (!taken) return false;
+    log(`droid-new dismissed droid-main's suggestion "${taken.command}${taken.mode ? ` → ${taken.mode}` : ''}"`, 'info', DRIVING_SOURCE);
+    return true;
+  };
 
   /** Decides which app does a job and logs it. */
   const decide = (name: string): JobDecision => {
@@ -172,9 +216,20 @@ export function useBridgeV2(deps: BridgeV2Deps) {
     },
     takeover: (p) => {
       commit(addTakeover(agreementsRef.current, p, Date.now()));
+      handOverWheel(`droid-main took over step ${p.index + 1} "${p.step}" — ${p.reason}`);
       log(`droid-main took over step ${p.index + 1} "${p.step}" — ${p.reason}; droid-new stays arbiter`, 'warn', TAKEOVER_SOURCE);
     },
-    regulate: (p) => log(applyRegulate(p, depsRef.current.regulate, 'droid-main'), 'warn'),
+    regulate: (p) => {
+      if (isDriving(drivingRef.current, 'droid-main')) {
+        log(applyRegulate(p, depsRef.current.regulate, 'droid-main'), 'warn');
+        return;
+      }
+      // droid-new is driving: a simultaneous command does not take effect, it becomes a queued suggestion.
+      const queued = enqueueSuggestion(suggestionsRef.current, p.command, p.mode, p.reason ?? '');
+      suggestionsRef.current = queued;
+      setSuggestions(queued);
+      log(suggestionLine(queued[0]), 'warn', DRIVING_SOURCE);
+    },
     step_opinion: (p) => {
       commit(addRemoteOpinion(agreementsRef.current, p, Date.now()));
       if (p.element) depsRef.current.forwardElement('mainApp', p.element);
@@ -226,7 +281,10 @@ export function useBridgeV2(deps: BridgeV2Deps) {
       const ruling = arbitrate(a);
       depsRef.current.arbitrate(a.step, ruling.text, ruling.complete);
     });
-    if (state === 'complete') once(`complete:${a.index}`, () => log(`Step ${a.index + 1} "${a.step}" complete — droid-new verified it and both apps' agents agree`, 'ok', TAKEOVER_SOURCE));
+    if (state === 'complete') once(`complete:${a.index}`, () => {
+      log(`Step ${a.index + 1} "${a.step}" complete — droid-new verified it and both apps' agents agree`, 'ok', TAKEOVER_SOURCE);
+      if (drivingRef.current.driver !== 'droid-new') takeWheelBack(`step ${a.index + 1} "${a.step}" completed`);
+    });
   };
 
   useEffect(() => {
@@ -243,7 +301,10 @@ export function useBridgeV2(deps: BridgeV2Deps) {
     const lines = d.recentLog().slice(0, 40).reverse().map((l) => `[${l.source}] ${l.message}`);
     const payload = takeoverPayload(d.goal(), d.steps.map((s) => s.name), a, lines, reason);
     void send('takeover', payload).then((r) => {
-      if (r.ok) commit(agreementsRef.current.map((x) => (x.index === 0 ? { ...x, owner: 'main' as const } : x)));
+      if (r.ok) {
+        commit(agreementsRef.current.map((x) => (x.index === 0 ? { ...x, owner: 'main' as const } : x)));
+        handOverWheel(`droid-main took over step 1 "${a.step}" — ${reason}`);
+      }
       log(r.ok ? `Handed step 1 "${a.step}" to droid-main — ${reason}` : `Could not hand step 1 "${a.step}" to droid-main — ${r.message}`, r.ok ? 'warn' : 'error', TAKEOVER_SOURCE);
     });
   };
@@ -342,6 +403,7 @@ export function useBridgeV2(deps: BridgeV2Deps) {
     onMessage, agreements, coordination: coordinationRows(deps.steps, agreements), flows,
     browserLogs, clearBrowserLogs, remote, swarmRound: round, runSwarm, dispatchSwarm,
     sendUserRequest, regulateMain, sendStoreDelta, decision,
+    driving, suggestions, acceptSuggestion, dismissSuggestion, takeWheelBack,
   };
 }
 
