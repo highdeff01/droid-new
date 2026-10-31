@@ -3,7 +3,7 @@
  * database with the app that did the work, so a future similar operation recalls what worked (and
  * what failed) on which app and app selection can prefer it.
  */
-import { emptyTally, type AppDecision, type AppTally } from './app-selection.js';
+import { emptyTally, type AppTally, type JointDecision } from './app-selection.js';
 import type { OperationRecord } from './operation-db.js';
 import type { OperationDraft } from './operation-log.js';
 import { similarOperation } from './operation-memory.js';
@@ -24,7 +24,7 @@ export interface JointOutcome {
 }
 
 /** The operation draft of one joint outcome, attributed to its app. */
-export function jointDraft(o: JointOutcome, d: AppDecision): OperationDraft {
+export function jointDraft(o: JointOutcome, d: JointDecision): OperationDraft {
   return { category: 'track', op: JOINT_OP, element: o.operation, input: `${o.role} on ${o.app} (${d.mode}) — ${d.reason}`, output: o.output, ok: o.ok, app: o.app };
 }
 

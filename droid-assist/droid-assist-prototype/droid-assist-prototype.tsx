@@ -1,4 +1,4 @@
-import { Routes, Route } from 'react-router-dom';
+import { Route, Routes } from 'react-router-dom';
 import { useAssist } from './use-assist.js';
 import { Stage } from './stage.js';
 import { Hud } from './hud.js';
@@ -85,9 +85,6 @@ function AssistScreen() {
       <main className={styles.main}>
         <Hud engine={engine} />
         <BridgeToolbar engine={engine} />
-        <LiveBriefingPanel engine={engine} />
-        <CurrentOperationPanel engine={engine} />
-        <PopupPanel engine={engine} />
         <div className={styles.work}>
           <div className={styles.workMain}>
             <Stage engine={engine} />

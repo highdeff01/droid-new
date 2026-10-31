@@ -1,5 +1,5 @@
-import type { LogEntry, WorkflowStep } from './types.js';
-import type { AgentVotePayload, InboundMessage, OutboundPayloads, OutboundType, ResultPayload, RunScriptPayload, TakeoverRequestPayload } from './main-bridge-protocol.js';
+import type { LogEntry, StepStatus, WorkflowStep } from './types.js';
+import type { AgentVotePayload, InboundMessage, OutboundPayloads, OutboundType, RegulateCommand, RegulatePayload, ResultPayload, RunScriptPayload, StepOpinionPayload, TakeoverPayload, TakeoverRequestPayload } from './main-bridge-protocol.js';
 
 /**
  * Droid-main takeover protocol. Droid-new is the boss and both apps share admin status. When a run
@@ -217,8 +217,6 @@ export function createTakeover(deps: TakeoverDeps) {
 }
 
 export type Takeover = ReturnType<typeof createTakeover>;
-import type { RegulateCommand, RegulatePayload, StepOpinionPayload, TakeoverPayload } from './main-bridge-protocol.js';
-import type { StepStatus, WorkflowStep } from './types.js';
 
 /** How long the first step of a run has to be verified complete before it is handed to droid-main. */
 export const TAKEOVER_MS = 10_000;

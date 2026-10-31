@@ -1,9 +1,6 @@
 import { BrowserRouter, HashRouter } from 'react-router-dom';
-import { 
-  createRoot, 
-  // hydrateRoot 
-} from 'react-dom/client';
-import { DroidAssistPrototype } from "./droid-assist-prototype.js";
+import { createRoot } from 'react-dom/client';
+import { DroidAssistPrototype } from './droid-assist-prototype.js';
 
 /**
  * comment this in for server-side rendering (ssr) and comment 

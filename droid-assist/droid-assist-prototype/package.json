@@ -13,7 +13,7 @@
     "build": "npm run build:web && npm run build:electron",
     "dist:win": "npm run build && electron-builder --win",
     "test": "vitest run",
-    "lint": "oxlint && tsc --noEmit -p tsconfig.json",
+    "lint": "oxlint --tsconfig ./tsconfig.json && tsc --noEmit -p tsconfig.json",
     "server": "tsx ai-server.ts"
   },
   "dependencies": {
@@ -52,6 +52,12 @@
       "dist/**",
       "dist-electron/**",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "bridge-service",
+        "to": "bridge-service"
+      }
     ],
     "win": {
       "target": [

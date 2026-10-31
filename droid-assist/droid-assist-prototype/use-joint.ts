@@ -8,7 +8,7 @@
 import { useRef, useState } from 'react';
 import type { GoalCheck } from './assist-ai.js';
 import type { ApprovalDraft, ApprovalItem } from './approvals.js';
-import { ARBITER, decisionText, selectApps, type AppDecision, type AppProfile, type JointOperation } from './app-selection.js';
+import { ARBITER, decisionText, selectApps, type AppProfile, type JointDecision, type JointOperation } from './app-selection.js';
 import type { CheckResult } from './follow-up.js';
 import type { FixContext } from './fix-script.js';
 import { DIAGNOSED_KINDS, codeFixPayload, diagnose, type JointError } from './joint-errors.js';
@@ -164,7 +164,7 @@ export function createJointEngine(get: () => JointDeps) {
   };
 
   /** Runs one half, records it with its app and logs the outcome. */
-  const doHalf = async (d: AppDecision, role: JointRole, goal: string, reason: string) => {
+  const doHalf = async (d: JointDecision, role: JointRole, goal: string, reason: string) => {
     const app = role === 'calculate' ? d.calculate : d.perform;
     const r = await half(app, role, d.operation, goal, reason);
     get().record(jointDraft({ operation: d.operation, app, role, ok: r.ok, output: r.message }, d));
@@ -173,7 +173,7 @@ export function createJointEngine(get: () => JointDeps) {
   };
 
   /** One joint turn: calculate, then perform with the result; earlier turns' actions are past. */
-  const turnOf = (d: AppDecision) => {
+  const turnOf = (d: JointDecision) => {
     const past: JointAction[] = [];
     return async (p: Project, injected: string[]): Promise<JointTurn> => {
       const goal = [p.goal, ...injected].join(' — ');
@@ -187,7 +187,7 @@ export function createJointEngine(get: () => JointDeps) {
   };
 
   /** An alternative attempt of a failed action: performed again with why it failed. */
-  const retryOf = (d: AppDecision) => async (action: JointAction, pass: number, reason: string) => {
+  const retryOf = (d: JointDecision) => async (action: JointAction, pass: number, reason: string) => {
     await doHalf(d, 'perform', `${action.expect} — retry ${pass} after: ${reason}`, `alternative attempt after: ${reason}`);
   };
 

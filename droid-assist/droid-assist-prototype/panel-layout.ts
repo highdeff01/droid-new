@@ -11,8 +11,7 @@ const DEFAULT_SIDE = [
   'operations',
 ] as const;
 const DEFAULT_BOTTOM = [
-  'liveBriefing', 'aiActivity', 'popups', 'comparisonGallery', 'aiHelp', 'briefing', 'aiHistory', 'qwenThinking', 'aiResponses', 'supervisor', 'agents', 'portfolios', 'loopControl',
-  'comparisonGallery', 'aiHelp', 'briefing', 'aiHistory', 'supervisor', 'agents', 'portfolios', 'loopControl',
+  'liveBriefing', 'aiActivity', 'popups', 'comparisonGallery', 'aiHelp', 'briefing', 'aiHistory', 'supervisor', 'agents', 'portfolios', 'loopControl',
   'capabilities', 'settings', 'agentBus', 'crew', 'agentCrew', 'opsAgents', 'subagentReport', 'resolution', 'log', 'errors',
   'actionHistory', 'database',
 ] as const;
