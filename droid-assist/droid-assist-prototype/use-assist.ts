@@ -23,7 +23,7 @@ import { localProposal, proposalText, proposeStep, type Proposal, type ProposalC
 import { addEntry, verdictText, type ThinkingEntry, type ThoughtKind } from './thinking-timeline.js';
 import { radarStatus, radarStatusText, radarTick, startRadar, type RadarEvent, type RadarState, type RadarTarget } from './radar.js';
 import { predictNextPosition, selfMoveSightings } from './mobility.js';
-import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, pointerAction, selfTestBridge, sendNative, type BridgeResult } from './bridge.js';
+import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, pointerAction, selfTestBridge, sendNative, sendToBridge, type BridgeResult } from './bridge.js';
 import { DRY_RUN, dragEndError, groundTarget, runStep, type Grounding, type SendFn, type StepDeps, type StepOutcome } from './run-step.js';
 import { NO_SOURCE, captureLabel, captureStatus, stepPlan, type FrameProvider, type StepPlan } from './capture-source.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
@@ -90,6 +90,7 @@ import { findScenario, progressLines, scenarioComplete } from './test-world-scen
 import { MAX_DISCOVERY, OBJECTIVE_TONE, chainReport, discoverTarget, isChainGoal, locateTarget, objectiveLine, planChain, type ChainObjective, type ChainPlan, type ChainRun, type DiscoveryMove } from './chain.js';
 import { applyReach, currentPath, deletePath, editPath, isHopAction, learnPaths, parseHops, pathLine, pathOutcome, pathSteps, reachTarget, relevantPaths, runPath, usablePath, type AccessProfile, type Reach } from './access-paths.js';
 import { useResolution } from './use-resolution.js';
+import { useBridgeV2 } from './use-bridge-v2.js';
 import { AUTO_RETRY_LABEL, AUTO_RETRY_TICK_MS, countAttempts, retryDue, retryText, type RetryCounts } from './auto-retry.js';
 import { DISAGREEMENT_THRESHOLD } from './resolution-center.js';
 import { dropGoal, loadGoals, projectId, queueGoal, saveGoals, settleGoal, startGoal, type GoalRecord } from './goal-objectives.js';
@@ -133,6 +134,8 @@ import { LOG_CAPTURE_WINDOW_MS, logErrorKind } from './error-forwarding.js';
 import { ERRORS_SOURCE } from './use-error-forwarding.js';
 import { captureDraft, elementDraft, errorDraft, errorSection, ideaDraft, projectOf, trackDraft, type OperationDraft } from './operation-log.js';
 import { useOperationDatabase, useOperations } from './use-operations.js';
+import { useAiFree, type AiFreeRoute } from './use-ai-free.js';
+import { sceneTick, type SceneRenderer } from './sample-workflows.js';
 import { usePresentations } from './use-presentations.js';
 import { askResearch } from './presentation-caps.js';
 import type { Got } from './presentation-sources.js';
@@ -140,7 +143,11 @@ import { drawWorldScreen, worldImageAt } from './presentation-project.js';
 import { DEFAULT_EXECUTION_MODE, EXECUTION_MODES, modeCaptureMs, modeChangeText, modeStatus, resolveAiDirective, type ExecutionMode, type ModeActor, type ModeDirective } from './execution-mode.js';
 import { DEFAULT_AUTO_APPLY, autoApplyDecision, bestGrounding, groundGoal, groundedStep, groundingShift, judgeCandidate, judgmentText, type KnownGrounding, type HeldCandidate, type Judgment } from './aggressive.js';
 import { NOT_CONNECTED, createMainBridge, defaultBridgeMode, type MainBridge, type MainBridgeConfig, type MainBridgeState } from './main-bridge.js';
-import type { FramePayload, InboundMessage, InterceptKind, InterceptPayload, RunScriptPayload } from './main-bridge-protocol.js';
+import type { FramePayload, InboundMessage, InterceptKind, InterceptPayload, JointRole, ResultPayload, RunScriptPayload } from './main-bridge-protocol.js';
+import { JOINT_SOURCE, useJoint } from './use-joint.js';
+import { errorApp, interceptError } from './joint-errors.js';
+import { CROSS_REFERENCE_LINES } from './joint-followup.js';
+import { loadOperations } from './operation-db.js';
 import { DEFAULT_OPERATION_RETRIES } from './operation-retry.js';
 import { DEFAULT_PLAYBACK_WINDOW_SEC } from './playback.js';
 import { CREW_AGENTS, createScreenLock, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
@@ -521,6 +528,8 @@ export function useAssist() {
   /** The main Droid app's connection: off, waiting for it, connecting, connected or failed with the last error. */
   const [mainBridge, setMainBridge] = useState<MainBridgeState>({ status: 'off', lastError: null, peer: null });
   const mainBridgeRef = useRef<MainBridge | null>(null);
+  /** Droid-main's takeover messages go to the AI-free hook's takeover controller; true when handled. */
+  const takeoverInboundRef = useRef<(m: InboundMessage) => boolean>(() => false);
   const [aborted, setAborted] = useState(false);
   /** When the ABORTED latch was set (for the HUD banner); null while clear. */
   const [abortedAt, setAbortedAt] = useState<number | null>(null);
@@ -1035,6 +1044,26 @@ export function useAssist() {
     const flow = cardsRef.current.find((c) => c.id === flowRef.current)?.name;
     recordRaw({ project: projectOf(flow, goalRef.current), agent, section }, draft);
   }, [recordRaw]);
+  /** The joint engine over the main app bridge: cross-app error diagnosis, app selection, follow-up and memory. */
+  const joint = useJoint({
+    addLog,
+    bridge: () => mainBridgeRef.current,
+    queue: approvals.queue,
+    fixScript: (ctx) => void proposeFix(ctx),
+    record: (draft) => recordOp(JOINT_SOURCE, 'mainBridge', draft),
+    history: loadOperations,
+    target: () => (sourceRef.current === 'main-app' ? 'droid-main' : 'droid-new'),
+    busy: () => executorBusy(),
+    local: (role, text) => jointLocal(role, text),
+    localFrame: () => framesRef.current[0] ?? null,
+    lines: (app) => logRef.current.filter((l) => (l.source === 'Main app') === (app === 'droid-main')).slice(0, CROSS_REFERENCE_LINES).map((l) => `${l.source}: ${l.message}`),
+    verify: async (action, frame) => {
+      const check = await verifyGoal(askFor('autoContinue'), frame, action.expect, []);
+      return { ok: check.complete, reason: check.reason };
+    },
+    pending: (g) => approvals.items.filter((i) => i.status === 'pending' && i.goal === g).length,
+    halt: () => (abortedRef.current ? ABORTED_REFUSAL : aiOnline() ? null : 'AI offline — joint follow-up cannot verify'),
+  });
   const forwardError = errorForwarding.capture;
   /** When the last explicit capture was made; an error log line close to it is the same failure. */
   const explicitCaptureAt = useRef(0);
@@ -1043,11 +1072,12 @@ export function useAssist() {
     forwardError(input);
     recordOp('Errors', errorSection(input.kind), errorDraft(input));
   }, [forwardError, recordOp]);
-  /** Captures an error for forwarding and records it in the operation database. */
-  const captureError = useCallback((input: CaptureInput) => {
+  /** Captures an error for forwarding, records it in the operation database and diagnoses it for a correction. */
+  const captureError = useCallback((input: CaptureInput & { file?: string }) => {
     explicitCaptureAt.current = Date.now();
     recordError(input);
-  }, [recordError]);
+    joint.onError({ ...input, app: errorApp(input.kind) });
+  }, [recordError, joint]);
   /** Every error-tone log line lands in the Errors list, unless an explicit capture of it was made alongside. */
   logErrorRef.current = (from, message, time) => queueMicrotask(() => {
     if (Math.abs(explicitCaptureAt.current - time) < LOG_CAPTURE_WINDOW_MS) return;
@@ -2220,6 +2250,33 @@ export function useAssist() {
 
   /** Demo history includes simulated actions and verified dry-run outcomes. */
   const historyWorthy = (out: Performed, dryRun: boolean) => out.executed || (dryRun && out.ok);
+
+  /** The demo desktop's simulated input at a step's aimed point, for AI-free runs. */
+  const sendToDemo: SendFn = async (step) => {
+    const p = { x: step.correctedX ?? step.x, y: step.correctedY ?? step.y };
+    if (step.action !== 'drag') return demoEffect(step, p);
+    const r = applyDemoDrag(p, { x: step.endX ?? p.x, y: step.endY ?? p.y });
+    return { ok: !!r.grabbed, message: r.message };
+  };
+
+  /**
+   * The AI-free route on the current source: its live frames and its real-input path. Input other than
+   * the simulated demo passes the real-input gate (abort, armed, this run's action budget); null without a source.
+   */
+  const aiFreeRoute = (): AiFreeRoute | null => {
+    const plan = stepPlan(sourceRef.current, { dryRun: false, bridgeUrl: settingsRef.current.bridgeUrl });
+    if (!plan) return null;
+    if (plan.input === 'demo') return { capture: async () => demoSnapshot() ?? Promise.reject(new Error('no demo canvas')), send: sendToDemo };
+    const budget = createBudget(settingsRef.current.actionBudget);
+    const real: SendFn = plan.input === 'main-app' ? sendToMainApp : (step, w, h, origin) => sendToBridge(settingsRef.current.bridgeUrl, step, w, h, { token: settingsRef.current.bridgeToken, origin });
+    return {
+      capture: () => stepFrame(plan.frames),
+      send: async (step, w, h, origin) => {
+        const gate = gateRealInput(budget);
+        return gate ? { ok: false, message: gate } : real(step, w, h, origin);
+      },
+    };
+  };
 
   /** Records a step's result on its route: a main-app failure is a main-app error; a desktop step is history and bridge health. */
   const noteRoute = (plan: StepPlan, step: WorkflowStep, out: Performed, actor: string, dryRun: boolean) => {
@@ -4368,6 +4425,16 @@ export function useAssist() {
     await runReplay(selfTest, { label: selfTest ? 'Self-test' : 'Replay', goal: runGoalOf() });
   };
 
+  /** droid-new's half of a joint operation: calculate plans the steps, perform runs them as the replay pipeline does. */
+  const jointLocal = async (role: JointRole, text: string): Promise<ResultPayload> => {
+    if (role === 'calculate') {
+      const planned = await autoPlan(text);
+      return { ok: planned, message: planned ? `planned ${stepsText(stepsRef.current)}` : 'no plan made' };
+    }
+    const out = await runReplay(!armedRef.current, { label: JOINT_SOURCE, goal: text });
+    return out ? { ok: !out.stopped && out.ok === out.total, message: `${out.ok}/${out.total} step(s) ${out.dryRun ? 'verified (dry run)' : 'executed'}` } : { ok: false, message: 'run refused before any step' };
+  };
+
   /** Whether the desktop bridge answers its health check; a failure is logged and captured. */
   const bridgeReady = async (label: string): Promise<boolean> => {
     const health = await checkBridge(settingsRef.current.bridgeUrl, settingsRef.current.bridgeToken);
@@ -5838,6 +5905,75 @@ export function useAssist() {
     connect: () => connectBridge(),
   });
 
+  /** Protocol v2 with droid-main: requests into the machinery, user requests both ways, takeover, regulation, browser logs and the swarm. */
+  const bridgeV2 = useBridgeV2({
+    bridge: () => mainBridgeRef.current,
+    connected: mainBridge.status === 'connected',
+    steps,
+    running: replaying,
+    activeIndex,
+    armed,
+    aiOnline,
+    crewSize: settings.crewSize,
+    knownElements,
+    bus,
+    goal: () => goalRef.current,
+    recentLog: () => logRef.current,
+    addLog,
+    forwardElement,
+    machinery: {
+      analyze: async (question) => {
+        const answer = await askScreen(question || undefined);
+        return answer ? { ok: true, message: answer } : { ok: false, message: 'No analysis — no frame, the screen watcher is off or the AI is unavailable' };
+      },
+      plan: async (planGoal) => {
+        const ok = await autoPlan(planGoal);
+        return { ok, message: ok ? `Planned ${stepsRef.current.length} step(s): ${stepsText(stepsRef.current)}` : `No plan made for "${planGoal}"` };
+      },
+      run: async (runGoal, selfTest) => {
+        if (runGoal && !(await autoPlan(runGoal))) return { ok: false, message: `No plan made for "${runGoal}" — nothing run` };
+        if (!stepsRef.current.length) return { ok: false, message: 'No plan to run' };
+        await replay(selfTest);
+        const ran = stepsRef.current;
+        const ok = ran.every((s) => s.status === 'done');
+        return { ok, message: `${ran.filter((s) => s.status === 'done').length}/${ran.length} step(s) done` };
+      },
+      verify: async (verifyFor) => {
+        if (!aiOnline()) return { ok: false, message: 'AI offline — cannot verify' };
+        const check = await verifyGoal(askFor('autoContinue'), framesRef.current[0] ?? null, verifyFor ?? runGoalOf(), stepsRef.current);
+        return { ok: check.complete, message: check.reason };
+      },
+      watch: async (on, watchTarget) => {
+        if (watchTarget) setTarget(watchTarget);
+        if (on) startPointOut();
+        else stopPointOut();
+        return { ok: true, message: on ? `Watching${watchTarget ? ` "${watchTarget}"` : ' the screen'}` : 'Stopped watching' };
+      },
+      assistError: async (message, errorGoal) => {
+        captureError({ kind: 'main-app', message, goal: errorGoal ?? goalRef.current });
+        return { ok: true, message: 'Error recorded and forwarded to the agents' };
+      },
+    },
+    regulate: {
+      pause: stopPlan,
+      stop,
+      resume: resumeRun,
+      setArmed: (on) => {
+        if (armedRef.current !== on) toggleArmed();
+      },
+      setMode: (mode) => {
+        if (mode in EXECUTION_MODES) setMode(mode as ExecutionMode, 'regulated by droid-main', 'ai');
+        else addLog('Main app v2', `droid-main asked for unknown execution mode "${mode}" — ignored`, 'warn');
+      },
+    },
+    plan: (text) => autoPlan(text),
+    disputedElements: resolution.disagreements.map((d) => d.element),
+    arbitrate: resolution.arbitrate,
+    act: (element) => testClick({ id: uid('swarm'), name: element.name, x: element.x, y: element.y, source: 'familiar' }),
+  });
+  const bridgeV2Ref = useRef(bridgeV2);
+  bridgeV2Ref.current = bridgeV2;
+
   // Bridge takeover: when a configured bridge answers, frames come from the real desktop unless the user chose the demo.
   useEffect(() => {
     const url = settings.bridgeUrl;
@@ -5882,6 +6018,7 @@ export function useAssist() {
   const onMainAppFrame = async ({ image, width, height }: FramePayload) => {
     try {
       const frame = await imageFrame(image, width, height, ++frameId.current, 'main-app');
+      joint.onFrame(frame);
       if (sourceRef.current === 'main-app') processRef.current(frame);
     } catch (error) {
       addLog('Main app', `Main app frame could not be decoded: ${errorText(error)}`, 'error');
@@ -5891,19 +6028,20 @@ export function useAssist() {
   /** What each intercept kind does beyond going on the agent bus. */
   const INTERCEPT_ROUTES: Record<InterceptKind, (p: InterceptPayload) => void> = {
     element_moved: () => void mainBridgeRef.current?.send('request_frame', {}),
-    error_occurred: (p) => captureError({ kind: 'main-app', message: p.message, goal: goalRef.current }),
+    error_occurred: (p) => captureError(interceptError(p, goalRef.current)),
     test_requested: (p) => void testRoutes(parseTestSpec(p.test ?? '')),
+    console_error: (p) => captureError(interceptError(p, goalRef.current)),
   };
 
   /** An intercept from the main app: logged, put on the agent bus from the main app, then routed by kind. */
   const onMainAppIntercept = (p: InterceptPayload) => {
-    addLog('Main app', `Intercept ${p.kind}: ${p.message}`, p.kind === 'error_occurred' ? 'error' : 'info');
+    addLog('Main app', `Intercept ${p.kind}: ${p.message}`, p.kind === 'error_occurred' || p.kind === 'console_error' ? 'error' : 'info');
     const element = p.element ?? { name: `${p.kind}: ${p.message}`, x: 0.5, y: 0.5 };
     forwardElement('mainApp', element, p.element ? undefined : NOTE_ONLY_AGENTS);
     INTERCEPT_ROUTES[p.kind](p);
   };
 
-  const mainAppHandlers = { onMainAppFrame, onMainAppIntercept, selectMainApp };
+  const mainAppHandlers = { onMainAppFrame, onMainAppIntercept, selectMainApp, onMainAppStatus: joint.onStatus };
   const mainAppRef = useRef(mainAppHandlers);
   mainAppRef.current = mainAppHandlers;
 
@@ -5911,9 +6049,12 @@ export function useAssist() {
   const mainConfigKey = JSON.stringify(mainBridgeConfig(settings));
   useEffect(() => {
     const onMessage = (m: InboundMessage) => {
+      if (takeoverInboundRef.current(m)) return;
       if (m.type === 'frame') void mainAppRef.current.onMainAppFrame(m.payload);
       else if (m.type === 'intercept') mainAppRef.current.onMainAppIntercept(m.payload);
       else if (m.type === 'hello') addLog('Main app', `Hello from ${m.payload.app}`, 'info');
+      else if (m.type === 'status') mainAppRef.current.onMainAppStatus(m.payload);
+      else bridgeV2Ref.current.onMessage(m);
     };
     const onState = (state: MainBridgeState) => {
       setMainBridge(state);
@@ -6414,7 +6555,7 @@ export function useAssist() {
   /** Each slash command's runner. */
   const COMMAND_RUNNERS: Record<Exclude<CommandName, 'test'>, (target: string) => Promise<void>> = {
     use: attachTarget, move: moveTo, measure: measureCommand, arrange, scenario: scenarioCommand, do: caps.doCommand, snip: snipCommand,
-    crew: crewCommand, intercept: interceptCommand, backtrack: backtrackCommand, ops: runOps,
+    crew: crewCommand, intercept: interceptCommand, backtrack: backtrackCommand, ops: runOps, joint: joint.run,
     section: sectionCommand, scope: scopeCommand, replicate: replicateCommand, sidetest: sideTestCommand, research: researchCommand,
   };
 
@@ -6658,7 +6799,9 @@ export function useAssist() {
     if (item.proposalId && edit !== undefined) updateWatcher((w) => ({ ...w, proposals: patchProposal(w.proposals, item.proposalId!, { text: edit }) }));
     if (item.proposalId) acceptProposal(item.proposalId);
     const decided = approvals.decide(id, status, edit);
-    if (decided) learnDecision(decided);
+    if (!decided) return;
+    learnDecision(decided);
+    await joint.onDecided(decided);
   };
 
   const approveItem = (id: string) => approveWith(id, 'approved');
@@ -6815,6 +6958,40 @@ export function useAssist() {
     runs,
   });
   const patchTrigger = (id: string, fn: (t: Trigger) => Trigger) => setTriggerList(triggersRef.current.map((t) => (t.id === id ? fn(t) : t)));
+
+  /** A demo scene rendered on an offscreen canvas: the sample workflows' reference screenshots. */
+  const renderScene: SceneRenderer = (scene) => {
+    const c = document.createElement('canvas');
+    c.width = DEMO_W;
+    c.height = DEMO_H;
+    const ctx = c.getContext('2d');
+    if (!ctx) return null;
+    drawDemoDesktop(ctx, DEMO_W, DEMO_H, sceneTick(scene), false, initialDemoFile(), initialDemoIcons(), null, scene.quest ? initialQuest() : null);
+    return toFrame(c, DEMO_W, DEMO_H, ++frameId.current, 'demo');
+  };
+
+  /** AI-free execution, sample workflows, trace/replay, the droid-main takeover and AI workflow building. */
+  const aiFree = useAiFree({
+    addLog,
+    route: aiFreeRoute,
+    learned: learnedPoint,
+    onVerified: strengthen,
+    replan: replanFailed,
+    ask: () => (aiOnline() && stageOn('planner') ? askFor('planner') : null),
+    renderScene,
+    saveOperation: (op) => savedOps.saveOperation(op.name, op.goal, op.source, op.steps),
+    loadSteps: (name, next) => loadCard({ id: '', name, description: '', savedAt: 0, steps: next }),
+    steps: () => stepsRef.current,
+    goal: () => goalRef.current,
+    frames: () => framesRef.current,
+    retries: () => settingsRef.current.stepRetries ?? DEFAULT_STEP_RETRIES,
+    stopped: ladderStopped,
+    busy: () => triggerBusyRef.current || executorBusy(),
+    sendMain: (type, payload) => mainBridgeRef.current?.request(type, payload) ?? Promise.resolve({ ok: false, message: NOT_CONNECTED }),
+    mainConnected: () => mainBridgeRef.current?.state().status === 'connected',
+    tellAi: (text) => note({ step: 'Takeover', kind: 'reflection', text, thinking: null }),
+  });
+  takeoverInboundRef.current = aiFree.onTakeoverMessage;
   const targetLabel = (t: Trigger) => targetText(t.target, cardsRef.current, savedOps.operations);
 
   /** Creates a trigger from the Triggers panel; appear/disappear need an element mapped with its template frame. */
@@ -7151,6 +7328,8 @@ export function useAssist() {
     accessPaths, editAccessPath, deleteAccessPath, testAccessPath,
     /** Saved operations, the main app's playback and detect + retry. */
     ...savedOps,
+    /** AI-free runs, sample workflows, trace export/import/replay, AI workflow building and the droid-main takeover. */
+    ...aiFree,
     bus, knownElements, forwardElement, subReport, subRunning, testRoutes, aiQueue,
     /** The coordinated crew (sentinels, testers, intercepts) and the AI-directed crew agents (/crew <goal>). */
     crew, crewAgents, crewRunning, runCrewGoal, stopPlan, swarm, liveDragging, interveneDrag,
@@ -7170,6 +7349,8 @@ export function useAssist() {
     bridgeOnline, verifyRealInput,
     /** The main Droid app bridge's live state, and selecting its preview as the screen source. */
     mainBridge, selectMainApp,
+    /** Protocol v2 with droid-main: agreements, coordination, request flows, browser logs, the swarm, user requests and regulation. */
+    bridgeV2,
     /** The active capture source, its kind and whether replay/drift are armed for it (HUD). */
     captureSource: captureStatus({ source, kind: captureRef.current?.kind, hasFrame: frames.length > 0, bridgeUrl: settings.bridgeUrl, mainConnected: mainBridge.status === 'connected' }),
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */

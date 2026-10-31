@@ -26,7 +26,7 @@ describe('settings', () => {
   beforeEach(() => localStorage.clear());
 
   it('round-trips a rearranged panel layout and validates it on load', () => {
-    const panelLayout = { side: [...DEFAULTS.panelLayout.side].reverse(), bottom: [...DEFAULTS.panelLayout.bottom] };
+    const panelLayout = { ...DEFAULTS.panelLayout, side: [...DEFAULTS.panelLayout.side].reverse(), bottom: [...DEFAULTS.panelLayout.bottom] };
     saveSettings({ ...DEFAULTS, panelLayout });
     expect(JSON.parse(localStorage.getItem('droid-assist.settings')!).panelLayout).toEqual(panelLayout);
     expect(loadSettings(DEFAULTS).panelLayout).toEqual(panelLayout);
@@ -35,7 +35,26 @@ describe('settings', () => {
     localStorage.setItem('droid-assist.settings', '{"panelLayout":{"side":["log","bogus","log"]}}');
     const loaded = loadSettings(DEFAULTS).panelLayout;
     expect(loaded.side[0]).toBe('log');
-    expect([...loaded.side, ...loaded.bottom].sort()).toEqual([...DEFAULTS.panelLayout.side, ...DEFAULTS.panelLayout.bottom].sort());
+    expect([...loaded.top, ...loaded.side, ...loaded.bottom].sort()).toEqual([...DEFAULTS.panelLayout.top, ...DEFAULTS.panelLayout.side, ...DEFAULTS.panelLayout.bottom].sort());
+  });
+
+  it('round-trips floating panel positions, clamps them to the viewport on load and docks invalid ones', () => {
+    const floating = { log: { x: 40, y: 60, width: 320, z: 1 }, goals: { x: 200, y: 100, width: 400, z: 2 } };
+    saveSettings({ ...DEFAULTS, panelLayout: { ...DEFAULTS.panelLayout, floating } });
+    expect(JSON.parse(localStorage.getItem('droid-assist.settings')!).panelLayout.floating).toEqual(floating);
+    expect(loadSettings(DEFAULTS).panelLayout.floating).toEqual(floating);
+    const stale = { ...DEFAULTS.panelLayout, floating: { log: { x: 99999, y: 99999, width: 300, z: 1 }, goals: { x: 'left', y: 0, width: 300, z: 2 } } };
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ panelLayout: stale }));
+    const loaded = loadSettings(DEFAULTS).panelLayout;
+    expect(loaded.floating).toEqual({ log: { x: window.innerWidth - 300, y: window.innerHeight - 40, width: 300, z: 1 } });
+    expect(loaded.side).toContain('goals');
+  });
+
+  it('surfaces the AI thinking panel at the top for a layout saved before the top area existed', () => {
+    localStorage.setItem('droid-assist.settings', JSON.stringify({ panelLayout: { side: ['goals'], bottom: ['qwenThinking', 'aiResponses', 'log'] } }));
+    const loaded = loadSettings(DEFAULTS).panelLayout;
+    expect(loaded.top).toEqual(['qwenThinking', 'aiResponses']);
+    expect(loaded.bottom[0]).toBe('log');
   });
 
   it('round-trips saved settings', () => {

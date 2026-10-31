@@ -147,7 +147,7 @@ describe('PROTOCOL', () => {
     });
 
     it('rejects an envelope with the wrong protocol version', () => {
-      const text = JSON.stringify({ v: 2, id: 'x', time: 1, type: 'hello', payload: { app: 'a' } });
+      const text = JSON.stringify({ v: 3, id: 'x', time: 1, type: 'hello', payload: { app: 'a' } });
       expect(parseInbound(text)).toMatchObject({ ok: false });
     });
 
