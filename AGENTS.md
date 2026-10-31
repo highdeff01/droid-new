@@ -334,3 +334,27 @@ export { User } from './user.js';
 | Creating a component that already exists                   | Always run `bit list` and check the Bit Cloud MCP (`read_scopes` / `search`) first                                 |
 | Using `npm install`, `yarn`, or `pnpm`                     | Use `bit install`                                                                                                  |
 | Using `tsc` or `npx tsc` to check types                    | Use `bit validate`, `bit check-types`, or `bit test`                                                               |
+
+---
+
+## Cross-app assist bridge (droid-new ⇄ Droid_app_main)
+
+The two apps coordinate over protocol v2. droid-new is the arbiter and owns execution; droid-main
+receives the driving flag and enforces the shared blacklist.
+
+- Protocol types live in `droid-assist/droid-assist-prototype/main-bridge-protocol.ts` (peer payloads,
+  inbound validators). droid-main mirrors them in `shared/assist-bridge.ts` (zod).
+- Peer messages: `store_delta` (learned-store delta) and `driving` (`{driver, since, reason}`).
+- Learned stores are shared by name: `habits`, `familiar`, `elementMap`, `accessPaths`, `avoidRules`,
+  `patterns`. A delta is keyed by store+key; the most recent verified observation wins and a tie keeps
+  the local entry — nothing is dropped.
+- `avoidRules` is the shared blacklist. droid-main enforces it at the single dispatch point
+  (`server/routes/execute-task.ts`, `blockedByBlacklist`); droid-new checks it before dispatching.
+- Derived entries read fresh each cycle carry `at: 0`, so a real observation supersedes them and the
+  periodic sync does not re-send them forever. Keep that invariant when adding a store adapter.
+- droid-main's half: `server/assist-bridge/{store-adapters,avoid-rules,driving}.ts`, `service.ts`,
+  `GET /driving`, `POST /sync`, and the `DrivingFlag` badge on the Assist page.
+- Docs: `Droid_app_main/Droid-Main-main/docs/assist-bridge-protocol.md` (learned-store sync, who's driving).
+
+Test commands: droid-new `npm test` (in `droid-assist/droid-assist-prototype`); droid-main
+`npx vitest run` and `npm run lint` (in `Droid-Main-main`).
