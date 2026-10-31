@@ -128,7 +128,7 @@ export interface Job {
 }
 
 /** Where each phase runs and why. */
-export interface AppDecision {
+export interface JobDecision {
   choice: AppChoice;
   calculate: AppId;
   perform: AppId;
@@ -149,7 +149,7 @@ const phaseText = (job: Job, phase: JobPhase, app: AppId | null) =>
   app ? `${phase} in ${APP_NAMES[app]} (cost ${job.apps[app][COST[phase]]})` : `nobody can ${phase} — ${APP_NAMES.assist} (boss) takes it`;
 
 /** Decides which app does a job by capability and cost. */
-export function decideApp(job: Job): AppDecision {
+export function decideApp(job: Job): JobDecision {
   const calc = cheapestFor(job, 'calculate');
   const perf = cheapestFor(job, 'perform');
   const calculate = calc ?? 'assist';
@@ -160,10 +160,10 @@ export function decideApp(job: Job): AppDecision {
 }
 
 /** The log line of a decision. */
-export const decisionLine = (job: Job, d: AppDecision) => `"${job.name}" → ${d.choice === 'assist' || d.choice === 'main' ? APP_NAMES[d.choice] : d.choice}: ${d.reason}`;
+export const decisionLine = (job: Job, d: JobDecision) => `"${job.name}" → ${d.choice === 'assist' || d.choice === 'main' ? APP_NAMES[d.choice] : d.choice}: ${d.reason}`;
 
 /** Decides and logs the decision (one line per call). */
-export function selectApp(job: Job, log: (source: string, line: string) => void): AppDecision {
+export function selectApp(job: Job, log: (source: string, line: string) => void): JobDecision {
   const d = decideApp(job);
   log(APP_SELECTION_SOURCE, decisionLine(job, d));
   return d;

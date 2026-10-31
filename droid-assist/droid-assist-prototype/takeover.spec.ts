@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FIRST_STEP_MS, VOTE_WAIT_MS, createTakeover, detectStalledStep, handoffPayload, stepCompletion, type TakeoverDeps } from './takeover.js';
-import { validateInbound, type InboundMessage, type OutboundPayloads, type OutboundType } from './main-bridge-protocol.js';
-import type { WorkflowStep } from './types.js';
+import { FIRST_STEP_MS, VOTE_WAIT_MS, agreementState, applyRegulate, arbitrate, createTakeover, detectStalledStep, handoffPayload, shouldHandOff, stepComplete, stepCompletion, syncAgreements, TAKEOVER_MS, withRemoteOpinion, type RegulateTarget, type StepAgreement, type TakeoverDeps } from './takeover.js';
+import { validateInbound, type InboundMessage, type OutboundPayloads, type OutboundType, type RegulatePayload } from './main-bridge-protocol.js';
+import type { StepStatus, WorkflowStep } from './types.js';
 
 const steps: WorkflowStep[] = [
   { id: 's1', name: 'Click Files', action: 'click', x: 0.05, y: 0.1, target: 'Files icon', status: 'pending', correctedX: 0.06, correctedY: 0.11 },
@@ -188,10 +188,8 @@ describe('takeover protocol messages', () => {
     expect(validateInbound({ v: 1, id: 'a', type: 'takeover_claim', payload: { runId: 'r', reason: 'stuck' } })).toEqual({ ok: false, error: 'takeover_claim needs runId and stepIndex' });
     expect(validateInbound({ v: 1, id: 'a', type: 'takeover_result', payload: { runId: 'r', stepIndex: 0 } })).toEqual({ ok: false, error: 'takeover_result needs ok and message' });
     expect(validateInbound({ v: 1, id: 'a', type: 'agent_vote', payload: { runId: 'r', stepIndex: 0, side: 'droid-new', agree: true } }).ok).toBe(false);
-import { describe, expect, it, vi } from 'vitest';
-import type { RegulatePayload } from './main-bridge-protocol.js';
-import { agreementState, applyRegulate, arbitrate, shouldHandOff, stepComplete, syncAgreements, TAKEOVER_MS, withRemoteOpinion, type RegulateTarget, type StepAgreement } from './takeover.js';
-import type { StepStatus, WorkflowStep } from './types.js';
+  });
+});
 
 describe('syncAgreements — a retried step', () => {
   const step = (status: StepStatus): WorkflowStep => ({ id: 's0', name: 'Open cart', action: 'click', x: 0.2, y: 0.4, status });

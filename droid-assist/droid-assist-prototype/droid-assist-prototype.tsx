@@ -7,7 +7,7 @@ import { BridgeTabs } from './bridge-tabs.js';
 import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BlacklistPanel, BriefingPanel, CapabilitiesPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel, SnipGalleryPanel, SectionsPanel, WakePanel } from './panels.js';
 import { AgentBusPanel, AgentCrewPanel, SubagentReportPanel, CrewPanel, ResolutionPanel } from './bus-panels.js';
 import { CurrentOperationPanel as OperationProgressPanel } from './current-operation-panel.js';
-import { CurrentOperationPanel as AiActivityPanel, PopupPanel } from './attention-panels.js';
+import { CurrentOperationPanel, CurrentOperationPanel as AiActivityPanel, PopupPanel } from './attention-panels.js';
 import { SelfTestPanel } from './screen-ai-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
 import { ProjectsPanel } from './projects-panel.js';
