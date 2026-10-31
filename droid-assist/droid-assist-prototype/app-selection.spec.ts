@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AI_CALL_COST,
   ARBITER,
@@ -124,7 +124,9 @@ describe('decisionText', () => {
     const text = decisionText(decision);
     expect(text).toContain('Save file');
     expect(text).toContain('split');
-import { describe, expect, it, vi } from 'vitest';
+  });
+});
+
 import {
   APP_SELECTION_SOURCE,
   decideApp,

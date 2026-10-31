@@ -1,6 +1,4 @@
 import { Component, useState, type DragEvent, type ReactNode } from 'react';
-import { isPanelId, type PanelArea, type PanelId } from './panel-layout.js';
-import { Component, type DragEvent, type ReactNode } from 'react';
 import { isPanelId, type FloatRect, type PanelArea, type PanelId } from './panel-layout.js';
 import styles from './droid-assist.module.css';
 
@@ -56,6 +54,8 @@ interface PanelSlotProps {
 
 /** A panel wrapped with a drag handle and an undock control; the panel itself is rendered as-is. */
 function PanelSlot({ id, onDragOver, onDrop, onFloat, children }: PanelSlotProps) {
+  const [collapsed, setCollapsed] = useState(false);
+  const title = id.replace(/([A-Z])/g, ' $1');
   const start = (e: DragEvent<HTMLButtonElement>) => {
     e.dataTransfer.setData(PANEL_DRAG_TYPE, id);
     e.dataTransfer.effectAllowed = 'move';
@@ -74,16 +74,11 @@ function PanelSlot({ id, onDragOver, onDrop, onFloat, children }: PanelSlotProps
         <button type="button" className={styles.panelToggle} onClick={() => setCollapsed((value) => !value)} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${id} panel`} aria-expanded={!collapsed}>
           {collapsed ? '+' : '−'}
         </button>
-      </div>
-      <div className={styles.panelBody} hidden={collapsed}><PanelErrorBoundary>{children}</PanelErrorBoundary></div>
-    <div className={styles.panelSlot} data-panel-id={id} onDragOver={onDragOver} onDrop={onDrop}>
-      <div className={styles.panelControls}>
-        <button type="button" className={styles.panelHandle} draggable onDragStart={start} aria-label={`Move ${id} panel`} title="Drag to move this panel">⠿</button>
         {onFloat && (
           <button type="button" className={styles.panelControl} onClick={(e) => float(e.currentTarget.closest('[data-panel-id]'))} aria-label={`Float ${id} panel`} title="Undock into a floating window">⧉</button>
         )}
       </div>
-      <div className={styles.panelBody}><PanelErrorBoundary>{children}</PanelErrorBoundary></div>
+      <div className={styles.panelBody} hidden={collapsed}><PanelErrorBoundary>{children}</PanelErrorBoundary></div>
     </div>
   );
 }

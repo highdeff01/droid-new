@@ -5,7 +5,7 @@ import type { MainBridge } from './main-bridge.js';
 import type { AppStatePayload, ConsoleLevel, InboundMessage, OutboundPayloads, OutboundType, PeerPayloads, RegulateCommand } from './main-bridge-protocol.js';
 import { routeV2, type PeerHandlers, type V2Machinery } from './bridge-v2-handlers.js';
 import { TAKEOVER_MS, TAKEOVER_SOURCE, addRemoteOpinion, addTakeover, agreementState, applyRegulate, arbitrate, handOffReason, shouldHandOff, syncAgreements, takeoverPayload, type RegulateTarget, type StepAgreement } from './takeover.js';
-import { selectApp, standingCapabilities, type AppDecision } from './app-selection.js';
+import { selectApp, standingCapabilities, type JobDecision } from './app-selection.js';
 import { busyAgents, roundLine, runSwarmRound, conflicts, type SwarmRound } from './project-swarm.js';
 import { buildCrew } from './crew.js';
 import { BROWSER_LOGS_SOURCE, captureConsole, fromConsolePayload, pushBrowserLog, type BrowserLog, type LogApp } from './browser-logs.js';
@@ -85,7 +85,7 @@ export function useBridgeV2(deps: BridgeV2Deps) {
   const [remote, setRemote] = useState<AppStatePayload | null>(null);
   const [round, setRound] = useState<SwarmRound | null>(null);
   const roundRef = useRef(0);
-  const [decision, setDecision] = useState<AppDecision | null>(null);
+  const [decision, setDecision] = useState<JobDecision | null>(null);
   const planKeyRef = useRef('');
   /** Once-per-plan effects already done (opinions sent, arbitrations, completions). */
   const doneRef = useRef(new Set<string>());
@@ -99,7 +99,7 @@ export function useBridgeV2(deps: BridgeV2Deps) {
     depsRef.current.bridge()?.send(type, payload, replyTo) ?? Promise.resolve({ ok: false, message: 'Main app bridge not started' });
 
   /** Decides which app does a job and logs it. */
-  const decide = (name: string): AppDecision => {
+  const decide = (name: string): JobDecision => {
     const d = depsRef.current;
     const capabilities = standingCapabilities({ armed: d.armed, aiOnline: d.aiOnline(), mainConnected: d.connected });
     const next = selectApp({ name, apps: capabilities }, (source, line) => d.addLog(source, line, 'info'));
