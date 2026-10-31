@@ -10,6 +10,8 @@ import { grabDisplay, grabScreen, listDisplays } from './screen-grab.js';
 import { BRIDGE_URL_PATTERNS, withBridgeCors } from './bridge-cors.js';
 import { MAIN_BRIDGE_CHANNELS, type ListenOptions } from './main-bridge-api.js';
 import { startMainBridgeListener, type MainBridgeListener } from './main-bridge-server.js';
+import { UPDATE_CHANNELS } from './update-api.js';
+import { check, update } from './update-runner.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** One capture loop per renderer. */
@@ -115,6 +117,22 @@ function registerWindowIpc() {
   }));
 }
 
+/** Wires the auto-update IPC: check GitHub, then pull/reinstall/rebuild and relaunch. */
+function registerUpdateIpc() {
+  ipcMain.handle(UPDATE_CHANNELS.check, async () => {
+    const c = await check();
+    return { ...c, version: app.getVersion() };
+  });
+  ipcMain.handle(UPDATE_CHANNELS.run, async () => {
+    const r = await update();
+    if (r.ok) {
+      // The rebuilt app is on disk; restart into it. A short delay lets the reply reach the renderer.
+      setTimeout(() => { app.relaunch(); app.exit(0); }, 500);
+    }
+    return { ok: r.ok, message: r.message, steps: r.steps.map((s) => ({ name: s.name, ok: s.ok })) };
+  });
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
@@ -142,6 +160,7 @@ void app.whenReady().then(() => {
   registerSystemIpc();
   registerMainBridgeIpc();
   registerWindowIpc();
+  registerUpdateIpc();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

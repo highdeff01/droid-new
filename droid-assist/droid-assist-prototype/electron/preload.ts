@@ -3,6 +3,7 @@ import { CAPTURE_CHANNELS, type NativeCaptureApi, type NativeFrame } from './cap
 import { SYSTEM_CHANNELS, type NativeSystemApi } from './system-api.js';
 import { MAIN_BRIDGE_CHANNELS, type MainBridgeNativeApi } from './main-bridge-api.js';
 import { WINDOW_CHANNELS, type NativeWindowApi } from './window-api.js';
+import { UPDATE_CHANNELS, type NativeUpdateApi } from './update-api.js';
 
 let frameListener: ((event: IpcRendererEvent, frame: NativeFrame) => void) | null = null;
 let errorListener: ((event: IpcRendererEvent, message: string) => void) | null = null;
@@ -95,3 +96,10 @@ const windowApi: NativeWindowApi = {
 };
 
 contextBridge.exposeInMainWorld('droidWindow', windowApi);
+/** The auto-update API the renderer sees as `window.droidUpdate`. */
+const updateApi: NativeUpdateApi = {
+  check: () => ipcRenderer.invoke(UPDATE_CHANNELS.check),
+  run: () => ipcRenderer.invoke(UPDATE_CHANNELS.run),
+};
+
+contextBridge.exposeInMainWorld('droidUpdate', updateApi);

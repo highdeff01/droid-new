@@ -191,9 +191,10 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
   out.crewSize = Math.round(out.crewSize);
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'liveDrag', 'showGrid', 'gridLabels', 'autoScan', 'relaxMode', 'aiThink', 'aiOverlap', 'mainBridgeEnabled'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'liveDrag', 'showGrid', 'gridLabels', 'autoScan', 'relaxMode', 'aiThink', 'aiOverlap', 'mainBridgeEnabled', 'autoUpdate'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
+  if (typeof stored.updateStatus === 'string' && stored.updateStatus.length <= MASTER_PROMPT_MAX) out.updateStatus = stored.updateStatus;
   if (typeof stored.masterPrompt === 'string' && stored.masterPrompt.length <= MASTER_PROMPT_MAX) out.masterPrompt = stored.masterPrompt;
   for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken', 'mainBridgeUrl', 'mainBridgeToken'] as const) {
     const v = stored[key];

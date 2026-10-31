@@ -68,6 +68,7 @@ import { NO_ASSESSMENT, SUPERVISOR_INTERVAL_MS, SUPERVISOR_REPLAN_LIMIT, SUPERVI
 import { BUS_AGENTS, BUS_AGENT_IDS, elementLine, forward, isGridLabel, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
 import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
+import { useAutoUpdate, UPDATE_SOURCE } from './use-update.js';
 import { useApprovals } from './use-approvals.js';
 import { DEFAULT_OPERATION_POLICY, decisionLesson, editedStep, type ApprovalItem, type OperationPolicy } from './approvals.js';
 import { buildElementMap } from './element-map.js';
@@ -380,6 +381,8 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   systemRefreshSec: DEFAULT_SYSTEM_REFRESH_SEC,
   notifyAutoAct: DEFAULT_AUTO_ACT,
   systemFolders: [],
+  autoUpdate: true,
+  updateStatus: '',
   panelLayout: DEFAULT_PANEL_LAYOUT,
   mainBridgeEnabled: true,
   mainBridgeMode: 'listen',
@@ -1034,6 +1037,8 @@ export function useAssist() {
   /** Error forwarding: reports carry the recent log and the current frame. */
   const errorForwarding = useErrorForwarding(settings, addLog, () => ({ log: logRef.current, frame: framesRef.current[0] ?? null }), (what, ok) =>
     notify({ source: 'Error forwarding', category: 'errors', severity: ok ? 'info' : 'warning', title: `${what} ${ok ? 'delivered' : 'not delivered'}` }));
+  /** Auto-update: on start, check GitHub and pull/rebuild/relaunch when the branch is behind. */
+  const update = useAutoUpdate(settings.autoUpdate, (message, tone) => addLog(UPDATE_SOURCE, message, tone ?? 'info'));
   /** The approval system: the dispatch gate, the point filter, the queue and its run-check. */
   const approvals = useApprovals(settings, () => patternsRef.current, addLog);
   /** The operation database: every element, track, capture, error and idea operation with its input and output. */
@@ -7351,6 +7356,8 @@ export function useAssist() {
     mainBridge, selectMainApp,
     /** Protocol v2 with droid-main: agreements, coordination, request flows, browser logs, the swarm, user requests and regulation. */
     bridgeV2,
+    /** Auto-update: check GitHub on start, pull/rebuild/relaunch when behind, and the manual controls. */
+    update,
     /** The active capture source, its kind and whether replay/drift are armed for it (HUD). */
     captureSource: captureStatus({ source, kind: captureRef.current?.kind, hasFrame: frames.length > 0, bridgeUrl: settings.bridgeUrl, mainConnected: mainBridge.status === 'connected' }),
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */

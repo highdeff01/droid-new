@@ -380,6 +380,10 @@ export interface AssistSettings {
   notifyAutoAct: AutoActMap;
   /** Folders (native paths) the System panel reports file specs for. */
   systemFolders: string[];
+  /** Check GitHub for a newer build on start and, when behind, pull/rebuild/relaunch automatically. */
+  autoUpdate: boolean;
+  /** The last update check's one-line result, shown in Settings → Updates. */
+  updateStatus: string;
   /** User arrangement of the workspace panels, per area; validated on load so no panel is ever lost. */
   panelLayout: PanelLayout;
 }
