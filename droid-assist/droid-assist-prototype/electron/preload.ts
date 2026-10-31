@@ -4,6 +4,7 @@ import { SYSTEM_CHANNELS, type NativeSystemApi } from './system-api.js';
 import { MAIN_BRIDGE_CHANNELS, type MainBridgeNativeApi } from './main-bridge-api.js';
 import { WINDOW_CHANNELS, type NativeWindowApi } from './window-api.js';
 import { UPDATE_CHANNELS, type NativeUpdateApi } from './update-api.js';
+import { PHONE_CHANNELS, type PhoneAction, type PhoneNativeApi } from './phone-api.js';
 
 let frameListener: ((event: IpcRendererEvent, frame: NativeFrame) => void) | null = null;
 let errorListener: ((event: IpcRendererEvent, message: string) => void) | null = null;
@@ -103,3 +104,21 @@ const updateApi: NativeUpdateApi = {
 };
 
 contextBridge.exposeInMainWorld('droidUpdate', updateApi);
+/** The phone-companion API the renderer sees as `window.droidPhone`. */
+let phoneActionListener: ((event: IpcRendererEvent, action: PhoneAction) => void) | null = null;
+const phoneApi: PhoneNativeApi = {
+  start: (options) => ipcRenderer.invoke(PHONE_CHANNELS.start, options),
+  push: (state) => ipcRenderer.send(PHONE_CHANNELS.state, state),
+  stop: () => ipcRenderer.send(PHONE_CHANNELS.stop),
+  onAction(handler) {
+    if (phoneActionListener) ipcRenderer.removeListener(PHONE_CHANNELS.action, phoneActionListener);
+    phoneActionListener = (_event, action) => handler(action);
+    ipcRenderer.on(PHONE_CHANNELS.action, phoneActionListener);
+    return () => {
+      if (phoneActionListener) ipcRenderer.removeListener(PHONE_CHANNELS.action, phoneActionListener);
+      phoneActionListener = null;
+    };
+  },
+};
+
+contextBridge.exposeInMainWorld('droidPhone', phoneApi);

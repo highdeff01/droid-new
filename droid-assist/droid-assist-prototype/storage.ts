@@ -18,6 +18,7 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { GRID_OPACITY_RANGE } from './grid-overlay.js';
 import { TRIGGER_LIMIT, isTrigger, type Trigger } from './triggers.js';
 import { CREW_SIZE_MAX, CREW_SIZE_MIN } from './crew.js';
+import { VOICE_MODES, VOICE_RATE_RANGE, VOICE_VOLUME_RANGE, type VoiceMode } from './voice.js';
 import { PROJECT_LIMIT, isProject, pruneProjects, type Project } from './project.js';
 import { APPROVAL_LIMIT as APPROVAL_QUEUE_LIMIT, EMPTY_APPROVALS, LEARNED_LIMIT, isApprovalRequest, isLearnedMethod, type ApprovalState } from './approval-queue.js';
 import { RUN_OUTCOMES, RUN_SUMMARY_LIMIT, type RunOutcome, type RunSummary } from './run-stats.js';
@@ -120,7 +121,7 @@ export const MODES: readonly MonitorMode[] = ['app', 'background', 'advanced'];
 const TONES: ReadonlyArray<LogEntry['tone']> = ['info', 'ok', 'warn', 'error'];
 
 /** Valid range of each numeric setting (matches the Settings sliders). */
-export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec' | 'abortAutoClearMin' | 'avoidTtlHours' | 'aiHistoryWindow', [number, number]> = {
+export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watchMs' | 'changeCells' | 'maxIterations' | 'stepRetries' | 'driftStable' | 'driftMatched' | 'driftRadius' | 'gridOpacity' | 'aiMaxInFlight' | 'aiTimeoutMs' | 'crewSize' | 'wakeMs' | 'scanSec' | 'stressCycles' | 'goalStall' | 'breakMinutes' | 'systemRefreshSec' | 'mainBridgePort' | 'mainBridgeBackoffMinMs' | 'mainBridgeBackoffMaxMs' | 'operationRetries' | 'playbackWindowSec' | 'abortAutoClearMin' | 'avoidTtlHours' | 'aiHistoryWindow' | 'phonePort', [number, number]> = {
   abortAutoClearMin: [0, ABORT_AUTO_CLEAR_MAX_MIN],
   aiHistoryWindow: [1, HISTORY_WINDOW_MAX],
   crewSize: [CREW_SIZE_MIN, CREW_SIZE_MAX],
@@ -144,6 +145,7 @@ export const RANGES: Record<'gallerySize' | 'checkpoints' | 'captureMs' | 'watch
   breakMinutes: BREAK_MINUTES_RANGE,
   systemRefreshSec: SYSTEM_REFRESH_SEC_RANGE,
   mainBridgePort: [MAIN_BRIDGE_PORT_MIN, MAIN_BRIDGE_PORT_MAX],
+  phonePort: [MAIN_BRIDGE_PORT_MIN, MAIN_BRIDGE_PORT_MAX],
   mainBridgeBackoffMinMs: [MAIN_BRIDGE_BACKOFF_MIN_MS, 10000],
   mainBridgeBackoffMaxMs: [1000, MAIN_BRIDGE_BACKOFF_MAX_MS],
   operationRetries: [OPERATION_RETRIES_MIN, OPERATION_RETRIES_MAX],
@@ -191,12 +193,16 @@ export function loadSettings(defaults: AssistSettings): AssistSettings {
     if (isNum(v) && v >= min && v <= max) out[key] = v;
   }
   out.crewSize = Math.round(out.crewSize);
-  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'liveDrag', 'showGrid', 'gridLabels', 'autoScan', 'relaxMode', 'aiThink', 'aiOverlap', 'mainBridgeEnabled', 'autoUpdate'] as const) {
+  for (const key of ['autoAct', 'aiHelp', 'showTrail', 'errorForwarding', 'autoContinue', 'liveDrag', 'showGrid', 'gridLabels', 'autoScan', 'relaxMode', 'aiThink', 'aiOverlap', 'mainBridgeEnabled', 'autoUpdate', 'voiceEnabled', 'voiceSpeakNotifications', 'voiceSpeakResponses'] as const) {
     if (typeof stored[key] === 'boolean') out[key] = stored[key] as boolean;
   }
   if (typeof stored.updateStatus === 'string' && stored.updateStatus.length <= MASTER_PROMPT_MAX) out.updateStatus = stored.updateStatus;
+  if (typeof stored.voiceMode === 'string' && VOICE_MODES.includes(stored.voiceMode as VoiceMode)) out.voiceMode = stored.voiceMode as VoiceMode;
+  if (typeof stored.voiceLang === 'string' && stored.voiceLang.trim()) out.voiceLang = stored.voiceLang.trim();
+  if (isNum(stored.voiceRate) && stored.voiceRate >= VOICE_RATE_RANGE[0] && stored.voiceRate <= VOICE_RATE_RANGE[1]) out.voiceRate = stored.voiceRate;
+  if (isNum(stored.voiceVolume) && stored.voiceVolume >= VOICE_VOLUME_RANGE[0] && stored.voiceVolume <= VOICE_VOLUME_RANGE[1]) out.voiceVolume = stored.voiceVolume;
   if (typeof stored.masterPrompt === 'string' && stored.masterPrompt.length <= MASTER_PROMPT_MAX) out.masterPrompt = stored.masterPrompt;
-  for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken', 'mainBridgeUrl', 'mainBridgeToken'] as const) {
+  for (const key of ['bridgeUrl', 'bridgeToken', 'errorUrl', 'errorToken', 'mainBridgeUrl', 'mainBridgeToken', 'phoneToken'] as const) {
     const v = stored[key];
     if (typeof v === 'string') out[key] = v;
   }

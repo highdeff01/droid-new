@@ -12,6 +12,8 @@ import { MAIN_BRIDGE_CHANNELS, type ListenOptions } from './main-bridge-api.js';
 import { startMainBridgeListener, type MainBridgeListener } from './main-bridge-server.js';
 import { UPDATE_CHANNELS } from './update-api.js';
 import { check, update } from './update-runner.js';
+import { PHONE_CHANNELS, type PhoneAction, type PhoneOptions, type PhonePush } from './phone-api.js';
+import { startPhoneCompanion, type PhoneCompanion } from './phone-companion.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** One capture loop per renderer. */
@@ -133,6 +135,46 @@ function registerUpdateIpc() {
   });
 }
 
+/** One phone companion per renderer, and the latest snapshot each pushed. */
+const phones = new Map<number, PhoneCompanion>();
+const phoneStates = new Map<number, PhonePush>();
+
+function stopPhone(contents: WebContents) {
+  phones.get(contents.id)?.stop();
+  phones.delete(contents.id);
+  phoneStates.delete(contents.id);
+}
+
+/** Wires the phone-companion IPC: the small mobile page and its API run here, fed by the renderer. */
+function registerPhoneIpc() {
+  ipcMain.handle(PHONE_CHANNELS.start, async (event, options: PhoneOptions) => {
+    const contents = event.sender;
+    stopPhone(contents);
+    const empty: PhonePush = { apps: [], approvals: [], workflows: [], driving: 'neither', frame: '', updatedAt: Date.now() };
+    phoneStates.set(contents.id, empty);
+    const companion = startPhoneCompanion(
+      options,
+      () => phoneStates.get(contents.id) ?? empty,
+      {
+        approve: (id) => { if (!contents.isDestroyed()) contents.send(PHONE_CHANNELS.action, { kind: 'approve', id } satisfies PhoneAction); },
+        reject: (id) => { if (!contents.isDestroyed()) contents.send(PHONE_CHANNELS.action, { kind: 'reject', id } satisfies PhoneAction); },
+        runWorkflow: (id) => { if (!contents.isDestroyed()) contents.send(PHONE_CHANNELS.action, { kind: 'runWorkflow', id } satisfies PhoneAction); },
+      },
+    );
+    phones.set(contents.id, companion);
+    contents.once('destroyed', () => stopPhone(contents));
+    try {
+      await companion.ready;
+      return { url: companion.url(), error: '' };
+    } catch (error) {
+      phones.delete(contents.id);
+      return { url: '', error: `Phone companion failed on ${options.host}:${options.port}: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  });
+  ipcMain.on(PHONE_CHANNELS.state, (event, state: PhonePush) => { phoneStates.set(event.sender.id, state); });
+  ipcMain.on(PHONE_CHANNELS.stop, (event) => stopPhone(event.sender));
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
@@ -161,6 +203,7 @@ void app.whenReady().then(() => {
   registerMainBridgeIpc();
   registerWindowIpc();
   registerUpdateIpc();
+  registerPhoneIpc();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

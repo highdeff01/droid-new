@@ -69,6 +69,8 @@ import { BUS_AGENTS, BUS_AGENT_IDS, elementLine, forward, isGridLabel, markHandl
 import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
 import { useAutoUpdate, UPDATE_SOURCE } from './use-update.js';
+import { browserEngines, createVoiceControl } from './voice.js';
+import { usePhoneCompanion } from './use-phone.js';
 import { usePlugins } from './use-plugins.js';
 import { useApprovals } from './use-approvals.js';
 import { DEFAULT_OPERATION_POLICY, decisionLesson, editedStep, type ApprovalItem, type OperationPolicy } from './approvals.js';
@@ -384,6 +386,15 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   systemFolders: [],
   autoUpdate: true,
   updateStatus: '',
+  voiceEnabled: false,
+  voiceMode: 'push-to-talk',
+  voiceLang: 'en-US',
+  voiceSpeakNotifications: false,
+  voiceSpeakResponses: false,
+  voiceRate: 1,
+  voiceVolume: 1,
+  phonePort: 8788,
+  phoneToken: '',
   panelLayout: DEFAULT_PANEL_LAYOUT,
   mainBridgeEnabled: true,
   mainBridgeMode: 'listen',
@@ -969,6 +980,9 @@ export function useAssist() {
     similarFailures(operation, memoryRef.current.failures).slice(0, FAILURE_CONTEXT_LIMIT)
       .forEach((f) => addLog('Memory', `${actor} — a similar operation failed before, adjusting: ${failureLine(f)}`, 'warn', f.shots));
   };
+
+  /** Voice control: spoken commands route into runInput; notifications and AI answers can be spoken. */
+  const voiceRef = useRef<ReturnType<typeof createVoiceControl> | null>(null);
 
   /** What runs for every new notification: auto-act (assigned below, once the executor exists). */
   const onNotifiedRef = useRef<(n: AssistNotification) => void>(() => undefined);
@@ -5652,6 +5666,7 @@ export function useAssist() {
         answered = answer;
         setAiAnswer(answer);
         setAnnotations(items);
+        voiceRef.current?.sayAnswer(answer);
         addLog('AI help', answer, 'info');
         items.filter((a) => a.actX !== undefined && a.actY !== undefined).forEach((a) => forwardElement('screen', { name: a.label, x: a.actX!, y: a.actY!, w: a.w, h: a.h }));
       } catch (error) {
@@ -6131,6 +6146,7 @@ export function useAssist() {
   // Auto-act: a new notification with a proposed action runs it when its category is switched on (default off).
   onNotifiedRef.current = (n) => {
     if (n.action && settingsRef.current.notifyAutoAct[n.category]) void runNotificationAction(n, 'Auto-act');
+    voiceRef.current?.announce(`${n.source}: ${n.title}`);
   };
 
   /** The notification center's "Run" button. */
@@ -6567,12 +6583,11 @@ export function useAssist() {
     section: sectionCommand, scope: scopeCommand, replicate: replicateCommand, sidetest: sideTestCommand, research: researchCommand,
   };
 
-  /** Submits the assist input: slash commands run, anything else is planned as a goal. */
-  const submitInput = async () => {
-    const pluginCmd = plugins.commandFor(goal);
+  /** Runs one line of input as a command or a goal: the shared path for typed input and voice. */
+  const runInput = async (text: string) => {
+    const pluginCmd = plugins.commandFor(text);
     if (pluginCmd) {
-      setGoal('');
-      kb.noteSignal('command', goal.trim());
+      kb.noteSignal('command', text.trim());
       try {
         await pluginCmd.command.run(pluginCmd.target);
       } catch (error) {
@@ -6580,22 +6595,76 @@ export function useAssist() {
       }
       return;
     }
-    const command = parseCommand(goal);
+    const command = parseCommand(text);
     if (!command) {
-      if (isTestGoal(goal)) await testRoutes(parseTestSpec(goal));
-      else if (isChainGoal(goal)) await runChain(goal);
-      else await autoPlan(goal);
+      if (isTestGoal(text)) await testRoutes(parseTestSpec(text));
+      else if (isChainGoal(text)) await runChain(text);
+      else await autoPlan(text);
       return;
     }
     if (command.kind === 'error') {
       addLog('Command', command.message, 'warn');
       return;
     }
-    setGoal('');
-    kb.noteSignal('command', goal.trim());
+    kb.noteSignal('command', text.trim());
     if (command.kind === 'test') await testRoutes(parseTestSpec(command.target));
     else await COMMAND_RUNNERS[command.kind](command.target);
   };
+
+  /** Submits the assist input: slash commands run, anything else is planned as a goal. */
+  const submitInput = async () => {
+    const text = goal;
+    setGoal('');
+    await runInput(text);
+  };
+
+  /** Voice control: spoken commands route into runInput; notifications and AI answers can be spoken. */
+  voiceRef.current ??= createVoiceControl(browserEngines(), {
+    submit: (text) => void runInput(text),
+    log: (message, tone) => addLog('Voice', message, tone ?? 'info'),
+  });
+  const voice = voiceRef.current;
+  useEffect(() => {
+    voice.configure({
+      enabled: settings.voiceEnabled,
+      mode: settings.voiceMode,
+      lang: settings.voiceLang,
+      speakNotifications: settings.voiceSpeakNotifications,
+      speakResponses: settings.voiceSpeakResponses,
+      rate: settings.voiceRate,
+      volume: settings.voiceVolume,
+    });
+  }, [voice, settings.voiceEnabled, settings.voiceMode, settings.voiceLang, settings.voiceSpeakNotifications, settings.voiceSpeakResponses, settings.voiceRate, settings.voiceVolume]);
+
+  // Push-to-talk: hold Ctrl+Space to talk while voice is on and the mode is push-to-talk.
+  useEffect(() => {
+    if (!settings.voiceEnabled || settings.voiceMode !== 'push-to-talk') return undefined;
+    const down = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && e.ctrlKey && !e.repeat) { e.preventDefault(); voice.press(); }
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.ctrlKey) voice.release();
+    };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); voice.release(); };
+  }, [voice, settings.voiceEnabled, settings.voiceMode]);
+
+  /** The phone companion: the bridge serves a small mobile page over the engine's live state. */
+  const phone = usePhoneCompanion({
+    apps: () => [
+      { name: 'droid-new', status: aiOnline() ? 'connected' : 'offline', detail: aiStatus.detail },
+      { name: 'droid-main', status: mainBridge.status, detail: mainBridge.peer ?? 'the main Droid app' },
+    ],
+    approvals: () => approvals.items.filter((i) => i.status === 'pending').map((i) => ({ id: i.id, title: i.summary, detail: `${i.requestedBy} · ${i.goal || 'no goal'}` })),
+    workflows: () => cardsRef.current.map((c) => ({ id: c.id, name: c.name })),
+    driving: () => bridgeV2.driving.driver,
+    frame: () => framesRef.current[0]?.url ?? '',
+    approve: (id) => void approveItem(id),
+    reject: (id) => rejectItem(id),
+    runWorkflow: (id) => loadWorkflow(id),
+    log: (message, tone) => addLog('Phone', message, tone ?? 'info'),
+  });
 
   /** Explicit demo mode. */
   const useDemo = () => {
@@ -7374,6 +7443,10 @@ export function useAssist() {
     update,
     /** The plugin host: registered capabilities, commands and panels, plus load/unload. */
     plugins,
+    /** Voice control: spoken commands route into the command parser; notifications and answers can be spoken. */
+    voice,
+    /** The phone companion: the bridge serves a small mobile page over the engine's live state. */
+    phone,
     /** The active capture source, its kind and whether replay/drift are armed for it (HUD). */
     captureSource: captureStatus({ source, kind: captureRef.current?.kind, hasFrame: frames.length > 0, bridgeUrl: settings.bridgeUrl, mainConnected: mainBridge.status === 'connected' }),
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
