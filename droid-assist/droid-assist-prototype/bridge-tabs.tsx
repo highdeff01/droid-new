@@ -6,14 +6,17 @@ import { busyAgents } from './project-swarm.js';
 import { coordinationTotals } from './coordination.js';
 import { drivingFlag } from './driver.js';
 import { errorLogs } from './browser-logs.js';
+import { healthLine, isFresh } from './health.js';
+import { ledgerLine } from './run-ledger.js';
 import styles from './droid-assist.module.css';
 
-type TabId = 'swarm' | 'status' | 'coordinate' | 'screenshare' | 'browser-logs';
+type TabId = 'swarm' | 'status' | 'coordinate' | 'ledger' | 'screenshare' | 'browser-logs';
 
 /** Both apps' live state: droid-new's own, and droid-main's from the last app_state it reported. */
 function StatusTab({ engine }: { engine: AssistEngine }) {
   const { mainBridge, armed, replaying, bridgeV2 } = engine;
   const remote = bridgeV2.remote;
+  const health = bridgeV2.peerHealth;
   return (
     <div aria-label="Status tab">
       <div>
@@ -34,8 +37,39 @@ function StatusTab({ engine }: { engine: AssistEngine }) {
         ) : (
           <p className={styles.muted}>No state from droid-main yet</p>
         )}
+        {health ? (
+          <p aria-label="droid-main health" className={isFresh(health) ? undefined : styles.muted}>
+            {healthLine(health)}{isFresh(health) ? '' : ' (stale)'}
+          </p>
+        ) : (
+          <p className={styles.muted}>No health from droid-main yet</p>
+        )}
       </div>
       {bridgeV2.decision && <p aria-label="App selection decision">{bridgeV2.decision.choice}: {bridgeV2.decision.reason}</p>}
+    </div>
+  );
+}
+
+/** The shared run ledger: one timeline of every step, verdict and handoff, merged from both apps. */
+function LedgerTab({ engine }: { engine: AssistEngine }) {
+  const { ledger, ledgerTotals } = engine.bridgeV2;
+  return (
+    <div aria-label="Run ledger tab">
+      <p aria-label="Ledger totals">
+        droid-new: {ledgerTotals['droid-new'].entries} entries ({ledgerTotals['droid-new'].passed}✓/{ledgerTotals['droid-new'].failed}✗)
+        · droid-main: {ledgerTotals['droid-main'].entries} entries ({ledgerTotals['droid-main'].passed}✓/{ledgerTotals['droid-main'].failed}✗)
+      </p>
+      {!ledger.length ? (
+        <p className={styles.muted}>No run activity yet</p>
+      ) : (
+        <ul className={styles.log} aria-label="Run ledger">
+          {ledger.map((e) => (
+            <li key={e.id} data-tone={e.ok === false ? 'error' : e.ok === true ? 'ok' : 'info'}>
+              {new Date(e.time).toLocaleTimeString()} {ledgerLine(e)}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -133,6 +167,7 @@ const TABS: Record<TabId, { label: string; View: (p: { engine: AssistEngine }) =
   swarm: { label: 'Swarm', View: SwarmView },
   status: { label: 'Status', View: StatusTab },
   coordinate: { label: 'Coordinate', View: CoordinateTab },
+  ledger: { label: 'Ledger', View: LedgerTab },
   screenshare: { label: 'Screenshare', View: ScreenshareTab },
   'browser-logs': { label: 'Browser logs', View: BrowserLogsTab },
 };

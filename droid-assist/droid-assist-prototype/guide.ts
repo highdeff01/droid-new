@@ -150,7 +150,16 @@ export const GUIDE: readonly GuideSection[] = [
         how: [
           'Learned habits, familiar elements, element maps, access paths and blacklist entries sync as deltas.',
           'Conflicts resolve to the most recent verified observation; nothing is dropped.',
-          'Read the shared timeline on the Coordinate tab from either app.',
+          'Read the shared timeline on the Ledger tab; both apps show the same entries.',
+        ],
+      },
+      {
+        name: 'Cross-app testing and habits',
+        summary: 'Each app tests in its own domain in the background; a method that works in either app strengthens the habit in both.',
+        how: [
+          'Goals are tested in the background using screenshots and cross-referenced against both apps’ history and logs.',
+          'A success in one app is recorded as a habit update the other app receives over the store sync.',
+          'Watch the strengthened habits in the Habits panel.',
         ],
       },
       {
@@ -160,6 +169,15 @@ export const GUIDE: readonly GuideSection[] = [
           'App selection picks the executor from real current health, never assumptions.',
           'Approve or reject queued items from either app; decisions sync both ways.',
           'If one app restarts mid-operation, the other holds state and replays what it missed.',
+        ],
+      },
+      {
+        name: 'Adaptive frame streaming',
+        summary: 'When several consumers pull frames at once (the desktop, the phone, a verification), quality and rate adapt to the bandwidth, and verification frames are prioritised over monitoring ones.',
+        how: [
+          'Nothing to configure: the stream lowers quality and slows the rate as more consumers join.',
+          'A step being verified always gets the fastest, clearest frames.',
+          'Watch the plan in the log line “Frame stream: …”.',
         ],
       },
     ],

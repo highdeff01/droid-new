@@ -5,14 +5,18 @@ import type { MainBridge } from './main-bridge.js';
 import type { AppStatePayload, ConsoleLevel, InboundMessage, OutboundPayloads, OutboundType, PeerPayloads, RegulateCommand } from './main-bridge-protocol.js';
 import { routeV2, type PeerHandlers, type V2Machinery } from './bridge-v2-handlers.js';
 import { TAKEOVER_MS, TAKEOVER_SOURCE, addRemoteOpinion, addTakeover, agreementState, applyRegulate, arbitrate, handOffReason, shouldHandOff, syncAgreements, takeoverPayload, type RegulateTarget, type StepAgreement } from './takeover.js';
-import { selectApp, standingCapabilities, type JobDecision } from './app-selection.js';
-import { SYNC_STORES, advanceWatermarks, fromPayload, mergeDelta, mergeLine, outgoingDelta, toPayload, type StoreWatermarks } from './store-sync.js';
+import { selectApp, type JobDecision } from './app-selection.js';
+import { advanceWatermarks, fromPayload, mergeDelta, mergeLine, outgoingDelta, toPayload, type StoreWatermarks } from './store-sync.js';
 import { applySyncEntries, loadStoreWatermarks, loadSyncEntries, saveStoreWatermarks } from './storage.js';
 import { DRIVING_SOURCE, drivingLine, enqueueSuggestion, handWheel, isDriving, newDriving, suggestionLine, takeSuggestion, takeWheel, type Driving, type Suggestion } from './driver.js';
 import { busyAgents, roundLine, runSwarmRound, conflicts, type SwarmRound } from './project-swarm.js';
 import { buildCrew } from './crew.js';
 import { BROWSER_LOGS_SOURCE, captureConsole, fromConsolePayload, pushBrowserLog, type BrowserLog, type LogApp } from './browser-logs.js';
 import { coordinationRows, pushFlow, type RequestFlow } from './coordination.js';
+import { entry, isLedgerEntry, ledgerDelta, ledgerTotals, mergeLedger, pushEntry, type LedgerEntry } from './run-ledger.js';
+import { capabilitiesFromHealth, fromHealthPayload, healthLine, localHealth, toHealthPayload, type Health } from './health.js';
+import { fromResumePayload, isResumable, resumePlan, toResumePayload, type RunSnapshot } from './session-resume.js';
+import type { ApprovalDecisionPayload } from './main-bridge-protocol.js';
 
 /** Log source of the v2 bridge traffic (user requests, regulation, opinions). */
 export const BRIDGE_V2_SOURCE = 'Main app v2';
@@ -20,6 +24,16 @@ export const BRIDGE_V2_SOURCE = 'Main app v2';
 export const SWARM_SOURCE = 'Swarm';
 /** Log source of learned-store sync over the bridge. */
 export const STORE_SYNC_SOURCE = 'Store sync';
+/** Log source of the shared run ledger. */
+export const LEDGER_SOURCE = 'Run ledger';
+/** Log source of the health exchange. */
+export const HEALTH_SOURCE = 'Health';
+/** Log source of session resume. */
+export const RESUME_SOURCE = 'Resume';
+/** How often, while connected, the shared run ledger and this app's health cross the bridge. */
+export const LEDGER_SYNC_MS = 5_000;
+/** How often this app broadcasts its health. */
+export const HEALTH_MS = 4_000;
 /** How often, while connected, learned-store deltas cross the bridge (an element learned in one app reaches the other). */
 export const STORE_SYNC_MS = 10_000;
 /** This app's name on the wire. */
@@ -60,6 +74,14 @@ export interface BridgeV2Deps {
   arbitrate: (step: string, brief: string, complete: boolean) => void;
   /** Performs one action against an element the swarm agreed on (gated like any step). */
   act: (element: ForwardedElement) => Promise<unknown>;
+  /** This app's live health, measured locally (AI endpoint, latency, crew load, armed). */
+  health: () => { aiUp: boolean; latencyMs: number; crewLoad: number; armed: boolean; canExecute: boolean };
+  /** Applies an approval decision that arrived from the other app (it was answered there). */
+  decideApproval: (id: string, decision: ApprovalDecisionPayload['decision'], text?: string) => void;
+  /** The current run's snapshot, for resuming on the other app after a restart. */
+  snapshot: () => RunSnapshot | null;
+  /** Applies a resume the other app offered: replay what happened while this app was down. */
+  onResume: (plan: { resumeAt: number; replay: string[]; summary: string }) => void;
 }
 
 /** droid-main's elements on the bus, newest per name. */
@@ -104,6 +126,17 @@ export function useBridgeV2(deps: BridgeV2Deps) {
   /** droid-main's simultaneous commands, held for droid-new to accept or dismiss. */
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const suggestionsRef = useRef<Suggestion[]>([]);
+  /** The shared run ledger: one timeline of every step, verdict and handoff, merged from both apps. */
+  const [ledger, setLedger] = useState<LedgerEntry[]>([]);
+  const ledgerRef = useRef<LedgerEntry[]>([]);
+  /** Ledger entries already exchanged with droid-main, so a delta never repeats one. */
+  const sentLedgerRef = useRef(new Set<string>());
+  /** droid-main's live health (null until it reports; stale reports are ignored). */
+  const [peerHealth, setPeerHealth] = useState<Health | null>(null);
+  const peerHealthRef = useRef<Health | null>(null);
+  /** The run snapshot the other app holds while this app restarts, for resuming on reconnect. */
+  const [snapshot, setSnapshot] = useState<RunSnapshot | null>(null);
+  const snapshotRef = useRef<RunSnapshot | null>(null);
 
   const commit = (next: StepAgreement[]) => {
     agreementsRef.current = next;
@@ -112,6 +145,22 @@ export function useBridgeV2(deps: BridgeV2Deps) {
   const log = (message: string, tone: LogEntry['tone'] = 'info', from = BRIDGE_V2_SOURCE) => depsRef.current.addLog(from, message, tone);
   const send = <K extends OutboundType>(type: K, payload: OutboundPayloads[K], replyTo?: string) =>
     depsRef.current.bridge()?.send(type, payload, replyTo) ?? Promise.resolve({ ok: false, message: 'Main app bridge not started' });
+
+  /** Appends a local entry to the shared run ledger and returns it (so callers can send it too). */
+  const ledgerAdd = (kind: LedgerEntry['kind'], text: string, stepIndex?: number, ok?: boolean): LedgerEntry => {
+    const e = entry(ASSIST_APP, kind, text, Date.now(), stepIndex, ok);
+    const next = pushEntry(ledgerRef.current, e);
+    ledgerRef.current = next;
+    setLedger(next);
+    return e;
+  };
+
+  /** Merges droid-main's ledger entries into the shared timeline (a union by id — nothing dropped). */
+  const mergeRemoteLedger = (entries: LedgerEntry[]) => {
+    const next = mergeLedger(ledgerRef.current, entries);
+    ledgerRef.current = next;
+    setLedger(next);
+  };
 
   /** Records a new driving flag in both the UI and the ref, and logs the change. */
   const commitDriving = (next: Driving) => {
@@ -150,11 +199,12 @@ export function useBridgeV2(deps: BridgeV2Deps) {
     return true;
   };
 
-  /** Decides which app does a job and logs it. */
+  /** Decides which app does a job and logs it, from live health when it is known. */
   const decide = (name: string): JobDecision => {
     const d = depsRef.current;
-    const capabilities = standingCapabilities({ armed: d.armed, aiOnline: d.aiOnline(), mainConnected: d.connected });
-    const next = selectApp({ name, apps: capabilities }, (source, line) => d.addLog(source, line, 'info'));
+    const local = localHealth(ASSIST_APP, d.health());
+    const caps = capabilitiesFromHealth({ assist: local, main: peerHealthRef.current });
+    const next = selectApp({ name, apps: caps }, (source, line) => d.addLog(source, line, 'info'));
     setDecision(next);
     return next;
   };
@@ -247,7 +297,31 @@ export function useBridgeV2(deps: BridgeV2Deps) {
       saveStoreWatermarks(watermarksRef.current);
       log(mergeLine('droid-main', mergeDelta(loadSyncEntries(), entries)), applied ? 'ok' : 'info', STORE_SYNC_SOURCE);
     },
-  };
+    ledger_delta: (p) => {
+      const entries = p.entries.filter(isLedgerEntry) as LedgerEntry[];
+      mergeRemoteLedger(entries);
+      log(`Run ledger: merged ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} from droid-main`, 'info', LEDGER_SOURCE);
+    },
+    health: (p) => {
+      const h = fromHealthPayload(p);
+      peerHealthRef.current = h;
+      setPeerHealth(h);
+      log(healthLine(h), 'info', HEALTH_SOURCE);
+    },
+    approval_decision: (p) => {
+      depsRef.current.decideApproval(p.id, p.decision, p.text);
+      log(`Approval ${p.id} ${p.decision} on ${p.by} — applied here too`, 'ok', BRIDGE_V2_SOURCE);
+      ledgerAdd('approval', `approval ${p.id} ${p.decision} (answered on ${p.by})`, undefined, p.decision !== 'rejected');
+    },
+    resume: (p) => {
+      const snap = fromResumePayload(p);
+      if (!isResumable(snap)) { log(`Resume ignored — run "${p.goal}" is not resumable`, 'warn', RESUME_SOURCE); return; }
+      const plan = resumePlan(snap, 0);
+      depsRef.current.onResume(plan);
+      log(plan.summary, 'ok', RESUME_SOURCE);
+      ledgerAdd('note', `resumed from droid-main: ${plan.summary}`);
+    },
+  } satisfies PeerHandlers;
 
   /** One inbound message: a v2 request is answered with a result; true when it was v2. */
   const onMessage = (m: InboundMessage): boolean =>
@@ -280,9 +354,11 @@ export function useBridgeV2(deps: BridgeV2Deps) {
     if (state === 'disagreement') once(`arbiter:${a.index}`, () => {
       const ruling = arbitrate(a);
       depsRef.current.arbitrate(a.step, ruling.text, ruling.complete);
+      ledgerAdd('verdict', `droid-new arbitrated step ${a.index + 1} "${a.step}": ${ruling.text}`, a.index, ruling.complete);
     });
     if (state === 'complete') once(`complete:${a.index}`, () => {
       log(`Step ${a.index + 1} "${a.step}" complete — droid-new verified it and both apps' agents agree`, 'ok', TAKEOVER_SOURCE);
+      ledgerAdd('verdict', `step ${a.index + 1} "${a.step}" complete — verified, both agents agree`, a.index, true);
       if (drivingRef.current.driver !== 'droid-new') takeWheelBack(`step ${a.index + 1} "${a.step}" completed`);
     });
   };
@@ -306,6 +382,7 @@ export function useBridgeV2(deps: BridgeV2Deps) {
         handOverWheel(`droid-main took over step 1 "${a.step}" — ${reason}`);
       }
       log(r.ok ? `Handed step 1 "${a.step}" to droid-main — ${reason}` : `Could not hand step 1 "${a.step}" to droid-main — ${r.message}`, r.ok ? 'warn' : 'error', TAKEOVER_SOURCE);
+      if (r.ok) ledgerAdd('handoff', `handed step 1 "${a.step}" to droid-main — ${reason}`, 0);
     });
   };
 
@@ -369,6 +446,15 @@ export function useBridgeV2(deps: BridgeV2Deps) {
     return r.ok;
   };
 
+  /** Sends an approval this app just answered to droid-main, so the shared queue agrees on both sides. */
+  const sendApprovalDecision = async (id: string, decision: ApprovalDecisionPayload['decision'], text?: string): Promise<boolean> => {
+    if (!depsRef.current.connected) return false;
+    const r = await send('approval_decision', { id, decision, ...(text ? { text } : {}), by: ASSIST_APP });
+    ledgerAdd('approval', `approval ${id} ${decision} (answered here)`, undefined, decision !== 'rejected');
+    if (!r.ok) log(`Approval ${id} decision not sent to droid-main — ${r.message}`, 'warn', BRIDGE_V2_SOURCE);
+    return r.ok;
+  };
+
   /**
    * Sends droid-main the learned-store entries it has not seen (habits, familiar elements, element
    * maps, access paths, blacklist rules and patterns), then records them as exchanged. Nothing is sent
@@ -399,11 +485,54 @@ export function useBridgeV2(deps: BridgeV2Deps) {
     // Re-syncs on every (re)connect; the stores themselves are read fresh each time.
   }, [deps.connected]);
 
+  /** Sends droid-main the ledger entries it has not seen, so both Assist pages show one timeline. */
+  const sendLedgerDelta = async (): Promise<number> => {
+    if (!depsRef.current.connected) return 0;
+    const delta = ledgerDelta(ledgerRef.current, sentLedgerRef.current);
+    if (!delta.length) return 0;
+    const r = await send('ledger_delta', { entries: delta });
+    if (!r.ok) {
+      log(`Run ledger to droid-main not sent — ${r.message}`, 'warn', LEDGER_SOURCE);
+      return 0;
+    }
+    delta.forEach((e) => sentLedgerRef.current.add(e.id));
+    return delta.length;
+  };
+
+  // The shared ledger crosses the bridge whenever it changes, and on connect for catch-up.
+  useEffect(() => {
+    if (!deps.connected) return undefined;
+    void sendLedgerDelta();
+    const timer = setInterval(() => void sendLedgerDelta(), LEDGER_SYNC_MS);
+    return () => clearInterval(timer);
+  }, [deps.connected, ledger]);
+
+  // This app's health goes out on a cadence, so droid-main picks the executor from facts, not assumptions.
+  useEffect(() => {
+    if (!deps.connected) return undefined;
+    const broadcast = () => void send('health', toHealthPayload(localHealth(ASSIST_APP, depsRef.current.health())));
+    broadcast();
+    const timer = setInterval(broadcast, HEALTH_MS);
+    return () => clearInterval(timer);
+  }, [deps.connected]);
+
+  // A run in progress is snapshotted and offered to droid-main, so a restart on either side resumes.
+  useEffect(() => {
+    if (!deps.connected || !deps.running) return undefined;
+    const snap = depsRef.current.snapshot();
+    if (!snap || !isResumable(snap)) return undefined;
+    snapshotRef.current = snap;
+    setSnapshot(snap);
+    void send('resume', toResumePayload(snap));
+    // Offered when a run starts and whenever the active step moves on.
+  }, [deps.connected, deps.running, deps.activeIndex]);
+
   return {
     onMessage, agreements, coordination: coordinationRows(deps.steps, agreements), flows,
     browserLogs, clearBrowserLogs, remote, swarmRound: round, runSwarm, dispatchSwarm,
-    sendUserRequest, regulateMain, sendStoreDelta, decision,
+    sendUserRequest, regulateMain, sendStoreDelta, sendApprovalDecision, decision,
     driving, suggestions, acceptSuggestion, dismissSuggestion, takeWheelBack,
+    ledger, ledgerAdd, ledgerTotals: ledgerTotals(ledger), peerHealth, snapshot,
   };
 }
 

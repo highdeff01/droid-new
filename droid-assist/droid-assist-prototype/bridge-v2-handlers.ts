@@ -66,4 +66,4 @@ export function routeV2(message: InboundMessage, router: V2Router): boolean {
   return false;
 }
 
-const PEER_TYPES: Record<PeerType, true> = { user_request: true, takeover: true, regulate: true, step_opinion: true, console_log: true, app_state: true, store_delta: true };
+const PEER_TYPES: Record<PeerType, true> = { user_request: true, takeover: true, regulate: true, step_opinion: true, console_log: true, app_state: true, store_delta: true, ledger_delta: true, health: true, approval_decision: true, resume: true };

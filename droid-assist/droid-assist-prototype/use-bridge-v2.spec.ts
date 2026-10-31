@@ -50,6 +50,10 @@ function makeDeps(bridge: MainBridge, patch: Partial<BridgeV2Deps> = {}): Bridge
     disputedElements: [],
     arbitrate: vi.fn(),
     act: vi.fn(async () => undefined),
+    health: () => ({ aiUp: true, latencyMs: 0, crewLoad: 0, armed: false, canExecute: true }),
+    decideApproval: vi.fn(),
+    snapshot: () => null,
+    onResume: vi.fn(),
     ...patch,
   };
 }
@@ -214,6 +218,68 @@ describe('useBridgeV2 — takeover flow', () => {
     act(() => { result.current.onMessage(msg('takeover', { reason: 'incomplete', goal: 'g', index: 1, step: 'Save', steps: ['Open menu', 'Save'], log: [] })); });
     expect(result.current.agreements.find((a) => a.index === 1)?.owner).toBe('main');
     expect(result.current.coordination[1].owner).toBe('main');
+  });
+});
+
+describe('useBridgeV2 — shared ledger, health, approvals and resume', () => {
+  it('merges droid-main ledger entries into one shared timeline', () => {
+    const { bridge } = fakeBridge();
+    const { result } = renderHook(() => useBridgeV2(makeDeps(bridge)));
+    act(() => { result.current.onMessage(msg('ledger_delta', { entries: [{ id: 'droid-main:step:0:5', app: 'droid-main', time: 5, kind: 'step', stepIndex: 0, text: 'clicked Files' }] })); });
+    expect(result.current.ledger[0]).toMatchObject({ app: 'droid-main', text: 'clicked Files' });
+    expect(result.current.ledgerTotals['droid-main'].entries).toBe(1);
+  });
+
+  it('records droid-main health and reports it in the status', () => {
+    const { bridge } = fakeBridge();
+    const { result } = renderHook(() => useBridgeV2(makeDeps(bridge)));
+    act(() => { result.current.onMessage(msg('health', { app: 'droid-main', aiUp: true, latencyMs: 120, crewLoad: 0.2, armed: true, canExecute: true })); });
+    expect(result.current.peerHealth).toMatchObject({ app: 'droid-main', latencyMs: 120 });
+  });
+
+  it('applies an approval answered on droid-main here too', () => {
+    const { bridge } = fakeBridge();
+    const deps = makeDeps(bridge);
+    const { result } = renderHook(() => useBridgeV2(deps));
+    act(() => { result.current.onMessage(msg('approval_decision', { id: 'a1', decision: 'approved', by: 'droid-main' })); });
+    expect(deps.decideApproval).toHaveBeenCalledWith('a1', 'approved', undefined);
+  });
+
+  it('replays what happened while this app was down when droid-main offers a resume', () => {
+    const { bridge } = fakeBridge();
+    const deps = makeDeps(bridge);
+    const { result } = renderHook(() => useBridgeV2(deps));
+    act(() => { result.current.onMessage(msg('resume', { runId: 'r1', goal: 'open settings', steps: ['click'], activeIndex: 0, replay: ['clicked'] })); });
+    expect(deps.onResume).toHaveBeenCalledWith(expect.objectContaining({ resumeAt: 0, replay: ['clicked'] }));
+  });
+
+  it('ignores a resume for a run that is not resumable', () => {
+    const { bridge } = fakeBridge();
+    const deps = makeDeps(bridge);
+    const { result } = renderHook(() => useBridgeV2(deps));
+    act(() => { result.current.onMessage(msg('resume', { runId: 'r1', goal: 'g', steps: [], activeIndex: 0, replay: [] })); });
+    expect(deps.onResume).not.toHaveBeenCalled();
+  });
+
+  it('broadcasts this app\'s health and a ledger delta when connected', async () => {
+    const { bridge, sent } = fakeBridge();
+    renderHook(() => useBridgeV2(makeDeps(bridge, { connected: true })));
+    await flush();
+    expect(sent.some((s) => s.type === 'health' && (s.payload as { app: string }).app === 'droid-new')).toBe(true);
+  });
+
+  it('sends an approval answered here to droid-main, so the shared queue agrees both ways', async () => {
+    const { bridge, sent } = fakeBridge();
+    const { result } = renderHook(() => useBridgeV2(makeDeps(bridge, { connected: true })));
+    await act(async () => { await result.current.sendApprovalDecision('a1', 'approved'); });
+    expect(sent.find((s) => s.type === 'approval_decision')?.payload).toEqual({ id: 'a1', decision: 'approved', by: 'droid-new' });
+  });
+
+  it('does not send an approval decision when the bridge is down', async () => {
+    const { bridge, sent } = fakeBridge();
+    const { result } = renderHook(() => useBridgeV2(makeDeps(bridge, { connected: false })));
+    await act(async () => { await result.current.sendApprovalDecision('a1', 'rejected'); });
+    expect(sent.some((s) => s.type === 'approval_decision')).toBe(false);
   });
 });
 

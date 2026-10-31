@@ -95,6 +95,8 @@ import { MAX_DISCOVERY, OBJECTIVE_TONE, chainReport, discoverTarget, isChainGoal
 import { applyReach, currentPath, deletePath, editPath, isHopAction, learnPaths, parseHops, pathLine, pathOutcome, pathSteps, reachTarget, relevantPaths, runPath, usablePath, type AccessProfile, type Reach } from './access-paths.js';
 import { useResolution } from './use-resolution.js';
 import { useBridgeV2 } from './use-bridge-v2.js';
+import { planStream, planChanged, streamLine, type FrameConsumer, type StreamPlan } from './frame-stream.js';
+import { crossReference as crossAppContext, crossTestLine, type CrossTest } from './cross-testing.js';
 import { AUTO_RETRY_LABEL, AUTO_RETRY_TICK_MS, countAttempts, retryDue, retryText, type RetryCounts } from './auto-retry.js';
 import { DISAGREEMENT_THRESHOLD } from './resolution-center.js';
 import { dropGoal, loadGoals, projectId, queueGoal, saveGoals, settleGoal, startGoal, type GoalRecord } from './goal-objectives.js';
@@ -876,6 +878,9 @@ export function useAssist() {
   scopeRef.current = scope;
 
   const intervalMs = relaxInterval(monitorInterval(settings.monitorMode, modeCaptureMs(settings.executionMode, settings.captureMs)), settings.relaxMode);
+  /** The frame stream's adaptive rate: faster for verification, lower when several consumers pull. */
+  const [streamInterval, setStreamInterval] = useState(intervalMs);
+  const [frameStream, setFrameStream] = useState<StreamPlan | null>(null);
 
   // Persistence: settings, log and cards.
   useEffect(() => saveSettings(settings), [settings]);
@@ -4192,9 +4197,9 @@ export function useAssist() {
     const id = setInterval(() => {
       const c = demoCanvasRef.current;
       if (c && !pausedWhileHidden()) processRef.current(toFrame(c, DEMO_W, DEMO_H, ++frameId.current, 'demo'));
-    }, intervalMs);
+    }, streamInterval);
     return () => clearInterval(id);
-  }, [intervalMs, source]);
+  }, [streamInterval, source]);
 
   // Bridge monitor: a real desktop screenshot at the mode's interval; failures are logged, never faked.
   useEffect(() => {
@@ -4213,14 +4218,14 @@ export function useAssist() {
         .finally(() => {
           pollBusyRef.current = false;
         });
-    }, intervalMs);
+    }, streamInterval);
     return () => clearInterval(id);
-  }, [addLog, captureError, intervalMs, source]);
+  }, [addLog, captureError, streamInterval, source]);
 
-  // The running screen capture follows the monitor mode's interval live.
+  // The running screen capture follows the adaptive stream rate live.
   useEffect(() => {
-    captureRef.current?.setInterval(intervalMs);
-  }, [intervalMs]);
+    captureRef.current?.setInterval(streamInterval);
+  }, [streamInterval]);
 
   // The running native capture follows the chosen display live (Settings or the HUD quick-switch).
   useEffect(() => {
@@ -5598,12 +5603,27 @@ export function useAssist() {
     }
   };
 
-  /** A link/route test's passed and failed slices as habit outcomes on their targets (coordinate learner stage). */
+  /**
+   * A link/route test's passed and failed slices as habit outcomes on their targets (coordinate
+   * learner stage). The test cross-references both apps' routes — the habits store already holds
+   * droid-main's synced routes — so a method that works in either app strengthens the habit in both
+   * (the strengthened habits then cross the bridge by the store sync).
+   */
   const learnTestHabits = (results: SubagentReport['results'], kind: TestRequest['kind']) => {
     if (!stageOn('coords')) return;
     const context = `${kind}-test:${habitContext()}`;
     const tested = results.filter((r) => r.status === 'pass' || r.status === 'fail');
-    commitHabits(tested.reduce((h, r) => recordOutcome(h, { target: r.target, context, success: r.status === 'pass', avoid: r.avoid, add: r.add }), habitsRef.current));
+    const outcomes = tested.map((r) => ({ target: r.target, context, success: r.status === 'pass', avoid: r.avoid, add: r.add }));
+    commitHabits(outcomes.reduce((h, o) => recordOutcome(h, o), habitsRef.current));
+    const crossTests: CrossTest[] = tested.map((r) => ({ app: 'droid-new', subject: r.target, method: context, ok: r.status === 'pass', evidence: `${r.status}${r.message ? `: ${r.message}` : ''}`, at: Date.now() }));
+    // The habits store already holds droid-main's routes (merged by the store sync), so the context
+    // below cross-references both apps' learned methods even though the store carries no provenance.
+    const prior = habitsRef.current.map((h) => ({ app: 'droid-new' as const, subject: h.target, method: h.context, ok: h.successes > 0, at: h.lastUsed }));
+    for (const subject of new Set(tested.map((r) => r.target))) {
+      const lines = crossAppContext(subject, prior, logRef.current.slice(0, 3).map((l) => l.message));
+      if (lines.length) addLog('Supervisor', `Cross-app context for "${subject}": ${lines.join(' · ')}`, 'info');
+    }
+    if (crossTests.length) addLog('Supervisor', crossTestLine(crossTests), 'info');
   };
 
   /**
@@ -5991,6 +6011,26 @@ export function useAssist() {
     disputedElements: resolution.disagreements.map((d) => d.element),
     arbitrate: resolution.arbitrate,
     act: (element) => testClick({ id: uid('swarm'), name: element.name, x: element.x, y: element.y, source: 'familiar' }),
+    health: () => ({
+      aiUp: aiOnline(),
+      latencyMs: 0,
+      crewLoad: Math.min(1, aiCalls / Math.max(1, settingsRef.current.crewSize)),
+      armed: armedRef.current,
+      canExecute: !abortedRef.current,
+    }),
+    decideApproval: (id, decision, text) => {
+      if (decision === 'rejected') rejectItem(id);
+      else if (decision === 'edited' && text) void editItem(id, text);
+      else void approveItem(id);
+    },
+    snapshot: () => (goalRef.current || stepsRef.current.length
+      ? { runId: flowRef.current ?? goalRef.current, goal: goalRef.current, steps: stepsRef.current.map((s) => s.name), activeIndex: activeIndex ?? 0, replay: logRef.current.slice(0, 40).reverse().map((l) => `[${l.source}] ${l.message}`), at: Date.now() }
+      : null),
+    onResume: (plan) => {
+      addLog('Resume', plan.summary, 'ok');
+      plan.replay.forEach((line) => addLog('Resume (while down)', line));
+      if (activeIndex === null && stepsRef.current.length) setActiveIndex(plan.resumeAt);
+    },
   });
   const bridgeV2Ref = useRef(bridgeV2);
   bridgeV2Ref.current = bridgeV2;
@@ -6666,6 +6706,25 @@ export function useAssist() {
     log: (message, tone) => addLog('Phone', message, tone ?? 'info'),
   });
 
+  /** Bandwidth-aware frame streaming: verification frames first, quality/rate lowered for many consumers. */
+  useEffect(() => {
+    const consumers: FrameConsumer[] = [];
+    if (phone.view.running) consumers.push({ id: 'phone', budgetBytes: 400_000, use: 'monitoring' });
+    if (replaying) consumers.push({ id: 'verification', budgetBytes: 1_500_000, use: 'verification' });
+    // With no extra consumers the stream keeps the user's configured monitor rate.
+    if (!consumers.length) {
+      setFrameStream(null);
+      setStreamInterval(intervalMs);
+      return;
+    }
+    const plan = planStream(consumers);
+    if (!planChanged(frameStream, plan)) return;
+    setFrameStream(plan);
+    setStreamInterval(plan.intervalMs);
+    addLog('Frame stream', streamLine(plan), 'info');
+    // Re-planned whenever the consumers or the configured rate change.
+  }, [phone.view.running, replaying, intervalMs, frameStream, addLog]);
+
   /** Explicit demo mode. */
   const useDemo = () => {
     attachSource('demo');
@@ -6880,6 +6939,7 @@ export function useAssist() {
   const approveWith = async (id: string, status: 'approved' | 'edited', edit?: string) => {
     const item = approvals.current(id);
     if (!item || item.status !== 'pending') return;
+    void bridgeV2Ref.current.sendApprovalDecision(id, status, edit);
     if (item.step) {
       await runApproved(item, edit === undefined ? item.step : editedStep(item.step, edit), status, edit);
       return;
@@ -6898,6 +6958,7 @@ export function useAssist() {
   const rejectItem = (id: string) => {
     const item = approvals.decide(id, 'rejected');
     if (!item) return;
+    void bridgeV2Ref.current.sendApprovalDecision(id, 'rejected');
     if (item.proposalId) dismissProposal(item.proposalId);
     learnDecision(item);
   };
@@ -7447,6 +7508,8 @@ export function useAssist() {
     voice,
     /** The phone companion: the bridge serves a small mobile page over the engine's live state. */
     phone,
+    /** Bandwidth-aware frame streaming: the current adaptive plan (quality/rate, consumers). */
+    frameStream,
     /** The active capture source, its kind and whether replay/drift are armed for it (HUD). */
     captureSource: captureStatus({ source, kind: captureRef.current?.kind, hasFrame: frames.length > 0, bridgeUrl: settings.bridgeUrl, mainConnected: mainBridge.status === 'connected' }),
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */

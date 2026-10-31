@@ -33,6 +33,10 @@ function fakePeers(): PeerHandlers {
     console_log: vi.fn(),
     app_state: vi.fn(),
     store_delta: vi.fn(),
+    ledger_delta: vi.fn(),
+    health: vi.fn(),
+    approval_decision: vi.fn(),
+    resume: vi.fn(),
   };
 }
 
@@ -47,6 +51,10 @@ const PEER_GOOD_PAYLOADS: Record<PeerType, object> = {
   console_log: { app: 'droid-main', level: 'error', message: 'oops' },
   app_state: { app: 'droid-main', running: true, goal: 'open settings', steps: 3, activeIndex: 1, agentsBusy: 2 },
   store_delta: { entries: [{ store: 'familiar', key: 'f1', at: 5, value: { id: 'f1', name: 'Files', x: 0.1, y: 0.2, lastSeen: 5 } }] },
+  ledger_delta: { entries: [{ id: 'droid-main:step:0:5', app: 'droid-main', time: 5, kind: 'step', stepIndex: 0, text: 'clicked Files' }] },
+  health: { app: 'droid-main', aiUp: true, latencyMs: 120, crewLoad: 0.2, armed: true, canExecute: true },
+  approval_decision: { id: 'a1', decision: 'approved', by: 'droid-main' },
+  resume: { runId: 'r1', goal: 'open settings', steps: ['click'], activeIndex: 0, replay: ['clicked'] },
 };
 
 // --- validateInbound ---------------------------------------------------------
