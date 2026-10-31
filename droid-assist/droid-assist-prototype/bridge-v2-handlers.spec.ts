@@ -32,6 +32,7 @@ function fakePeers(): PeerHandlers {
     step_opinion: vi.fn(),
     console_log: vi.fn(),
     app_state: vi.fn(),
+    store_delta: vi.fn(),
   };
 }
 
@@ -45,6 +46,7 @@ const PEER_GOOD_PAYLOADS: Record<PeerType, object> = {
   step_opinion: { index: 0, step: 'click', agree: true },
   console_log: { app: 'droid-main', level: 'error', message: 'oops' },
   app_state: { app: 'droid-main', running: true, goal: 'open settings', steps: 3, activeIndex: 1, agentsBusy: 2 },
+  store_delta: { entries: [{ store: 'familiar', key: 'f1', at: 5, value: { id: 'f1', name: 'Files', x: 0.1, y: 0.2, lastSeen: 5 } }] },
 };
 
 // --- validateInbound ---------------------------------------------------------

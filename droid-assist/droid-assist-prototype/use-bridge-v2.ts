@@ -6,6 +6,8 @@ import type { AppStatePayload, ConsoleLevel, InboundMessage, OutboundPayloads, O
 import { routeV2, type PeerHandlers, type V2Machinery } from './bridge-v2-handlers.js';
 import { TAKEOVER_MS, TAKEOVER_SOURCE, addRemoteOpinion, addTakeover, agreementState, applyRegulate, arbitrate, handOffReason, shouldHandOff, syncAgreements, takeoverPayload, type RegulateTarget, type StepAgreement } from './takeover.js';
 import { selectApp, standingCapabilities, type JobDecision } from './app-selection.js';
+import { SYNC_STORES, advanceWatermarks, fromPayload, mergeDelta, mergeLine, outgoingDelta, toPayload, type StoreWatermarks } from './store-sync.js';
+import { applySyncEntries, loadStoreWatermarks, loadSyncEntries, saveStoreWatermarks } from './storage.js';
 import { busyAgents, roundLine, runSwarmRound, conflicts, type SwarmRound } from './project-swarm.js';
 import { buildCrew } from './crew.js';
 import { BROWSER_LOGS_SOURCE, captureConsole, fromConsolePayload, pushBrowserLog, type BrowserLog, type LogApp } from './browser-logs.js';
@@ -15,6 +17,10 @@ import { coordinationRows, pushFlow, type RequestFlow } from './coordination.js'
 export const BRIDGE_V2_SOURCE = 'Main app v2';
 /** Log source of swarm rounds. */
 export const SWARM_SOURCE = 'Swarm';
+/** Log source of learned-store sync over the bridge. */
+export const STORE_SYNC_SOURCE = 'Store sync';
+/** How often, while connected, learned-store deltas cross the bridge (an element learned in one app reaches the other). */
+export const STORE_SYNC_MS = 10_000;
 /** This app's name on the wire. */
 export const ASSIST_APP = 'droid-new';
 
@@ -89,6 +95,8 @@ export function useBridgeV2(deps: BridgeV2Deps) {
   const planKeyRef = useRef('');
   /** Once-per-plan effects already done (opinions sent, arbitrations, completions). */
   const doneRef = useRef(new Set<string>());
+  /** Store-sync watermarks: the newest learned observation already exchanged with droid-main. */
+  const watermarksRef = useRef<StoreWatermarks>(loadStoreWatermarks());
 
   const commit = (next: StepAgreement[]) => {
     agreementsRef.current = next;
@@ -177,6 +185,13 @@ export function useBridgeV2(deps: BridgeV2Deps) {
       if (p.level === 'error') void depsRef.current.machinery.assistError(p.message, undefined);
     },
     app_state: (p: PeerPayloads['app_state']) => setRemote(p),
+    store_delta: (p) => {
+      const entries = fromPayload(p);
+      const applied = applySyncEntries(entries);
+      watermarksRef.current = advanceWatermarks(watermarksRef.current, entries);
+      saveStoreWatermarks(watermarksRef.current);
+      log(mergeLine('droid-main', mergeDelta(loadSyncEntries(), entries)), applied ? 'ok' : 'info', STORE_SYNC_SOURCE);
+    },
   };
 
   /** One inbound message: a v2 request is answered with a result; true when it was v2. */
@@ -286,17 +301,47 @@ export function useBridgeV2(deps: BridgeV2Deps) {
     return r.ok;
   };
 
-  /** droid-new regulates droid-main. */
+  /** droid-main regulates droid-new. */
   const regulateMain = async (command: RegulateCommand, mode?: string): Promise<boolean> => {
     const r = await send('regulate', { command, ...(mode ? { mode } : {}), reason: 'regulated from droid-new' });
     log(r.ok ? `Regulated droid-main: ${command}${mode ? ` → ${mode}` : ''}` : `Could not regulate droid-main — ${r.message}`, r.ok ? 'info' : 'warn');
     return r.ok;
   };
 
+  /**
+   * Sends droid-main the learned-store entries it has not seen (habits, familiar elements, element
+   * maps, access paths, blacklist rules and patterns), then records them as exchanged. Nothing is sent
+   * when the stores hold nothing new, so a quiet bridge stays quiet.
+   */
+  const sendStoreDelta = async (): Promise<number> => {
+    if (!depsRef.current.connected) return 0;
+    const entries = loadSyncEntries();
+    const delta = outgoingDelta(entries, watermarksRef.current);
+    if (!delta.length) return 0;
+    const r = await send('store_delta', toPayload(delta));
+    if (!r.ok) {
+      log(`Store sync to droid-main not sent — ${r.message}`, 'warn', STORE_SYNC_SOURCE);
+      return 0;
+    }
+    watermarksRef.current = advanceWatermarks(watermarksRef.current, delta);
+    saveStoreWatermarks(watermarksRef.current);
+    log(mergeLine('droid-new', mergeDelta([], delta)), 'info', STORE_SYNC_SOURCE);
+    return delta.length;
+  };
+
+  // Both apps exchange what they have learned when they connect, then keep learning from each other.
+  useEffect(() => {
+    if (!deps.connected) return undefined;
+    void sendStoreDelta();
+    const timer = setInterval(() => void sendStoreDelta(), STORE_SYNC_MS);
+    return () => clearInterval(timer);
+    // Re-syncs on every (re)connect; the stores themselves are read fresh each time.
+  }, [deps.connected]);
+
   return {
     onMessage, agreements, coordination: coordinationRows(deps.steps, agreements), flows,
     browserLogs, clearBrowserLogs, remote, swarmRound: round, runSwarm, dispatchSwarm,
-    sendUserRequest, regulateMain, decision,
+    sendUserRequest, regulateMain, sendStoreDelta, decision,
   };
 }
 

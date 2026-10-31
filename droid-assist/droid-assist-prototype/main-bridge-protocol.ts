@@ -257,6 +257,22 @@ export interface AppStatePayload {
   agentsBusy: number;
 }
 
+/** v2: one learned store entry of a sync delta — its store, its identity within it, and when it was last verified. */
+export interface StoreDelta {
+  /** One of SYNC_STORES: habits, familiar, elementMap, accessPaths, avoidRules, patterns. */
+  store: string;
+  /** Identity within the store (the entry's natural key). */
+  key: string;
+  /** Last verified observation, ms since epoch. */
+  at: number;
+  value: Record<string, unknown>;
+}
+
+/** v2: a delta of learned store entries, so both apps learn from each other. */
+export interface StoreDeltaPayload {
+  entries: StoreDelta[];
+}
+
 /** The v2 messages both apps send each other. */
 export interface PeerPayloads {
   user_request: UserRequestPayload;
@@ -265,6 +281,7 @@ export interface PeerPayloads {
   step_opinion: StepOpinionPayload;
   console_log: ConsoleLogPayload;
   app_state: AppStatePayload;
+  store_delta: StoreDeltaPayload;
 }
 
 /** The v2 requests the main app sends; each is answered with a `result` replying to it. */
@@ -356,6 +373,11 @@ const INTERCEPT_CHECKS: Record<InterceptKind, (p: Record<string, unknown> & { me
 
 const isLoad = (v: unknown) => isNum(v) && v >= 0 && v <= 1;
 const isNames = (v: unknown) => Array.isArray(v) && v.every((c) => typeof c === 'string');
+/** One store-delta entry: a named store, a key, a finite time and a JSON object value. */
+const isStoreDelta = (v: unknown): v is StoreDelta =>
+  isObject(v) && isText(v.store) && isText(v.key) && isNum(v.at) && v.at >= 0 && isObject(v.value);
+/** A store-delta's entry list. */
+const isStoreDeltas = (v: unknown): v is StoreDelta[] => Array.isArray(v) && v.every(isStoreDelta);
 /** Why a takeover payload's run/step reference is invalid; null when valid. */
 const stepRef = (type: string, p: Record<string, unknown>) => (typeof p.runId === 'string' && isNum(p.stepIndex) && p.stepIndex >= 0 ? null : `${type} needs runId and stepIndex`);
 
@@ -382,6 +404,7 @@ const INBOUND_CHECKS: Record<InboundType, (p: Record<string, unknown>) => string
   step_opinion: (p) => (isNum(p.index) && typeof p.step === 'string' && typeof p.agree === 'boolean' && (p.element === undefined || isElement(p.element)) ? null : 'step_opinion needs index, step and agree'),
   console_log: (p) => (typeof p.app === 'string' && CONSOLE_LEVELS.includes(p.level as ConsoleLevel) && typeof p.message === 'string' ? null : 'console_log needs app, level and message'),
   app_state: (p) => (typeof p.app === 'string' && typeof p.running === 'boolean' && typeof p.goal === 'string' && isNum(p.steps) && isNum(p.activeIndex) && isNum(p.agentsBusy) ? null : 'app_state needs app, running, goal, steps, activeIndex and agentsBusy'),
+  store_delta: (p) => (isStoreDeltas(p.entries) ? null : 'store_delta needs entries of {store, key, at, value}'),
 };
 
 const REQUEST_TYPES: Record<RequestType, true> = { analyze: true, plan_workflow: true, run_workflow: true, verify: true, watch: true, assist_error: true };
