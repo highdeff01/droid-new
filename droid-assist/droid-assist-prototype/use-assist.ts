@@ -498,6 +498,20 @@ export function useAssist() {
   const [replicas, setReplicas] = useState<Replica[]>([]);
   const [sideResults, setSideResults] = useState<SideTestResult[]>([]);
   const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Shows a highlight and clears it 3 s later. The timer is cancelled on unmount so it can never fire after teardown. */
+  const flashHighlight = (h: { x: number; y: number; label: string }) => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    setHighlight(h);
+    highlightTimerRef.current = setTimeout(() => {
+      highlightTimerRef.current = null;
+      setHighlight((cur) => (cur && cur.x === h.x && cur.y === h.y ? null : cur));
+    }, 3000);
+  };
+  useEffect(() => () => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+  }, []);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
   const [progress, setProgress] = useState({ done: 0, manual: 0 });
@@ -3231,8 +3245,7 @@ export function useAssist() {
    * through the same gated pipeline (abort, arm, a fresh one-click budget). Disarmed is a dry run.
    */
   const testClick = async (el: ScreenElement) => {
-    setHighlight({ x: el.x, y: el.y, label: el.name });
-    setTimeout(() => setHighlight((h) => (h && h.x === el.x && h.y === el.y ? null : h)), 3000);
+    flashHighlight({ x: el.x, y: el.y, label: el.name });
     const where = `${gridRef(el)} (${pct(el.x)}, ${pct(el.y)})`;
     if (!armedRef.current) {
       addLog('Test click', `"${el.name}" highlighted at ${where} — real input disarmed, ${DRY_RUN}`, 'info');
@@ -7023,8 +7036,7 @@ export function useAssist() {
 
   /** Highlights a point on the preview for 3 s. */
   const flash = (h: { x: number; y: number; label: string }) => {
-    setHighlight(h);
-    setTimeout(() => setHighlight((cur) => (cur && cur.x === h.x && cur.y === h.y ? null : cur)), 3000);
+    flashHighlight(h);
   };
 
   const initiativeApi = useInitiative({
