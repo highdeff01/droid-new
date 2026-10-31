@@ -41,6 +41,7 @@ import { AI_MAX_IN_FLIGHT_MAX, AI_MAX_IN_FLIGHT_MIN } from './ai-queue.js';
 import { CREW_SIZE_MAX, CREW_SIZE_MIN, clampCrewSize } from './crew.js';
 import { BackupSettings } from './backup-panel.js';
 import { UpdateSettings } from './update-settings.js';
+import { PluginsPanel } from './plugins-panel.js';
 import { FixScriptReview } from './screen-ai-panels.js';
 import { sectionMemoryLines } from './sections.js';
 import { replicaLine } from './replicate.js';
@@ -608,6 +609,7 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       <ErrorForwardingSettings engine={engine} />
       <BackupSettings onExport={() => void engine.invoke('backup.export')} />
       <UpdateSettings engine={engine} />
+      <PluginsPanel engine={engine} />
       <RelaxSettings engine={engine} />
       <RecoverySettings engine={engine} />
     </section>

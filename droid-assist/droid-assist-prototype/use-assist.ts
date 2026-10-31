@@ -69,6 +69,7 @@ import { BUS_AGENTS, BUS_AGENT_IDS, elementLine, forward, isGridLabel, markHandl
 import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
 import { useAutoUpdate, UPDATE_SOURCE } from './use-update.js';
+import { usePlugins } from './use-plugins.js';
 import { useApprovals } from './use-approvals.js';
 import { DEFAULT_OPERATION_POLICY, decisionLesson, editedStep, type ApprovalItem, type OperationPolicy } from './approvals.js';
 import { buildElementMap } from './element-map.js';
@@ -6512,6 +6513,8 @@ export function useAssist() {
     if (!bridgeUrl) return { ok: false, reason: 'no desktop / main-app bridge configured' };
     return { ok: true, value: await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current) };
   };
+  /** The plugin host: plugins register capabilities, commands and panels through a sandboxed API. */
+  const plugins = usePlugins((message, tone) => addLog('Plugin', message, tone ?? 'info'));
   /** The presentation studio: slideshows, movies, projects, approvals, rich notifications and the in-world embed. */
   const studio = usePresentations({
     ...capDeps,
@@ -6529,7 +6532,7 @@ export function useAssist() {
       },
     },
   });
-  const caps = useCapabilities(capDeps, studio.capabilities);
+  const caps = useCapabilities(capDeps, [...studio.capabilities, ...plugins.capabilities]);
 
   /** /crew locate <element> asks its sentinel; /crew test <what> runs a background-then-main test; any other /crew text is a goal for the AI-directed crew. */
   const crewCommand = async (text: string) => {
@@ -6566,6 +6569,17 @@ export function useAssist() {
 
   /** Submits the assist input: slash commands run, anything else is planned as a goal. */
   const submitInput = async () => {
+    const pluginCmd = plugins.commandFor(goal);
+    if (pluginCmd) {
+      setGoal('');
+      kb.noteSignal('command', goal.trim());
+      try {
+        await pluginCmd.command.run(pluginCmd.target);
+      } catch (error) {
+        addLog('Plugin', `/${pluginCmd.command.name} failed — ${errorText(error)}`, 'error');
+      }
+      return;
+    }
     const command = parseCommand(goal);
     if (!command) {
       if (isTestGoal(goal)) await testRoutes(parseTestSpec(goal));
@@ -7358,6 +7372,8 @@ export function useAssist() {
     bridgeV2,
     /** Auto-update: check GitHub on start, pull/rebuild/relaunch when behind, and the manual controls. */
     update,
+    /** The plugin host: registered capabilities, commands and panels, plus load/unload. */
+    plugins,
     /** The active capture source, its kind and whether replay/drift are armed for it (HUD). */
     captureSource: captureStatus({ source, kind: captureRef.current?.kind, hasFrame: frames.length > 0, bridgeUrl: settings.bridgeUrl, mainConnected: mainBridge.status === 'connected' }),
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
