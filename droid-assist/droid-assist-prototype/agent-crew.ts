@@ -126,7 +126,7 @@ const reportLine = (r: CrewReport) => {
 };
 
 /** Asks the main AI for the next round's commands (`system` names the roster's roles; the crew prompt by default). */
-export async function decideCrew(ask: AskFn, frame: Frame | null, goal: string, agents: readonly CrewAgent[], reports: CrewReport[], system = CREW_SYSTEM): Promise<CrewDecision> {
+export async function decideCrew(ask: AskFn, frame: Frame | null, goal: string, agents: readonly CrewAgent[], reports: CrewReport[], system = CREW_SYSTEM, perception = ''): Promise<CrewDecision> {
   const roster = agents.map((a) => `${a.id}: ${a.status}${a.lastReport ? ` — last report: ${a.lastReport}` : ''}`).join('\n');
   const prompt = `Goal: ${goal}\nAgents:\n${roster}\n${reports.length ? `Reports from the last round:\n${reports.map(reportLine).join('\n')}` : 'No reports yet: this is the first round.'}`;
   const reply = await ask({ system, prompt, frame, json: true });
