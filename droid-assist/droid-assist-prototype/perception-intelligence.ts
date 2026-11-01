@@ -224,7 +224,7 @@ export function outcomeRates(history: readonly ActionRecord[], steps: readonly W
 /** Detect planned commands that appear skipped, unfinished or unverified against the recorded step state. */
 export function auditCommands(steps: readonly WorkflowStep[], now = Date.now(), staleAfterMs = 10_000): CommandAudit[] {
   return steps.map(step => {
-    const age = now - (step.verifiedAt ?? 0);
+    const age = now - (step.refFrame?.time ?? now);
     if (step.status === 'failed') return { stepId: step.id, name: step.name, status: step.status, issue: 'failed', detail: 'Step is marked failed; inspect its after-frame and error log' };
     if (step.status === 'pending' && age > staleAfterMs) return { stepId: step.id, name: step.name, status: step.status, issue: 'possibly-missed', detail: 'Still pending beyond the expected step window; check whether a command was never dispatched' };
     if (step.status === 'running') return { stepId: step.id, name: step.name, status: step.status, issue: 'unverified', detail: 'Running state needs a fresh result and screenshot verdict' };
