@@ -41,6 +41,10 @@ export interface CrewReport {
   found: string;
   /** Where on screen the agent ended (normalized), when it acted on something. */
   point?: { x: number; y: number };
+  /** ID of the screenshot/frame used to ground this report. */
+  screenshotId?: number;
+  /** Normalized region the report refers to; reviewers can inspect the same frame region. */
+  evidenceRegion?: { x: number; y: number; w: number; h: number };
 }
 
 /** The main AI's decision for one round. */
