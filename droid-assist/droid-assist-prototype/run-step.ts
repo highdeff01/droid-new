@@ -299,9 +299,22 @@ async function retryMissed(step: WorkflowStep, out: StepOutcome, deps: StepDeps)
     return { ...out, retry: { dxPx: miss.dxPx, dyPx: miss.dyPx, at: miss.at, ok: false, message: refusal } };
   }
   const shot = out.shot!;
+  const ownershipRefusal = deps.authorizeDispatch?.();
+  if (ownershipRefusal) {
+    deps.log(`"${step.name}": corrected retry blocked by cooperative control: ${ownershipRefusal}`, 'warn');
+    return { ...out, retry: { dxPx: miss.dxPx, dyPx: miss.dyPx, at: miss.at, ok: false, message: ownershipRefusal } };
+  }
   deps.log(`"${step.name}": missed by ${delta} — retrying once at ${px(miss.at, shot)}`, 'warn');
   deps.aim?.(miss.at);
-  const sent = await sender(deps)({ ...step, correctedX: miss.at.x, correctedY: miss.at.y }, shot.srcW, shot.srcH, { x: 0, y: 0 });
+  deps.onDispatchStart?.(step);
+  let sent: BridgeResult;
+  try {
+    sent = await sender(deps)({ ...step, correctedX: miss.at.x, correctedY: miss.at.y }, shot.srcW, shot.srcH, { x: 0, y: 0 });
+    deps.onDispatchEnd?.(step, { ok: sent.ok, message: sent.message });
+  } catch (error) {
+    deps.onDispatchEnd?.(step, { ok: false, message: errorText(error) });
+    throw error;
+  }
   const retry = { dxPx: miss.dxPx, dyPx: miss.dyPx, at: miss.at, ok: sent.ok, message: sent.message };
   if (!sent.ok) return { ...out, retry };
   const after = await verifyAfter(step, shot, miss.at, deps);
