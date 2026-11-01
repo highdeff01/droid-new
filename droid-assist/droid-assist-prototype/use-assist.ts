@@ -114,7 +114,7 @@ const AI: Requester = { kind: 'ai' };
 const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
 import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
-import { auditCommands, classifyPageTransition, frameChangeRatio, learnVisualPrototype, outcomeRates, perceptionContext, prospectPoints, relateElements, visualDescriptor, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
+import { auditCommands, classifyPageTransition, compareElementEffect, frameChangeRatio, learnVisualPrototype, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, relateElements, saveVisualPrototypes, visualDescriptor, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
 import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
 import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
 import { refreshStep, retestSummary, retestText, retestedSteps, runRetest, selectSteps, type RetestStepResult, type RetestSummary } from './retest.js';
@@ -434,7 +434,9 @@ export function useAssist() {
   historyRef.current = history;
   /** Latest shared perception snapshot and screenshot-verified visual prototypes. */
   const perceptionRef = useRef<PerceptionSnapshot | null>(null);
-  const visualPrototypesRef = useRef<VisualPrototype[]>([]);
+  const visualPrototypesRef = useRef<VisualPrototype[]>(loadVisualPrototypes());
+  const elementEffectsRef = useRef<ElementEffect[]>([]);
+  const lastEffectActionRef = useRef<string | null>(null);
   /** Normalized point the last executed pointer action left the cursor at: the previously-focused point of the next action. */
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   /** The last action written to the history, so a side test can backtrack exactly what it did. */
@@ -2682,6 +2684,7 @@ export function useAssist() {
           name: target.name, kind: target.kind, descriptor: visualDescriptor(afterFrame, target.box),
           frameId: afterFrame.id, verifiedSuccess: true, at: afterFrame.time,
         });
+        saveVisualPrototypes(visualPrototypesRef.current);
         addLog('Visual learner', `Updated verified appearance prototype for "${target.name}" from frame #${afterFrame.id} (${visualPrototypesRef.current.find(p => p.key === target.name.trim().toLowerCase())?.samples ?? 1} sample(s))`, 'ok');
       }
     }
@@ -4729,21 +4732,37 @@ export function useAssist() {
   const readScreen = (frame: Frame) => {
     const previous = inventoryRef.current;
     const previousFrame = inventoryFrameRef.current;
-    const next = buildInventory({ frame, mapped: elementMapRef.current, familiar: familiarRef.current, prev: previous, prevFrame: previousFrame });
+    const detected = buildInventory({ frame, mapped: elementMapRef.current, familiar: familiarRef.current, prev: previous, prevFrame: previousFrame });
+    const next = recognizeElements(detected, frame, visualPrototypesRef.current);
     const changeRatio = frameChangeRatio(previousFrame, frame);
     const relations = relateElements(next);
     const pageTransition = classifyPageTransition(previous, next, changeRatio);
     const audits = auditCommands(stepsRef.current, frame.time);
     const prospects = prospectPoints(next, relations, audits);
+    const latestAction = historyRef.current[0];
+    const newEffect = latestAction && latestAction.id !== lastEffectActionRef.current && Math.abs(frame.time - latestAction.time) <= 10_000
+      ? compareElementEffect(latestAction, previous, next) : null;
+    if (newEffect) {
+      lastEffectActionRef.current = newEffect.actionId;
+      elementEffectsRef.current = [newEffect, ...elementEffectsRef.current].slice(0, 60);
+    }
     const notes = [
       ...next.filter(e => e.state !== 'static').map(e => `"${e.name}" is ${e.state} at ${e.cell}`),
+      ...(newEffect ? [`After ${newEffect.actor} ${newEffect.action} on "${newEffect.target}": appeared [${newEffect.appeared.join(', ') || 'none'}], disappeared [${newEffect.disappeared.join(', ') || 'none'}], moved [${newEffect.moved.join(', ') || 'none'}]`] : []),
       ...audits.filter(a => a.issue !== 'clear').slice(0, 4).map(a => `Step "${a.name}" needs review: ${a.issue} — ${a.detail}`),
       ...(pageTransition === 'navigation-likely' ? ['Known-element overlap is low while many pixels changed: verify whether navigation moved to a different page or app'] : []),
     ];
-    perceptionRef.current = { frameId: frame.id, capturedAt: frame.time, elements: next, relations, pageTransition, changeRatio, notes };
+    perceptionRef.current = { frameId: frame.id, capturedAt: frame.time, elements: next, relations, pageTransition, changeRatio, notes, effects: elementEffectsRef.current.slice(0, 20) };
     inventoryRef.current = next;
     inventoryFrameRef.current = frame;
     setInventory(next);
+    if (prospects.some(p => p.priority === 'high')) {
+      const markers: Annotation[] = prospects.filter(p => p.priority === 'high').slice(0, 3).map((p, i) => ({
+        id: `prospect-${frame.id}-${i}`, x: Math.max(0, p.point.x - 0.035), y: Math.max(0, p.point.y - 0.025),
+        w: 0.07, h: 0.05, label: p.reason, tone: 'warn', actX: p.point.x, actY: p.point.y,
+      }));
+      setAnnotations(old => [...markers, ...old.filter(a => !a.id.startsWith('prospect-') && a.tone === 'error')].slice(0, 6));
+    }
     // Keep the shared perception context current for the next planner, reviewer and crew round.
     if (notes.length && previousFrame && pageTransition !== 'same-page') {
       addLog('Perception controller', `Frame #${frame.id}: ${pageTransition}; ${next.length} elements, ${relations.length} geometric relationships; ${notes.slice(0, 3).join('; ')}`, pageTransition === 'navigation-likely' ? 'warn' : 'info');
