@@ -293,12 +293,59 @@ export function prospectPoints(elements: readonly InventoryElement[], relations:
   return points.slice(0, 12);
 }
 
+
+export interface PerceptionQuestion {
+  id: string;
+  priority: 'high' | 'normal' | 'low';
+  question: string;
+  why: string;
+  evidence: string[];
+  /** Suggested crop/region for AI inspection; advisory metadata, never an input command. */
+  region?: Box;
+}
+
+/** Convert uncertainty in observer evidence into questions for the main AI. */
+export function derivePerceptionQuestions(snapshot: PerceptionSnapshot): PerceptionQuestion[] {
+  const questions: PerceptionQuestion[] = [];
+  const add = (q: PerceptionQuestion) => { if (!questions.some(x => x.id === q.id)) questions.push(q); };
+  if (snapshot.pageTransition === 'navigation-likely') add({
+    id: 'page-transition', priority: 'high',
+    question: 'Does this frame show a new page, dialog, application, or navigation state? Identify the page and next stable visual landmark.',
+    why: 'Known-element overlap fell while a substantial visual change occurred.',
+    evidence: ['frame #' + snapshot.frameId, 'pixel change ratio ' + snapshot.changeRatio.toFixed(3), ...snapshot.notes.slice(0, 2)],
+  });
+  for (const element of snapshot.elements.filter(e => !e.known).slice(0, 5)) add({
+    id: 'identify:' + key(element.id || element.name), priority: 'normal',
+    question: 'Identify the foreground element in this region, its likely role, visible label, and neighboring elements that disambiguate it.',
+    why: 'The inventory has a region but no trusted semantic identity.',
+    evidence: ['candidate: ' + element.name, 'kind: ' + element.kind, 'state: ' + element.state, 'box: ' + JSON.stringify(element.box)],
+    region: element.box,
+  });
+  for (const effect of snapshot.effects.slice(0, 4)) {
+    if (effect.target === '(unmatched coordinate)' || effect.appeared.length || effect.disappeared.length || effect.moved.length) add({
+      id: 'effect:' + effect.actionId, priority: effect.target === '(unmatched coordinate)' ? 'high' : 'normal',
+      question: 'Explain the likely UI changes after ' + effect.actor + "'s " + effect.action + '. Distinguish correlation from proven causation and identify any next element needing inspection.',
+      why: 'The action and resulting screen changes are associated in time, but the semantic effect may be uncertain.',
+      evidence: ['target: ' + effect.target, 'appeared: ' + (effect.appeared.join(', ') || 'none'), 'disappeared: ' + (effect.disappeared.join(', ') || 'none'), 'moved: ' + (effect.moved.join(', ') || 'none'), effect.evidence],
+    });
+  }
+  for (const note of snapshot.notes.filter(n => /needs review|navigation|unknown|unmatched|uncertain/i.test(n)).slice(0, 4)) add({
+    id: 'review:' + key(note).slice(0, 80), priority: 'normal',
+    question: 'Review this observation against the current screenshot, prior notes, and recent agent/user evidence. What additional information would resolve the uncertainty?',
+    why: 'A cross-reference note indicates incomplete or conflicting evidence.', evidence: [note],
+  });
+  const rank = { high: 0, normal: 1, low: 2 };
+  return questions.sort((a, b) => rank[a.priority] - rank[b.priority]).slice(0, 10);
+}
+
 /** Compact context block shared with planners, supervisors and specialist reviewers. */
 export function perceptionContext(snapshot: PerceptionSnapshot, rates: readonly ElementOutcomeRate[], prospects: readonly ProspectPoint[]): string[] {
+  const questions = derivePerceptionQuestions(snapshot);
   return [
     `[Perception frame #${snapshot.frameId}] page=${snapshot.pageTransition}; changed pixels≈${(snapshot.changeRatio * 100).toFixed(1)}%; elements=${snapshot.elements.length}; relations=${snapshot.relations.length}`,
     ...snapshot.notes.slice(0, 8).map(n => `[Perception note] ${n}`),
     ...rates.slice(0, 8).map(r => `[Verified outcome] ${r.target}: ${r.successPercent === null ? 'not enough screenshot-verified outcomes' : `${r.successPercent}% (${r.verifiedSuccesses}/${r.verifiedSuccesses + r.verifiedFailures})`} confidence=${r.confidence}`),
     ...prospects.slice(0, 8).map(p => `[Prospect ${p.priority}] ${p.reason} at ${(p.point.x * 100).toFixed(1)}%, ${(p.point.y * 100).toFixed(1)}% — ${p.evidence}`),
+    ...questions.map(q => `[AI review request ${q.priority}] ${q.question} Why: ${q.why} Evidence: ${q.evidence.join('; ')}`),
   ];
 }
