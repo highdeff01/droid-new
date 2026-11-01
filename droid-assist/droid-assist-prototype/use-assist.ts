@@ -157,7 +157,7 @@ import { CROSS_REFERENCE_LINES } from './joint-followup.js';
 import { loadOperations } from './operation-db.js';
 import { DEFAULT_OPERATION_RETRIES } from './operation-retry.js';
 import { DEFAULT_PLAYBACK_WINDOW_SEC } from './playback.js';
-import { CREW_AGENTS, CREW_SYSTEM, createScreenLock, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
+import { CREW_AGENTS, CREW_SYSTEM, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
 import { runLiveDrag, type DragIntervention, type LiveDragResult, type SwarmAgent } from './drag-swarm.js';
 import { AUTO_OPS_SYSTEM, OPS_AGENTS, OPS_SYSTEM, addEvidence, addOpsReport, changeKey, changeLine, dedupeLog, enabledOps, loopReport, mapDelta, markEvidence, monitorChange, opsAgent, opsFor, parseOpsTarget, patchOpsAgent, shouldReport, tagLog, type MonitorChange, type OpsAgentId, type OpsState, type TestCandidate } from './operations.js';
 import { AUTO_OPS_INTERVAL_MS, automaticOpsPlan, type AutomaticOpsPlan } from './agent-autopilot.js';
@@ -776,8 +776,6 @@ export function useAssist() {
   const subRunningRef = useRef(false);
   const crewRef = useRef<CrewAgent[]>([]);
   const crewRunningRef = useRef(false);
-  /** Real input from crew agents goes through one lock: two agents never move the pointer at once. */
-  const screenLockRef = useRef(createScreenLock());
   const opsRef = useRef(ops);
   const opsRunningRef = useRef(false);
   const lastAutoOpsAtRef = useRef(0);
@@ -1627,7 +1625,6 @@ export function useAssist() {
   }, [addLog, addPatterns, askFor, autoSaveFlow, recordRun, rememberFailure, commitAccessPaths]);
 
   const triggerAbort = useCallback((reason: string) => {
-    screenLockRef.current.invalidate();
     abortRef.current = true;
     abortedRef.current = true;
     cancelAi();
@@ -2293,14 +2290,6 @@ export function useAssist() {
       onVerified: strengthen,
       aim,
       gateRetry: dryRun ? undefined : () => gateRealInput(budget),
-      // Re-check revocable run authority after waiting for the physical-input slot.
-      authorizeDispatch: () => abortedRef.current ? 'Aborted — input authority revoked'
-        : !armedRef.current ? 'Real input is disarmed'
-        : !stageOn('executor') ? stageOff('executor')
-        : abortRef.current ? 'Plan stopped — queued input authority revoked' : null,
-      // Only the native send is serialized. Agents can plan, inspect and ground in parallel.
-      // Generation changes reject queued work that was planned under an earlier owner.
-      dispatchExclusive: (dispatch) => screenLockRef.current(dispatch),
     };
   };
 
@@ -2364,9 +2353,7 @@ export function useAssist() {
     const gate = dryRun ? null : gateRealInput(budget);
     if (gate) return refused(step, gate);
     if (!dryRun && plan.input === 'desktop-bridge' && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) {
-      // A live drag holds the pointer from press through release; keep the exclusive slot for
-      // that complete gesture so no other agent can interleave input mid-drag.
-      return screenLockRef.current(() => performLiveDrag(step, actor));
+      return performLiveDrag(step, actor);
     }
     const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), stepDeps(plan, actor, budget, dryRun, step.refFrame));
     noteRoute(plan, step, out, actor, dryRun);
@@ -3629,7 +3616,6 @@ export function useAssist() {
 
   /** Convergence guard tripped: stop the run, Auto Act and AI calls, and say why the goal cannot proceed. */
   const haltSupervisor = (review: SupervisorReview) => {
-    screenLockRef.current.invalidate();
     supervisorHaltedRef.current = true;
     abortRef.current = true;
     cancelAi();
@@ -4968,7 +4954,6 @@ export function useAssist() {
 
   /** Replay's ■ Stop: ends the run between steps and cancels the in-flight AI call. */
   const stop = () => {
-    screenLockRef.current.invalidate();
     abortRef.current = true;
     trainStopRef.current = true;
     cancelAi();
@@ -5009,8 +4994,6 @@ export function useAssist() {
    * disarming, latching ABORTED, turning Auto Act off or stopping the monitor and the watchers.
    */
   const stopPlan = () => {
-    // Fence any agent dispatches still waiting behind the native-input slot.
-    screenLockRef.current.invalidate();
     abortRef.current = true;
     cancelAi();
     if (liveDragRef.current) dragControlRef.current = { kind: 'release' };
@@ -5877,7 +5860,6 @@ export function useAssist() {
 
   /** The capture ended by itself: stop any replay, keep the source and raise a visible error. */
   const onCaptureLost = (reason: string) => {
-    screenLockRef.current.invalidate();
     captureRef.current = null;
     abortRef.current = true;
     setCaptureLost(reason);
