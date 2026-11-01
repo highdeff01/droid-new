@@ -136,40 +136,6 @@ export async function decideCrew(ask: AskFn, frame: Frame | null, goal: string, 
 /** An agent report as a Screen watcher note. */
 export const reportNote = (r: CrewReport): NoteDraft => ({ kind: r.ok ? 'element' : 'unusual', text: `Crew ${reportLine(r)}` });
 
-/** A serialized native-input gate. Queued work is generation-fenced when ownership changes. */
-export interface ScreenLock {
-  <T>(fn: () => Promise<T>): Promise<T>;
-  /** Invalidates every queued dispatch captured under an older generation. */
-  invalidate(): number;
-  generation(): number;
-}
-
-/**
- * Serializes only the physical send, not planning, screenshot inspection or grounding. Each queued
- * dispatch captures a generation; a pause/transfer invalidates stale queued work before it reaches
- * the native bridge. An already-running native action must still acknowledge cancellation/release
- * at its own safe boundary before another action can enter the queue.
- */
-export function createScreenLock(): ScreenLock {
-  let tail: Promise<unknown> = Promise.resolve();
-  let currentGeneration = 1;
-  const lock = (<T>(fn: () => Promise<T>): Promise<T> => {
-    const capturedGeneration = currentGeneration;
-    const run = tail.then(async () => {
-      if (capturedGeneration !== currentGeneration) throw new Error('Stale physical-input dispatch rejected after control generation changed');
-      return fn();
-    }, async () => {
-      if (capturedGeneration !== currentGeneration) throw new Error('Stale physical-input dispatch rejected after control generation changed');
-      return fn();
-    });
-    tail = run.catch(() => undefined);
-    return run;
-  }) as ScreenLock;
-  lock.invalidate = () => ++currentGeneration;
-  lock.generation = () => currentGeneration;
-  return lock;
-}
-
 /**
  * The command loop: the main AI decides, every commanded agent works in parallel and reports, then
  * waits for the next decision. Ends when the AI says done, assigns nothing (stalled), the round cap
