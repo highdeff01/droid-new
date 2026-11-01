@@ -1619,6 +1619,7 @@ export function useAssist() {
   }, [addLog, addPatterns, askFor, autoSaveFlow, recordRun, rememberFailure, commitAccessPaths]);
 
   const triggerAbort = useCallback((reason: string) => {
+    screenLockRef.current.invalidate();
     abortRef.current = true;
     abortedRef.current = true;
     cancelAi();
@@ -3605,6 +3606,7 @@ export function useAssist() {
 
   /** Convergence guard tripped: stop the run, Auto Act and AI calls, and say why the goal cannot proceed. */
   const haltSupervisor = (review: SupervisorReview) => {
+    screenLockRef.current.invalidate();
     supervisorHaltedRef.current = true;
     abortRef.current = true;
     cancelAi();
@@ -4887,6 +4889,7 @@ export function useAssist() {
 
   /** Replay's ■ Stop: ends the run between steps and cancels the in-flight AI call. */
   const stop = () => {
+    screenLockRef.current.invalidate();
     abortRef.current = true;
     trainStopRef.current = true;
     cancelAi();
@@ -5782,6 +5785,7 @@ export function useAssist() {
 
   /** The capture ended by itself: stop any replay, keep the source and raise a visible error. */
   const onCaptureLost = (reason: string) => {
+    screenLockRef.current.invalidate();
     captureRef.current = null;
     abortRef.current = true;
     setCaptureLost(reason);
