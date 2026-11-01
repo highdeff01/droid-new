@@ -3768,7 +3768,8 @@ export function useAssist() {
           goal: goalRef.current, next,
           context: [
             ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),
-            ...recentEvidenceContext(),\n          ].join('\n'),
+            ...recentEvidenceContext(),
+          ].join(String.fromCharCode(10)),
         });
       }, changeText, 'change');
       lastChangeRef.current = { at: Date.now(), assessment: a };
