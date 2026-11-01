@@ -150,12 +150,14 @@ export function createCooperativeControl(options: CooperativeControlOptions) {
             (r.review.assessment === 'better-route' ? 2 : 0) + r.review.confidence;
           return score(b) - score(a) || a.requestedAt - b.requestedAt || a.from.localeCompare(b.from);
         });
-        const winner = candidates[0];
-        if (winner && winner.review.assessment !== 'progress' && winner.review.assessment !== 'uncertain') {
+        const eligible = candidates.filter(r => r.review.assessment === 'blocked' || r.review.assessment === 'better-route');
+        for (const observer of candidates.filter(r => !eligible.includes(r))) {
+          record({ ...observer, status: 'rejected', decision: 'review did not establish blockage or a better route' });
+        }
+        const winner = eligible[0];
+        if (winner) {
           grant(winner, 'safe action boundary reached; screenshot review supports takeover');
-          for (const other of candidates.slice(1)) record({ ...other, status: 'rejected', decision: 'another evidence-backed request won arbitration' });
-        } else if (winner) {
-          record({ ...winner, status: 'rejected', decision: 'current controller is making verified progress; no stronger blockage evidence' });
+          for (const other of eligible.slice(1)) record({ ...other, status: 'rejected', decision: 'another evidence-backed request won arbitration' });
         }
       }
       return true;
@@ -177,9 +179,13 @@ export function createCooperativeControl(options: CooperativeControlOptions) {
         const denied = { ...request, status: 'rejected' as const, decision: 'user currently owns control' };
         record(denied); emit('takeover-rejected', denied); return denied;
       }
+      if (!activeAction && !paused && (review.assessment === 'progress' || review.assessment === 'uncertain')) {
+        const denied = { ...request, status: 'rejected' as const, decision: 'current controller has not been shown to be blocked; review does not justify transfer' };
+        record(denied); emit('takeover-rejected', denied); return denied;
+      }
       pending = [...pending.filter(p => p.from !== from), request];
       emit('takeover-requested', request);
-      if (!activeAction && !paused && review.assessment !== 'progress' && review.assessment !== 'uncertain') {
+      if (!activeAction && !paused) {
         grant(request, 'no action in flight; screenshot review supports takeover');
         return history[0];
       }
@@ -188,7 +194,7 @@ export function createCooperativeControl(options: CooperativeControlOptions) {
     /** The user can reclaim control immediately; pending agent requests and all old tokens are invalidated. */
     userTakeControl: () => {
       generation += 1; owner = 'user'; paused = false; activeAction = null;
-      for (const r of pending) record({ ...r, status: 'cancelled', decision: 'user reclaimed control' });
+      for (const r of [...pending]) record({ ...r, status: 'cancelled', decision: 'user reclaimed control' });
       pending = [];
       emit('user-control', { generation });
       return snapshot();
@@ -197,7 +203,7 @@ export function createCooperativeControl(options: CooperativeControlOptions) {
     userPause: () => {
       fence('user paused AI input');
       owner = 'user';
-      for (const r of pending) record({ ...r, status: 'cancelled', decision: 'user paused AI input' });
+      for (const r of [...pending]) record({ ...r, status: 'cancelled', decision: 'user paused AI input' });
       pending = [];
       return snapshot();
     },
