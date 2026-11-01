@@ -3766,7 +3766,7 @@ export function useAssist() {
         const { full, crop } = await boxedFrames(cur, change.box);
         return assessChange(askFor('screenResponder'), full, crop, change, {
           goal: goalRef.current, next,
-          context: perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))).join('\\n') : '',
+          context: [\n            ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),\n            ...recentEvidenceContext(),\n          ].join('\\n'),
         });
       }, changeText, 'change');
       lastChangeRef.current = { at: Date.now(), assessment: a };
@@ -3818,6 +3818,15 @@ export function useAssist() {
     });
   };
 
+  /**
+   * Compact, read-only cross-reference of recent conversation and recorded user/agent operations.
+   * This is context for reasoning only; it is never consulted by the execution or dispatch path.
+   */
+  const recentEvidenceContext = (): string[] => [
+    ...aiHistory.slice(-8).map(message => `[Conversation ${message.role}] ${message.content.slice(0, 320)}`),
+    ...historyRef.current.slice(0, 8).map(action => `[Recorded ${action.source} action] ${action.action} at ${action.x},${action.y}; bridge=${action.ok ? 'accepted' : 'failed'}; dispatched=${action.dispatched}; dryRun=${action.dryRun}`),
+  ];
+
   /** The planning context a proposal for `step` by `actor` is justified against; `redo` marks a re-proposal. */
   const proposalContext = (actor: string, step: WorkflowStep, redo?: string): ProposalContext => ({
     goal: goalRef.current,
@@ -3826,6 +3835,7 @@ export function useAssist() {
       ...relevantPatterns(goalRef.current, patternsRef.current).map(patternLine),
       ...crossReference(actor, goalRef.current),
       ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),
+      ...recentEvidenceContext(),
     ],
     related: operationDb.related(`${step.name} ${step.target ?? ''}`, goalRef.current),
     redo,
@@ -5077,7 +5087,7 @@ export function useAssist() {
         const out = await runCrew({
           agents: CREW_AGENTS,
           maxRounds: settingsRef.current.maxIterations,
-          decide: (reports, round) => thought(`Crew round ${round}: ${text}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, text, crewRef.current, reports, CREW_SYSTEM, perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))).join('\\n') : ''), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
+          decide: (reports, round) => thought(`Crew round ${round}: ${text}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, text, crewRef.current, reports, CREW_SYSTEM, [...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []), ...recentEvidenceContext()].join('\\n')), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
           work: (c) => runCrewAgent(c, budget, dryRun),
           shouldStop: crewStopped,
           onAgents: (agents) => {
