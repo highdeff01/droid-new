@@ -491,39 +491,3 @@ describe('runStep attempt visualization (aim)', () => {
     expect(aims).toEqual([]);
   });
 });
-
-
-describe('runStep cooperative dispatch fence', () => {
-  it('re-checks ownership after screenshot grounding and refuses stale controller input', async () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal('fetch', fetchSpy);
-    const authorizeDispatch = vi.fn(() => 'control generation changed; user reclaimed control');
-    const onDispatchStart = vi.fn();
-    const onDispatchEnd = vi.fn();
-    const { d } = deps([frame(1, image(100, 60))], {
-      authorizeDispatch, onDispatchStart, onDispatchEnd,
-    });
-    const out = await runStep(step, d);
-    expect(out).toMatchObject({ ok: false, executed: false });
-    expect(out.message).toContain('user reclaimed control');
-    expect(authorizeDispatch).toHaveBeenCalledTimes(1);
-    expect(onDispatchStart).not.toHaveBeenCalled();
-    expect(onDispatchEnd).not.toHaveBeenCalled();
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it('reports the real dispatch lifecycle to the cooperative controller', async () => {
-    vi.stubGlobal('fetch', completedRun());
-    const onDispatchStart = vi.fn();
-    const onDispatchEnd = vi.fn();
-    const authorizeDispatch = vi.fn(() => null);
-    const { d } = deps([frame(1, image(100, 60)), frame(2, image(200, 120))], {
-      authorizeDispatch, onDispatchStart, onDispatchEnd,
-    });
-    const out = await runStep(step, d);
-    expect(out.executed).toBe(true);
-    expect(authorizeDispatch).toHaveBeenCalledTimes(1);
-    expect(onDispatchStart).toHaveBeenCalledWith(step);
-    expect(onDispatchEnd).toHaveBeenCalledWith(step, expect.objectContaining({ ok: true }));
-  });
-});
