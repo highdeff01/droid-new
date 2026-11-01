@@ -60,7 +60,7 @@ export interface VisualPrototype {
   lastFrameId: number;
 }
 
-const key = (s: string) => s.trim().toLowerCase().replace(/\\s+/g, ' ');
+const key = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 const center = (b: Box) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 });
 const overlap = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
