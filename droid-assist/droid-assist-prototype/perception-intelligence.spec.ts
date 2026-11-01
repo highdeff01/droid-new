@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { ActionRecord, Frame, WorkflowStep } from './types.js';
 import type { InventoryElement } from './screen-inventory.js';
 import {
-  auditCommands, classifyPageTransition, descriptorDistance, frameChangeRatio, learnVisualPrototype,
-  matchVisualPrototype, outcomeRates, prospectPoints, relateElements, visualDescriptor,
+  auditCommands, classifyPageTransition, compareElementEffect, descriptorDistance, frameChangeRatio, learnVisualPrototype,
+  matchVisualPrototype, outcomeRates, prospectPoints, recognizeElements, relateElements, visualDescriptor,
 } from './perception-intelligence.js';
 
 const element = (name: string, x: number, y: number, state: InventoryElement['state'] = 'static'): InventoryElement => ({
@@ -38,6 +38,25 @@ describe('visual perception intelligence', () => {
     expect(learned[0]).toMatchObject({ name: 'Save', samples: 1, verifiedSuccesses: 1, lastFrameId: 1 });
     expect(matchVisualPrototype(learned, 'button', [0.2, 0.3])?.distance).toBe(0);
     expect(matchVisualPrototype(learned, 'input', [0.2, 0.3])).toBeNull();
+  });
+
+  it('recognizes a repeated element only after at least two verified visual examples', () => {
+    const shot = frame(3, 80);
+    const descriptor = visualDescriptor(shot, { x: 0, y: 0, w: 1, h: 1 });
+    const one = learnVisualPrototype([], { name: 'Save', kind: 'button', descriptor, frameId: 3, verifiedSuccess: true, at: 30 });
+    expect(recognizeElements([element('button A1', 0, 0)], shot, one)[0].known).toBe(false);
+    const two = learnVisualPrototype(one, { name: 'Save', kind: 'button', descriptor, frameId: 4, verifiedSuccess: true, at: 40 });
+    expect(recognizeElements([element('button A1', 0, 0)], shot, two)[0]).toMatchObject({ name: 'Save', known: true });
+  });
+
+  it('correlates an input coordinate with the resulting visual element changes', () => {
+    const action: ActionRecord = {
+      id: 'a1', time: 100, action: 'click', x: 240, y: 180, srcW: 1920, srcH: 1080,
+      source: 'user', via: 'bridge', ok: true, message: 'clicked',
+    };
+    const effect = compareElementEffect(action, [element('Save', 0.1, 0.1)], [element('Save', 0.1, 0.1), element('Toast', 0.3, 0.3)]);
+    expect(effect).toMatchObject({ actor: 'user', target: 'Save', appeared: ['Toast'], disappeared: [] });
+    expect(effect.evidence).toContain('input coordinate');
   });
 
   it('tracks geometric relationships without claiming semantic causality', () => {
