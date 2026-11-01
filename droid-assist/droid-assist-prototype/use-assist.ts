@@ -3766,7 +3766,8 @@ export function useAssist() {
         const { full, crop } = await boxedFrames(cur, change.box);
         return assessChange(askFor('screenResponder'), full, crop, change, {
           goal: goalRef.current, next,
-          context: [\n            ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),\n            ...recentEvidenceContext(),\n          ].join('\\n'),
+          context: [
+            ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),\n            ...recentEvidenceContext(),\n          ].join('\\n'),
         });
       }, changeText, 'change');
       lastChangeRef.current = { at: Date.now(), assessment: a };
