@@ -3784,9 +3784,25 @@ export function useAssist() {
         });
       }, changeText, 'change');
       lastChangeRef.current = { at: Date.now(), assessment: a };
-      addLog('Screen-change responder', `Change at ${where}: ${changeText(a)}`, a.stale ? 'warn' : 'info');
+      addLog('Screen-change responder', `Change at ${where}: ${changeText(a)}${a.background ? ` · background: ${a.background}` : ''}`, a.stale ? 'warn' : 'info');
       if (a.kind === 'popup') flagPopup(prev, cur, change.box);
-      else setAnnotations((list) => [{ id: uid('ann'), ...change.box, label: `Changed: ${a.summary}`, tone: 'warn' as const }, ...list.filter((x) => x.tone === 'error')].slice(0, 6));
+      const visualMarkers: Annotation[] = a.elements.filter(e => e.confidence >= 0.55).slice(0, 5).map(e => ({
+        id: uid('vision'), ...e.box, label: `${e.name} · ${Math.round(e.confidence * 100)}%`,
+        tone: e.kind === 'button' || e.kind === 'input' ? 'info' : 'warn',
+        actX: e.box.x + e.box.w / 2, actY: e.box.y + e.box.h / 2,
+      }));
+      if (visualMarkers.length) {
+        setAnnotations(list => [...visualMarkers, ...list.filter(x => x.tone === 'error')].slice(0, 6));
+        // Send candidate detections to the shared bus for independent review, not direct clicking.
+        for (const e of a.elements.filter(e => e.confidence >= 0.7).slice(0, 8)) {
+          forwardElement('screen', { name: e.name, x: e.box.x + e.box.w / 2, y: e.box.y + e.box.h / 2, w: e.box.w, h: e.box.h });
+        }
+      } else if (a.kind !== 'popup') setAnnotations(list => [{ id: uid('ann'), ...change.box, label: `Changed: ${a.summary}`, tone: 'warn' as const }, ...list.filter(x => x.tone === 'error')].slice(0, 6));
+      if (a.kind === 'navigation' || perceptionRef.current?.pageTransition === 'navigation-likely') {
+        const message = `Possible page transition detected: ${a.summary}. Re-identify targets, inspect the new page, and research unfamiliar controls before continuing the old step.`;
+        addLog('Planner', message, 'warn');
+        projectInjectRef.current('agent', 'Screen-change responder', message);
+      }
     } catch (error) {
       addLog('Screen-change responder', `Change at ${where} not assessed — AI unavailable: ${errorText(error)}`, 'error');
       flagPopup(prev, cur, change.box);
