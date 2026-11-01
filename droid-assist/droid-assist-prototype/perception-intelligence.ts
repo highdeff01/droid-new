@@ -137,6 +137,20 @@ export function relateElements(elements: readonly InventoryElement[]): ElementRe
   return out;
 }
 
+/** Fraction of sampled RGB pixels whose luminance changed beyond tolerance. */
+export function frameChangeRatio(prev: Frame | null, next: Frame, tolerance = 18): number {
+  if (!prev || prev.data.width !== next.data.width || prev.data.height !== next.data.height) return 1;
+  let changed = 0, total = 0;
+  for (let i = 0; i < next.data.data.length; i += 16) {
+    const a = prev.data.data[i], b = next.data.data[i];
+    const ag = prev.data.data[i + 1], bg = next.data.data[i + 1];
+    const ab = prev.data.data[i + 2], bb = next.data.data[i + 2];
+    if (Math.abs(a - b) + Math.abs(ag - bg) + Math.abs(ab - bb) > tolerance * 3) changed++;
+    total++;
+  }
+  return total ? changed / total : 0;
+}
+
 /** Compare two captures to estimate whether the app navigated or merely changed content in place. */
 export function classifyPageTransition(prev: readonly InventoryElement[], next: readonly InventoryElement[], changeRatio: number): PageTransition {
   if (!prev.length || !next.length || !Number.isFinite(changeRatio)) return 'unknown';
