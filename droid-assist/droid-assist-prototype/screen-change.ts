@@ -42,6 +42,8 @@ export interface PlanContext {
   goal: string;
   /** The pending step, described ("click \"Play button\" at (50%, 60%)"), or null when nothing is pending. */
   next: string | null;
+  /** Shared interaction/perception notes, including page-change and element-effect evidence. */
+  context?: string;
 }
 
 /** The summary of an assessment whose reply described no change: said plainly, never left blank. */
