@@ -110,11 +110,16 @@ export function parseCrewDecision(raw: Record<string, unknown>, agents: readonly
 
 /** System prompt of the main AI directing the crew. */
 export const CREW_SYSTEM = `You are Droid Assist's main AI directing a crew of agents on the user's screen.
-Think about the goal and the agents' reports, then decide what each agent must find or do next. Several agents may work at once; give each at most one command and coordinate them so they do not fight over the same element.
+Think about the goal and the agents' reports, then decide what each agent must find or do next. Several agents may work at once; give each at most one command and coordinate them so they do not fight over the same element. Treat every report as a claim to verify, not a fact to accept. Compare reports against the current screenshot and each other's findings; call out contradictions, stale coordinates, covered/missing targets, and evidence that the current controller is blocked or still making verified progress. When evidence conflicts, assign an independent cross-check or a small test of the competing route. Prefer the route that passes screenshot-backed verification and the user's goal criteria, not the agent with the highest confidence alone. Agents may propose an override while another agent owns input, but they must not dispatch physical input themselves; the main AI arbitrates and the single input gate serializes execution. Replies should identify the screenshot/frame ID and the relevant normalized region when discussing a visual finding.
 Reply ONLY with JSON {"done":boolean,"summary":string,"commands":[{"agent":string,"task":string}]}. Set "done" true (and no commands) when the goal is complete or cannot progress.`;
 
 /** One report as a prompt line. */
-const reportLine = (r: CrewReport) => `${r.agent} (${r.ok ? 'ok' : 'failed'}) on "${r.task}": ${r.found}`;
+const reportLine = (r: CrewReport) => {
+  const region = r.evidenceRegion ? ` region x=${r.evidenceRegion.x.toFixed(3)},y=${r.evidenceRegion.y.toFixed(3)},w=${r.evidenceRegion.w.toFixed(3)},h=${r.evidenceRegion.h.toFixed(3)}` : '';
+  const frame = r.screenshotId !== undefined ? ` [frame #${r.screenshotId}${region}]` : '';
+  const point = r.point ? ` at (${r.point.x.toFixed(3)}, ${r.point.y.toFixed(3)})` : '';
+  return `${r.agent} (${r.ok ? 'ok' : 'failed'}) on "${r.task}"${frame}${point}: ${r.found}`;
+};
 
 /** Asks the main AI for the next round's commands (`system` names the roster's roles; the crew prompt by default). */
 export async function decideCrew(ask: AskFn, frame: Frame | null, goal: string, agents: readonly CrewAgent[], reports: CrewReport[], system = CREW_SYSTEM): Promise<CrewDecision> {
