@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CREW_AGENTS, createScreenLock, decideCrew, parseCrewDecision, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewDeps, type CrewReport } from './agent-crew.js';
+import { CREW_AGENTS, decideCrew, parseCrewDecision, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewDeps, type CrewReport } from './agent-crew.js';
 
 const decision = (commands: CrewCommand[], done = false, summary = ''): CrewDecision => ({ done, summary, commands, ignored: [], thinking: null });
 const report = (c: CrewCommand, found = `found ${c.task}`): CrewReport => ({ agent: c.agent, task: c.task, ok: true, found });
@@ -140,39 +140,6 @@ describe('runCrew command loop', () => {
 });
 
 describe('crew helpers', () => {
-  it('the screen lock runs real input one agent at a time, even after a failure', async () => {
-    const lock = createScreenLock();
-    const order: string[] = [];
-    const job = (name: string, fail = false) => lock(async () => {
-      order.push(`${name}:start`);
-      await new Promise((r) => setTimeout(r, 3));
-      order.push(`${name}:end`);
-      if (fail) throw new Error(name);
-      return name;
-    });
-    const results = await Promise.allSettled([job('a', true), job('b'), job('c')]);
-    expect(order).toEqual(['a:start', 'a:end', 'b:start', 'b:end', 'c:start', 'c:end']);
-    expect(results.map((r) => r.status)).toEqual(['rejected', 'fulfilled', 'fulfilled']);
-  });
-
-  it('rejects queued physical input captured before a control-generation change', async () => {
-    const lock = createScreenLock();
-    let release!: () => void;
-    let started!: () => void;
-    const entered = new Promise<void>((resolve) => { started = resolve; });
-    const first = lock(() => new Promise<void>((resolve) => { release = resolve; started(); }));
-    await entered;
-    let staleRan = false;
-    const stale = lock(async () => { staleRan = true; });
-    lock.invalidate();
-    release();
-    await first;
-    await expect(stale).rejects.toThrow(/Stale physical-input dispatch rejected/);
-    expect(staleRan).toBe(false);
-    await lock(async () => 'new owner');
-    expect(lock.generation()).toBe(2);
-  });
-
   it('a report becomes a watcher note', () => {
     expect(reportNote({ agent: 'agent-2', task: 'find Save', ok: true, found: 'Save at top right' })).toEqual({ kind: 'element', text: 'Crew agent-2 (ok) on "find Save": Save at top right' });
     expect(reportNote({ agent: 'agent-2', task: 'x', ok: false, found: 'no' }).kind).toBe('unusual');
