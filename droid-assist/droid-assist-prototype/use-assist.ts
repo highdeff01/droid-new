@@ -2284,6 +2284,9 @@ export function useAssist() {
       onVerified: strengthen,
       aim,
       gateRetry: dryRun ? undefined : () => gateRealInput(budget),
+      // Only the native send is serialized. Agents can plan, inspect and ground in parallel.
+      // The authorization hook is evaluated inside this lock immediately before dispatch.
+      dispatchExclusive: (dispatch) => screenLockRef.current(dispatch),
     };
   };
 
@@ -4951,11 +4954,11 @@ export function useAssist() {
     let point: { x: number; y: number } | undefined;
     for (const step of plan.steps) {
       if (crewStopped()) return report(false, `parked before "${step.name}" — nothing more sent`, point);
-      const out = await screenLockRef.current(async () => {
-        const local = recordLocal(label, step, `the main AI asked ${command.agent} to "${command.task}"`);
-        const briefed = await brief(label, { kind: 'go', step, proposal: local });
-        return briefed.kind === 'go' ? execute(briefed.step, label, budget, dryRun, briefed.proposal) : refused(step, `"${step.name}" not justified by the pre-action briefing`);
-      });
+      const local = recordLocal(label, step, `the main AI asked ${command.agent} to "${command.task}"`);
+      const briefed = await brief(label, { kind: 'go', step, proposal: local });
+      const out = briefed.kind === 'go'
+        ? await execute(briefed.step, label, budget, dryRun, briefed.proposal)
+        : refused(step, `"${step.name}" not justified by the pre-action briefing`);
       if (!out.ok) return report(false, `${step.name}: ${out.message}`, point);
       point = out.target;
     }
@@ -5074,11 +5077,13 @@ export function useAssist() {
     test: (step, proposalId, dryRun) => testStep(step, { proposalId, context: step.target ?? step.name, source: 'Testing agent' }, dryRun, opsBudgetRef.current),
     armed: () => armedRef.current,
     plan: async (task) => (await thought(`Apply agent: ${task}`, () => planFromGoal(task, [], framesRef.current[0] ?? null, askFor('opsApply'), knownRef.current.map(elementLine), patternsRef.current), planSummary)).steps,
-    apply: (step) => screenLockRef.current(async () => {
+    apply: async (step) => {
       const local = recordLocal(OPS_APPLY_ACTOR, step, `the main AI asked the Apply agent to apply "${step.name}"`);
       const briefed = await brief(OPS_APPLY_ACTOR, { kind: 'go', step, proposal: local });
-      return briefed.kind === 'go' ? execute(briefed.step, OPS_APPLY_ACTOR, opsBudgetRef.current, !armedRef.current, briefed.proposal) : refused(step, `"${step.name}" not justified by the pre-action briefing`);
-    }),
+      return briefed.kind === 'go'
+        ? execute(briefed.step, OPS_APPLY_ACTOR, opsBudgetRef.current, !armedRef.current, briefed.proposal)
+        : refused(step, `"${step.name}" not justified by the pre-action briefing`);
+    },
     capture: evidenceFrame,
     store: (f) => void putStoredFrame(toStoredFrame(f), settingsRef.current.gallerySize).catch(() => undefined),
     addEvidence: (e) => {
