@@ -46,6 +46,7 @@ export interface PerceptionSnapshot {
   pageTransition: PageTransition;
   changeRatio: number;
   notes: string[];
+  effects: ElementEffect[];
 }
 
 export interface VisualPrototype {
@@ -107,6 +108,35 @@ export function learnVisualPrototype(
   const alpha = 1 / Math.min(old.samples + 1, 12);
   const next = { ...old, descriptor: old.descriptor.map((v, i) => v * (1 - alpha) + input.descriptor[i] * alpha), samples: old.samples + 1, verifiedSuccesses: old.verifiedSuccesses + 1, lastVerifiedAt: input.at, lastFrameId: input.frameId };
   return prototypes.map((p, i) => i === index ? next : p);
+}
+
+/** Recognize only repeatably verified prototypes; one accidental match cannot rename a live target. */
+export function recognizeElements(elements: readonly InventoryElement[], frame: Frame, prototypes: readonly VisualPrototype[]): InventoryElement[] {
+  return elements.map(element => {
+    if (element.known) return element;
+    const match = matchVisualPrototype(prototypes.filter(p => p.samples >= 2), element.kind, visualDescriptor(frame, element.box), 0.08);
+    return match ? { ...element, name: match.prototype.name, known: true } : element;
+  });
+}
+
+export const VISUAL_PROTOTYPES_KEY = 'droid-assist.visual-prototypes';
+
+/** Persist compact verified descriptors, never screenshots or raw user text. */
+export function loadVisualPrototypes(storage: Pick<Storage, 'getItem'> = localStorage): VisualPrototype[] {
+  try {
+    const parsed: unknown = JSON.parse(storage.getItem(VISUAL_PROTOTYPES_KEY) ?? '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((p): p is VisualPrototype => !!p && typeof p === 'object'
+      && typeof (p as VisualPrototype).key === 'string'
+      && Array.isArray((p as VisualPrototype).descriptor)
+      && (p as VisualPrototype).descriptor.every(Number.isFinite)
+      && Number.isInteger((p as VisualPrototype).samples)
+      && (p as VisualPrototype).samples >= 1).slice(0, 300);
+  } catch { return []; }
+}
+
+export function saveVisualPrototypes(prototypes: readonly VisualPrototype[], storage: Pick<Storage, 'setItem'> = localStorage): void {
+  try { storage.setItem(VISUAL_PROTOTYPES_KEY, JSON.stringify(prototypes.slice(0, 300))); } catch { /* keep the in-memory learner */ }
 }
 
 export function matchVisualPrototype(prototypes: readonly VisualPrototype[], kind: InventoryElement['kind'], descriptor: readonly number[], threshold = 0.16): { prototype: VisualPrototype; distance: number } | null {
