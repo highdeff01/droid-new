@@ -2354,7 +2354,11 @@ export function useAssist() {
     if (plan.needsBridge && !settingsRef.current.bridgeUrl) return refused(step, BRIDGE_REQUIRED);
     const gate = dryRun ? null : gateRealInput(budget);
     if (gate) return refused(step, gate);
-    if (!dryRun && plan.input === 'desktop-bridge' && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) return performLiveDrag(step, actor);
+    if (!dryRun && plan.input === 'desktop-bridge' && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) {
+      // A live drag holds the pointer from press through release; keep the exclusive slot for
+      // that complete gesture so no other agent can interleave input mid-drag.
+      return screenLockRef.current(() => performLiveDrag(step, actor));
+    }
     const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), stepDeps(plan, actor, budget, dryRun, step.refFrame));
     noteRoute(plan, step, out, actor, dryRun);
     if (dryRun && out.ok) {
