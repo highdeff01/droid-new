@@ -38,7 +38,10 @@ describe('decideCrew', () => {
   it('sends the goal, roster and last reports to the main AI and parses its commands', async () => {
     const ask = vi.fn(async () => ({ content: '{"done":false,"summary":"split","commands":[{"agent":"agent-1","task":"find the Files icon"}]}', thinking: 't' }));
     const agents: CrewAgent[] = [{ id: 'agent-1', status: 'waiting', task: null, lastReport: 'saw a menu' }];
-    const out = await decideCrew(ask, null, 'open files', agents, [{ agent: 'agent-1', task: 'look', ok: true, found: 'saw a menu' }]);
+    const out = await decideCrew(ask, null, 'open files', agents, [{
+      agent: 'agent-1', task: 'look', ok: true, found: 'saw a menu',
+      screenshotId: 42, point: { x: 0.7, y: 0.3 }, evidenceRegion: { x: 0.66, y: 0.26, w: 0.08, h: 0.08 },
+    }]);
     expect(out).toMatchObject({ done: false, commands: [{ agent: 'agent-1', task: 'find the Files icon' }], thinking: 't' });
     const prompt = (ask.mock.calls[0] as unknown as [{ prompt: string; json: boolean }])[0];
     expect(prompt.json).toBe(true);
