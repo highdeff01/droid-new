@@ -2284,8 +2284,13 @@ export function useAssist() {
       onVerified: strengthen,
       aim,
       gateRetry: dryRun ? undefined : () => gateRealInput(budget),
+      // Re-check revocable run authority after waiting for the physical-input slot.
+      authorizeDispatch: () => abortedRef.current ? 'Aborted — input authority revoked'
+        : !armedRef.current ? 'Real input is disarmed'
+        : !stageOn('executor') ? stageOff('executor')
+        : abortRef.current ? 'Plan stopped — queued input authority revoked' : null,
       // Only the native send is serialized. Agents can plan, inspect and ground in parallel.
-      // The authorization hook is evaluated inside this lock immediately before dispatch.
+      // Generation changes reject queued work that was planned under an earlier owner.
       dispatchExclusive: (dispatch) => screenLockRef.current(dispatch),
     };
   };
@@ -4918,6 +4923,8 @@ export function useAssist() {
    * disarming, latching ABORTED, turning Auto Act off or stopping the monitor and the watchers.
    */
   const stopPlan = () => {
+    // Fence any agent dispatches still waiting behind the native-input slot.
+    screenLockRef.current.invalidate();
     abortRef.current = true;
     cancelAi();
     if (liveDragRef.current) dragControlRef.current = { kind: 'release' };
