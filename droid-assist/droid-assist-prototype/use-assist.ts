@@ -3767,7 +3767,8 @@ export function useAssist() {
         return assessChange(askFor('screenResponder'), full, crop, change, {
           goal: goalRef.current, next,
           context: [
-            ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),\n            ...recentEvidenceContext(),\n          ].join('\\n'),
+            ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),
+            ...recentEvidenceContext(),\n          ].join('\n'),
         });
       }, changeText, 'change');
       lastChangeRef.current = { at: Date.now(), assessment: a };
@@ -5088,7 +5089,7 @@ export function useAssist() {
         const out = await runCrew({
           agents: CREW_AGENTS,
           maxRounds: settingsRef.current.maxIterations,
-          decide: (reports, round) => thought(`Crew round ${round}: ${text}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, text, crewRef.current, reports, CREW_SYSTEM, [...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []), ...recentEvidenceContext()].join('\\n')), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
+          decide: (reports, round) => thought(`Crew round ${round}: ${text}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, text, crewRef.current, reports, CREW_SYSTEM, [...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []), ...recentEvidenceContext()].join('\n')), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
           work: (c) => runCrewAgent(c, budget, dryRun),
           shouldStop: crewStopped,
           onAgents: (agents) => {
