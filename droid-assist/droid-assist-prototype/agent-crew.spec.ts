@@ -152,6 +152,21 @@ describe('crew helpers', () => {
     expect(results.map((r) => r.status)).toEqual(['rejected', 'fulfilled', 'fulfilled']);
   });
 
+  it('rejects queued physical input captured before a control-generation change', async () => {
+    const lock = createScreenLock();
+    let release!: () => void;
+    const first = lock(() => new Promise<void>((resolve) => { release = resolve; }));
+    let staleRan = false;
+    const stale = lock(async () => { staleRan = true; });
+    lock.invalidate();
+    release();
+    await first;
+    await expect(stale).rejects.toThrow(/Stale physical-input dispatch rejected/);
+    expect(staleRan).toBe(false);
+    await lock(async () => 'new owner');
+    expect(lock.generation()).toBe(2);
+  });
+
   it('a report becomes a watcher note', () => {
     expect(reportNote({ agent: 'agent-2', task: 'find Save', ok: true, found: 'Save at top right' })).toEqual({ kind: 'element', text: 'Crew agent-2 (ok) on "find Save": Save at top right' });
     expect(reportNote({ agent: 'agent-2', task: 'x', ok: false, found: 'no' }).kind).toBe('unusual');
