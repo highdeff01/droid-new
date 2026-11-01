@@ -152,7 +152,10 @@ export function createCooperativeControl(options: CooperativeControlOptions) {
         });
         const eligible = candidates.filter(r => r.review.assessment === 'blocked' || r.review.assessment === 'better-route');
         for (const observer of candidates.filter(r => !eligible.includes(r))) {
-          record({ ...observer, status: 'rejected', decision: 'review did not establish blockage or a better route' });
+          const decision = outcome.ok && outcome.verified
+            ? 'current controller completed a screenshot-verified action; observer did not establish a stronger recovery case'
+            : 'review did not establish blockage or a better route';
+          record({ ...observer, status: 'rejected', decision });
         }
         const winner = eligible[0];
         if (winner) {
