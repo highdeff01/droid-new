@@ -114,6 +114,7 @@ const AI: Requester = { kind: 'ai' };
 const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
 import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
+import { auditCommands, classifyPageTransition, frameChangeRatio, learnVisualPrototype, outcomeRates, perceptionContext, prospectPoints, relateElements, visualDescriptor, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
 import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
 import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
 import { refreshStep, retestSummary, retestText, retestedSteps, runRetest, selectSteps, type RetestStepResult, type RetestSummary } from './retest.js';
@@ -429,6 +430,11 @@ export function useAssist() {
   /** The app the assistant is attached to via /use. */
   const [target, setTarget] = useState<string | null>(null);
   const [history, setHistory] = useState<ActionRecord[]>(() => loadHistory());
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  /** Latest shared perception snapshot and screenshot-verified visual prototypes. */
+  const perceptionRef = useRef<PerceptionSnapshot | null>(null);
+  const visualPrototypesRef = useRef<VisualPrototype[]>([]);
   /** Normalized point the last executed pointer action left the cursor at: the previously-focused point of the next action. */
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   /** The last action written to the history, so a side test can backtrack exactly what it did. */
@@ -3794,7 +3800,11 @@ export function useAssist() {
   const proposalContext = (actor: string, step: WorkflowStep, redo?: string): ProposalContext => ({
     goal: goalRef.current,
     change: currentChange(),
-    patterns: [...relevantPatterns(goalRef.current, patternsRef.current).map(patternLine), ...crossReference(actor, goalRef.current)],
+    patterns: [
+      ...relevantPatterns(goalRef.current, patternsRef.current).map(patternLine),
+      ...crossReference(actor, goalRef.current),
+      ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),
+    ],
     related: operationDb.related(`${step.name} ${step.target ?? ''}`, goalRef.current),
     redo,
   });
@@ -4703,10 +4713,27 @@ export function useAssist() {
 
   /** Full-screen reading of `frame`: every detectable element, classified against the previous reading. */
   const readScreen = (frame: Frame) => {
-    const next = buildInventory({ frame, mapped: elementMapRef.current, familiar: familiarRef.current, prev: inventoryRef.current, prevFrame: inventoryFrameRef.current });
+    const previous = inventoryRef.current;
+    const previousFrame = inventoryFrameRef.current;
+    const next = buildInventory({ frame, mapped: elementMapRef.current, familiar: familiarRef.current, prev: previous, prevFrame: previousFrame });
+    const changeRatio = frameChangeRatio(previousFrame, frame);
+    const relations = relateElements(next);
+    const pageTransition = classifyPageTransition(previous, next, changeRatio);
+    const audits = auditCommands(stepsRef.current, frame.time);
+    const prospects = prospectPoints(next, relations, audits);
+    const notes = [
+      ...next.filter(e => e.state !== 'static').map(e => `"${e.name}" is ${e.state} at ${e.cell}`),
+      ...audits.filter(a => a.issue !== 'clear').slice(0, 4).map(a => `Step "${a.name}" needs review: ${a.issue} — ${a.detail}`),
+      ...(pageTransition === 'navigation-likely' ? ['Known-element overlap is low while many pixels changed: verify whether navigation moved to a different page or app'] : []),
+    ];
+    perceptionRef.current = { frameId: frame.id, capturedAt: frame.time, elements: next, relations, pageTransition, changeRatio, notes };
     inventoryRef.current = next;
     inventoryFrameRef.current = frame;
     setInventory(next);
+    // Keep the shared perception context current for the next planner, reviewer and crew round.
+    if (notes.length && previousFrame && pageTransition !== 'same-page') {
+      addLog('Perception controller', `Frame #${frame.id}: ${pageTransition}; ${next.length} elements, ${relations.length} geometric relationships; ${notes.slice(0, 3).join('; ')}`, pageTransition === 'navigation-likely' ? 'warn' : 'info');
+    }
   };
 
   const commitProfiles = (next: RouteProfile[]) => {
@@ -5015,7 +5042,7 @@ export function useAssist() {
         const out = await runCrew({
           agents: CREW_AGENTS,
           maxRounds: settingsRef.current.maxIterations,
-          decide: (reports, round) => thought(`Crew round ${round}: ${text}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, text, crewRef.current, reports), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
+          decide: (reports, round) => thought(`Crew round ${round}: ${text}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, text, crewRef.current, reports, CREW_SYSTEM, perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))).join('\\n') : ''), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
           work: (c) => runCrewAgent(c, budget, dryRun),
           shouldStop: crewStopped,
           onAgents: (agents) => {
