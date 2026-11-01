@@ -155,7 +155,10 @@ describe('crew helpers', () => {
   it('rejects queued physical input captured before a control-generation change', async () => {
     const lock = createScreenLock();
     let release!: () => void;
-    const first = lock(() => new Promise<void>((resolve) => { release = resolve; }));
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => { started = resolve; });
+    const first = lock(() => new Promise<void>((resolve) => { release = resolve; started(); }));
+    await entered;
     let staleRan = false;
     const stale = lock(async () => { staleRan = true; });
     lock.invalidate();
