@@ -45,6 +45,11 @@ export interface StepDeps {
   onVerified?: (live: Frame, step: WorkflowStep, p: Point) => void;
   /** Shows each point the pipeline tries (planned, drift-corrected, grounded, retried) as an AI cursor movement. */
   aim?: (p: Point) => void;
+  /** Final native-input fence, evaluated immediately before dispatch. Return a refusal reason to block input. */
+  authorizeDispatch?: () => string | null;
+  /** Optional lifecycle hooks let cooperative control track long drags/typing through safe boundaries. */
+  onDispatchStart?: (step: WorkflowStep) => void;
+  onDispatchEnd?: (step: WorkflowStep, outcome: { ok: boolean; message: string }) => void;
   /** Sends the located step's input (frame size and display origin of the live frame); the desktop bridge when omitted. */
   send?: SendFn;
 }
@@ -246,7 +251,19 @@ export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepO
     end = e.point;
   }
   if (!deps.dispatch) return { ok: true, executed: false, message: `verified on the live screen — ${DRY_RUN}`, target, end, correction, live };
-  const sent = await sender(deps)({ ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, frameOrigin(live));
+  // Re-check ownership at the last possible point: grounding/model calls above may have taken
+  // long enough for a different agent or the user to reclaim control.
+  const refusal = deps.authorizeDispatch?.();
+  if (refusal) return { ok: false, executed: false, message: `Input refused by cooperative control: ${refusal}`, target, end, correction, live };
+  deps.onDispatchStart?.(step);
+  let sent: BridgeResult;
+  try {
+    sent = await sender(deps)({ ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, frameOrigin(live));
+    deps.onDispatchEnd?.(step, { ok: sent.ok, message: sent.message });
+  } catch (error) {
+    deps.onDispatchEnd?.(step, { ok: false, message: errorText(error) });
+    throw error;
+  }
   if (!sent.ok) return { ok: false, executed: false, bridgeFailed: true, message: sent.message, target, end, correction, live };
   const after = await verifyAfter(step, live, target, deps);
   const done: StepOutcome = { ok: true, executed: true, message: sent.message, target, end, correction, live, ...after };
