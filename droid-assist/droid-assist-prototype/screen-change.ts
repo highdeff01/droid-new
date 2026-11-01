@@ -26,9 +26,21 @@ export function detectChange(prev: ImageData, cur: ImageData, minCells: number):
 }
 
 /** What the model says changed and whether it affects the current plan. */
+export interface VisualFinding {
+  name: string;
+  kind: 'button' | 'input' | 'text' | 'panel' | 'tab' | 'icon' | 'other';
+  box: Box;
+  confidence: number;
+  role: string;
+}
+
 export interface ChangeAssessment extends Thought {
   /** Kind of change: popup, navigation, dialog, content, error or other. */
   kind: string;
+  /** Semantic detections grounded in the supplied full frame and crop; never auto-clicked. */
+  elements: VisualFinding[];
+  /** Short description of surrounding background/context, separate from the foreground target. */
+  background: string;
   /** One sentence describing what the screen now shows. */
   summary: string;
   /** True when the pending step can no longer run as planned. */
@@ -62,7 +74,7 @@ export async function assessChange(ask: AskFn, full: Frame, crop: Frame, change:
   const { box } = change;
   const { content, thinking } = await ask({
     system: CHANGE_SYSTEM,
-    prompt: `The screen changed in the region x=${pct(box.x)}..${pct(box.x + box.w)}, y=${pct(box.y)}..${pct(box.y + box.h)}.\nGoal: ${plan.goal || '(none)'}\nNext planned step: ${plan.next ?? '(none)'}${plan.context ? `\nShared interaction and page evidence:\n${plan.context}` : ''}\nWhat changed on the screen, and does it affect the current plan? Set stale=true only if the next planned step can no longer run as planned (its target moved, is covered or gone, or the screen is somewhere else).`,
+    prompt: `The screen changed in the region x=${pct(box.x)}..${pct(box.x + box.w)}, y=${pct(box.y)}..${pct(box.y + box.h)}.\nGoal: ${plan.goal || '(none)'}\nNext planned step: ${plan.next ?? '(none)'}${plan.context ? `\nShared interaction and page evidence:\n${plan.context}` : ''}\nWhat changed on the screen, and does it affect the current plan? Separately describe the surrounding background, identify visible foreground elements with tight normalized bounding boxes, and provide confidence/role for each. Return an empty elements array if uncertain. Set stale=true only if the next planned step can no longer run as planned (its target moved, is covered or gone, or the screen is somewhere else).`,
     frame: full,
     crops: [crop],
     json: true,
@@ -70,7 +82,20 @@ export async function assessChange(ask: AskFn, full: Frame, crop: Frame, change:
   const r = parseJsonReply(content);
   const summary = (typeof r.summary === 'string' ? r.summary.trim() : '') || NO_SUMMARY;
   const kind = KINDS.has(String(r.kind)) ? String(r.kind) : 'other';
-  return { kind, summary, stale: r.stale === true, effect: String(r.effect ?? '').trim(), thinking };
+  const allowed = new Set(['button', 'input', 'text', 'panel', 'tab', 'icon', 'other']);
+  const elements: VisualFinding[] = Array.isArray(r.elements) ? r.elements.flatMap((item): VisualFinding[] => {
+    if (!item || typeof item !== 'object') return [];
+    const e = item as Record<string, unknown>;
+    const b = e.box && typeof e.box === 'object' ? e.box as Record<string, unknown> : {};
+    const values = [b.x, b.y, b.w, b.h].map(Number);
+    if (typeof e.name !== 'string' || !e.name.trim() || values.some(v => !Number.isFinite(v)) || values[2] <= 0 || values[3] <= 0) return [];
+    const [x, y, w, h] = values;
+    const bx = Math.max(0, Math.min(1, x)), by = Math.max(0, Math.min(1, y));
+    const bw = Math.max(0, Math.min(1 - bx, w)), bh = Math.max(0, Math.min(1 - by, h));
+    if (!bw || !bh) return [];
+    return [{ name: e.name.trim(), kind: allowed.has(String(e.kind)) ? e.kind as VisualFinding['kind'] : 'other', box: { x: bx, y: by, w: bw, h: bh }, confidence: Math.max(0, Math.min(1, Number(e.confidence) || 0)), role: typeof e.role === 'string' ? e.role.trim() : '' }];
+  }).slice(0, 24) : [];
+  return { kind, summary, stale: r.stale === true, effect: String(r.effect ?? '').trim(), background: typeof r.background === 'string' ? r.background.trim() : '', elements, thinking };
 }
 
 /** One-line text of an assessment, for the timeline and the activity log. */
