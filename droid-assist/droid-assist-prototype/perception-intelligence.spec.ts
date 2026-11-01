@@ -73,7 +73,7 @@ describe('visual perception intelligence', () => {
 
   it('audits pending, running and completed-without-screenshot commands', () => {
     const audits = auditCommands([
-      step({ id: 'pending', name: 'Pending', status: 'pending' }),
+      step({ id: 'pending', name: 'Pending', status: 'pending', refFrame: frame(1) }),
       step({ id: 'running', name: 'Running', status: 'running' }),
       step({ id: 'done', name: 'Done', status: 'done' }),
     ], 50_000, 10_000);
