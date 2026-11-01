@@ -25,7 +25,7 @@ const full = { id: 1, url: 'data:image/jpeg;base64,RlVMTA==' } as Frame;
 const crop = { id: 1, url: 'data:image/jpeg;base64,Q1JPUA==' } as Frame;
 const change = { box: { x: 0.25, y: 0.25, w: 0.25, h: 0.33 }, cells: 12 };
 const step: WorkflowStep = { id: 's', name: 'Press play', action: 'click', target: 'Play button', x: 0.5, y: 0.6, status: 'pending' };
-const navigated: ChangeAssessment = { kind: 'navigation', summary: 'the Settings page', stale: true, effect: 'Play is gone', thinking: null };
+const navigated: ChangeAssessment = { kind: 'navigation', summary: 'the Settings page', stale: true, effect: 'Play is gone', background: 'settings content', elements: [], thinking: null };
 
 describe('detectChange', () => {
   // A 3×3-cell block of the 16×9 grid (cells are 20×20 sample pixels).
@@ -43,9 +43,9 @@ describe('detectChange', () => {
 
 describe('assessChange', () => {
   it('sends the boxed frame plus the zoomed crop with the plan and parses the assessment', async () => {
-    const ask = askReturning('{"kind":"dialog","summary":"a Save dialog","stale":true,"effect":"it covers Play"}', 'A dialog opened.');
+    const ask = askReturning('{"kind":"dialog","summary":"a Save dialog","stale":true,"effect":"it covers Play","background":"settings page behind dialog","elements":[{"name":"Save button","kind":"button","box":{"x":0.2,"y":0.3,"w":0.1,"h":0.05},"confidence":0.94,"role":"confirm action"}]}', 'A dialog opened.');
     const a = await assessChange(ask, full, crop, change, { goal: 'play the video', next: '"Press play" — click' });
-    expect(a).toEqual({ kind: 'dialog', summary: 'a Save dialog', stale: true, effect: 'it covers Play', thinking: 'A dialog opened.' });
+    expect(a).toEqual({ kind: 'dialog', summary: 'a Save dialog', stale: true, effect: 'it covers Play', background: 'settings page behind dialog', elements: [{ name: 'Save button', kind: 'button', box: { x: 0.2, y: 0.3, w: 0.1, h: 0.05 }, confidence: 0.94, role: 'confirm action' }], thinking: 'A dialog opened.' });
     const req = ask.mock.calls[0][0];
     expect(req.frame).toBe(full);
     expect(req.crops).toEqual([crop]);
@@ -56,7 +56,7 @@ describe('assessChange', () => {
 
   it('reads an unknown kind as other and a missing stale as not stale', async () => {
     const a = await assessChange(askReturning('{"kind":"weird","summary":"new text loaded"}'), full, crop, change, { goal: '', next: null });
-    expect(a).toMatchObject({ kind: 'other', stale: false, effect: '' });
+    expect(a).toMatchObject({ kind: 'other', stale: false, effect: '', background: '', elements: [] });
   });
 
   it('states plainly that no summary could be produced when the reply has none', async () => {
