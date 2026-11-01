@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BOSS, drivingFlag, drivingLine, enqueueSuggestion, handWheel, isDriving, isSimultaneous, newDriving, suggestionLine, takeSuggestion, takeWheel } from './driver.js';
+import { agreesOnDriving, BOSS, conflictLine, drivingFlag, drivingLine, enqueueSuggestion, fromDrivingPayload, handWheel, isDriving, isSimultaneous, newDriving, suggestionLine, takeSuggestion, takeWheel } from './driver.js';
 
 describe('driving', () => {
   it('starts with droid-new driving, because it is the boss', () => {
@@ -59,5 +59,22 @@ describe('suggestions', () => {
     expect(line).toContain('droid-main suggested "mode → app"');
     expect(line).toContain('queued for droid-new');
     expect(line).toContain('user asked');
+  });
+
+  it('round-trips an inbound driving claim into a Driving value', () => {
+    const d = fromDrivingPayload({ driver: 'droid-main', since: 42, reason: 'took over step 1' });
+    expect(d).toEqual({ driver: 'droid-main', since: 42, reason: 'took over step 1' });
+  });
+
+  it('agrees only when the claim matches the local wheel', () => {
+    expect(agreesOnDriving(newDriving(), fromDrivingPayload({ driver: 'droid-new', since: 1, reason: 'boss' }))).toBe(true);
+    expect(agreesOnDriving(newDriving(), fromDrivingPayload({ driver: 'droid-main', since: 1, reason: 'grabbed it' }))).toBe(false);
+  });
+
+  it('logs a refused claim naming the arbitration', () => {
+    const line = conflictLine(newDriving(), fromDrivingPayload({ driver: 'droid-main', since: 1, reason: 'grabbed it' }));
+    expect(line).toContain('droid-main claims the wheel');
+    expect(line).toContain('refused');
+    expect(line).toContain('droid-new keeps the wheel');
   });
 });

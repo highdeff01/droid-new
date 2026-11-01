@@ -71,3 +71,13 @@ export const drivingLine = (d: Driving): string => `Now driving: ${DRIVER_NAMES[
 
 /** The one-line flag for the UI: who owns execution. */
 export const drivingFlag = (d: Driving): string => `Driving: ${DRIVER_NAMES[d.driver]}`;
+
+/** The inbound driving claim from droid-main, as a Driving value. */
+export const fromDrivingPayload = (p: { driver: Driver; since: number; reason: string }): Driving => ({ driver: p.driver, since: p.since, reason: p.reason });
+
+/** Whether an inbound claim agrees with this app's arbitration. droid-new is the boss, so it never yields the wheel uninvited. */
+export const agreesOnDriving = (local: Driving, claim: Driving): boolean => local.driver === claim.driver;
+
+/** The log line for an inbound claim that conflicts with the arbitration. */
+export const conflictLine = (local: Driving, claim: Driving): string =>
+  `droid-main claims the wheel (${DRIVER_NAMES[claim.driver]}) but droid-new is driving — the claim is refused; droid-new keeps the wheel`;

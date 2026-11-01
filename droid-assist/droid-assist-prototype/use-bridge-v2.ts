@@ -8,7 +8,7 @@ import { TAKEOVER_MS, TAKEOVER_SOURCE, addRemoteOpinion, addTakeover, agreementS
 import { selectApp, type JobDecision } from './app-selection.js';
 import { advanceWatermarks, fromPayload, mergeDelta, mergeLine, outgoingDelta, toPayload, type StoreWatermarks } from './store-sync.js';
 import { applySyncEntries, loadStoreWatermarks, loadSyncEntries, saveStoreWatermarks } from './storage.js';
-import { DRIVING_SOURCE, drivingLine, enqueueSuggestion, handWheel, isDriving, newDriving, suggestionLine, takeSuggestion, takeWheel, type Driving, type Suggestion } from './driver.js';
+import { agreesOnDriving, conflictLine, DRIVER_NAMES, DRIVING_SOURCE, drivingLine, enqueueSuggestion, fromDrivingPayload, handWheel, isDriving, newDriving, suggestionLine, takeSuggestion, takeWheel, type Driving, type Suggestion } from './driver.js';
 import { busyAgents, roundLine, runSwarmRound, conflicts, type SwarmRound } from './project-swarm.js';
 import { buildCrew } from './crew.js';
 import { BROWSER_LOGS_SOURCE, captureConsole, fromConsolePayload, pushBrowserLog, type BrowserLog, type LogApp } from './browser-logs.js';
@@ -162,11 +162,12 @@ export function useBridgeV2(deps: BridgeV2Deps) {
     setLedger(next);
   };
 
-  /** Records a new driving flag in both the UI and the ref, and logs the change. */
+  /** Records a new driving flag in both the UI and the ref, logs the change, and tells droid-main. */
   const commitDriving = (next: Driving) => {
     drivingRef.current = next;
     setDriving(next);
     log(drivingLine(next), 'info', DRIVING_SOURCE);
+    if (depsRef.current.connected) void send('driving', { driver: next.driver, since: next.since, reason: next.reason });
   };
 
   /** The wheel passes to droid-main (it took over a step). */
@@ -320,6 +321,15 @@ export function useBridgeV2(deps: BridgeV2Deps) {
       depsRef.current.onResume(plan);
       log(plan.summary, 'ok', RESUME_SOURCE);
       ledgerAdd('note', `resumed from droid-main: ${plan.summary}`);
+    },
+    driving: (p) => {
+      const claim = fromDrivingPayload(p);
+      if (agreesOnDriving(drivingRef.current, claim)) {
+        log(`droid-main agrees on the wheel: ${DRIVER_NAMES[claim.driver]}`, 'info', DRIVING_SOURCE);
+        return;
+      }
+      log(conflictLine(drivingRef.current, claim), 'warn', DRIVING_SOURCE);
+      ledgerAdd('note', conflictLine(drivingRef.current, claim));
     },
   } satisfies PeerHandlers;
 
@@ -514,6 +524,13 @@ export function useBridgeV2(deps: BridgeV2Deps) {
     broadcast();
     const timer = setInterval(broadcast, HEALTH_MS);
     return () => clearInterval(timer);
+  }, [deps.connected]);
+
+  // The wheel state goes out on connect (and on every change, via commitDriving), so both UIs agree.
+  useEffect(() => {
+    if (!deps.connected) return undefined;
+    const d = drivingRef.current;
+    void send('driving', { driver: d.driver, since: d.since, reason: d.reason });
   }, [deps.connected]);
 
   // A run in progress is snapshotted and offered to droid-main, so a restart on either side resumes.
