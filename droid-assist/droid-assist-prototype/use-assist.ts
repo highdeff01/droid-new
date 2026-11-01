@@ -4962,7 +4962,20 @@ export function useAssist() {
    */
   const runCrewAgent = async (command: CrewCommand, budget: ActionBudget, dryRun: boolean): Promise<CrewReport> => {
     const label = `Crew ${command.agent}`;
-    const report = (ok: boolean, found: string, point?: { x: number; y: number }): CrewReport => ({ agent: command.agent, task: command.task, ok, found, ...(point ? { point } : {}) });
+    const report = (ok: boolean, found: string, point?: { x: number; y: number }): CrewReport => {
+      const frame = framesRef.current[0] ?? null;
+      const evidenceRegion = point ? {
+        x: Math.max(0, point.x - 0.04), y: Math.max(0, point.y - 0.04),
+        w: Math.min(0.08, 1 - Math.max(0, point.x - 0.04)),
+        h: Math.min(0.08, 1 - Math.max(0, point.y - 0.04)),
+      } : undefined;
+      return {
+        agent: command.agent, task: command.task, ok, found,
+        ...(point ? { point } : {}),
+        ...(frame ? { screenshotId: frame.id } : {}),
+        ...(evidenceRegion ? { evidenceRegion } : {}),
+      };
+    };
     const plan = await thought(`${label}: ${command.task}`, () => planFromGoal(command.task, [], framesRef.current[0] ?? null, askFor('crew'), knownRef.current.map(elementLine), patternsRef.current), planSummary);
     if (!plan.steps.length) return report(true, plan.thinking ?? 'nothing to act on — the task needs no input');
     let point: { x: number; y: number } | undefined;
