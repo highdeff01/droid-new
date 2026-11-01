@@ -3778,7 +3778,10 @@ export function useAssist() {
     try {
       const a = await thought('Screen change', async () => {
         const { full, crop } = await boxedFrames(cur, change.box);
-        return assessChange(askFor('screenResponder'), full, crop, change, { goal: goalRef.current, next });
+        return assessChange(askFor('screenResponder'), full, crop, change, {
+          goal: goalRef.current, next,
+          context: perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))).join('\\n') : '',
+        });
       }, changeText, 'change');
       lastChangeRef.current = { at: Date.now(), assessment: a };
       addLog('Screen-change responder', `Change at ${where}: ${changeText(a)}`, a.stale ? 'warn' : 'info');
