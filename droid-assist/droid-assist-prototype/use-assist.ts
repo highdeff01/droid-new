@@ -157,7 +157,7 @@ import { CROSS_REFERENCE_LINES } from './joint-followup.js';
 import { loadOperations } from './operation-db.js';
 import { DEFAULT_OPERATION_RETRIES } from './operation-retry.js';
 import { DEFAULT_PLAYBACK_WINDOW_SEC } from './playback.js';
-import { CREW_AGENTS, createScreenLock, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
+import { CREW_AGENTS, CREW_SYSTEM, createScreenLock, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
 import { runLiveDrag, type DragIntervention, type LiveDragResult, type SwarmAgent } from './drag-swarm.js';
 import { AUTO_OPS_SYSTEM, OPS_AGENTS, OPS_SYSTEM, addEvidence, addOpsReport, changeKey, changeLine, dedupeLog, enabledOps, loopReport, mapDelta, markEvidence, monitorChange, opsAgent, opsFor, parseOpsTarget, patchOpsAgent, shouldReport, tagLog, type MonitorChange, type OpsAgentId, type OpsState, type TestCandidate } from './operations.js';
 import { AUTO_OPS_INTERVAL_MS, automaticOpsPlan, type AutomaticOpsPlan } from './agent-autopilot.js';
@@ -2669,8 +2669,22 @@ export function useAssist() {
     if (actor !== OPS_APPLY_ACTOR) recordStepEvidence(step, out, before, out.shot ?? null);
     if (!out.ok && !out.bridgeFailed) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
     if (out.halt || !aiOnline()) return out;
-    const verdict = await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
+    const afterFrame = out.shot ?? framesRef.current[0] ?? null;
+    const verdict = await reflectAfter(step, afterFrame, out, actor);
     if (verdict && !dryRun) learnHabit(step, verdict);
+    // The visual prototype model learns only from a successful, screenshot-backed verdict.
+    if (verdict?.success && out.ok && !dryRun && afterFrame) {
+      const observed = buildInventory({ frame: afterFrame, mapped: elementMapRef.current, familiar: familiarRef.current });
+      const target = observed.find(e => (step.target ?? step.name).trim().toLowerCase() === e.name.trim().toLowerCase())
+        ?? observed.find(e => e.known && (step.target ?? step.name).toLowerCase().includes(e.name.toLowerCase()));
+      if (target) {
+        visualPrototypesRef.current = learnVisualPrototype(visualPrototypesRef.current, {
+          name: target.name, kind: target.kind, descriptor: visualDescriptor(afterFrame, target.box),
+          frameId: afterFrame.id, verifiedSuccess: true, at: afterFrame.time,
+        });
+        addLog('Visual learner', `Updated verified appearance prototype for "${target.name}" from frame #${afterFrame.id} (${visualPrototypesRef.current.find(p => p.key === target.name.trim().toLowerCase())?.samples ?? 1} sample(s))`, 'ok');
+      }
+    }
     return { ...out, verdict };
   };
 
