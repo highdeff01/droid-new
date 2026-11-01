@@ -64,7 +64,7 @@ export const NO_SUMMARY = 'No summary could be produced — the AI described no 
 const KINDS = new Set(['popup', 'navigation', 'dialog', 'content', 'error', 'other']);
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
 
-export const CHANGE_SYSTEM = 'You are Droid Assist\'s screen-change responder. The first image is the full screen with the changed region boxed in red; the second is a zoomed crop of that region. Reply ONLY with JSON {"kind":"popup"|"navigation"|"dialog"|"content"|"error"|"other","summary":string,"stale":boolean,"effect":string}.';
+export const CHANGE_SYSTEM = 'You are Droid Assist\'s visual perception and screen-change responder. The first image is the full screen with the changed region boxed in red; the second is a zoomed crop of that region. Identify visible elements, estimate their normalized bounding boxes (0..1), distinguish foreground elements from the surrounding background, and state whether navigation occurred. Do not invent text or coordinates. Reply ONLY with JSON {"kind":"popup"|"navigation"|"dialog"|"content"|"error"|"other","summary":string,"stale":boolean,"effect":string,"background":string,"elements":[{"name":string,"kind":"button"|"input"|"text"|"panel"|"tab"|"icon"|"other","box":{"x":number,"y":number,"w":number,"h":number},"confidence":number,"role":string}]}.';
 
 /**
  * Asks the model what changed in the boxed region and whether it affects the current plan.
