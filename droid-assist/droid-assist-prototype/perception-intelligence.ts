@@ -203,6 +203,50 @@ export function auditCommands(steps: readonly WorkflowStep[], now = Date.now(), 
   });
 }
 
+export interface ElementEffect {
+  actionId: string;
+  actor: string;
+  action: string;
+  target: string;
+  nearbyBefore: string[];
+  appeared: string[];
+  disappeared: string[];
+  moved: string[];
+  evidence: string;
+}
+
+/** Attribute an input to the nearest observed element and compare the surrounding UI before/after. */
+export function compareElementEffect(
+  action: ActionRecord,
+  before: readonly InventoryElement[],
+  after: readonly InventoryElement[],
+): ElementEffect {
+  const srcW = action.srcW || 1, srcH = action.srcH || 1;
+  const point = { x: action.x / srcW, y: action.y / srcH };
+  const nearest = [...before].sort((a, b) => {
+    const ca = center(a.box), cb = center(b.box);
+    return Math.hypot(ca.x - point.x, ca.y - point.y) - Math.hypot(cb.x - point.x, cb.y - point.y);
+  })[0];
+  const target = nearest && Math.hypot(center(nearest.box).x - point.x, center(nearest.box).y - point.y) < 0.12 ? nearest.name : '(unmatched coordinate)';
+  const beforeByName = new Map(before.map(e => [key(e.name), e]));
+  const afterByName = new Map(after.map(e => [key(e.name), e]));
+  const appeared = after.filter(e => !beforeByName.has(key(e.name))).map(e => e.name);
+  const disappeared = before.filter(e => !afterByName.has(key(e.name))).map(e => e.name);
+  const moved = after.filter(e => {
+    const old = beforeByName.get(key(e.name));
+    return !!old && Math.hypot(center(old.box).x - center(e.box).x, center(old.box).y - center(e.box).y) > 0.02;
+  }).map(e => e.name);
+  const nearbyBefore = before.filter(e => {
+    const c = center(e.box);
+    return Math.hypot(c.x - point.x, c.y - point.y) < 0.18;
+  }).map(e => e.name);
+  return {
+    actionId: action.id, actor: action.source, action: action.action, target, nearbyBefore,
+    appeared, disappeared, moved,
+    evidence: `input coordinate ${(point.x * 100).toFixed(1)}%,${(point.y * 100).toFixed(1)}%; after-frame element inventory comparison`,
+  };
+}
+
 /** Potential next-step checks that help the main AI reason between operations. */
 export function prospectPoints(elements: readonly InventoryElement[], relations: readonly ElementRelation[], audits: readonly CommandAudit[]): ProspectPoint[] {
   const points: ProspectPoint[] = [];
