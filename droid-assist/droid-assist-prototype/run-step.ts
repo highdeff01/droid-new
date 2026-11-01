@@ -47,6 +47,8 @@ export interface StepDeps {
   aim?: (p: Point) => void;
   /** Final native-input fence, evaluated immediately before dispatch. Return a refusal reason to block input. */
   authorizeDispatch?: () => string | null;
+  /** Final serialized physical-input authority. Planning/grounding may run concurrently; only this callback owns the native dispatch slot. */
+  dispatchExclusive?: (dispatch: () => Promise<BridgeResult>) => Promise<BridgeResult>;
   /** Optional lifecycle hooks let cooperative control track long drags/typing through safe boundaries. */
   onDispatchStart?: (step: WorkflowStep) => void;
   onDispatchEnd?: (step: WorkflowStep, outcome: { ok: boolean; message: string }) => void;
@@ -251,18 +253,26 @@ export async function runStep(step: WorkflowStep, deps: StepDeps): Promise<StepO
     end = e.point;
   }
   if (!deps.dispatch) return { ok: true, executed: false, message: `verified on the live screen — ${DRY_RUN}`, target, end, correction, live };
-  // Re-check ownership at the last possible point: grounding/model calls above may have taken
-  // long enough for a different agent or the user to reclaim control.
-  const refusal = deps.authorizeDispatch?.();
-  if (refusal) return { ok: false, executed: false, message: `Input refused by cooperative control: ${refusal}`, target, end, correction, live };
-  deps.onDispatchStart?.(step);
+  // Acquire the one physical-input slot only after planning, screenshot capture and grounding.
+  // The generation/ownership check runs INSIDE the slot, immediately before the native bridge call.
+  const dispatch = async (): Promise<BridgeResult> => {
+    const refusal = deps.authorizeDispatch?.();
+    if (refusal) return { ok: false, message: `Input refused by cooperative control: ${refusal}` };
+    deps.onDispatchStart?.(step);
+    try {
+      const result = await sender(deps)({ ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, frameOrigin(live));
+      deps.onDispatchEnd?.(step, { ok: result.ok, message: result.message });
+      return result;
+    } catch (error) {
+      deps.onDispatchEnd?.(step, { ok: false, message: errorText(error) });
+      throw error;
+    }
+  };
   let sent: BridgeResult;
   try {
-    sent = await sender(deps)({ ...step, correctedX: target.x, correctedY: target.y, ...(end ? { endX: end.x, endY: end.y } : {}) }, live.srcW, live.srcH, frameOrigin(live));
-    deps.onDispatchEnd?.(step, { ok: sent.ok, message: sent.message });
+    sent = await (deps.dispatchExclusive ? deps.dispatchExclusive(dispatch) : dispatch());
   } catch (error) {
-    deps.onDispatchEnd?.(step, { ok: false, message: errorText(error) });
-    throw error;
+    return { ok: false, executed: false, bridgeFailed: true, message: `Native dispatch failed: ${errorText(error)}`, target, end, correction, live };
   }
   if (!sent.ok) return { ok: false, executed: false, bridgeFailed: true, message: sent.message, target, end, correction, live };
   const after = await verifyAfter(step, live, target, deps);
@@ -299,21 +309,26 @@ async function retryMissed(step: WorkflowStep, out: StepOutcome, deps: StepDeps)
     return { ...out, retry: { dxPx: miss.dxPx, dyPx: miss.dyPx, at: miss.at, ok: false, message: refusal } };
   }
   const shot = out.shot!;
-  const ownershipRefusal = deps.authorizeDispatch?.();
-  if (ownershipRefusal) {
-    deps.log(`"${step.name}": corrected retry blocked by cooperative control: ${ownershipRefusal}`, 'warn');
-    return { ...out, retry: { dxPx: miss.dxPx, dyPx: miss.dyPx, at: miss.at, ok: false, message: ownershipRefusal } };
-  }
   deps.log(`"${step.name}": missed by ${delta} — retrying once at ${px(miss.at, shot)}`, 'warn');
   deps.aim?.(miss.at);
-  deps.onDispatchStart?.(step);
+  const dispatch = async (): Promise<BridgeResult> => {
+    const ownershipRefusal = deps.authorizeDispatch?.();
+    if (ownershipRefusal) return { ok: false, message: ownershipRefusal };
+    deps.onDispatchStart?.(step);
+    try {
+      const result = await sender(deps)({ ...step, correctedX: miss.at.x, correctedY: miss.at.y }, shot.srcW, shot.srcH, { x: 0, y: 0 });
+      deps.onDispatchEnd?.(step, { ok: result.ok, message: result.message });
+      return result;
+    } catch (error) {
+      deps.onDispatchEnd?.(step, { ok: false, message: errorText(error) });
+      throw error;
+    }
+  };
   let sent: BridgeResult;
   try {
-    sent = await sender(deps)({ ...step, correctedX: miss.at.x, correctedY: miss.at.y }, shot.srcW, shot.srcH, { x: 0, y: 0 });
-    deps.onDispatchEnd?.(step, { ok: sent.ok, message: sent.message });
+    sent = await (deps.dispatchExclusive ? deps.dispatchExclusive(dispatch) : dispatch());
   } catch (error) {
-    deps.onDispatchEnd?.(step, { ok: false, message: errorText(error) });
-    throw error;
+    sent = { ok: false, message: `Native retry dispatch failed: ${errorText(error)}` };
   }
   const retry = { dxPx: miss.dxPx, dyPx: miss.dyPx, at: miss.at, ok: sent.ok, message: sent.message };
   if (!sent.ok) return { ...out, retry };
