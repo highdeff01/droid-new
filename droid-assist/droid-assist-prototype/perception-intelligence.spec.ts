@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActionRecord, Frame, WorkflowStep } from './types.js';
 import type { InventoryElement } from './screen-inventory.js';
 import {
-  auditCommands, classifyPageTransition, compareElementEffect, descriptorDistance, frameChangeRatio, learnVisualPrototype,
+  auditCommands, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
   matchVisualPrototype, outcomeRates, prospectPoints, recognizeElements, relateElements, visualDescriptor,
 } from './perception-intelligence.js';
 
@@ -95,4 +95,20 @@ describe('visual perception intelligence', () => {
     expect(points[0]).toMatchObject({ priority: 'high', reason: expect.stringContaining('failed') });
     expect(points.some(p => p.reason.includes('Reconfirm Save'))).toBe(true);
   });
+  it('turns uncertainty into bounded AI review questions without creating actions', () => {
+    const unknown = { ...element('button A1', 0.2, 0.3), known: false };
+    const snapshot = {
+      frameId: 9, capturedAt: 9000, elements: [unknown], relations: [], pageTransition: 'navigation-likely' as const,
+      changeRatio: 0.42, notes: ['Step "Save" needs review: unverified'],
+      effects: [{ actionId: 'a1', actor: 'User', action: 'click', target: '(unmatched coordinate)', nearbyBefore: [], appeared: ['Dialog'], disappeared: [], moved: [], evidence: 'after-frame comparison' }],
+    };
+    const questions = derivePerceptionQuestions(snapshot);
+    expect(questions.length).toBeGreaterThanOrEqual(3);
+    expect(questions[0].id).toBe('page-transition');
+    expect(questions.some(q => q.id.startsWith('identify:') && q.region)).toBe(true);
+    expect(questions.some(q => q.id === 'effect:a1' && q.priority === 'high')).toBe(true);
+    expect(questions.every(q => q.question.length > 20 && q.evidence.length > 0)).toBe(true);
+    expect(questions.length).toBeLessThanOrEqual(10);
+  });
+
 });
