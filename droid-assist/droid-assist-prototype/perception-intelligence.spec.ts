@@ -44,9 +44,9 @@ describe('visual perception intelligence', () => {
     const shot = frame(3, 80);
     const descriptor = visualDescriptor(shot, { x: 0, y: 0, w: 1, h: 1 });
     const one = learnVisualPrototype([], { name: 'Save', kind: 'button', descriptor, frameId: 3, verifiedSuccess: true, at: 30 });
-    expect(recognizeElements([element('button A1', 0, 0)], shot, one)[0].known).toBe(false);
+    expect(recognizeElements([{ ...element('button A1', 0, 0), known: false }], shot, one)[0].known).toBe(false);
     const two = learnVisualPrototype(one, { name: 'Save', kind: 'button', descriptor, frameId: 4, verifiedSuccess: true, at: 40 });
-    expect(recognizeElements([element('button A1', 0, 0)], shot, two)[0]).toMatchObject({ name: 'Save', known: true });
+    expect(recognizeElements([{ ...element('button A1', 0, 0), known: false }], shot, two)[0]).toMatchObject({ name: 'Save', known: true });
   });
 
   it('correlates an input coordinate with the resulting visual element changes', () => {
