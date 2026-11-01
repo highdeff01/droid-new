@@ -46,7 +46,7 @@ describe('decideCrew', () => {
     const prompt = (ask.mock.calls[0] as unknown as [{ prompt: string; json: boolean }])[0];
     expect(prompt.json).toBe(true);
     expect(prompt.prompt).toMatch(/Goal: open files/);
-    expect(prompt.prompt).toMatch(/agent-1 \\(ok\\) on "look" \\[frame #42 region x=0\\.660,y=0\\.260,w=0\\.080,h=0\\.080\\] at \\(0\\.700, 0\\.300\\): saw a menu/);
+    expect(prompt.prompt).toMatch(/agent-1 \(ok\) on "look" \[frame #42 region x=0\.660,y=0\.260,w=0\.080,h=0\.080\] at \(0\.700, 0\.300\): saw a menu/);
   });
 });
 
