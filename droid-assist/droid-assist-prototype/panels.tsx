@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { createExternalModelBridge, type ExternalChatProtocol } from './external-model-adapters.js';
+import { getDocumentFileReadiness } from './document-file-formats.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { DRY_RUN } from './run-step.js';
@@ -1293,14 +1294,21 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
     if (!list?.length) return;
     setError('');
     const loaded: QueuedFile[] = [];
+    const rejected: string[] = [];
     for (const file of Array.from(list)) {
+      const readiness = getDocumentFileReadiness(file.name, file.type);
+      if (!readiness.supported) {
+        rejected.push(`${file.name}: ${readiness.reason}`);
+        continue;
+      }
       try {
         const text = await file.text();
         loaded.push({ id: `${file.name}-${file.size}-${file.lastModified}`, name: file.name, text, selected: true, group: 'Default', workers: 0 });
       } catch (e) {
-        setError(`Could not read ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+        rejected.push(`Could not read ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
+    if (rejected.length) setError(rejected.join('\\n'));
     setFiles((old) => {
       const next = [...old];
       for (const file of loaded) {
