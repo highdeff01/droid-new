@@ -391,3 +391,79 @@ export function perceptionContext(snapshot: PerceptionSnapshot, rates: readonly 
     ...questions.map(q => `[AI review request ${q.priority}] ${q.question} Why: ${q.why} Evidence: ${q.evidence.join('; ')}`),
   ];
 }
+
+
+export interface DecisionHistoryRecord {
+  id: string;
+  at: number;
+  frameId: number;
+  actor: string;
+  action: string;
+  expected: string;
+  actual: string;
+  evidence: string[];
+  status: 'verified' | 'contradicted' | 'uncertain';
+  confidence: number;
+}
+
+/**
+ * Build an evidence-conservative decision record from an action/effect pair.
+ * This records correlation only; it never controls or delays execution.
+ */
+export function recordDecisionOutcome(input: {
+  effect: ElementEffect;
+  frameId: number;
+  expected?: string;
+  at?: number;
+}): DecisionHistoryRecord {
+  const expected = (input.expected ?? '').trim();
+  const effect = input.effect;
+  const changes = [
+    ...effect.appeared.map(name => `appeared: ${name}`),
+    ...effect.disappeared.map(name => `disappeared: ${name}`),
+    ...effect.moved.map(name => `moved: ${name}`),
+  ];
+  const actual = changes.length ? changes.join('; ') : 'No inventory change detected in the compared regions';
+  const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const expectedNorm = norm(expected);
+  const changeNames = changes.map(norm);
+  const explicitChangeWords = /\b(appear|appeared|open|opened|show|shown|disappear|disappeared|close|closed|move|moved|navigate|navigation|change|changed|select|selected|save|saved|submit|submitted)\b/.test(expectedNorm);
+  const match = !!expectedNorm && changeNames.some(change => {
+    const changeNorm = norm(change);
+    return changeNorm.split(' ').some(token => token.length > 2 && expectedNorm.split(' ').includes(token));
+  });
+  const status: DecisionHistoryRecord['status'] = match
+    ? 'verified'
+    : expectedNorm && explicitChangeWords && changes.length === 0
+      ? 'uncertain'
+      : 'uncertain';
+  return {
+    id: effect.actionId + ':' + input.frameId,
+    at: input.at ?? Date.now(),
+    frameId: input.frameId,
+    actor: effect.actor,
+    action: effect.action,
+    expected: expected || 'No explicit expected outcome recorded',
+    actual,
+    evidence: [effect.evidence, `target: ${effect.target}`, `inventory changes: ${changes.length}`],
+    status,
+    confidence: match ? 0.65 : 0.2,
+  };
+}
+
+/** Bound decision history and avoid retaining screenshots or raw page text. */
+export function appendDecisionHistory(
+  history: readonly DecisionHistoryRecord[],
+  record: DecisionHistoryRecord,
+  limit = 100,
+): DecisionHistoryRecord[] {
+  const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+  return [record, ...history.filter(item => item.id !== record.id)].slice(0, boundedLimit);
+}
+
+/** Render compact, bounded decision evidence for advisory AI context. */
+export function decisionHistoryContext(history: readonly DecisionHistoryRecord[], limit = 8): string[] {
+  return history.slice(0, Math.max(0, Math.min(20, Math.floor(limit)))).map(record =>
+    `[Decision history ${record.status} · confidence ${Math.round(record.confidence * 100)}%] ${record.actor} ${record.action}; expected: ${record.expected}; observed: ${record.actual}; evidence: ${record.evidence.slice(0, 3).join('; ')}`,
+  );
+}
