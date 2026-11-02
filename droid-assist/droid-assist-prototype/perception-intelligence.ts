@@ -404,6 +404,7 @@ export interface DecisionHistoryRecord {
   evidence: string[];
   status: 'verified' | 'contradicted' | 'uncertain';
   confidence: number;
+  reviewedFrameId?: number;
 }
 
 /**
@@ -464,17 +465,31 @@ export function reconcileDecisionHistory(
   history: readonly DecisionHistoryRecord[],
   elements: readonly InventoryElement[],
   frameId: number,
+  pageTransition: PageTransition = 'unknown',
 ): DecisionHistoryRecord[] {
   return history.map(record => {
     if (record.status !== 'uncertain' || frameId <= record.frameId || record.expected === 'No explicit expected outcome recorded') return record;
     const expected = record.expected.toLowerCase();
+    const expectsNavigation = /\b(navigate|navigation|navigates|navigated|redirect|redirects|redirected|new page|page changes|page changes to)\b/.test(expected);
+    if (expectsNavigation) {
+      if (pageTransition === 'unknown' || pageTransition === 'content-shift') return record;
+      const satisfied = pageTransition === 'navigation-likely';
+      return {
+        ...record,
+        status: satisfied ? 'verified' : 'contradicted',
+        confidence: 0.65,
+        reviewedFrameId: frameId,
+        actual: satisfied ? 'Navigation-like transition detected in later frame' : 'No navigation-like transition detected in later frame',
+        evidence: [...record.evidence.slice(0, 2), 'rechecked page transition in frame #' + frameId + ': ' + pageTransition],
+      };
+    }
     const mode = /\b(disappear|disappears|disappeared|disappearing|close|closes|closed|closing|hidden|hide|hides|no longer visible)\b/.test(expected)
       ? 'absent'
-      : /\b(appear|appears|appeared|appearing|open|opens|opened|opening|visible|shown|show|shows|present)\b/.test(expected)
+      : /\b(appear|appears|appeared|appearing|open|opens|opened|opening|visible|shown|show|shows|present|saved|save confirmation)\b/.test(expected)
         ? 'present'
         : null;
     if (!mode) return record;
-    const ignored = new Set(['appear', 'appears', 'appeared', 'open', 'opens', 'opened', 'visible', 'shown', 'show', 'present', 'disappear', 'disappears', 'disappeared', 'close', 'closes', 'closed', 'hidden', 'no', 'longer', 'is', 'the', 'a', 'an', 'on', 'in', 'to']);
+    const ignored = new Set(['appear', 'appears', 'appeared', 'appearing', 'open', 'opens', 'opened', 'opening', 'visible', 'shown', 'show', 'shows', 'present', 'saved', 'save', 'confirmation', 'disappear', 'disappears', 'disappeared', 'disappearing', 'close', 'closes', 'closed', 'closing', 'hidden', 'hide', 'hides', 'no', 'longer', 'is', 'the', 'a', 'an', 'on', 'in', 'to']);
     const tokens = expected.split(/[^a-z0-9]+/).filter(token => token.length > 2 && !ignored.has(token));
     if (!tokens.length) return record;
     const match = elements.some(element => {
@@ -490,7 +505,7 @@ export function reconcileDecisionHistory(
       actual: satisfied
         ? (mode === 'present' ? 'Expected element visible in later inventory' : 'Expected element absent from later inventory')
         : (mode === 'present' ? 'Expected element not found in later inventory' : 'Expected element still present in later inventory'),
-      evidence: [...record.evidence.slice(0, 2), `rechecked against inventory in frame #${frameId}`],
+      evidence: [...record.evidence.slice(0, 2), 'rechecked against inventory in frame #' + frameId],
     };
   });
 }
