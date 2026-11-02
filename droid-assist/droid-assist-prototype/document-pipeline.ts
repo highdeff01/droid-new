@@ -17,7 +17,7 @@ export interface DocumentPlan {
 export interface ModelBridge { id: string; label: string; ask: AskFn }
 export interface BridgeOpinion { bridgeId: string; label: string; content?: string; error?: string }
 export interface DocumentPipelineOptions {
-  concurrency?: number; reviewAgents?: number; maxReviewRetries?: number; signal?: AbortSignal;
+  concurrency?: number; maxReviewRetries?: number; signal?: AbortSignal;
   conversationHistory?: string; previousResponse?: string; priorNotes?: WorkerNote[];
   onProgress?: (event: { phase: 'planning' | 'processing' | 'reviewing' | 'combining'; file: string; completed: number; total: number; detail: string }) => void;
   onNote?: SwarmOptions['onNote'];
