@@ -1265,3 +1265,107 @@ export function DecisionHistoryPanel({ engine }: { engine: AssistEngine }) {
     </section>
   );
 }
+
+
+/** File-focused document analysis. Reads selected files in the browser and uses the existing AI session only. */
+export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
+  type QueuedFile = { id: string; name: string; text: string; selected: boolean; group: string; workers: number };
+  const [files, setFiles] = useState<QueuedFile[]>([]);
+  const [question, setQuestion] = useState('Summarize the key information and answer the question using source evidence.');
+  const [groupFilter, setGroupFilter] = useState('All files');
+  const [reviewers, setReviewers] = useState(1);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState('');
+  const [error, setError] = useState('');
+  const [answer, setAnswer] = useState('');
+  const [report, setReport] = useState('');
+  const groups = [...new Set(files.map((file) => file.group.trim() || 'Ungrouped'))];
+  const visible = files.filter((file) => groupFilter === 'All files' || (file.group.trim() || 'Ungrouped') === groupFilter);
+  const selected = visible.filter((file) => file.selected);
+  const loadFiles = async (list: FileList | null) => {
+    if (!list?.length) return;
+    setError('');
+    const loaded: QueuedFile[] = [];
+    for (const file of Array.from(list)) {
+      try {
+        const text = await file.text();
+        loaded.push({ id: `${file.name}-${file.size}-${file.lastModified}`, name: file.name, text, selected: true, group: 'Default', workers: 0 });
+      } catch (e) {
+        setError(`Could not read ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    setFiles((old) => {
+      const next = [...old];
+      for (const file of loaded) {
+        const existing = next.findIndex((item) => item.id === file.id);
+        if (existing >= 0) next[existing] = file;
+        else next.push(file);
+      }
+      return next;
+    });
+  };
+  const updateFile = (id: string, patch: Partial<QueuedFile>) => setFiles((old) => old.map((file) => file.id === id ? { ...file, ...patch } : file));
+  const run = async () => {
+    if (!selected.length) { setError('Select at least one file in the current group.'); return; }
+    if (!question.trim()) { setError('Enter a question or analysis goal.'); return; }
+    setRunning(true); setError(''); setAnswer(''); setReport('');
+    try {
+      const inputs = selected.map(({ id, name, text }) => ({ id, name, text }));
+      const workerAllocations = Object.fromEntries(selected.filter((file) => file.workers > 0).map((file) => [file.id, file.workers]));
+      const result = await engine.runDocumentPipeline(inputs, question, {
+        workerAllocations,
+        onProgress: (event) => setProgress(`${event.phase}: ${event.file} — ${event.detail}`),
+      }, reviewers);
+      setAnswer(result.combinedAnswer);
+      setReport(result.files.map((file) => `${file.plan.name} · ${file.plan.agentCount} workers · relevance ${file.relevanceScore ?? 'unscored'}/5 · failed sections ${file.failedChunks}\n${file.review}`).join('\n\n---\n\n'));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+  return (
+    <section className={styles.panel} aria-label="Document pipeline">
+      <h3>Document pipeline <small>file analysis · existing AI session</small></h3>
+      <p className={styles.muted}>Read-only document analysis. Files are read locally in this tab and sent through the configured AI session for analysis; this panel never issues mouse or keyboard actions.</p>
+      <div className={styles.group}>
+        <label>Choose files <input type="file" multiple onChange={(event) => { void loadFiles(event.currentTarget.files); event.currentTarget.value = ''; }} /></label>
+        <label>File group
+          <select value={groupFilter} onChange={(event) => setGroupFilter(event.currentTarget.value)}>
+            <option>All files</option>
+            {groups.map((group) => <option key={group}>{group}</option>)}
+          </select>
+        </label>
+        <label>Independent reviewer agents
+          <input type="number" min={0} max={5} value={reviewers} onChange={(event) => setReviewers(Math.max(0, Math.min(5, Number(event.currentTarget.value) || 0)))} />
+        </label>
+      </div>
+      <label>Question / analysis goal
+        <textarea value={question} onChange={(event) => setQuestion(event.currentTarget.value)} rows={3} />
+      </label>
+      <h4>Files <small>{selected.length} selected in this view · {files.length} loaded</small></h4>
+      {!files.length && <p className={styles.muted}>Choose one or more text-readable files to begin. Files are not uploaded until you run the analysis.</p>}
+      <ul className={styles.log}>
+        {visible.map((file) => (
+          <li key={file.id}>
+            <label><input type="checkbox" checked={file.selected} onChange={(event) => updateFile(file.id, { selected: event.currentTarget.checked })} /> <b>{file.name}</b></label>
+            <small>{file.text.length.toLocaleString()} characters</small>
+            <div className={styles.group}>
+              <label>Group <input value={file.group} onChange={(event) => updateFile(file.id, { group: event.currentTarget.value })} /></label>
+              <label>Workers (0 = automatic) <input type="number" min={0} max={100} value={file.workers} onChange={(event) => updateFile(file.id, { workers: Math.max(0, Math.min(100, Number(event.currentTarget.value) || 0)) })} /></label>
+              <button type="button" onClick={() => setFiles((old) => old.filter((item) => item.id !== file.id))}>Remove</button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <div className={styles.group}>
+        <button type="button" disabled={running || !selected.length} onClick={() => void run()}>{running ? 'Analyzing…' : `Analyze ${selected.length} selected file(s)`}</button>
+        <button type="button" disabled={running || !files.length} onClick={() => { setFiles([]); setAnswer(''); setReport(''); setError(''); setProgress(''); }}>Clear files/results</button>
+      </div>
+      {progress && <p role="status">{progress}</p>}
+      {error && <p role="alert" data-tone="error">{error}</p>}
+      {answer && <><h4>Combined answer</h4><pre className={styles.log}>{answer}</pre></>}
+      {report && <details><summary>Per-file review and relevance reports</summary><pre className={styles.log}>{report}</pre></details>}
+    </section>
+  );
+}
