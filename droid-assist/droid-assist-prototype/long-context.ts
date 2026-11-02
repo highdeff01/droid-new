@@ -1,4 +1,5 @@
 import type { AskFn, AskRequest } from './ai.js';
+import type { Frame } from './types.js';
 
 export const LONG_CONTEXT_DEFAULT_CHUNK_CHARS = 9000;
 export const LONG_CONTEXT_MAX_CHUNKS_PER_RUN = 500;
@@ -42,6 +43,23 @@ export async function readLongText(ask: AskFn, task: string, source: string, opt
   const combinedAnswer = sections.map(s => '## Section ' + s.index + '\n\n' + s.answer).join('\n\n');
   emit(options, 'combining', sections.length, sections.length, 'All sections combined');
   return { task, sections, notes, combinedAnswer, sourceChars: source.length };
+}
+
+/** Analyse a sequence of screenshots/images one image per request, carrying notes between frames. */
+export async function readLongImages(ask: AskFn, task: string, frames: Frame[], options: LongWorkOptions = {}): Promise<LongReadResult> {
+  const max = clamp(options.maxChunks, LONG_CONTEXT_MAX_CHUNKS_PER_RUN, 1, LONG_CONTEXT_MAX_CHUNKS_PER_RUN);
+  if (frames.length > max) throw new Error('Image sequence has ' + frames.length + ' frames; maxChunks is ' + max + '. No frames were discarded.');
+  const sections: LongReadSection[] = []; let notes = options.previousNotes?.trim() ?? ''; const refs = refsBlock(options.references);
+  for (let i = 0; i < frames.length; i++) {
+    checkAbort(options.signal); const frame = frames[i];
+    emit(options, 'reading', i, frames.length, 'Analysing image ' + (i + 1) + '/' + frames.length);
+    const req: AskRequest = { system: 'Carefully inspect this supplied image only. Report visible details, text, controls, objects and uncertainty. Compare with notes from earlier images when available. Do not invent details outside the image.', prompt: ['TASK: ' + task, 'IMAGE ' + (i + 1) + ' OF ' + frames.length + (frame.id === undefined ? '' : '; frame id ' + frame.id), notes ? 'CUMULATIVE NOTES FROM PREVIOUS IMAGES:\n' + notes : '', refs, 'Describe evidence visible in this image and how it relates to the task. Preserve uncertain readings as uncertain.'].filter(Boolean).join('\n\n'), frame, signal: options.signal };
+    const answer = (await ask(req)).content.trim(); notes = compactNotes(notes, 'Image ' + (i + 1) + ': ' + answer);
+    const section: LongReadSection = { index: i + 1, start: i, end: i + 1, source: '[image/frame ' + (frame.id ?? i + 1) + ']', notes: answer, answer };
+    sections.push(section); await options.onReadSection?.(section); emit(options, 'reading', i + 1, frames.length, 'Finished image ' + (i + 1) + '/' + frames.length);
+  }
+  const combinedAnswer = sections.map(s => '## Image ' + s.index + '\n\n' + s.answer).join('\n\n');
+  return { task, sections, notes, combinedAnswer, sourceChars: 0 };
 }
 
 /** Generates an answer as sequential append-only chunks. A model may stop with [[DROID_DONE]]. */
