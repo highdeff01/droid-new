@@ -80,7 +80,7 @@ export async function runAgentSwarm(ask: AskFn, tasks: readonly SwarmTask[], opt
   let completed = 0;
   let active = 0;
 
-  const worker = async (slot: number): Promise<void> => {
+  const worker = async (): Promise<void> => {
     while (true) {
       if (options.signal?.aborted) throw new Error('Agent swarm cancelled.');
       const index = cursor++;
@@ -128,7 +128,7 @@ export async function runAgentSwarm(ask: AskFn, tasks: readonly SwarmTask[], opt
     }
   };
 
-  await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, (_, slot) => worker(slot)));
+  await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker()));
   return {
     reports: reports.filter(Boolean),
     notes,
