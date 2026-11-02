@@ -114,7 +114,7 @@ const AI: Requester = { kind: 'ai' };
 const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
 import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
-import { appendDecisionHistory, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, frameChangeRatio, learnVisualPrototype, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, relateElements, saveVisualPrototypes, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
+import { appendDecisionHistory, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, frameChangeRatio, learnVisualPrototype, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveVisualPrototypes, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
 import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
 import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
 import { refreshStep, retestSummary, retestText, retestedSteps, runRetest, selectSteps, type RetestStepResult, type RetestSummary } from './retest.js';
@@ -4758,6 +4758,8 @@ export function useAssist() {
     const next = recognizeElements(detected, frame, visualPrototypesRef.current);
     const changeRatio = frameChangeRatio(previousFrame, frame);
     const relations = relateElements(next);
+    // Re-check prior decisions against this later frame; this only annotates evidence.
+    decisionHistoryRef.current = reconcileDecisionHistory(decisionHistoryRef.current, next, frame.id);
     const identityReviews = next.map(element => assessElementIdentity({
       element, frame,
       prototypes: visualPrototypesRef.current,
@@ -4773,7 +4775,8 @@ export function useAssist() {
       lastEffectActionRef.current = newEffect.actionId;
       elementEffectsRef.current = [newEffect, ...elementEffectsRef.current].slice(0, 60);
       const runningStep = stepsRef.current.find(step => step.status === 'running');
-      const decision = recordDecisionOutcome({ effect: newEffect, frameId: frame.id, expected: runningStep?.name, at: frame.time });
+      const explicitExpectation = runningStep && /\\b(appears|appeared|visible|shown|disappears|disappeared|closed|opened)\\b/i.test(runningStep.name) ? runningStep.name : undefined;
+      const decision = recordDecisionOutcome({ effect: newEffect, frameId: frame.id, expected: explicitExpectation, at: frame.time });
       decisionHistoryRef.current = appendDecisionHistory(decisionHistoryRef.current, decision, 100);
     }
     const notes = [
