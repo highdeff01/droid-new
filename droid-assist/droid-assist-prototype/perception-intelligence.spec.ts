@@ -122,4 +122,19 @@ describe('visual perception intelligence', () => {
     expect(questions.length).toBeLessThanOrEqual(10);
   });
 
+  it('records bounded decision history without inventing an expected outcome', () => {
+    const effect = {
+      actionId: 'a1', actor: 'user', action: 'click', target: 'Save', nearbyBefore: ['Save'],
+      appeared: ['Saved toast'], disappeared: [], moved: [], evidence: 'frame inventory comparison',
+    };
+    const record = recordDecisionOutcome({ effect, frameId: 8, expected: 'Saved toast appears', at: 80 });
+    expect(record).toMatchObject({ status: 'verified', confidence: 0.65, frameId: 8, actual: 'appeared: Saved toast' });
+    const uncertain = recordDecisionOutcome({ effect: { ...effect, actionId: 'a2', appeared: [] }, frameId: 9 });
+    expect(uncertain).toMatchObject({ status: 'uncertain', confidence: 0.2, expected: 'No explicit expected outcome recorded' });
+    const history = appendDecisionHistory([record], { ...record, id: 'a3:9' }, 1);
+    expect(history).toHaveLength(1);
+    expect(history[0].id).toBe('a3:9');
+    expect(decisionHistoryContext(history)[0]).toContain('Decision history');
+  });
+
 });
