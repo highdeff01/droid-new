@@ -3,6 +3,7 @@ import type { InventoryElement } from './screen-inventory.js';
 import type { Box } from './assist-ai.js';
 
 export type PageTransition = 'same-page' | 'content-shift' | 'navigation-likely' | 'unknown';
+export type InventoryCoverage = 'complete' | 'partial' | 'unknown';
 export type RelationKind = 'contains' | 'overlaps' | 'near' | 'aligned-x' | 'aligned-y';
 
 export interface ElementRelation {
@@ -405,6 +406,9 @@ export interface DecisionHistoryRecord {
   status: 'verified' | 'contradicted' | 'uncertain';
   confidence: number;
   reviewedFrameId?: number;
+  evidenceQuality?: 'strong' | 'limited' | 'conflicting';
+  supportingObservations?: number;
+  conflictingObservations?: number;
 }
 
 /**
@@ -466,6 +470,7 @@ export function reconcileDecisionHistory(
   elements: readonly InventoryElement[],
   frameId: number,
   pageTransition: PageTransition = 'unknown',
+  inventoryCoverage: InventoryCoverage = 'unknown',
 ): DecisionHistoryRecord[] {
   return history.map(record => {
     if (record.status !== 'uncertain' || frameId <= record.frameId || record.expected === 'No explicit expected outcome recorded') return record;
@@ -496,11 +501,14 @@ export function reconcileDecisionHistory(
       const label = element.name.toLowerCase().split(/[^a-z0-9]+/).filter(token => token.length > 2);
       return label.length > 0 && tokens.every(token => label.includes(token));
     });
+    if (mode === 'absent' && inventoryCoverage !== 'complete') return { ...record, evidenceQuality: 'limited', evidence: [...record.evidence.slice(0, 2), `absence not inferred: inventory coverage is ${inventoryCoverage}`] };
+    if (mode === 'present' && !match && inventoryCoverage !== 'complete') return { ...record, evidenceQuality: 'limited', evidence: [...record.evidence.slice(0, 2), `expected element not detected; inventory coverage is ${inventoryCoverage}`] };
     const satisfied = mode === 'present' ? match : !match;
     return {
       ...record,
       status: satisfied ? 'verified' : 'contradicted',
-      confidence: 0.7,
+      confidence: calibrateEvidenceConfidence({ base: 0.7, quality: 'strong', supporting: 1, conflicting: 0 }),
+      evidenceQuality: 'strong', supportingObservations: 1, conflictingObservations: 0,
       reviewedFrameId: frameId,
       actual: satisfied
         ? (mode === 'present' ? 'Expected element visible in later inventory' : 'Expected element absent from later inventory')
@@ -509,3 +517,25 @@ export function reconcileDecisionHistory(
     };
   });
 }
+
+
+export function calibrateEvidenceConfidence(input: { base: number; quality: 'strong' | 'limited' | 'conflicting'; supporting: number; conflicting: number }): number {
+  const support = Math.max(0, Math.floor(input.supporting)); const conflict = Math.max(0, Math.floor(input.conflicting));
+  const factor = input.quality === 'strong' ? 1 : input.quality === 'limited' ? 0.62 : 0.35;
+  return clamp(input.base * factor + Math.min(0.12, Math.max(0, support - 1) * 0.04) - Math.min(0.45, conflict * 0.15), 0.05, 0.98);
+}
+
+export interface DecisionLearningProfile { key: string; actor: string; action: string; target: string; attempts: number; verified: number; contradicted: number; uncertain: number; confidenceTotal: number; lastOutcomeId: string; lastUpdatedAt: number; }
+export function updateDecisionLearning(profiles: readonly DecisionLearningProfile[], record: DecisionHistoryRecord): DecisionLearningProfile[] {
+  if (record.status === 'uncertain' || profiles.some(p => p.lastOutcomeId === record.id)) return [...profiles];
+  const targetLine = record.evidence.find(item => item.startsWith('target: ')); const target = targetLine ? targetLine.slice(8) : '(unknown target)';
+  const k = [record.actor, record.action, target].map(key).join('|'); const old = profiles.find(p => p.key === k);
+  const next: DecisionLearningProfile = { key:k, actor:record.actor, action:record.action, target, attempts:(old?.attempts ?? 0)+1, verified:(old?.verified ?? 0)+(record.status === 'verified' ? 1 : 0), contradicted:(old?.contradicted ?? 0)+(record.status === 'contradicted' ? 1 : 0), uncertain:old?.uncertain ?? 0, confidenceTotal:(old?.confidenceTotal ?? 0)+record.confidence, lastOutcomeId:record.id, lastUpdatedAt:record.at };
+  return [next, ...profiles.filter(p => p.key !== k)].slice(0, 200);
+}
+export function decisionLearningContext(profiles: readonly DecisionLearningProfile[], limit = 8): string[] {
+  return profiles.slice(0, Math.max(0, Math.min(20, Math.floor(limit)))).map(p => { const resolved=p.verified+p.contradicted; const rate=resolved ? Math.round(p.verified/resolved*100) : null; const sample=p.attempts>=10?'higher sample':p.attempts>=3?'early pattern':'low sample'; return `[Learned pattern · ${sample}] ${p.actor} ${p.action} on ${p.target}: ${p.verified}/${resolved} verified (${rate===null?'not enough resolved outcomes':rate+'%'}); ${p.attempts} resolved attempts`; });
+}
+export const DECISION_LEARNING_KEY = 'droid-assist.decision-learning';
+export function loadDecisionLearning(storage: Pick<Storage,'getItem'> = localStorage): DecisionLearningProfile[] { try { const v: unknown=JSON.parse(storage.getItem(DECISION_LEARNING_KEY) ?? '[]'); return Array.isArray(v) ? v.filter((p): p is DecisionLearningProfile => !!p && typeof p==='object' && typeof (p as DecisionLearningProfile).key==='string' && Number.isInteger((p as DecisionLearningProfile).attempts)).slice(0,200) : []; } catch { return []; } }
+export function saveDecisionLearning(profiles: readonly DecisionLearningProfile[], storage: Pick<Storage,'setItem'> = localStorage): void { try { storage.setItem(DECISION_LEARNING_KEY, JSON.stringify(profiles.slice(0,200))); } catch { /* retain in memory */ } }
