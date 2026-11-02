@@ -52,6 +52,15 @@ describe('document answer grounding/review', () => {
 
 
 describe('configurable worker allocations and independent reviewers', () => {
+  it('bounds prompt chunk size even when a file is assigned one worker', () => {
+    const source = 'x'.repeat(48_000);
+    const plan = planDocument({ name: 'long.txt', text: source }, 0, 1);
+    expect(plan.agentCount).toBe(1);
+    expect(plan.chunks.length).toBeGreaterThan(1);
+    expect(Math.max(...plan.chunks.map((chunk) => chunk.text.length))).toBeLessThanOrEqual(6_000);
+    expect(plan.chunks.map((chunk) => chunk.text).join('')).toBe(source);
+  });
+
   it('clamps per-file worker overrides to 1..100 and uses them for chunk planning', () => {
     expect(planDocument({ name: 'custom.txt', text: 'x'.repeat(5000) }, 0, 4).agentCount).toBe(4);
     expect(planDocument({ name: 'too-many.txt', text: 'x'.repeat(5000) }, 0, 500).agentCount).toBe(100);
