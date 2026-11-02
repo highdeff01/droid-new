@@ -7674,6 +7674,8 @@ export function useAssist() {
     artifactCapabilities: caps.registry, invokeCapability: caps.invoke, presentations: caps.presentations, scripts: caps.scripts, artifactKnowledge: caps.knowledge,
     /** The capability registry: the single dispatch surface for buttons, the AI, agents and the main app. */
     capabilities: capabilities.registry.list, invocations: capabilities.invocations, invoke: capabilities.invoke, requestCapability, relaxed: !!relaxedRef.current,
+    /** Passive, bounded action-outcome trace for the read-only review panel. */
+    decisionHistory: decisionHistoryRef.current,
     inventory, routes, routeProfiles, plotRoute, runRoute, fixMethods, pendingFix, runFixScript, dismissFix, retest, retestFlow,
     /** The last end-to-end AI self-test (plan → ground → execute → verify) and running one. */
     selfTestReport, runSelfTestNow,
