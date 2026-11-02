@@ -49,6 +49,48 @@ export interface PerceptionSnapshot {
   effects: ElementEffect[];
 }
 
+export interface ElementIdentityAssessment {
+  name: string;
+  confidence: number;
+  stability: 'stable' | 'changed' | 'ambiguous';
+  reasons: string[];
+}
+
+/**
+ * Advisory identity stability: confidence is lowered when the element moves materially or
+ * its visual descriptor no longer resembles the verified prototype. It never dispatches actions.
+ */
+export function assessElementIdentity(input: {
+  element: InventoryElement;
+  frame: Frame;
+  prototypes: readonly VisualPrototype[];
+  previous?: InventoryElement;
+}): ElementIdentityAssessment {
+  const { element, frame, prototypes, previous } = input;
+  const reasons: string[] = [];
+  let confidence = element.known ? 0.72 : 0.35;
+  let stability: ElementIdentityAssessment['stability'] = 'stable';
+  const prior = previous && key(previous.name) === key(element.name) ? previous : undefined;
+  if (prior) {
+    const movement = Math.hypot(center(prior.box).x - center(element.box).x, center(prior.box).y - center(element.box).y);
+    if (movement > 0.035) { confidence -= Math.min(0.35, movement * 2); stability = 'changed'; reasons.push(`element moved ${movement.toFixed(3)} normalized units`); }
+  } else {
+    confidence -= 0.08;
+    reasons.push('no same-name element in the previous inventory');
+  }
+  const match = matchVisualPrototype(prototypes.filter(p => p.samples >= 2), element.kind, visualDescriptor(frame, element.box));
+  if (match) {
+    confidence = Math.max(confidence, 1 - match.distance / 0.16);
+    reasons.push(`visual prototype distance ${match.distance.toFixed(3)} from ${match.prototype.name}`);
+  } else {
+    confidence -= 0.12;
+    reasons.push('no sufficiently close verified visual prototype');
+  }
+  if (element.state === 'moved' || element.state === 'in-motion') { confidence -= 0.15; stability = 'changed'; reasons.push(`inventory state is ${element.state}`); }
+  if (confidence < 0.5) stability = stability === 'changed' ? 'changed' : 'ambiguous';
+  return { name: element.name, confidence: clamp(confidence, 0, 1), stability, reasons };
+}
+
 export interface VisualPrototype {
   key: string;
   name: string;
