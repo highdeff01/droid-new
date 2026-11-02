@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActionRecord, Frame, WorkflowStep } from './types.js';
 import type { InventoryElement } from './screen-inventory.js';
 import {
-  assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
+  appendDecisionHistory, assessElementIdentity, auditCommands, decisionHistoryContext, recordDecisionOutcome, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
   matchVisualPrototype, outcomeRates, prospectPoints, recognizeElements, relateElements, visualDescriptor,
 } from './perception-intelligence.js';
 
