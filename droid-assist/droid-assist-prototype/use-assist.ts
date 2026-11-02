@@ -4758,14 +4758,14 @@ export function useAssist() {
     const next = recognizeElements(detected, frame, visualPrototypesRef.current);
     const changeRatio = frameChangeRatio(previousFrame, frame);
     const relations = relateElements(next);
-    // Re-check prior decisions against this later frame; this only annotates evidence.
-    decisionHistoryRef.current = reconcileDecisionHistory(decisionHistoryRef.current, next, frame.id);
     const identityReviews = next.map(element => assessElementIdentity({
       element, frame,
       prototypes: visualPrototypesRef.current,
       previous: previous.find(old => old.id === element.id || old.name.toLowerCase() === element.name.toLowerCase()),
     })).filter(review => review.stability !== 'stable' || review.confidence < 0.5);
     const pageTransition = classifyPageTransition(previous, next, changeRatio);
+    // Re-check prior decisions against this later frame; this only annotates evidence.
+    decisionHistoryRef.current = reconcileDecisionHistory(decisionHistoryRef.current, next, frame.id, pageTransition);
     const audits = auditCommands(stepsRef.current, frame.time);
     const prospects = prospectPoints(next, relations, audits);
     const latestAction = historyRef.current[0];
