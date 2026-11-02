@@ -63,7 +63,7 @@ function estimateChatMessageTokens(message: ChatMessage): number {
 function truncateKeepingEnds(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   if (maxChars <= 80) return text.slice(0, Math.max(0, maxChars));
-  const marker = '\\n\\n[… context shortened to fit the model window …]\\n\\n';
+  const marker = '\n\n[… context shortened to fit the model window …]\n\n';
   const available = Math.max(0, maxChars - marker.length);
   const head = Math.ceil(available * 0.7);
   const tail = available - head;
