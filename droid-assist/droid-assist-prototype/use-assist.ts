@@ -114,7 +114,7 @@ const AI: Requester = { kind: 'ai' };
 const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
 import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
-import { appendDecisionHistory, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, frameChangeRatio, learnVisualPrototype, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveVisualPrototypes, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
+import { appendDecisionHistory, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, decisionLearningContext, frameChangeRatio, learnVisualPrototype, loadDecisionLearning, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveDecisionLearning, saveVisualPrototypes, updateDecisionLearning, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
 
 import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
 import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
