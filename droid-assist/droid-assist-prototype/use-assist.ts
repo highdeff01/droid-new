@@ -114,7 +114,7 @@ const AI: Requester = { kind: 'ai' };
 const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
 import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
-import { assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, frameChangeRatio, learnVisualPrototype, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, relateElements, saveVisualPrototypes, visualDescriptor, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
+import { appendDecisionHistory, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, frameChangeRatio, learnVisualPrototype, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, relateElements, saveVisualPrototypes, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
 import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
 import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
 import { refreshStep, retestSummary, retestText, retestedSteps, runRetest, selectSteps, type RetestStepResult, type RetestSummary } from './retest.js';
@@ -436,6 +436,8 @@ export function useAssist() {
   const perceptionRef = useRef<PerceptionSnapshot | null>(null);
   const visualPrototypesRef = useRef<VisualPrototype[]>(loadVisualPrototypes());
   const elementEffectsRef = useRef<ElementEffect[]>([]);
+  /** Bounded, in-memory decision trace; compact evidence only, never screenshots/raw page text. */
+  const decisionHistoryRef = useRef<DecisionHistoryRecord[]>([]);
   const lastEffectActionRef = useRef<string | null>(null);
   /** Normalized point the last executed pointer action left the cursor at: the previously-focused point of the next action. */
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
@@ -3768,6 +3770,7 @@ export function useAssist() {
           goal: goalRef.current, next,
           context: [
             ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),
+            ...decisionHistoryContext(decisionHistoryRef.current),
             ...recentEvidenceContext(),
           ].join(String.fromCharCode(10)),
         });
@@ -4768,6 +4771,9 @@ export function useAssist() {
     if (newEffect) {
       lastEffectActionRef.current = newEffect.actionId;
       elementEffectsRef.current = [newEffect, ...elementEffectsRef.current].slice(0, 60);
+      const runningStep = stepsRef.current.find(step => step.status === 'running');
+      const decision = recordDecisionOutcome({ effect: newEffect, frameId: frame.id, expected: runningStep?.name, at: frame.time });
+      decisionHistoryRef.current = appendDecisionHistory(decisionHistoryRef.current, decision, 100);
     }
     const notes = [
       ...next.filter(e => e.state !== 'static').map(e => `"${e.name}" is ${e.state} at ${e.cell}`),
