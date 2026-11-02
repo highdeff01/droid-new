@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CREW_AGENTS, createScreenLock, decideCrew, parseCrewDecision, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewDeps, type CrewReport } from './agent-crew.js';
+import { CREW_AGENTS, decideCrew, parseCrewDecision, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewDeps, type CrewReport } from './agent-crew.js';
 
 const decision = (commands: CrewCommand[], done = false, summary = ''): CrewDecision => ({ done, summary, commands, ignored: [], thinking: null });
 const report = (c: CrewCommand, found = `found ${c.task}`): CrewReport => ({ agent: c.agent, task: c.task, ok: true, found });
@@ -38,12 +38,15 @@ describe('decideCrew', () => {
   it('sends the goal, roster and last reports to the main AI and parses its commands', async () => {
     const ask = vi.fn(async () => ({ content: '{"done":false,"summary":"split","commands":[{"agent":"agent-1","task":"find the Files icon"}]}', thinking: 't' }));
     const agents: CrewAgent[] = [{ id: 'agent-1', status: 'waiting', task: null, lastReport: 'saw a menu' }];
-    const out = await decideCrew(ask, null, 'open files', agents, [{ agent: 'agent-1', task: 'look', ok: true, found: 'saw a menu' }]);
+    const out = await decideCrew(ask, null, 'open files', agents, [{
+      agent: 'agent-1', task: 'look', ok: true, found: 'saw a menu',
+      screenshotId: 42, point: { x: 0.7, y: 0.3 }, evidenceRegion: { x: 0.66, y: 0.26, w: 0.08, h: 0.08 },
+    }]);
     expect(out).toMatchObject({ done: false, commands: [{ agent: 'agent-1', task: 'find the Files icon' }], thinking: 't' });
     const prompt = (ask.mock.calls[0] as unknown as [{ prompt: string; json: boolean }])[0];
     expect(prompt.json).toBe(true);
     expect(prompt.prompt).toMatch(/Goal: open files/);
-    expect(prompt.prompt).toMatch(/agent-1 \(ok\) on "look": saw a menu/);
+    expect(prompt.prompt).toMatch(/agent-1 \(ok\) on "look" \[frame #42 region x=0\.660,y=0\.260,w=0\.080,h=0\.080\] at \(0\.700, 0\.300\): saw a menu/);
   });
 });
 
@@ -137,21 +140,6 @@ describe('runCrew command loop', () => {
 });
 
 describe('crew helpers', () => {
-  it('the screen lock runs real input one agent at a time, even after a failure', async () => {
-    const lock = createScreenLock();
-    const order: string[] = [];
-    const job = (name: string, fail = false) => lock(async () => {
-      order.push(`${name}:start`);
-      await new Promise((r) => setTimeout(r, 3));
-      order.push(`${name}:end`);
-      if (fail) throw new Error(name);
-      return name;
-    });
-    const results = await Promise.allSettled([job('a', true), job('b'), job('c')]);
-    expect(order).toEqual(['a:start', 'a:end', 'b:start', 'b:end', 'c:start', 'c:end']);
-    expect(results.map((r) => r.status)).toEqual(['rejected', 'fulfilled', 'fulfilled']);
-  });
-
   it('a report becomes a watcher note', () => {
     expect(reportNote({ agent: 'agent-2', task: 'find Save', ok: true, found: 'Save at top right' })).toEqual({ kind: 'element', text: 'Crew agent-2 (ok) on "find Save": Save at top right' });
     expect(reportNote({ agent: 'agent-2', task: 'x', ok: false, found: 'no' }).kind).toBe('unusual');

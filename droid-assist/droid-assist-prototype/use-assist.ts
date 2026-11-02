@@ -114,6 +114,8 @@ const AI: Requester = { kind: 'ai' };
 const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
 import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
+import { appendDecisionHistory, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, decisionLearningContext, frameChangeRatio, learnVisualPrototype, loadDecisionLearning, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveDecisionLearning, saveVisualPrototypes, updateDecisionLearning, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
+
 import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
 import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
 import { refreshStep, retestSummary, retestText, retestedSteps, runRetest, selectSteps, type RetestStepResult, type RetestSummary } from './retest.js';
@@ -156,7 +158,7 @@ import { CROSS_REFERENCE_LINES } from './joint-followup.js';
 import { loadOperations } from './operation-db.js';
 import { DEFAULT_OPERATION_RETRIES } from './operation-retry.js';
 import { DEFAULT_PLAYBACK_WINDOW_SEC } from './playback.js';
-import { CREW_AGENTS, createScreenLock, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
+import { CREW_AGENTS, CREW_SYSTEM, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
 import { runLiveDrag, type DragIntervention, type LiveDragResult, type SwarmAgent } from './drag-swarm.js';
 import { AUTO_OPS_SYSTEM, OPS_AGENTS, OPS_SYSTEM, addEvidence, addOpsReport, changeKey, changeLine, dedupeLog, enabledOps, loopReport, mapDelta, markEvidence, monitorChange, opsAgent, opsFor, parseOpsTarget, patchOpsAgent, shouldReport, tagLog, type MonitorChange, type OpsAgentId, type OpsState, type TestCandidate } from './operations.js';
 import { AUTO_OPS_INTERVAL_MS, automaticOpsPlan, type AutomaticOpsPlan } from './agent-autopilot.js';
@@ -429,6 +431,15 @@ export function useAssist() {
   /** The app the assistant is attached to via /use. */
   const [target, setTarget] = useState<string | null>(null);
   const [history, setHistory] = useState<ActionRecord[]>(() => loadHistory());
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  /** Latest shared perception snapshot and screenshot-verified visual prototypes. */
+  const perceptionRef = useRef<PerceptionSnapshot | null>(null);
+  const visualPrototypesRef = useRef<VisualPrototype[]>(loadVisualPrototypes());
+  const elementEffectsRef = useRef<ElementEffect[]>([]);
+  /** Bounded, in-memory decision trace; compact evidence only, never screenshots/raw page text. */
+  const decisionHistoryRef = useRef<DecisionHistoryRecord[]>([]);
+  const lastEffectActionRef = useRef<string | null>(null);
   /** Normalized point the last executed pointer action left the cursor at: the previously-focused point of the next action. */
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   /** The last action written to the history, so a side test can backtrack exactly what it did. */
@@ -609,6 +620,7 @@ export function useAssist() {
   const [inventory, setInventory] = useState<InventoryElement[]>([]);
   const inventoryRef = useRef<InventoryElement[]>([]);
   const inventoryFrameRef = useRef<Frame | null>(null);
+  const decisionLearningRef = useRef(loadDecisionLearning());
   /** The ranked routes last plotted for the goal. */
   const [routes, setRoutes] = useState<Route[]>([]);
   const routesRef = useRef<Route[]>([]);
@@ -768,8 +780,6 @@ export function useAssist() {
   const subRunningRef = useRef(false);
   const crewRef = useRef<CrewAgent[]>([]);
   const crewRunningRef = useRef(false);
-  /** Real input from crew agents goes through one lock: two agents never move the pointer at once. */
-  const screenLockRef = useRef(createScreenLock());
   const opsRef = useRef(ops);
   const opsRunningRef = useRef(false);
   const lastAutoOpsAtRef = useRef(0);
@@ -2346,7 +2356,9 @@ export function useAssist() {
     if (plan.needsBridge && !settingsRef.current.bridgeUrl) return refused(step, BRIDGE_REQUIRED);
     const gate = dryRun ? null : gateRealInput(budget);
     if (gate) return refused(step, gate);
-    if (!dryRun && plan.input === 'desktop-bridge' && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) return performLiveDrag(step, actor);
+    if (!dryRun && plan.input === 'desktop-bridge' && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) {
+      return performLiveDrag(step, actor);
+    }
     const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), stepDeps(plan, actor, budget, dryRun, step.refFrame));
     noteRoute(plan, step, out, actor, dryRun);
     if (dryRun && out.ok) {
@@ -2650,8 +2662,23 @@ export function useAssist() {
     if (actor !== OPS_APPLY_ACTOR) recordStepEvidence(step, out, before, out.shot ?? null);
     if (!out.ok && !out.bridgeFailed) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
     if (out.halt || !aiOnline()) return out;
-    const verdict = await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
+    const afterFrame = out.shot ?? framesRef.current[0] ?? null;
+    const verdict = await reflectAfter(step, afterFrame, out, actor);
     if (verdict && !dryRun) learnHabit(step, verdict);
+    // The visual prototype model learns only from a successful, screenshot-backed verdict.
+    if (verdict?.success && out.ok && !dryRun && afterFrame) {
+      const observed = buildInventory({ frame: afterFrame, mapped: elementMapRef.current, familiar: familiarRef.current });
+      const target = observed.find(e => (step.target ?? step.name).trim().toLowerCase() === e.name.trim().toLowerCase())
+        ?? observed.find(e => e.known && (step.target ?? step.name).toLowerCase().includes(e.name.toLowerCase()));
+      if (target) {
+        visualPrototypesRef.current = learnVisualPrototype(visualPrototypesRef.current, {
+          name: target.name, kind: target.kind, descriptor: visualDescriptor(afterFrame, target.box),
+          frameId: afterFrame.id, verifiedSuccess: true, at: afterFrame.time,
+        });
+        saveVisualPrototypes(visualPrototypesRef.current);
+        addLog('Visual learner', `Updated verified appearance prototype for "${target.name}" from frame #${afterFrame.id} (${visualPrototypesRef.current.find(p => p.key === target.name.trim().toLowerCase())?.samples ?? 1} sample(s))`, 'ok');
+      }
+    }
     return { ...out, verdict };
   };
 
@@ -3741,12 +3768,36 @@ export function useAssist() {
     try {
       const a = await thought('Screen change', async () => {
         const { full, crop } = await boxedFrames(cur, change.box);
-        return assessChange(askFor('screenResponder'), full, crop, change, { goal: goalRef.current, next });
+        return assessChange(askFor('screenResponder'), full, crop, change, {
+          goal: goalRef.current, next,
+          context: [
+            ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),
+            ...decisionHistoryContext(decisionHistoryRef.current),
+            ...decisionLearningContext(decisionLearningRef.current),
+      ...recentEvidenceContext(),
+          ].join(String.fromCharCode(10)),
+        });
       }, changeText, 'change');
       lastChangeRef.current = { at: Date.now(), assessment: a };
-      addLog('Screen-change responder', `Change at ${where}: ${changeText(a)}`, a.stale ? 'warn' : 'info');
+      addLog('Screen-change responder', `Change at ${where}: ${changeText(a)}${a.background ? ` · background: ${a.background}` : ''}`, a.stale ? 'warn' : 'info');
       if (a.kind === 'popup') flagPopup(prev, cur, change.box);
-      else setAnnotations((list) => [{ id: uid('ann'), ...change.box, label: `Changed: ${a.summary}`, tone: 'warn' as const }, ...list.filter((x) => x.tone === 'error')].slice(0, 6));
+      const visualMarkers: Annotation[] = a.elements.filter(e => e.confidence >= 0.55).slice(0, 5).map(e => ({
+        id: uid('vision'), ...e.box, label: `${e.name} · ${Math.round(e.confidence * 100)}%`,
+        tone: e.kind === 'button' || e.kind === 'input' ? 'info' : 'warn',
+        actX: e.box.x + e.box.w / 2, actY: e.box.y + e.box.h / 2,
+      }));
+      if (visualMarkers.length) {
+        setAnnotations(list => [...visualMarkers, ...list.filter(x => x.tone === 'error')].slice(0, 6));
+        // Send candidate detections to the shared bus for independent review, not direct clicking.
+        for (const e of a.elements.filter(e => e.confidence >= 0.7).slice(0, 8)) {
+          forwardElement('screen', { name: e.name, x: e.box.x + e.box.w / 2, y: e.box.y + e.box.h / 2, w: e.box.w, h: e.box.h });
+        }
+      } else if (a.kind !== 'popup') setAnnotations(list => [{ id: uid('ann'), ...change.box, label: `Changed: ${a.summary}`, tone: 'warn' as const }, ...list.filter(x => x.tone === 'error')].slice(0, 6));
+      if (a.kind === 'navigation' || perceptionRef.current?.pageTransition === 'navigation-likely') {
+        const message = `Possible page transition detected: ${a.summary}. Re-identify targets, inspect the new page, and research unfamiliar controls before continuing the old step.`;
+        addLog('Planner', message, 'warn');
+        projectInjectRef.current('agent', 'Screen-change responder', message);
+      }
     } catch (error) {
       addLog('Screen-change responder', `Change at ${where} not assessed — AI unavailable: ${errorText(error)}`, 'error');
       flagPopup(prev, cur, change.box);
@@ -3776,11 +3827,25 @@ export function useAssist() {
     });
   };
 
+  /**
+   * Compact, read-only cross-reference of recent conversation and recorded user/agent operations.
+   * This is context for reasoning only; it is never consulted by the execution or dispatch path.
+   */
+  const recentEvidenceContext = (): string[] => [
+    ...aiHistory.slice(-8).map(message => `[Conversation ${message.role}] ${message.content.slice(0, 320)}`),
+    ...historyRef.current.slice(0, 8).map(action => `[Recorded ${action.source} action] ${action.action} at ${action.x},${action.y}; bridge=${action.ok ? 'accepted' : 'failed'}; dispatched=${action.dispatched}; dryRun=${action.dryRun}`),
+  ];
+
   /** The planning context a proposal for `step` by `actor` is justified against; `redo` marks a re-proposal. */
   const proposalContext = (actor: string, step: WorkflowStep, redo?: string): ProposalContext => ({
     goal: goalRef.current,
     change: currentChange(),
-    patterns: [...relevantPatterns(goalRef.current, patternsRef.current).map(patternLine), ...crossReference(actor, goalRef.current)],
+    patterns: [
+      ...relevantPatterns(goalRef.current, patternsRef.current).map(patternLine),
+      ...crossReference(actor, goalRef.current),
+      ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),
+      ...recentEvidenceContext(),
+    ],
     related: operationDb.related(`${step.name} ${step.target ?? ''}`, goalRef.current),
     redo,
   });
@@ -4689,10 +4754,62 @@ export function useAssist() {
 
   /** Full-screen reading of `frame`: every detectable element, classified against the previous reading. */
   const readScreen = (frame: Frame) => {
-    const next = buildInventory({ frame, mapped: elementMapRef.current, familiar: familiarRef.current, prev: inventoryRef.current, prevFrame: inventoryFrameRef.current });
+    const previous = inventoryRef.current;
+    const previousFrame = inventoryFrameRef.current;
+    const detected = buildInventory({ frame, mapped: elementMapRef.current, familiar: familiarRef.current, prev: previous, prevFrame: previousFrame });
+    const next = recognizeElements(detected, frame, visualPrototypesRef.current);
+    const changeRatio = frameChangeRatio(previousFrame, frame);
+    const relations = relateElements(next);
+    const identityReviews = next.map(element => assessElementIdentity({
+      element, frame,
+      prototypes: visualPrototypesRef.current,
+      previous: previous.find(old => old.id === element.id || old.name.toLowerCase() === element.name.toLowerCase()),
+    })).filter(review => review.stability !== 'stable' || review.confidence < 0.5);
+    const pageTransition = classifyPageTransition(previous, next, changeRatio);
+    // Re-check prior decisions against this later frame; this only annotates evidence.
+    const previousDecisions = decisionHistoryRef.current;
+    const reconciledDecisions = reconcileDecisionHistory(previousDecisions, next, frame.id, pageTransition, 'unknown');
+    for (const record of reconciledDecisions) {
+      const previous = previousDecisions.find(item => item.id === record.id);
+      if (previous?.status === 'uncertain' && record.status !== 'uncertain') decisionLearningRef.current = updateDecisionLearning(decisionLearningRef.current, record);
+    }
+    decisionHistoryRef.current = reconciledDecisions;
+    saveDecisionLearning(decisionLearningRef.current);
+    const audits = auditCommands(stepsRef.current, frame.time);
+    const prospects = prospectPoints(next, relations, audits);
+    const latestAction = historyRef.current[0];
+    const newEffect = latestAction && latestAction.id !== lastEffectActionRef.current && Math.abs(frame.time - latestAction.time) <= 10_000
+      ? compareElementEffect(latestAction, previous, next) : null;
+    if (newEffect) {
+      lastEffectActionRef.current = newEffect.actionId;
+      elementEffectsRef.current = [newEffect, ...elementEffectsRef.current].slice(0, 60);
+      const runningStep = stepsRef.current.find(step => step.status === 'running');
+      const explicitExpectation = runningStep && /\\b(appears|appeared|visible|shown|disappears|disappeared|closed|opened)\\b/i.test(runningStep.name) ? runningStep.name : undefined;
+      const decision = recordDecisionOutcome({ effect: newEffect, frameId: frame.id, expected: explicitExpectation, at: frame.time });
+      decisionHistoryRef.current = appendDecisionHistory(decisionHistoryRef.current, decision, 100);
+    }
+    const notes = [
+      ...next.filter(e => e.state !== 'static').map(e => `"${e.name}" is ${e.state} at ${e.cell}`),
+      ...identityReviews.slice(0, 6).map(review => 'Identity ' + review.stability + ': "' + review.name + '" confidence ' + Math.round(review.confidence * 100) + '% — ' + review.reasons.join('; ')),
+      ...(newEffect ? [`After ${newEffect.actor} ${newEffect.action} on "${newEffect.target}": appeared [${newEffect.appeared.join(', ') || 'none'}], disappeared [${newEffect.disappeared.join(', ') || 'none'}], moved [${newEffect.moved.join(', ') || 'none'}]`] : []),
+      ...audits.filter(a => a.issue !== 'clear').slice(0, 4).map(a => `Step "${a.name}" needs review: ${a.issue} — ${a.detail}`),
+      ...(pageTransition === 'navigation-likely' ? ['Known-element overlap is low while many pixels changed: verify whether navigation moved to a different page or app'] : []),
+    ];
+    perceptionRef.current = { frameId: frame.id, capturedAt: frame.time, elements: next, relations, pageTransition, changeRatio, notes, effects: elementEffectsRef.current.slice(0, 20) };
     inventoryRef.current = next;
     inventoryFrameRef.current = frame;
     setInventory(next);
+    if (prospects.some(p => p.priority === 'high')) {
+      const markers: Annotation[] = prospects.filter(p => p.priority === 'high').slice(0, 3).map((p, i) => ({
+        id: `prospect-${frame.id}-${i}`, x: Math.max(0, p.point.x - 0.035), y: Math.max(0, p.point.y - 0.025),
+        w: 0.07, h: 0.05, label: p.reason, tone: 'warn', actX: p.point.x, actY: p.point.y,
+      }));
+      setAnnotations(old => [...markers, ...old.filter(a => !a.id.startsWith('prospect-') && a.tone === 'error')].slice(0, 6));
+    }
+    // Keep the shared perception context current for the next planner, reviewer and crew round.
+    if (notes.length && previousFrame && pageTransition !== 'same-page') {
+      addLog('Perception controller', `Frame #${frame.id}: ${pageTransition}; ${next.length} elements, ${relations.length} geometric relationships; ${notes.slice(0, 3).join('; ')}`, pageTransition === 'navigation-likely' ? 'warn' : 'info');
+    }
   };
 
   const commitProfiles = (next: RouteProfile[]) => {
@@ -4945,17 +5062,30 @@ export function useAssist() {
    */
   const runCrewAgent = async (command: CrewCommand, budget: ActionBudget, dryRun: boolean): Promise<CrewReport> => {
     const label = `Crew ${command.agent}`;
-    const report = (ok: boolean, found: string, point?: { x: number; y: number }): CrewReport => ({ agent: command.agent, task: command.task, ok, found, ...(point ? { point } : {}) });
+    const report = (ok: boolean, found: string, point?: { x: number; y: number }): CrewReport => {
+      const frame = framesRef.current[0] ?? null;
+      const evidenceRegion = point ? {
+        x: Math.max(0, point.x - 0.04), y: Math.max(0, point.y - 0.04),
+        w: Math.min(0.08, 1 - Math.max(0, point.x - 0.04)),
+        h: Math.min(0.08, 1 - Math.max(0, point.y - 0.04)),
+      } : undefined;
+      return {
+        agent: command.agent, task: command.task, ok, found,
+        ...(point ? { point } : {}),
+        ...(frame ? { screenshotId: frame.id } : {}),
+        ...(evidenceRegion ? { evidenceRegion } : {}),
+      };
+    };
     const plan = await thought(`${label}: ${command.task}`, () => planFromGoal(command.task, [], framesRef.current[0] ?? null, askFor('crew'), knownRef.current.map(elementLine), patternsRef.current), planSummary);
     if (!plan.steps.length) return report(true, plan.thinking ?? 'nothing to act on — the task needs no input');
     let point: { x: number; y: number } | undefined;
     for (const step of plan.steps) {
       if (crewStopped()) return report(false, `parked before "${step.name}" — nothing more sent`, point);
-      const out = await screenLockRef.current(async () => {
-        const local = recordLocal(label, step, `the main AI asked ${command.agent} to "${command.task}"`);
-        const briefed = await brief(label, { kind: 'go', step, proposal: local });
-        return briefed.kind === 'go' ? execute(briefed.step, label, budget, dryRun, briefed.proposal) : refused(step, `"${step.name}" not justified by the pre-action briefing`);
-      });
+      const local = recordLocal(label, step, `the main AI asked ${command.agent} to "${command.task}"`);
+      const briefed = await brief(label, { kind: 'go', step, proposal: local });
+      const out = briefed.kind === 'go'
+        ? await execute(briefed.step, label, budget, dryRun, briefed.proposal)
+        : refused(step, `"${step.name}" not justified by the pre-action briefing`);
       if (!out.ok) return report(false, `${step.name}: ${out.message}`, point);
       point = out.target;
     }
@@ -4985,7 +5115,7 @@ export function useAssist() {
         const out = await runCrew({
           agents: CREW_AGENTS,
           maxRounds: settingsRef.current.maxIterations,
-          decide: (reports, round) => thought(`Crew round ${round}: ${text}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, text, crewRef.current, reports), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
+          decide: (reports, round) => thought(`Crew round ${round}: ${text}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, text, crewRef.current, reports, CREW_SYSTEM, [...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []), ...recentEvidenceContext()].join('\n')), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
           work: (c) => runCrewAgent(c, budget, dryRun),
           shouldStop: crewStopped,
           onAgents: (agents) => {
@@ -5074,11 +5204,13 @@ export function useAssist() {
     test: (step, proposalId, dryRun) => testStep(step, { proposalId, context: step.target ?? step.name, source: 'Testing agent' }, dryRun, opsBudgetRef.current),
     armed: () => armedRef.current,
     plan: async (task) => (await thought(`Apply agent: ${task}`, () => planFromGoal(task, [], framesRef.current[0] ?? null, askFor('opsApply'), knownRef.current.map(elementLine), patternsRef.current), planSummary)).steps,
-    apply: (step) => screenLockRef.current(async () => {
+    apply: async (step) => {
       const local = recordLocal(OPS_APPLY_ACTOR, step, `the main AI asked the Apply agent to apply "${step.name}"`);
       const briefed = await brief(OPS_APPLY_ACTOR, { kind: 'go', step, proposal: local });
-      return briefed.kind === 'go' ? execute(briefed.step, OPS_APPLY_ACTOR, opsBudgetRef.current, !armedRef.current, briefed.proposal) : refused(step, `"${step.name}" not justified by the pre-action briefing`);
-    }),
+      return briefed.kind === 'go'
+        ? execute(briefed.step, OPS_APPLY_ACTOR, opsBudgetRef.current, !armedRef.current, briefed.proposal)
+        : refused(step, `"${step.name}" not justified by the pre-action briefing`);
+    },
     capture: evidenceFrame,
     store: (f) => void putStoredFrame(toStoredFrame(f), settingsRef.current.gallerySize).catch(() => undefined),
     addEvidence: (e) => {
