@@ -424,19 +424,6 @@ export function recordDecisionOutcome(input: {
     ...effect.moved.map(name => `moved: ${name}`),
   ];
   const actual = changes.length ? changes.join('; ') : 'No inventory change detected in the compared regions';
-  const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-  const expectedNorm = norm(expected);
-  const changeNames = changes.map(norm);
-  const explicitChangeWords = /\b(appear|appeared|open|opened|show|shown|disappear|disappeared|close|closed|move|moved|navigate|navigation|change|changed|select|selected|save|saved|submit|submitted)\b/.test(expectedNorm);
-  const match = !!expectedNorm && changeNames.some(change => {
-    const changeNorm = norm(change);
-    return changeNorm.split(' ').some(token => token.length > 2 && expectedNorm.split(' ').includes(token));
-  });
-  const status: DecisionHistoryRecord['status'] = match
-    ? 'verified'
-    : expectedNorm && explicitChangeWords && changes.length === 0
-      ? 'uncertain'
-      : 'uncertain';
   return {
     id: effect.actionId + ':' + input.frameId,
     at: input.at ?? Date.now(),
@@ -446,8 +433,8 @@ export function recordDecisionOutcome(input: {
     expected: expected || 'No explicit expected outcome recorded',
     actual,
     evidence: [effect.evidence, `target: ${effect.target}`, `inventory changes: ${changes.length}`],
-    status,
-    confidence: match ? 0.65 : 0.2,
+    status: 'uncertain',
+    confidence: 0.2,
   };
 }
 
