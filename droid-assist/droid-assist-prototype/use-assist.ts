@@ -115,6 +115,7 @@ const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
 import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
 import { appendDecisionHistory, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, frameChangeRatio, learnVisualPrototype, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveVisualPrototypes, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
+
 import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
 import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
 import { refreshStep, retestSummary, retestText, retestedSteps, runRetest, selectSteps, type RetestStepResult, type RetestSummary } from './retest.js';
@@ -619,6 +620,7 @@ export function useAssist() {
   const [inventory, setInventory] = useState<InventoryElement[]>([]);
   const inventoryRef = useRef<InventoryElement[]>([]);
   const inventoryFrameRef = useRef<Frame | null>(null);
+  const decisionLearningRef = useRef(loadDecisionLearning());
   /** The ranked routes last plotted for the goal. */
   const [routes, setRoutes] = useState<Route[]>([]);
   const routesRef = useRef<Route[]>([]);
@@ -3771,7 +3773,7 @@ export function useAssist() {
           context: [
             ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),
             ...decisionHistoryContext(decisionHistoryRef.current),
-            ...decisionHistoryContext(decisionHistoryRef.current),
+            ...decisionLearningContext(decisionLearningRef.current),
       ...recentEvidenceContext(),
           ].join(String.fromCharCode(10)),
         });
@@ -4765,7 +4767,14 @@ export function useAssist() {
     })).filter(review => review.stability !== 'stable' || review.confidence < 0.5);
     const pageTransition = classifyPageTransition(previous, next, changeRatio);
     // Re-check prior decisions against this later frame; this only annotates evidence.
-    decisionHistoryRef.current = reconcileDecisionHistory(decisionHistoryRef.current, next, frame.id, pageTransition);
+    const previousDecisions = decisionHistoryRef.current;
+    const reconciledDecisions = reconcileDecisionHistory(previousDecisions, next, frame.id, pageTransition, 'unknown');
+    for (const record of reconciledDecisions) {
+      const previous = previousDecisions.find(item => item.id === record.id);
+      if (previous?.status === 'uncertain' && record.status !== 'uncertain') decisionLearningRef.current = updateDecisionLearning(decisionLearningRef.current, record);
+    }
+    decisionHistoryRef.current = reconciledDecisions;
+    saveDecisionLearning(decisionLearningRef.current);
     const audits = auditCommands(stepsRef.current, frame.time);
     const prospects = prospectPoints(next, relations, audits);
     const latestAction = historyRef.current[0];
