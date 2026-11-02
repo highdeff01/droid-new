@@ -8,7 +8,7 @@ export const DOCUMENT_MEDIUM_AGENTS = 25;
 export const DOCUMENT_LARGE_AGENTS = 100;
 export const DOCUMENT_MAX_FILES_PER_RUN = 100;
 /** Keep each model request comfortably below common 8k-token context limits. Character count is a conservative proxy, not a tokenizer. */
-export const DOCUMENT_MAX_CHUNK_CHARS = 6_000;
+export const DOCUMENT_MAX_CHUNK_CHARS = 3_000;
 export const DOCUMENT_MAX_CHUNKS_PER_FILE = 1_000;
 
 export type DocumentSizeBand = 'small' | 'medium' | 'large';
