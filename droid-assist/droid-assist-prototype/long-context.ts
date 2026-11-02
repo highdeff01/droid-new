@@ -5,7 +5,7 @@ export const LONG_CONTEXT_MAX_CHUNKS_PER_RUN = 500;
 export const LONG_CONTEXT_DONE_MARKER = '[[DROID_DONE]]';
 
 export interface LongWorkProgress { phase: 'reading' | 'writing' | 'combining'; completed: number; total: number; detail: string }
-export interface LongWorkOptions { chunkChars?: number; maxChunks?: number; signal?: AbortSignal; onProgress?: (p: LongWorkProgress) => void; previousNotes?: string; references?: string[] }
+export interface LongWorkOptions { chunkChars?: number; maxChunks?: number; signal?: AbortSignal; onProgress?: (p: LongWorkProgress) => void; previousNotes?: string; references?: string[]; onAppend?: (chunk: string, index: number) => void | Promise<void>; onReadSection?: (section: LongReadSection) => void | Promise<void> }
 export interface LongReadSection { index: number; start: number; end: number; source: string; notes: string; answer: string }
 export interface LongReadResult { task: string; sections: LongReadSection[]; notes: string; combinedAnswer: string; sourceChars: number }
 export interface LongWriteResult { prompt: string; sections: string[]; answer: string; chunks: number; stoppedByModel: boolean }
@@ -36,7 +36,7 @@ export async function readLongText(ask: AskFn, task: string, source: string, opt
   for (let i = 0; i < chunks.length; i++) {
     checkAbort(options.signal); const chunk = chunks[i]; const end = offset + chunk.length; emit(options, 'reading', i, chunks.length, 'Reading section ' + (i + 1) + '/' + chunks.length);
     const req: AskRequest = { system: 'Carefully analyse the supplied section of a long document. Preserve facts, names, numbers, decisions, paths and uncertainty. Return section notes and an answer. Do not claim to have read sections not supplied.', prompt: ['TASK: ' + task, 'SECTION ' + (i + 1) + '/' + chunks.length + ', character range [' + offset + ', ' + end + ').', notes ? 'CUMULATIVE NOTES FROM EARLIER SECTIONS:\n' + notes : '', refs, 'SOURCE TEXT (data to analyse):\n' + chunk, 'Return SECTION NOTES and SECTION ANSWER; retain details needed for the overall task.'].filter(Boolean).join('\n\n'), signal: options.signal };
-    const answer = (await ask(req)).content.trim(); notes = compactNotes(notes, 'Section ' + (i + 1) + ': ' + answer); sections.push({ index: i + 1, start: offset, end, source: chunk, notes: answer, answer }); offset = end; emit(options, 'reading', i + 1, chunks.length, 'Finished section ' + (i + 1) + '/' + chunks.length);
+    const answer = (await ask(req)).content.trim(); notes = compactNotes(notes, 'Section ' + (i + 1) + ': ' + answer); const section = { index: i + 1, start: offset, end, source: chunk, notes: answer, answer }; sections.push(section); await options.onReadSection?.(section); offset = end; emit(options, 'reading', i + 1, chunks.length, 'Finished section ' + (i + 1) + '/' + chunks.length);
   }
   emit(options, 'combining', 0, sections.length, 'Combining every section answer');
   const combinedAnswer = sections.map(s => '## Section ' + s.index + '\n\n' + s.answer).join('\n\n');
@@ -54,7 +54,7 @@ export async function writeLongAnswer(ask: AskFn, prompt: string, options: LongW
     let piece = (await ask(req)).content.trim();
     if (piece.includes(LONG_CONTEXT_DONE_MARKER)) { piece = piece.split(LONG_CONTEXT_DONE_MARKER).join('').trimEnd(); stoppedByModel = true; }
     if (!piece) throw new Error('Empty response at chunk ' + (i + 1) + '.');
-    sections.push(piece); notes = compactNotes(notes, 'Chunk ' + (i + 1) + ': ' + piece.slice(0, 1800)); emit(options, 'writing', i + 1, target, 'Appended chunk ' + (i + 1) + '/' + target); if (stoppedByModel) break;
+    sections.push(piece); await options.onAppend?.(piece, i + 1); notes = compactNotes(notes, 'Chunk ' + (i + 1) + ': ' + piece.slice(0, 1800)); emit(options, 'writing', i + 1, target, 'Appended chunk ' + (i + 1) + '/' + target); if (stoppedByModel) break;
   }
   let answer = sections.join('\n\n');
   if (options.finalCombine && sections.length > 1) { checkAbort(options.signal); emit(options, 'combining', 0, sections.length, 'Generating separate overview while preserving full answer'); const summary = await ask({ system: 'Create a compact overview and section index for the supplied artifact. Do not replace, rewrite or delete the artifact itself.', prompt: 'Original request: ' + prompt + '\n\nCreate a separate overview and index. The full artifact remains intact in appended chunks.\n\nARTIFACT TAIL:\n' + answer.slice(-12000), signal: options.signal }); answer += '\n\n## Final overview and index\n\n' + summary.content.trim(); }
