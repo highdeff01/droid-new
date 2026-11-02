@@ -49,3 +49,34 @@ describe('document answer grounding/review', () => {
     expect(calls.some((c) => c.system?.includes('Independent relevance'))).toBe(true);
   });
 });
+
+
+describe('configurable worker allocations and independent reviewers', () => {
+  it('clamps per-file worker overrides to 1..100 and uses them for chunk planning', () => {
+    expect(planDocument({ name: 'custom.txt', text: 'x'.repeat(5000) }, 0, 4).agentCount).toBe(4);
+    expect(planDocument({ name: 'too-many.txt', text: 'x'.repeat(5000) }, 0, 500).agentCount).toBe(100);
+    expect(planDocument({ name: 'zero.txt', text: 'x'.repeat(5000) }, 0, 0).agentCount).toBe(1);
+  });
+
+  it('includes independent reviewer scores in the final relevance score and exposes low-score warnings', async () => {
+    const primary = vi.fn(async (request: { system?: string; prompt?: string }) => ({
+      content: request.system?.includes('Independent relevance')
+        ? 'RELEVANCE: 5/5\\nCOVERAGE: 5/5\\nGROUNDING: 5/5\\nREVISED ANSWER: The release is Friday.'
+        : 'DIRECT ANSWER: Friday. SOURCE EVIDENCE: release is Friday.',
+      thinking: null
+    })) as unknown as AskFn;
+    const reviewer = vi.fn(async () => ({
+      content: 'RELEVANCE: 1/5\\nCOVERAGE: 2/5\\nGROUNDING: 2/5\\nCONTRADICTIONS: none\\nREVISED ANSWER: Friday.',
+      thinking: null
+    })) as unknown as AskFn;
+    const result = await processDocument(primary, { id: 'release', name: 'release.txt', text: 'The release is Friday.' }, 'When is the release?', {
+      workerAllocations: { release: 3 },
+      reviewers: [{ id: 'independent-a', label: 'Independent A', ask: reviewer }]
+    });
+    expect(result.plan.agentCount).toBe(3);
+    expect(result.relevanceScore).toBe(3);
+    expect(result.review).toContain('INDEPENDENT REVIEWER Independent A');
+    expect(result.answer).toContain('INDEPENDENT REVIEW WARNINGS');
+    expect(reviewer).toHaveBeenCalled();
+  });
+});
