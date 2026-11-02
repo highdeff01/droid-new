@@ -37,6 +37,7 @@ import { loadAvoidRules, saveAvoidRules } from './storage.js';
 import { DEFAULT_AVOID_TTL_HOURS, deadlockRules, isBlocking, recordFailure, ruleLine, ruleScope, ttlMs, withoutRules, type AvoidRule } from './blacklist.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, saveOperationMemory, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher, loadAccessPaths, saveAccessPaths, loadRouteProfiles, loadFixMethods, saveRouteProfiles, saveFixMethods, loadDossiers, saveDossiers, loadScreenSections, saveScreenSections, loadPersonas, savePersonas, loadOpsState, saveOpsState } from './storage.js';
 import { DEFAULT_PANEL_LAYOUT } from './panel-layout.js';
+import { processDocuments, type DocumentInput, type DocumentPipelineOptions, type DocumentPipelineResult } from './document-pipeline.js';
 import { mirrorMode, mirrorStep, type MirrorEvent } from './mirror-input.js';
 import { addEntry as addPortfolioEntry, createPersona, upsertPersona, type Persona, type PortfolioKind } from './persona.js';
 import { logSightings, monitorChanges, perspective, planLanes, type ElementReport, type Lane, type Perspective, type Sighting } from './element-relevance.js';
@@ -7596,8 +7597,31 @@ export function useAssist() {
   }, recording);
   packCaptureRef.current = packs.capture;
 
+  const runDocumentPipeline = async (files: DocumentInput[], question: string, options: DocumentPipelineOptions = {}): Promise<DocumentPipelineResult> => {
+    if (!aiOnline()) throw new Error('AI is unavailable. Connect the configured AI endpoint before running document analysis.');
+    if (!files.length) throw new Error('Choose at least one file to analyze.');
+    addLog('Document pipeline', `Starting analysis of ${files.length} file(s).`, 'info');
+    const ask = askFor('planner');
+    return processDocuments(ask, files, question, {
+      ...options,
+      conversationHistory: aiSessionRef.current.history().map((m) => `${m.role}: ${m.content}`).join('\n').slice(-12000),
+      onProgress: (event) => {
+        options.onProgress?.(event);
+        if (event.phase === 'planning' || event.phase === 'combining') addLog('Document pipeline', event.detail, 'info');
+      },
+    }).then((result) => {
+      addLog('Document pipeline', `Completed ${result.files.length} file(s); combined answer is ready.`, 'success');
+      return result;
+    }).catch((error) => {
+      addLog('Document pipeline', error instanceof Error ? error.message : String(error), 'error');
+      throw error;
+    });
+  };
+
   return {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
+    /** Read-only file analysis through the app's existing configured AI session; it never dispatches input actions. */
+    runDocumentPipeline,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
     armed, aborted, abortedAt, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, avoidRules, clearBlacklist, supervisor, superviseRun,
