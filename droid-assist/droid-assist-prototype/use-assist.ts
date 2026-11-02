@@ -114,7 +114,7 @@ const AI: Requester = { kind: 'ai' };
 const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
 import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
-import { appendDecisionHistory, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, decisionLearningContext, frameChangeRatio, learnVisualPrototype, loadDecisionLearning, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveDecisionLearning, saveVisualPrototypes, updateDecisionLearning, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
+import { appendDecisionHistory, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, loadDecisionHistory, saveDecisionHistory, decisionLearningContext, frameChangeRatio, learnVisualPrototype, loadDecisionLearning, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveDecisionLearning, saveVisualPrototypes, updateDecisionLearning, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
 
 import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
 import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
@@ -438,7 +438,7 @@ export function useAssist() {
   const visualPrototypesRef = useRef<VisualPrototype[]>(loadVisualPrototypes());
   const elementEffectsRef = useRef<ElementEffect[]>([]);
   /** Bounded, in-memory decision trace; compact evidence only, never screenshots/raw page text. */
-  const decisionHistoryRef = useRef<DecisionHistoryRecord[]>([]);
+  const decisionHistoryRef = useRef<DecisionHistoryRecord[]>(loadDecisionHistory());
   const lastEffectActionRef = useRef<string | null>(null);
   /** Normalized point the last executed pointer action left the cursor at: the previously-focused point of the next action. */
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
@@ -4774,6 +4774,7 @@ export function useAssist() {
       if (previous?.status === 'uncertain' && record.status !== 'uncertain') decisionLearningRef.current = updateDecisionLearning(decisionLearningRef.current, record);
     }
     decisionHistoryRef.current = reconciledDecisions;
+    saveDecisionHistory(decisionHistoryRef.current);
     saveDecisionLearning(decisionLearningRef.current);
     const audits = auditCommands(stepsRef.current, frame.time);
     const prospects = prospectPoints(next, relations, audits);
@@ -4787,6 +4788,7 @@ export function useAssist() {
       const explicitExpectation = runningStep && /\\b(appears|appeared|visible|shown|disappears|disappeared|closed|opened)\\b/i.test(runningStep.name) ? runningStep.name : undefined;
       const decision = recordDecisionOutcome({ effect: newEffect, frameId: frame.id, expected: explicitExpectation, at: frame.time });
       decisionHistoryRef.current = appendDecisionHistory(decisionHistoryRef.current, decision, 100);
+      saveDecisionHistory(decisionHistoryRef.current);
     }
     const notes = [
       ...next.filter(e => e.state !== 'static').map(e => `"${e.name}" is ${e.state} at ${e.cell}`),
