@@ -13,7 +13,7 @@ describe('external model adapters', () => {
   });
 
   it('sends bearer auth and parses OpenAI-compatible choices', async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: 'Evidence-backed answer.' } }] }), { status: 200 }));
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ choices: [{ message: { content: 'Evidence-backed answer.' } }] }), { status: 200 }));
     const bridge = createExternalModelBridge({ id: 'openai-test', label: 'Compatible API', endpoint: 'https://example.test/v1/chat/completions', model: 'model-x', protocol: 'openai-compatible', apiKey: 'secret-test' }, fetcher as typeof fetch);
     expect((await bridge.ask({ system: 'Review.', prompt: 'Check this.' })).content).toBe('Evidence-backed answer.');
     const init = fetcher.mock.calls[0][1] as RequestInit;
