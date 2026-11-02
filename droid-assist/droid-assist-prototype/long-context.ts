@@ -6,22 +6,23 @@ export const LONG_CONTEXT_MAX_CHUNKS_PER_RUN = 500;
 export const LONG_CONTEXT_DONE_MARKER = '[[DROID_DONE]]';
 
 export interface LongWorkProgress { phase: 'reading' | 'writing' | 'combining'; completed: number; total: number; detail: string }
-export interface LongWorkOptions { chunkChars?: number; maxChunks?: number; signal?: AbortSignal; onProgress?: (p: LongWorkProgress) => void; previousNotes?: string; references?: string[]; onAppend?: (chunk: string, index: number) => void | Promise<void>; onReadSection?: (section: LongReadSection) => void | Promise<void> }
+export type LongChunkGranularity = 'auto' | 'paragraph' | 'sentence' | 'token';
+export interface LongWorkOptions { chunkChars?: number; granularity?: LongChunkGranularity; maxChunks?: number; signal?: AbortSignal; onProgress?: (p: LongWorkProgress) => void; previousNotes?: string; references?: string[]; onAppend?: (chunk: string, index: number) => void | Promise<void>; onReadSection?: (section: LongReadSection) => void | Promise<void> }
 export interface LongReadSection { index: number; start: number; end: number; source: string; notes: string; answer: string }
 export interface LongReadResult { task: string; sections: LongReadSection[]; notes: string; combinedAnswer: string; sourceChars: number }
 export interface LongWriteResult { prompt: string; sections: string[]; answer: string; chunks: number; stoppedByModel: boolean }
 
 const clamp = (n: number | undefined, fallback: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(Number.isFinite(n) ? n! : fallback)));
-function boundary(text: string, max: number): number {
+function boundary(text: string, max: number, granularity: LongChunkGranularity = 'auto'): number {
   if (text.length <= max) return text.length;
   const floor = Math.floor(max * 0.7);
   const at = Math.max(text.lastIndexOf('\n\n', max), text.lastIndexOf('\n', max), text.lastIndexOf('. ', max), text.lastIndexOf(' ', max));
   return at >= floor ? at + 1 : max;
 }
-export function splitLongText(text: string, chunkChars = LONG_CONTEXT_DEFAULT_CHUNK_CHARS): string[] {
+export function splitLongText(text: string, chunkChars = LONG_CONTEXT_DEFAULT_CHUNK_CHARS, granularity: LongChunkGranularity = 'auto'): string[] {
   const size = clamp(chunkChars, LONG_CONTEXT_DEFAULT_CHUNK_CHARS, 1000, 100000);
   const chunks: string[] = []; let offset = 0;
-  while (offset < text.length) { const len = boundary(text.slice(offset), Math.min(size, text.length - offset)); const end = Math.min(text.length, offset + Math.max(1, len)); chunks.push(text.slice(offset, end)); offset = end; }
+  while (offset < text.length) { const len = boundary(text.slice(offset), Math.min(size, text.length - offset), granularity); const end = Math.min(text.length, offset + Math.max(1, len)); chunks.push(text.slice(offset, end)); offset = end; }
   return chunks;
 }
 function refsBlock(refs?: string[]): string { const v = (refs ?? []).map(s => s.trim()).filter(Boolean); return v.length ? '\n\nREFERENCES FROM EARLIER TURNS / ANSWERS:\n' + v.join('\n\n') : ''; }
@@ -31,7 +32,7 @@ function compactNotes(a: string, b: string): string { const joined = [a.trim(), 
 
 /** Reads long extracted text section-by-section, preserving every source section and every answer. */
 export async function readLongText(ask: AskFn, task: string, source: string, options: LongWorkOptions = {}): Promise<LongReadResult> {
-  const chunks = splitLongText(source, options.chunkChars); const max = clamp(options.maxChunks, LONG_CONTEXT_MAX_CHUNKS_PER_RUN, 1, LONG_CONTEXT_MAX_CHUNKS_PER_RUN);
+  const chunks = splitLongText(source, options.chunkChars, options.granularity); const max = clamp(options.maxChunks, LONG_CONTEXT_MAX_CHUNKS_PER_RUN, 1, LONG_CONTEXT_MAX_CHUNKS_PER_RUN);
   if (chunks.length > max) throw new Error('Input requires ' + chunks.length + ' sections; maxChunks is ' + max + '. Raise the limit or process batches. No source was discarded.');
   const sections: LongReadSection[] = []; let notes = options.previousNotes?.trim() ?? ''; let offset = 0; const refs = refsBlock(options.references);
   for (let i = 0; i < chunks.length; i++) {
