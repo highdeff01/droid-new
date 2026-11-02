@@ -114,7 +114,7 @@ const AI: Requester = { kind: 'ai' };
 const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
 import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
-import { auditCommands, classifyPageTransition, compareElementEffect, frameChangeRatio, learnVisualPrototype, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, relateElements, saveVisualPrototypes, visualDescriptor, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
+import { assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, frameChangeRatio, learnVisualPrototype, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, relateElements, saveVisualPrototypes, visualDescriptor, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
 import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
 import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
 import { refreshStep, retestSummary, retestText, retestedSteps, runRetest, selectSteps, type RetestStepResult, type RetestSummary } from './retest.js';
@@ -4754,6 +4754,11 @@ export function useAssist() {
     const next = recognizeElements(detected, frame, visualPrototypesRef.current);
     const changeRatio = frameChangeRatio(previousFrame, frame);
     const relations = relateElements(next);
+    const identityReviews = next.map(element => assessElementIdentity({
+      element, frame,
+      prototypes: visualPrototypesRef.current,
+      previous: previous.find(old => old.id === element.id || old.name.toLowerCase() === element.name.toLowerCase()),
+    })).filter(review => review.stability !== 'stable' || review.confidence < 0.5);
     const pageTransition = classifyPageTransition(previous, next, changeRatio);
     const audits = auditCommands(stepsRef.current, frame.time);
     const prospects = prospectPoints(next, relations, audits);
@@ -4766,6 +4771,7 @@ export function useAssist() {
     }
     const notes = [
       ...next.filter(e => e.state !== 'static').map(e => `"${e.name}" is ${e.state} at ${e.cell}`),
+      ...identityReviews.slice(0, 6).map(review => 'Identity ' + review.stability + ': "' + review.name + '" confidence ' + Math.round(review.confidence * 100) + '% — ' + review.reasons.join('; ')),
       ...(newEffect ? [`After ${newEffect.actor} ${newEffect.action} on "${newEffect.target}": appeared [${newEffect.appeared.join(', ') || 'none'}], disappeared [${newEffect.disappeared.join(', ') || 'none'}], moved [${newEffect.moved.join(', ') || 'none'}]`] : []),
       ...audits.filter(a => a.issue !== 'clear').slice(0, 4).map(a => `Step "${a.name}" needs review: ${a.issue} — ${a.detail}`),
       ...(pageTransition === 'navigation-likely' ? ['Known-element overlap is low while many pixels changed: verify whether navigation moved to a different page or app'] : []),
