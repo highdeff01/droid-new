@@ -150,7 +150,7 @@ describe('visual perception intelligence', () => {
     expect(record).toMatchObject({ status: 'uncertain', confidence: 0.2, frameId: 8, actual: 'appeared: Saved toast' });
     const verified = reconcileDecisionHistory([{ ...record, expected: 'Saved toast appears' }], [element('Saved toast', 0.3, 0.3)], 9);
     expect(verified[0]).toMatchObject({ status: 'verified', confidence: 0.7, reviewedFrameId: 9 });
-    const contradicted = reconcileDecisionHistory([{ ...record, expected: 'Saved toast appears' }], [element('Cancel', 0.3, 0.3)], 9);
+    const contradicted = reconcileDecisionHistory([{ ...record, expected: 'Saved toast appears' }], [element('Cancel', 0.3, 0.3)], 9, 'unknown', 'complete');
     expect(contradicted[0]).toMatchObject({ status: 'contradicted', confidence: 0.7, reviewedFrameId: 9 });
     const navRecord = { ...record, expected: 'Navigation to dashboard occurs' };
     expect(reconcileDecisionHistory([navRecord], [], 9, 'navigation-likely')[0]).toMatchObject({
