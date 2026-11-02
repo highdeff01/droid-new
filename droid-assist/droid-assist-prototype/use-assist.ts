@@ -7613,7 +7613,7 @@ export function useAssist() {
         if (event.phase === 'planning' || event.phase === 'combining') addLog('Document pipeline', event.detail, 'info');
       },
     }).then((result) => {
-      addLog('Document pipeline', `Completed ${result.files.length} file(s); combined answer is ready.`, 'success');
+      addLog('Document pipeline', `Completed ${result.files.length} file(s); combined answer is ready.`, 'ok');
       return result;
     }).catch((error) => {
       addLog('Document pipeline', error instanceof Error ? error.message : String(error), 'error');
