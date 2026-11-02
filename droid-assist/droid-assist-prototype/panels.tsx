@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
+import { createExternalModelBridge, type ExternalChatProtocol } from './external-model-adapters.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { DRY_RUN } from './run-step.js';
@@ -1274,6 +1275,11 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
   const [question, setQuestion] = useState('Summarize the key information and answer the question using source evidence.');
   const [groupFilter, setGroupFilter] = useState('All files');
   const [reviewers, setReviewers] = useState(1);
+  const [externalLabel, setExternalLabel] = useState('External reviewer');
+  const [externalEndpoint, setExternalEndpoint] = useState('');
+  const [externalModel, setExternalModel] = useState('');
+  const [externalProtocol, setExternalProtocol] = useState<ExternalChatProtocol>('ollama');
+  const [externalApiKey, setExternalApiKey] = useState('');
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
@@ -1312,8 +1318,10 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
     try {
       const inputs = selected.map(({ id, name, text }) => ({ id, name, text }));
       const workerAllocations = Object.fromEntries(selected.filter((file) => file.workers > 0).map((file) => [file.id, file.workers]));
+      const externalReviewers = externalEndpoint.trim() && externalModel.trim() ? [createExternalModelBridge({ id: 'external-reviewer-1', label: externalLabel.trim() || 'External reviewer', endpoint: externalEndpoint, model: externalModel, protocol: externalProtocol, apiKey: externalApiKey })] : [];
       const result = await engine.runDocumentPipeline(inputs, question, {
         workerAllocations,
+        reviewers: externalReviewers,
         onProgress: (event) => setProgress(`${event.phase}: ${event.file} — ${event.detail}`),
       }, reviewers);
       setAnswer(result.combinedAnswer);
@@ -1343,6 +1351,17 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
       <label>Question / analysis goal
         <textarea value={question} onChange={(event) => setQuestion(event.currentTarget.value)} rows={3} />
       </label>
+      <details>
+        <summary>External model reviewer (optional)</summary>
+        <p className={styles.muted}>Uses a real HTTP request to the configured endpoint. API keys are held only in this panel's memory and are not saved by this feature.</p>
+        <div className={styles.group}>
+          <label>Reviewer label <input value={externalLabel} onChange={(event) => setExternalLabel(event.currentTarget.value)} /></label>
+          <label>Protocol <select value={externalProtocol} onChange={(event) => setExternalProtocol(event.currentTarget.value as ExternalChatProtocol)}><option value="ollama">Ollama-compatible /api/chat</option><option value="openai-compatible">OpenAI-compatible chat completions</option></select></label>
+          <label>Exact endpoint URL <input type="url" placeholder="http://localhost:11434/api/chat" value={externalEndpoint} onChange={(event) => setExternalEndpoint(event.currentTarget.value)} /></label>
+          <label>Model ID <input value={externalModel} onChange={(event) => setExternalModel(event.currentTarget.value)} placeholder="qwen3.5:2b" /></label>
+          <label>API key (optional) <input type="password" autoComplete="off" value={externalApiKey} onChange={(event) => setExternalApiKey(event.currentTarget.value)} /></label>
+        </div>
+      </details>
       <h4>Files <small>{selected.length} selected in this view · {files.length} loaded</small></h4>
       {!files.length && <p className={styles.muted}>Choose one or more text-readable files to begin. Files are not uploaded until you run the analysis.</p>}
       <ul className={styles.log}>
