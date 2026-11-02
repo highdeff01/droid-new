@@ -87,8 +87,20 @@ export function fitMessagesToContext(
     messages.splice(removable, 1);
   }
 
+  // If image payloads dominate, retain the primary/current screenshot and discard extra frames
+  // or crops from the end before shortening meaningful text.
+  while (total() > budget) {
+    const imageCandidates = messages
+      .map((message, index) => ({ message, index }))
+      .filter(({ message }) => (message.images?.length ?? 0) > 1)
+      .sort((a, b) => (b.message.images?.length ?? 0) - (a.message.images?.length ?? 0));
+    if (!imageCandidates.length) break;
+    const target = imageCandidates[0];
+    messages[target.index] = { ...target.message, images: target.message.images!.slice(0, -1) };
+  }
+
   // If the current request itself is oversized, shorten its text while preserving both its start
-  // (task/instructions) and end (recent context or operation memory). Images remain attached.
+  // (task/instructions) and end (recent context or operation memory).
   while (total() > budget) {
     const candidates = messages
       .map((message, index) => ({ message, index }))
