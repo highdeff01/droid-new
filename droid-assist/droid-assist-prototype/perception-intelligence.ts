@@ -494,7 +494,7 @@ export function reconcileDecisionHistory(
     if (!tokens.length) return record;
     const match = elements.some(element => {
       const label = element.name.toLowerCase().split(/[^a-z0-9]+/).filter(token => token.length > 2);
-      return label.length > 0 && label.every(token => tokens.includes(token));
+      return label.length > 0 && tokens.every(token => label.includes(token));
     });
     const satisfied = mode === 'present' ? match : !match;
     return {
