@@ -1216,3 +1216,34 @@ export function LogPanel({ engine }: { engine: AssistEngine }) {
     </section>
   );
 }
+
+
+/** Read-only audit of passive perception outcomes; it never dispatches or changes workflow state. */
+export function DecisionHistoryPanel({ engine }: { engine: AssistEngine }) {
+  const records = engine.decisionHistory;
+  const counts = {
+    verified: records.filter((r) => r.status === 'verified').length,
+    contradicted: records.filter((r) => r.status === 'contradicted').length,
+    uncertain: records.filter((r) => r.status === 'uncertain').length,
+  };
+  return (
+    <section className={styles.panel} aria-label="Perception decision history">
+      <h3>Perception review <small>{records.length} saved observations</small></h3>
+      <p className={styles.muted}>Read-only evidence from screen observations correlated with prior actions. This panel does not control input or workflow execution.</p>
+      <p><b>Verified:</b> {counts.verified} · <b>Contradicted:</b> {counts.contradicted} · <b>Uncertain:</b> {counts.uncertain}</p>
+      {!records.length && <p className={styles.muted}>No correlated outcomes yet. Records appear after the observer compares a later screen inventory with a recent action.</p>}
+      <ol className={styles.log}>
+        {records.map((record) => (
+          <li key={record.id} data-tone={record.status === 'verified' ? 'ok' : record.status === 'contradicted' ? 'error' : 'warn'}>
+            <small>{new Date(record.at).toLocaleString()} · frame #{record.frameId}{record.reviewedFrameId ? ` · reviewed in #${record.reviewedFrameId}` : ''}</small>
+            <b>{record.status.toUpperCase()}</b> · {record.actor} {record.action}
+            <div><b>Expected:</b> {record.expected || 'Not specified'}</div>
+            <div><b>Observed:</b> {record.actual}</div>
+            <small>Confidence {Math.round(record.confidence * 100)}%{record.evidenceQuality ? ` · ${record.evidenceQuality} evidence` : ''}</small>
+            {record.evidence.length > 0 && <ul>{record.evidence.map((item, index) => <li key={index}>{item}</li>)}</ul>}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
