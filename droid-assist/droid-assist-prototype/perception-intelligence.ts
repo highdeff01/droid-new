@@ -468,9 +468,9 @@ export function reconcileDecisionHistory(
   return history.map(record => {
     if (record.status !== 'uncertain' || frameId <= record.frameId || record.expected === 'No explicit expected outcome recorded') return record;
     const expected = record.expected.toLowerCase();
-    const mode = /\b(disappear|disappeared|close|closed|hidden|no longer visible)\b/.test(expected)
+    const mode = /\b(disappear|disappears|disappeared|disappearing|close|closes|closed|closing|hidden|hide|hides|no longer visible)\b/.test(expected)
       ? 'absent'
-      : /\b(appear|appeared|open|opened|visible|shown|show|present)\b/.test(expected)
+      : /\b(appear|appears|appeared|appearing|open|opens|opened|opening|visible|shown|show|shows|present)\b/.test(expected)
         ? 'present'
         : null;
     if (!mode) return record;
