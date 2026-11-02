@@ -106,7 +106,10 @@ describe('compareFrames', () => {
   it('is idle with no reference frame', () => {
     const live = frameWith();
     const c = compareFrames(live, null, DEFAULT_DRIFT);
-    expect(c).toMatchObject({ live, level: 'idle', failed: false });
+    // Identity, not toMatchObject: deep-matching a Frame walks its 320x180
+    // ImageData pixel by pixel and alone took >5s under full-suite load.
+    expect(c.live).toBe(live);
+    expect(c).toMatchObject({ level: 'idle', failed: false });
     expect(c.verdict).toMatch(/no reference frame/i);
   });
 
