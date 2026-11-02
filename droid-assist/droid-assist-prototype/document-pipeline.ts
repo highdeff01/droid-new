@@ -18,6 +18,10 @@ export interface ModelBridge { id: string; label: string; ask: AskFn }
 export interface BridgeOpinion { bridgeId: string; label: string; content?: string; error?: string }
 export interface DocumentPipelineOptions {
   concurrency?: number; maxReviewRetries?: number; signal?: AbortSignal;
+  /** Optional per-file logical worker counts keyed by file id first, then exact filename. Values are clamped to 1..100. */
+  workerAllocations?: Record<string, number>;
+  /** Optional independent reviewers. Their scores are included in the conservative final relevance score. */
+  reviewers?: ModelBridge[];
   conversationHistory?: string; previousResponse?: string; priorNotes?: WorkerNote[];
   onProgress?: (event: { phase: 'planning' | 'processing' | 'reviewing' | 'combining'; file: string; completed: number; total: number; detail: string }) => void;
   onNote?: SwarmOptions['onNote'];
@@ -44,9 +48,11 @@ function sizing(chars: number): { band: DocumentSizeBand; count: number } {
   if (chars <= DOCUMENT_MEDIUM_MAX_CHARS) return { band: 'medium', count: 25 };
   return { band: 'large', count: 100 };
 }
-export function planDocument(file: DocumentInput, index = 0): DocumentPlan {
+export function planDocument(file: DocumentInput, index = 0, workerOverride?: number): DocumentPlan {
   const id = file.id?.trim() || 'file-' + (index + 1), s = sizing(file.text.length);
-  return { id, name: file.name || id, sizeBand: s.band, sourceChars: file.text.length, agentCount: s.count, chunks: splitDocumentEvenly(file.text, s.count) };
+  const requested = Number.isFinite(workerOverride) ? Math.floor(workerOverride!) : s.count;
+  const agentCount = Math.max(1, Math.min(100, requested));
+  return { id, name: file.name || id, sizeBand: s.band, sourceChars: file.text.length, agentCount, chunks: splitDocumentEvenly(file.text, agentCount) };
 }
 function tagsFor(text: string): string[] {
   return [...new Set((text.toLowerCase().match(/[a-z0-9_./-]{3,}/g) ?? []).filter((w) => !/^(the|and|for|with|from|that|this|are|was|were|you|your|into|then|than|have|has|will|can|could|should|would|about|what|when|where|which)$/i.test(w)))].slice(0, 30);
@@ -90,7 +96,9 @@ async function reviewAnswer(ask: AskFn, question: string, plan: DocumentPlan, re
 
 /** One file gets its own adaptive worker group and independent reviewer pass. */
 export async function processDocument(ask: AskFn, file: DocumentInput, question: string, options: DocumentPipelineOptions = {}, fileIndex = 0): Promise<DocumentPipelineResult['files'][number]> {
-  const plan = planDocument(file, fileIndex);
+  const id = file.id?.trim() || 'file-' + (fileIndex + 1);
+  const allocation = options.workerAllocations?.[id] ?? options.workerAllocations?.[file.name];
+  const plan = planDocument(file, fileIndex, allocation);
   options.onProgress?.({ phase: 'planning', file: plan.name, completed: 0, total: plan.agentCount, detail: 'Planned ' + plan.agentCount + ' workers for ' + plan.sizeBand + ' file (' + plan.sourceChars + ' chars).' });
   const swarm = await runAgentSwarm(ask, plan.chunks.map((chunk) => tasksFor({ ...plan, chunks: [chunk] }, question)[0]), {
     concurrency: options.concurrency, signal: options.signal, userInput: question,
@@ -104,7 +112,22 @@ export async function processDocument(ask: AskFn, file: DocumentInput, question:
     if (options.signal?.aborted) throw new Error('Document pipeline cancelled.');
     options.onProgress?.({ phase: 'reviewing', file: plan.name, completed: pass, total: maxRetries + 1, detail: 'Independent relevance review ' + (pass + 1) });
     const result = await reviewAnswer(ask, question, plan, swarm.reports, answer, options.signal);
-    review = result.text; answer = result.answer; score = result.score; retries = pass;
+    const independent = await Promise.all((options.reviewers ?? []).map(async (reviewer) => {
+      try {
+        const reviewed = await reviewAnswer(reviewer.ask, question, plan, swarm.reports, answer || result.answer, options.signal);
+        return { reviewer, ...reviewed };
+      } catch (error) {
+        return { reviewer, text: '', answer: '', score: null, error: error instanceof Error ? error.message : String(error) };
+      }
+    }));
+    const scored = [result.score, ...independent.map((r) => r.score)].filter((n): n is number => n !== null);
+    // A low independent score can lower the final relevance score; a failed reviewer is disclosed but not treated as a zero.
+    score = scored.length ? scored.reduce((sum, n) => sum + n, 0) / scored.length : null;
+    review = [result.text, ...independent.map((r) => `INDEPENDENT REVIEWER ${r.reviewer.label} (${r.reviewer.id})${'error' in r && r.error ? ` ERROR: ${r.error}` : ''}\n${r.text || 'No review returned.'}`)].join('\n\n');
+    answer = result.answer;
+    const corrections = independent.filter((r) => r.score !== null && r.score < 3).map((r) => `Reviewer ${r.reviewer.label} flagged low relevance (${r.score}/5): ${r.text}`);
+    if (corrections.length) answer += '\n\nINDEPENDENT REVIEW WARNINGS\n' + corrections.join('\n\n');
+    retries = pass;
     if (score === null || score >= 4 || pass === maxRetries) break;
   }
   if (score !== null && score < 3) answer = 'LOW-RELEVANCE WARNING (' + score + '/5): inspect evidence before relying on this draft.\n\n' + answer;
@@ -116,7 +139,10 @@ export async function processDocument(ask: AskFn, file: DocumentInput, question:
 /** Each file receives its own count based on that file's size; results are then cross-referenced. */
 export async function processDocuments(ask: AskFn, files: DocumentInput[], question: string, options: DocumentPipelineOptions = {}): Promise<DocumentPipelineResult> {
   if (files.length > DOCUMENT_MAX_FILES_PER_RUN) throw new Error('At most ' + DOCUMENT_MAX_FILES_PER_RUN + ' files per run.');
-  const plans = files.map(planDocument), results: DocumentPipelineResult['files'] = [];
+  const plans = files.map((file, index) => {
+    const id = file.id?.trim() || 'file-' + (index + 1);
+    return planDocument(file, index, options.workerAllocations?.[id] ?? options.workerAllocations?.[file.name]);
+  }), results: DocumentPipelineResult['files'] = [];
   for (let i = 0; i < files.length; i++) {
     if (options.signal?.aborted) throw new Error('Document pipeline cancelled.');
     results.push(await processDocument(ask, files[i], question, options, i));
