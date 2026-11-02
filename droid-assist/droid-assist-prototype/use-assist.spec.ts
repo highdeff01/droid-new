@@ -854,8 +854,14 @@ describe('useAssist auto-continue and AI stop', () => {
       run = result.current.replay(false);
     });
     await vi.waitFor(() => expect(m.verifies()).toBe(1));
-    expect(result.current.aiWorking).toBe(true);
-    expect(result.current.continuing).toBe(true);
+    // Wait for the working state itself: the mock counts the request when it
+    // is sent, but aiWorking lands a tick later — asserting it immediately
+    // raced under full-suite load and flaked. The verify call hangs, so once
+    // true it stays true until the abort below.
+    await vi.waitFor(() => {
+      expect(result.current.aiWorking).toBe(true);
+      expect(result.current.continuing).toBe(true);
+    });
     const calls = m.bodies.length;
     act(() => result.current.triggerAbort('stop button'));
     await act(() => run);

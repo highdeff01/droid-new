@@ -22,8 +22,8 @@ export default defineConfig({
   // Relative asset paths so the built index.html also loads from file:// inside Electron.
   base: './',
   plugins: [react()],
-  server: { proxy: aiProxy },
-  preview: { proxy: aiProxy },
+  server: { proxy: { ...bridgeProxy, ...aiProxy } },
+  preview: { proxy: { ...bridgeProxy, ...aiProxy } },
   test: {
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],

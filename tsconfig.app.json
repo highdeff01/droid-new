@@ -1,4 +1,8 @@
 {
+  // No explicit "types" here: the workspace root has no node_modules of its
+  // own, so listing e.g. "vite/client" made type-aware lint (oxlint/tsgolint)
+  // fail with "Cannot find type definition file". The app's own tsconfig
+  // (droid-assist/droid-assist-prototype/tsconfig.json) declares the types.
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "target": "ES2022",
@@ -6,7 +10,6 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
-    "types": ["vite/client"],
     "strict": true,
     "skipLibCheck": true,
     "isolatedModules": true,

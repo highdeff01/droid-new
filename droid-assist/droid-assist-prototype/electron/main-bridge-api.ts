@@ -13,7 +13,7 @@ export const MAIN_BRIDGE_CHANNELS = {
 export interface ListenOptions {
   host: string;
   port: number;
-  /** Required as `?token=` (WebSocket) or `Authorization: Bearer` (HTTP) when non-empty. */
+  /** Required as `?token=` (WebSocket) or `Authorization: Bearer` (HTTP). While empty, the listener refuses every request. */
   token: string;
 }
 
