@@ -15,9 +15,13 @@ export interface LongWriteResult { prompt: string; sections: string[]; answer: s
 const clamp = (n: number | undefined, fallback: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(Number.isFinite(n) ? n! : fallback)));
 function boundary(text: string, max: number, granularity: LongChunkGranularity = 'auto'): number {
   if (text.length <= max) return text.length;
-  const floor = Math.floor(max * 0.7);
-  const at = Math.max(text.lastIndexOf('\n\n', max), text.lastIndexOf('\n', max), text.lastIndexOf('. ', max), text.lastIndexOf(' ', max));
-  return at >= floor ? at + 1 : max;
+  const floor = Math.floor(max * 0.55);
+  const paragraph = Math.max(text.lastIndexOf('\n\n', max), text.lastIndexOf('\n', max));
+  const sentence = Math.max(text.lastIndexOf('. ', max), text.lastIndexOf('! ', max), text.lastIndexOf('? ', max), text.lastIndexOf('.\n', max), text.lastIndexOf('!\n', max), text.lastIndexOf('?\n', max));
+  const word = text.lastIndexOf(' ', max);
+  const candidates = granularity === 'paragraph' ? [paragraph] : granularity === 'sentence' ? [sentence, paragraph] : granularity === 'token' ? [word] : [paragraph, sentence, word];
+  const at = candidates.filter((n) => n >= floor).sort((a, b) => b - a)[0] ?? -1;
+  return at >= 0 ? at + (text[at] === ' ' ? 1 : text[at] === '\n' ? 1 : 2) : max;
 }
 export function splitLongText(text: string, chunkChars = LONG_CONTEXT_DEFAULT_CHUNK_CHARS, granularity: LongChunkGranularity = 'auto'): string[] {
   const size = clamp(chunkChars, LONG_CONTEXT_DEFAULT_CHUNK_CHARS, 1000, 100000);
