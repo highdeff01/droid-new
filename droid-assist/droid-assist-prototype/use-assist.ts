@@ -7597,13 +7597,16 @@ export function useAssist() {
   }, recording);
   packCaptureRef.current = packs.capture;
 
-  const runDocumentPipeline = async (files: DocumentInput[], question: string, options: DocumentPipelineOptions = {}): Promise<DocumentPipelineResult> => {
+  const runDocumentPipeline = async (files: DocumentInput[], question: string, options: DocumentPipelineOptions = {}, reviewerCount = 0): Promise<DocumentPipelineResult> => {
     if (!aiOnline()) throw new Error('AI is unavailable. Connect the configured AI endpoint before running document analysis.');
     if (!files.length) throw new Error('Choose at least one file to analyze.');
     addLog('Document pipeline', `Starting analysis of ${files.length} file(s).`, 'info');
     const ask = askFor('planner');
+    const reviewerTotal = Math.max(0, Math.min(5, Math.floor(reviewerCount)));
+    const reviewers = Array.from({ length: reviewerTotal }, (_, index) => ({ id: `session-reviewer-${index + 1}`, label: `Session reviewer ${index + 1}`, ask: askFor('supervisor') }));
     return processDocuments(ask, files, question, {
       ...options,
+      reviewers: [...(options.reviewers ?? []), ...reviewers],
       conversationHistory: aiSessionRef.current.history().map((m) => `${m.role}: ${m.content}`).join('\n').slice(-12000),
       onProgress: (event) => {
         options.onProgress?.(event);
