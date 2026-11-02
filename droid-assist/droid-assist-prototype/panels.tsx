@@ -1226,12 +1226,30 @@ export function DecisionHistoryPanel({ engine }: { engine: AssistEngine }) {
     contradicted: records.filter((r) => r.status === 'contradicted').length,
     uncertain: records.filter((r) => r.status === 'uncertain').length,
   };
+  // Advisory prompts are derived locally from existing records; no extra AI calls or actions.
+  const reviewQuestions = records
+    .filter((r) => r.status !== 'verified' || !r.expected.trim())
+    .slice(0, 8)
+    .map((r) => ({
+      id: r.id,
+      question: r.status === 'contradicted'
+        ? `What explains the mismatch after ${r.actor} ${r.action}?`
+        : !r.expected.trim()
+          ? `What outcome should be expected after ${r.actor} ${r.action}?`
+          : `What additional screen evidence would verify the result of ${r.actor} ${r.action}?`,
+      detail: `Frame #${r.frameId} · ${r.status} · ${r.actual}`,
+    }));
   return (
     <section className={styles.panel} aria-label="Perception decision history">
       <h3>Perception review <small>{records.length} saved observations</small></h3>
       <p className={styles.muted}>Read-only evidence from screen observations correlated with prior actions. This panel does not control input or workflow execution.</p>
       <p><b>Verified:</b> {counts.verified} · <b>Contradicted:</b> {counts.contradicted} · <b>Uncertain:</b> {counts.uncertain}</p>
       {!records.length && <p className={styles.muted}>No correlated outcomes yet. Records appear after the observer compares a later screen inventory with a recent action.</p>}
+      {reviewQuestions.length > 0 && <section aria-label="Suggested review questions">
+        <h4>Questions worth reviewing <small>advisory only</small></h4>
+        <p className={styles.muted}>These prompts highlight uncertainty for a person or AI reviewer. They do not trigger analysis, clicks, or workflow changes.</p>
+        <ul>{reviewQuestions.map((item) => <li key={item.id}><b>{item.question}</b><div>{item.detail}</div></li>)}</ul>
+      </section>}
       <ol className={styles.log}>
         {records.map((record) => (
           <li key={record.id} data-tone={record.status === 'verified' ? 'ok' : record.status === 'contradicted' ? 'error' : 'warn'}>
