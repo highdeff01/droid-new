@@ -57,7 +57,7 @@ describe('configurable worker allocations and independent reviewers', () => {
     const plan = planDocument({ name: 'long.txt', text: source }, 0, 1);
     expect(plan.agentCount).toBe(1);
     expect(plan.chunks.length).toBeGreaterThan(1);
-    expect(Math.max(...plan.chunks.map((chunk) => chunk.text.length))).toBeLessThanOrEqual(6_000);
+    expect(Math.max(...plan.chunks.map((chunk) => chunk.text.length))).toBeLessThanOrEqual(3_000);
     expect(plan.chunks.map((chunk) => chunk.text).join('')).toBe(source);
   });
 
