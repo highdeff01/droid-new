@@ -40,6 +40,13 @@ describe('long context chunking', () => {
     expect(result.stoppedByModel).toBe(true);
   });
 
+  it('calls the append sink after each generated chunk so a caller can append directly to a file', async () => {
+    const appended: string[] = [];
+    const result = await writeLongAnswer(makeAsk(['file chunk one', 'file chunk two']), 'Write to file', { targetChunks: 2, onAppend: (chunk) => { appended.push(chunk); } });
+    expect(appended).toEqual(['file chunk one', 'file chunk two']);
+    expect(result.answer).toBe(appended.join('\n\n'));
+  });
+
   it('extends rather than overwrites the existing answer', async () => {
     const result = await extendLongAnswer(makeAsk(['NEW EXTENSION']), 'Continue the explanation', 'EXISTING ANSWER', { targetChunks: 1 });
     expect(result.answer).toBe('EXISTING ANSWER\n\nNEW EXTENSION');
