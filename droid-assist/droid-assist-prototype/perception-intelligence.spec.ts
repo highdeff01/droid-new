@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActionRecord, Frame, WorkflowStep } from './types.js';
 import type { InventoryElement } from './screen-inventory.js';
 import {
-  auditCommands, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
+  assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
   matchVisualPrototype, outcomeRates, prospectPoints, recognizeElements, relateElements, visualDescriptor,
 } from './perception-intelligence.js';
 
@@ -38,6 +38,17 @@ describe('visual perception intelligence', () => {
     expect(learned[0]).toMatchObject({ name: 'Save', samples: 1, verifiedSuccesses: 1, lastFrameId: 1 });
     expect(matchVisualPrototype(learned, 'button', [0.2, 0.3])?.distance).toBe(0);
     expect(matchVisualPrototype(learned, 'input', [0.2, 0.3])).toBeNull();
+  });
+
+  it('lowers advisory identity confidence when an element moves and lacks a verified prototype', () => {
+    const shot = frame(4, 80);
+    const current = { ...element('Save', 0.4, 0.4), known: true };
+    const prior = { ...element('Save', 0.1, 0.1), known: true };
+    const result = assessElementIdentity({ element: current, frame: shot, prototypes: [], previous: prior });
+    expect(result.stability).toBe('changed');
+    expect(result.confidence).toBeLessThan(0.6);
+    expect(result.reasons.some(reason => reason.includes('moved'))).toBe(true);
+    expect(result.reasons.some(reason => reason.includes('prototype'))).toBe(true);
   });
 
   it('recognizes a repeated element only after at least two verified visual examples', () => {
