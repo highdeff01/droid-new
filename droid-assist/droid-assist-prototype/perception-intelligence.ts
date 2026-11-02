@@ -539,3 +539,46 @@ export function decisionLearningContext(profiles: readonly DecisionLearningProfi
 export const DECISION_LEARNING_KEY = 'droid-assist.decision-learning';
 export function loadDecisionLearning(storage: Pick<Storage,'getItem'> = localStorage): DecisionLearningProfile[] { try { const v: unknown=JSON.parse(storage.getItem(DECISION_LEARNING_KEY) ?? '[]'); return Array.isArray(v) ? v.filter((p): p is DecisionLearningProfile => !!p && typeof p==='object' && typeof (p as DecisionLearningProfile).key==='string' && Number.isInteger((p as DecisionLearningProfile).attempts)).slice(0,200) : []; } catch { return []; } }
 export function saveDecisionLearning(profiles: readonly DecisionLearningProfile[], storage: Pick<Storage,'setItem'> = localStorage): void { try { storage.setItem(DECISION_LEARNING_KEY, JSON.stringify(profiles.slice(0,200))); } catch { /* retain in memory */ } }
+
+
+/** Compact decision history persists across reloads; screenshots and raw page text are never stored. */
+export const DECISION_HISTORY_KEY = 'droid-assist.decision-history';
+
+function isDecisionHistoryRecord(value: unknown): value is DecisionHistoryRecord {
+  if (!value || typeof value !== 'object') return false;
+  const r = value as Partial<DecisionHistoryRecord>;
+  return typeof r.id === 'string' && typeof r.at === 'number' && Number.isFinite(r.at)
+    && typeof r.frameId === 'number' && Number.isFinite(r.frameId)
+    && typeof r.actor === 'string' && typeof r.action === 'string'
+    && typeof r.expected === 'string' && typeof r.actual === 'string'
+    && Array.isArray(r.evidence) && r.evidence.every(x => typeof x === 'string')
+    && (r.status === 'verified' || r.status === 'contradicted' || r.status === 'uncertain')
+    && typeof r.confidence === 'number' && Number.isFinite(r.confidence)
+    && (r.reviewedFrameId === undefined || (typeof r.reviewedFrameId === 'number' && Number.isFinite(r.reviewedFrameId)));
+}
+
+export function loadDecisionHistory(storage: Pick<Storage, 'getItem'> = localStorage): DecisionHistoryRecord[] {
+  try {
+    const parsed: unknown = JSON.parse(storage.getItem(DECISION_HISTORY_KEY) ?? '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isDecisionHistoryRecord).slice(0, 100).map(record => ({
+      ...record,
+      confidence: clamp(record.confidence, 0, 1),
+      evidence: record.evidence.slice(0, 8).map(item => item.slice(0, 500)),
+    }));
+  } catch { return []; }
+}
+
+export function saveDecisionHistory(
+  history: readonly DecisionHistoryRecord[],
+  storage: Pick<Storage, 'setItem'> = localStorage,
+): void {
+  try {
+    const compact = history.slice(0, 100).filter(isDecisionHistoryRecord).map(record => ({
+      ...record,
+      confidence: clamp(record.confidence, 0, 1),
+      evidence: record.evidence.slice(0, 8).map(item => item.slice(0, 500)),
+    }));
+    storage.setItem(DECISION_HISTORY_KEY, JSON.stringify(compact));
+  } catch { /* persistence is best-effort and never blocks live observation */ }
+}
