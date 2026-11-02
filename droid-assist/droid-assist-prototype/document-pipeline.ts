@@ -7,6 +7,9 @@ export const DOCUMENT_SMALL_MAX_AGENTS = 10;
 export const DOCUMENT_MEDIUM_AGENTS = 25;
 export const DOCUMENT_LARGE_AGENTS = 100;
 export const DOCUMENT_MAX_FILES_PER_RUN = 100;
+/** Keep each model request comfortably below common 8k-token context limits. Character count is a conservative proxy, not a tokenizer. */
+export const DOCUMENT_MAX_CHUNK_CHARS = 6_000;
+export const DOCUMENT_MAX_CHUNKS_PER_FILE = 1_000;
 
 export type DocumentSizeBand = 'small' | 'medium' | 'large';
 export interface DocumentInput { id?: string; name: string; text: string }
@@ -52,7 +55,11 @@ export function planDocument(file: DocumentInput, index = 0, workerOverride?: nu
   const id = file.id?.trim() || 'file-' + (index + 1), s = sizing(file.text.length);
   const requested = Number.isFinite(workerOverride) ? Math.floor(workerOverride!) : s.count;
   const agentCount = Math.max(1, Math.min(100, requested));
-  return { id, name: file.name || id, sizeBand: s.band, sourceChars: file.text.length, agentCount, chunks: splitDocumentEvenly(file.text, agentCount) };
+  // Worker allocation controls parallel capacity, not the maximum prompt size. Even a one-worker file
+  // is split into bounded tasks so a single long document cannot overflow an 8k-token model context.
+  const sizeBoundedChunks = Math.ceil(file.text.length / DOCUMENT_MAX_CHUNK_CHARS);
+  const chunkCount = Math.max(agentCount, Math.min(DOCUMENT_MAX_CHUNKS_PER_FILE, sizeBoundedChunks));
+  return { id, name: file.name || id, sizeBand: s.band, sourceChars: file.text.length, agentCount, chunks: splitDocumentEvenly(file.text, chunkCount) };
 }
 function tagsFor(text: string): string[] {
   return [...new Set((text.toLowerCase().match(/[a-z0-9_./-]{3,}/g) ?? []).filter((w) => !/^(the|and|for|with|from|that|this|are|was|were|you|your|into|then|than|have|has|will|can|could|should|would|about|what|when|where|which)$/i.test(w)))].slice(0, 30);
