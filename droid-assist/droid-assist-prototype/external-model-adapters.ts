@@ -55,7 +55,7 @@ export function createExternalModelBridge(config: ExternalModelConfig, fetcher: 
         value = message?.content;
       }
       if (typeof value !== 'string' || !value.trim()) throw new Error('External model returned no text content.');
-      return { content: value.trim() };
+      return { content: value.trim(), thinking: null };
     } finally {
       clearTimeout(timer);
       request.signal?.removeEventListener('abort', onAbort);
