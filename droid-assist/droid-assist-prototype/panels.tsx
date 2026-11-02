@@ -1390,7 +1390,7 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
         {engine.bridgeOnline && !engine.armed && <small>Arm authorized input before running a live test.</small>}
         {engine.selfTestReport && <p data-tone={engine.selfTestReport.pass ? 'ok' : 'error'}>Latest self-test: {engine.selfTestReport.pass ? 'passed' : 'failed'} — {engine.selfTestReport.stages.map((stage) => `${stage.stage}: ${stage.ok ? 'ok' : 'failed'}`).join(' · ')}</p>}
       </details>
-      {progress && <p role="status">{progress}</p>
+      {progress && <p role="status">{progress}</p>}
       {error && <p role="alert" data-tone="error">{error}</p>}
       {answer && <><h4>Combined answer</h4><pre className={styles.log}>{answer}</pre></>}
       {report && <details><summary>Per-file review and relevance reports</summary><pre className={styles.log}>{report}</pre></details>}
