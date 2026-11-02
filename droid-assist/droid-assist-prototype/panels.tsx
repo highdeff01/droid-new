@@ -1285,6 +1285,7 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
   const [error, setError] = useState('');
   const [answer, setAnswer] = useState('');
   const [report, setReport] = useState('');
+  const [liveTestRunning, setLiveTestRunning] = useState(false);
   const groups = [...new Set(files.map((file) => file.group.trim() || 'Ungrouped'))];
   const visible = files.filter((file) => groupFilter === 'All files' || (file.group.trim() || 'Ungrouped') === groupFilter);
   const selected = visible.filter((file) => file.selected);
@@ -1381,7 +1382,15 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
         <button type="button" disabled={running || !selected.length} onClick={() => void run()}>{running ? 'Analyzing…' : `Analyze ${selected.length} selected file(s)`}</button>
         <button type="button" disabled={running || !files.length} onClick={() => { setFiles([]); setAnswer(''); setReport(''); setError(''); setProgress(''); }}>Clear files/results</button>
       </div>
-      {progress && <p role="status">{progress}</p>}
+      <details>
+        <summary>Live application test</summary>
+        <p className={styles.muted}>This invokes the app's existing end-to-end self-test, not the document pipeline. It is available only while the computer-control bridge is connected and input is armed. It is never run automatically.</p>
+        <button type="button" disabled={!engine.bridgeOnline || !engine.armed || liveTestRunning || engine.replaying} onClick={async () => { setLiveTestRunning(true); try { await engine.invoke('selftest.run'); } finally { setLiveTestRunning(false); } }}>{liveTestRunning ? 'Running live self-test…' : 'Run authorized live self-test'}</button>
+        {!engine.bridgeOnline && <small>Connect the computer-control bridge first.</small>}
+        {engine.bridgeOnline && !engine.armed && <small>Arm authorized input before running a live test.</small>}
+        {engine.selfTestReport && <p data-tone={engine.selfTestReport.pass ? 'ok' : 'error'}>Latest self-test: {engine.selfTestReport.pass ? 'passed' : 'failed'} — {engine.selfTestReport.stages.map((stage) => `${stage.stage}: ${stage.ok ? 'ok' : 'failed'}`).join(' · ')}</p>}
+      </details>
+      {progress && <p role="status">{progress}</p>
       {error && <p role="alert" data-tone="error">{error}</p>}
       {answer && <><h4>Combined answer</h4><pre className={styles.log}>{answer}</pre></>}
       {report && <details><summary>Per-file review and relevance reports</summary><pre className={styles.log}>{report}</pre></details>}
