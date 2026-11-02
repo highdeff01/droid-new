@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActionRecord, Frame, WorkflowStep } from './types.js';
 import type { InventoryElement } from './screen-inventory.js';
 import {
-  appendDecisionHistory, assessElementIdentity, auditCommands, decisionHistoryContext, recordDecisionOutcome, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
+  appendDecisionHistory, assessElementIdentity, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
   matchVisualPrototype, outcomeRates, prospectPoints, recognizeElements, relateElements, visualDescriptor,
 } from './perception-intelligence.js';
 
@@ -128,7 +128,11 @@ describe('visual perception intelligence', () => {
       appeared: ['Saved toast'], disappeared: [], moved: [], evidence: 'frame inventory comparison',
     };
     const record = recordDecisionOutcome({ effect, frameId: 8, expected: 'Saved toast appears', at: 80 });
-    expect(record).toMatchObject({ status: 'verified', confidence: 0.65, frameId: 8, actual: 'appeared: Saved toast' });
+    expect(record).toMatchObject({ status: 'uncertain', confidence: 0.2, frameId: 8, actual: 'appeared: Saved toast' });
+    const verified = reconcileDecisionHistory([{ ...record, expected: 'Saved toast appears' }], [element('Saved toast', 0.3, 0.3)], 9);
+    expect(verified[0]).toMatchObject({ status: 'verified', confidence: 0.7, reviewedFrameId: 9 });
+    const contradicted = reconcileDecisionHistory([{ ...record, expected: 'Saved toast appears' }], [element('Cancel', 0.3, 0.3)], 9);
+    expect(contradicted[0]).toMatchObject({ status: 'contradicted', confidence: 0.7, reviewedFrameId: 9 });
     const uncertain = recordDecisionOutcome({ effect: { ...effect, actionId: 'a2', appeared: [] }, frameId: 9 });
     expect(uncertain).toMatchObject({ status: 'uncertain', confidence: 0.2, expected: 'No explicit expected outcome recorded' });
     const history = appendDecisionHistory([record], { ...record, id: 'a3:9' }, 1);
