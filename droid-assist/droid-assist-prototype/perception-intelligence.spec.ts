@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActionRecord, Frame, WorkflowStep } from './types.js';
 import type { InventoryElement } from './screen-inventory.js';
 import {
-  appendDecisionHistory, assessElementIdentity, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
+  appendDecisionHistory, assessElementIdentity, calibrateEvidenceConfidence, decisionLearningContext, updateDecisionLearning, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
   matchVisualPrototype, outcomeRates, prospectPoints, recognizeElements, relateElements, visualDescriptor,
 } from './perception-intelligence.js';
 
@@ -120,6 +120,25 @@ describe('visual perception intelligence', () => {
     expect(questions.some(q => q.id === 'effect:a1' && q.priority === 'high')).toBe(true);
     expect(questions.every(q => q.question.length > 20 && q.evidence.length > 0)).toBe(true);
     expect(questions.length).toBeLessThanOrEqual(10);
+  });
+
+  it('keeps absence uncertain when inventory coverage is partial or unknown', () => {
+    const r = recordDecisionOutcome({ effect: { actionId:'hide1', actor:'user', action:'click', target:'Close', nearbyBefore:[], appeared:[], disappeared:[], moved:[], evidence:'frame comparison' }, frameId:20, expected:'Dialog disappears' });
+    expect(reconcileDecisionHistory([r], [], 21, 'same-page', 'partial')[0]).toMatchObject({ status:'uncertain', evidenceQuality:'limited' });
+    expect(reconcileDecisionHistory([r], [], 21, 'same-page', 'unknown')[0].status).toBe('uncertain');
+    expect(reconcileDecisionHistory([r], [], 21, 'same-page', 'complete')[0]).toMatchObject({ status:'verified', evidenceQuality:'strong' });
+  });
+  it('uses positive evidence in partial inventories but not missing-item evidence', () => {
+    const r = recordDecisionOutcome({ effect: { actionId:'show1', actor:'user', action:'click', target:'Open', nearbyBefore:[], appeared:[], disappeared:[], moved:[], evidence:'frame comparison' }, frameId:30, expected:'Saved toast appears' });
+    expect(reconcileDecisionHistory([r], [element('Saved toast',0.2,0.2)], 31, 'same-page', 'partial')[0]).toMatchObject({ status:'verified', evidenceQuality:'strong' });
+    expect(reconcileDecisionHistory([r], [], 31, 'same-page', 'partial')[0].status).toBe('uncertain');
+  });
+  it('calibrates evidence and learns resolved patterns only once', () => {
+    expect(calibrateEvidenceConfidence({base:0.8,quality:'limited',supporting:1,conflicting:0})).toBeLessThan(0.8);
+    expect(calibrateEvidenceConfidence({base:0.8,quality:'conflicting',supporting:1,conflicting:2})).toBeLessThan(0.4);
+    const r={...recordDecisionOutcome({effect:{actionId:'learn1',actor:'agent',action:'click',target:'Save',nearbyBefore:[],appeared:[],disappeared:[],moved:[],evidence:'frame comparison'},frameId:40}),status:'verified' as const,confidence:0.8};
+    const learned=updateDecisionLearning([],r); expect(learned[0]).toMatchObject({attempts:1,verified:1,target:'Save'}); expect(updateDecisionLearning(learned,r)).toEqual(learned); expect(decisionLearningContext(learned)[0]).toContain('low sample');
+    expect(updateDecisionLearning(learned,{...r,id:'learn2',status:'contradicted'})).toMatchObject([{attempts:2,verified:1,contradicted:1}]);
   });
 
   it('records bounded decision history without inventing an expected outcome', () => {
