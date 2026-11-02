@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActionRecord, Frame, WorkflowStep } from './types.js';
 import type { InventoryElement } from './screen-inventory.js';
 import {
-  appendDecisionHistory, assessElementIdentity, calibrateEvidenceConfidence, decisionLearningContext, updateDecisionLearning, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
+  appendDecisionHistory, loadDecisionHistory, saveDecisionHistory, DECISION_HISTORY_KEY, assessElementIdentity, calibrateEvidenceConfidence, decisionLearningContext, updateDecisionLearning, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
   matchVisualPrototype, outcomeRates, prospectPoints, recognizeElements, relateElements, visualDescriptor,
 } from './perception-intelligence.js';
 
@@ -168,4 +168,40 @@ describe('visual perception intelligence', () => {
     expect(decisionHistoryContext(history)[0]).toContain('Decision history');
   });
 
+});
+
+
+describe('persistent decision history', () => {
+  function memoryStorage() {
+    const values = new Map<string, string>();
+    return {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+    };
+  }
+  it('round-trips compact records, bounds history, and clamps confidence', () => {
+    const storage = memoryStorage();
+    const records = Array.from({ length: 105 }, (_, i) => ({
+      id: 'decision-' + i, at: i + 1, frameId: i + 1, actor: 'agent', action: 'click',
+      expected: 'toast appears', actual: 'toast visible', evidence: ['frame-backed observation'],
+      status: 'verified' as const, confidence: 1.4,
+    }));
+    saveDecisionHistory(records, storage);
+    const loaded = loadDecisionHistory(storage);
+    expect(storage.getItem(DECISION_HISTORY_KEY)).toBeTruthy();
+    expect(loaded).toHaveLength(100);
+    expect(loaded[0].id).toBe('decision-0');
+    expect(loaded[0].confidence).toBe(1);
+  });
+  it('ignores malformed records and tolerates corrupt storage', () => {
+    const storage = memoryStorage();
+    storage.setItem(DECISION_HISTORY_KEY, JSON.stringify([{ id: 'bad' }, null]));
+    expect(loadDecisionHistory(storage)).toEqual([]);
+    storage.setItem(DECISION_HISTORY_KEY, '{broken');
+    expect(loadDecisionHistory(storage)).toEqual([]);
+  });
+  it('never lets storage failures interrupt perception', () => {
+    expect(() => saveDecisionHistory([], { setItem: () => { throw new Error('quota'); } })).not.toThrow();
+    expect(loadDecisionHistory({ getItem: () => { throw new Error('blocked'); } })).toEqual([]);
+  });
 });
