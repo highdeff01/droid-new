@@ -41,6 +41,69 @@ export interface ChatMessage {
   images?: string[];
 }
 
+/**
+ * Keep requests below the common 8k context limit while reserving room for the generated reply.
+ * This is deliberately a conservative estimate: text is budgeted at ~3 chars/token and each
+ * attached image gets a fixed allowance. Old conversational turns are discarded first; the
+ * system prompt and newest user request are retained and shortened only as a last resort.
+ */
+export const AI_CONTEXT_LIMIT_TOKENS = 8192;
+export const AI_CONTEXT_OUTPUT_RESERVE_TOKENS = 1024;
+export const AI_CONTEXT_INPUT_BUDGET = AI_CONTEXT_LIMIT_TOKENS - AI_CONTEXT_OUTPUT_RESERVE_TOKENS;
+const APPROX_CHARS_PER_TOKEN = 3;
+const APPROX_IMAGE_TOKENS = 1024;
+const MESSAGE_OVERHEAD_TOKENS = 8;
+
+function estimateChatMessageTokens(message: ChatMessage): number {
+  return MESSAGE_OVERHEAD_TOKENS
+    + Math.ceil(message.content.length / APPROX_CHARS_PER_TOKEN)
+    + (message.images?.length ?? 0) * APPROX_IMAGE_TOKENS;
+}
+
+function truncateKeepingEnds(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  if (maxChars <= 80) return text.slice(0, Math.max(0, maxChars));
+  const marker = '\\n\\n[… context shortened to fit the model window …]\\n\\n';
+  const available = Math.max(0, maxChars - marker.length);
+  const head = Math.ceil(available * 0.7);
+  const tail = available - head;
+  return text.slice(0, head) + marker + text.slice(-tail);
+}
+
+/** Return a request-sized copy; the stored history and the caller's messages are never mutated. */
+export function fitMessagesToContext(
+  input: ChatMessage[],
+  budgetTokens = AI_CONTEXT_INPUT_BUDGET,
+): ChatMessage[] {
+  const messages = input.map((message) => ({ ...message, ...(message.images ? { images: [...message.images] } : {}) }));
+  const budget = Math.max(256, Math.floor(budgetTokens));
+  const total = () => messages.reduce((sum, message) => sum + estimateChatMessageTokens(message), 0);
+
+  // Drop oldest non-system turns first, never dropping the newest user request.
+  while (total() > budget) {
+    const lastUser = messages.findLastIndex((message) => message.role === 'user');
+    const removable = messages.findIndex((message, index) => message.role !== 'system' && index !== lastUser);
+    if (removable < 0) break;
+    messages.splice(removable, 1);
+  }
+
+  // If the current request itself is oversized, shorten its text while preserving both its start
+  // (task/instructions) and end (recent context or operation memory). Images remain attached.
+  while (total() > budget) {
+    const candidates = messages
+      .map((message, index) => ({ message, index }))
+      .filter(({ message }) => message.content.length > 160)
+      .sort((a, b) => b.message.content.length - a.message.content.length);
+    if (!candidates.length) break;
+    const target = candidates[0];
+    const excessTokens = total() - budget;
+    const nextLength = Math.max(160, target.message.content.length - Math.max(128, excessTokens * APPROX_CHARS_PER_TOKEN + 64));
+    if (nextLength >= target.message.content.length) break;
+    messages[target.index] = { ...target.message, content: truncateKeepingEnds(target.message.content, nextLength) };
+  }
+  return messages;
+}
+
 /** Any failure to get a usable model reply. Never replaced by a canned answer. */
 export class AiError extends Error {
   override name = 'AiError';
@@ -238,7 +301,10 @@ async function fetchReply(cfg: AiConfig, messages: ChatMessage[], json: boolean,
  * @param escalation the session's app-context provider and stage reporter
  */
 export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false, timeoutMs = DEFAULT_AI_TIMEOUT_MS, cancel?: AbortSignal, escalation?: EscalationHooks): Promise<AiReply> {
-  const first = await postOrRephrase(cfg, messages, json, timeoutMs, cancel);
+  // Every AI feature passes through chat(), so enforce the context budget centrally. Retries and
+  // escalation inherit this already-fitted request instead of re-sending the full oversized history.
+  const fittedMessages = fitMessagesToContext(messages);
+  const first = await postOrRephrase(cfg, fittedMessages, json, timeoutMs, cancel);
   if (first.content) return first;
   if (!first.thinking) throw new AiError('AI endpoint returned no message content and no thinking');
   if (cfg.think && escalation) return escalate((msgs, signal) => post(cfg, msgs, json, timeoutMs, linkSignals(cancel, signal)), messages, json, first.thinking, escalation);
