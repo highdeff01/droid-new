@@ -81,7 +81,13 @@ export function fitMessagesToContext(
 
   // Drop oldest non-system turns first, never dropping the newest user request.
   while (total() > budget) {
-    const lastUser = messages.findLastIndex((message) => message.role === 'user');
+    let lastUser = -1;
+    for (let index = messages.length - 1; index >= 0; index--) {
+      if (messages[index].role === 'user') {
+        lastUser = index;
+        break;
+      }
+    }
     const removable = messages.findIndex((message, index) => message.role !== 'system' && index !== lastUser);
     if (removable < 0) break;
     messages.splice(removable, 1);
