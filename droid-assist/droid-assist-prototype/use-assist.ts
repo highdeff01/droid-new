@@ -3771,7 +3771,8 @@ export function useAssist() {
           context: [
             ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),
             ...decisionHistoryContext(decisionHistoryRef.current),
-            ...recentEvidenceContext(),
+            ...decisionHistoryContext(decisionHistoryRef.current),
+      ...recentEvidenceContext(),
           ].join(String.fromCharCode(10)),
         });
       }, changeText, 'change');
