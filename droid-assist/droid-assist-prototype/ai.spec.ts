@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AiCancelled, AiError, AiParseError, CONTENT_RETRY_LADDER, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, FALLBACK_QUESTION_PREFIX, RAW_REPLY_MAX, chat, createAiSession, parseJsonReply, pingAi, thinkingOnlyNotice, toUnit, withMasterPrompt } from './ai.js';
+import { AI_TIMEOUT_MS_MAX, AI_TIMEOUT_MS_MIN, AiCancelled, AiError, AiParseError, CONTENT_RETRY_LADDER, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_URL, FALLBACK_QUESTION_PREFIX, RAW_REPLY_MAX, chat, createAiSession, fitMessagesToContext, parseJsonReply, pingAi, thinkingOnlyNotice, toUnit, withMasterPrompt } from './ai.js';
 import type { ChatMessage } from './ai.js';
 import type { Frame } from './types.js';
 
@@ -31,6 +31,38 @@ describe('ai defaults', () => {
     expect(DEFAULT_AI_TIMEOUT_MS).toBe(90_000);
     expect(AI_TIMEOUT_MS_MIN).toBe(10_000);
     expect(AI_TIMEOUT_MS_MAX).toBe(300_000);
+  });
+});
+
+describe('context budget protection', () => {
+  it('drops oldest conversation turns before the system prompt and newest request', () => {
+    const messages: ChatMessage[] = [
+      { role: 'system', content: 'Keep the workflow safe and follow the task.' },
+      ...Array.from({ length: 30 }, (_, i) => ({
+        role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: `old turn ${i} ${'detail '.repeat(180)}`,
+      })),
+      { role: 'user', content: 'CURRENT TASK: click the selected button.' },
+    ];
+    const fitted = fitMessagesToContext(messages);
+    expect(fitted[0]).toEqual(messages[0]);
+    expect(fitted.at(-1)?.content).toBe('CURRENT TASK: click the selected button.');
+    expect(fitted.length).toBeLessThan(messages.length);
+    expect(messages).toHaveLength(32); // the caller's history is not mutated
+  });
+
+  it('shortens an oversized irreducible request instead of forwarding it unchanged', () => {
+    const oversized: ChatMessage[] = [
+      { role: 'system', content: 'System instructions. '.repeat(900) },
+      { role: 'user', content: 'IMPORTANT TASK START. ' + 'large context '.repeat(3000) + ' IMPORTANT TASK END.' },
+    ];
+    const fitted = fitMessagesToContext(oversized, 1200);
+    expect(fitted).toHaveLength(2);
+    expect(fitted[1].content).toContain('IMPORTANT TASK START.');
+    expect(fitted[1].content).toContain('IMPORTANT TASK END.');
+    expect(fitted.reduce((n, message) => n + message.content.length, 0)).toBeLessThan(
+      oversized.reduce((n, message) => n + message.content.length, 0),
+    );
   });
 });
 
