@@ -41,7 +41,7 @@ export async function repairGeneratedProject(
     const selected = review.files.filter((file) => targets.includes(file.path));
     // Supply directly imported generated files as read-only context, never as patch targets.
     const dependencyPaths = new Set<string>();
-    const importPattern = /(?:from\\s*|import\\s*(?:\\(\\s*)?)(['"])(\\.\\.?\\/[^'"]+)\\1/g;
+    const importPattern = /(?:from\s*|import\s*(?:\(\s*)?)(['"])(\.\.?\/[^'"]+)\1/g;
     for (const file of selected) {
       for (const match of file.content.matchAll(importPattern)) {
         const specifier = match[2];
@@ -68,8 +68,8 @@ export async function repairGeneratedProject(
     const dependencyContext = dependencies.map((file) => {
       const content = file.content.slice(0, Math.max(0, Math.min(file.content.length, remaining)));
       remaining -= content.length;
-      return `READ-ONLY DEPENDENCY FILE: ${file.path}\\n${content}`;
-    }).join('\\n\\n');
+      return `READ-ONLY DEPENDENCY FILE: ${file.path}\n${content}`;
+    }).join('\n\n');
     const prompt = [
       'Repair the generated project based on the static diagnostics below.',
       'Return ONLY complete replacement files, each using FILE: relative/path.ext followed by one fenced code block.',
