@@ -22,7 +22,7 @@ export interface LongGenerationResult {
   content: string;
   rounds: number;
   complete: boolean;
-  stoppedBecause: 'model_finished' | 'round_limit' | 'character_limit';
+  stoppedBecause: 'model_finished' | 'round_limit' | 'character_limit' | 'cancelled' | 'model_error';
 }
 export class LongGenerationError extends Error {
   readonly partial: LongGenerationResult;
@@ -73,7 +73,7 @@ export async function generateLongResponse(
   });
   for (let round = 1; round <= maxRounds; round++) {
     if (options.signal?.aborted) {
-      throw new LongGenerationError('Long generation cancelled.', snapshot(false, 'round_limit'));
+      throw new LongGenerationError('Long generation cancelled.', snapshot(false, 'cancelled'));
     }
     const continuation = content.length > 0;
     const paths = extractGeneratedFilePaths(content);
@@ -115,10 +115,10 @@ export async function generateLongResponse(
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new LongGenerationError(message, snapshot(false, options.signal?.aborted ? 'round_limit' : 'round_limit'));
+      throw new LongGenerationError(message, snapshot(false, options.signal?.aborted ? 'cancelled' : 'model_error'));
     }
     let part = reply.content.trim();
-    if (!part) throw new LongGenerationError('Long generation stopped: the model returned an empty content section.', snapshot(false, 'round_limit'));
+    if (!part) throw new LongGenerationError('Long generation stopped: the model returned an empty content section.', snapshot(false, 'model_error'));
     const finished = part.includes(LONG_GENERATION_END_MARKER);
     part = part.replaceAll(LONG_GENERATION_END_MARKER, '').trimEnd();
     content = appendWithoutOverlap(content, part, tailChars);
