@@ -83,7 +83,7 @@ describe('generated project review', () => {
       '```ts',
       'export const c = 1;',
       '```',
-    ].join('\\n'));
+    ].join('\n'));
     expect(result.issues.filter((issue) => issue.code === 'unsafe_path')).toHaveLength(3);
   });
 
@@ -97,7 +97,7 @@ describe('generated project review', () => {
       '```ts',
       'export const b = 1;',
       '```',
-    ].join('\\n'));
+    ].join('\n'));
     expect(result.issues.some((issue) => issue.code === 'duplicate_file')).toBe(true);
   });
 
