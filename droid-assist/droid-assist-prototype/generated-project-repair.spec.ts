@@ -41,7 +41,7 @@ describe('generated project repair', () => {
       expect(request.prompt).toContain('READ-ONLY DEPENDENCY FILE: src/helper.ts');
       expect(request.prompt).toContain('export const helper = () => true;');
       return {
-        content: ['FILE: src/main.ts', '```ts', "import { helper } from './helper';", 'export const main = helper();', '```'].join('\\n'),
+        content: ['FILE: src/main.ts', '```ts', "import { helper } from './helper';", 'export const main = helper();', '```'].join('\n'),
         thinking: null,
       };
     });
