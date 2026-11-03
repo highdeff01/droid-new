@@ -54,6 +54,7 @@ export function reviewGeneratedProject(output: string, expectedPaths: string[] =
   const matches = [...output.matchAll(FILE_HEADER)];
   const files: GeneratedFile[] = [];
   const seen = new Set<string>();
+  const seenCanonical = new Set<string>();
 
   if (!matches.length && output.trim()) {
     issues.push({ code: 'missing_file_header', message: 'No explicit FILE: path headers were found.' });
@@ -68,11 +69,13 @@ export function reviewGeneratedProject(output: string, expectedPaths: string[] =
       issues.push({ code: 'unsafe_path', path, message: `Rejected unsafe or invalid generated path: ${path || '(empty)'}` });
       continue;
     }
-    if (seen.has(path)) {
-      issues.push({ code: 'duplicate_file', path, message: `The output declares ${path} more than once.` });
+    const canonicalPath = path.toLocaleLowerCase('en-US');
+    if (seenCanonical.has(canonicalPath)) {
+      issues.push({ code: 'duplicate_file', path, message: `The output declares ${path} more than once (paths are compared case-insensitively for Windows compatibility).` });
       continue;
     }
     seen.add(path);
+    seenCanonical.add(canonicalPath);
     const extracted = stripFence(output.slice(start, end));
     if (!extracted.closed) issues.push({ code: 'unclosed_fence', path, message: `The code fence for ${path} is not closed.` });
     if (!extracted.content.trim()) issues.push({ code: 'empty_file', path, message: `${path} has no generated content.` });
