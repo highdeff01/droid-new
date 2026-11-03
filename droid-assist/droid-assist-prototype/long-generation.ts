@@ -22,7 +22,7 @@ export interface LongGenerationResult {
 /** Remove a repeated prefix when a model restarts by echoing the previous ending. */
 export function appendWithoutOverlap(existing: string, next: string, maxOverlap = 2_000): string {
   const limit = Math.min(existing.length, next.length, Math.max(0, maxOverlap));
-  for (let size = limit; size >= 40; size--) {
+  for (let size = limit; size >= 8; size--) {
     if (existing.slice(-size) === next.slice(0, size)) return existing + next.slice(size).trimStart();
   }
   return existing + (existing && next ? '\n' : '') + next.trimStart();
