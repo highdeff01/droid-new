@@ -38,6 +38,7 @@ import { DEFAULT_AVOID_TTL_HOURS, deadlockRules, isBlocking, recordFailure, rule
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, saveOperationMemory, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher, loadAccessPaths, saveAccessPaths, loadRouteProfiles, loadFixMethods, saveRouteProfiles, saveFixMethods, loadDossiers, saveDossiers, loadScreenSections, saveScreenSections, loadPersonas, savePersonas, loadOpsState, saveOpsState } from './storage.js';
 import { DEFAULT_PANEL_LAYOUT } from './panel-layout.js';
 import { processDocuments, type DocumentInput, type DocumentPipelineOptions, type DocumentPipelineResult } from './document-pipeline.js';
+import { generateLongResponse, type LongGenerationOptions, type LongGenerationResult } from './long-generation.js';
 import { mirrorMode, mirrorStep, type MirrorEvent } from './mirror-input.js';
 import { addEntry as addPortfolioEntry, createPersona, upsertPersona, type Persona, type PortfolioKind } from './persona.js';
 import { logSightings, monitorChanges, perspective, planLanes, type ElementReport, type Lane, type Perspective, type Sighting } from './element-relevance.js';
@@ -7621,10 +7622,32 @@ export function useAssist() {
     });
   };
 
+  const runLongGeneration = async (question: string, options: LongGenerationOptions = {}): Promise<LongGenerationResult> => {
+    if (!aiOnline()) throw new Error('AI is unavailable. Connect the configured AI endpoint before generating a long response.');
+    if (!question.trim()) throw new Error('Enter a prompt for long-form generation.');
+    addLog('Long generation', 'Starting bounded multi-call response generation.', 'info');
+    try {
+      const result = await generateLongResponse(askFor('planner'), question, {
+        ...options,
+        onProgress: (event) => {
+          options.onProgress?.(event);
+          addLog('Long generation', `Section ${event.round}/${event.maxRounds}: ${event.totalChars.toLocaleString()} characters assembled.`, 'info');
+        },
+      });
+      addLog('Long generation', result.complete ? `Completed ${result.content.length.toLocaleString()} characters in ${result.rounds} calls.` : `Stopped at ${result.stoppedBecause}; ${result.content.length.toLocaleString()} characters assembled.`, result.complete ? 'ok' : 'warn');
+      return result;
+    } catch (error) {
+      addLog('Long generation', error instanceof Error ? error.message : String(error), 'error');
+      throw error;
+    }
+  };
+
   return {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     /** Read-only file analysis through the app's existing configured AI session; it never dispatches input actions. */
     runDocumentPipeline,
+    /** Bounded sequential long-form generation through the existing AI session. */
+    runLongGeneration,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
     armed, aborted, abortedAt, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, avoidRules, clearBlacklist, supervisor, superviseRun,
