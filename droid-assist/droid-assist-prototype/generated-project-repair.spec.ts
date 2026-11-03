@@ -24,6 +24,32 @@ describe('generated project repair', () => {
     expect(result.output).toContain('FILE: src/main.ts');
   });
 
+  it('includes directly imported files as read-only repair context', async () => {
+    const output = [
+      'FILE: src/main.ts',
+      '```ts',
+      "import { helper } from './helper';",
+      "import './missing';",
+      'export const main = helper();',
+      '```',
+      'FILE: src/helper.ts',
+      '```ts',
+      'export const helper = () => true;',
+      '```',
+    ].join('\\n');
+    const ask = vi.fn<AskFn>().mockImplementation(async (request) => {
+      expect(request.prompt).toContain('READ-ONLY DEPENDENCY FILE: src/helper.ts');
+      expect(request.prompt).toContain('export const helper = () => true;');
+      return {
+        content: ['FILE: src/main.ts', '```ts', "import { helper } from './helper';", 'export const main = helper();', '```'].join('\\n'),
+        thinking: null,
+      };
+    });
+    const result = await repairGeneratedProject(ask, output);
+    expect(result.repaired).toBe(true);
+    expect(result.output).toContain('FILE: src/helper.ts');
+  });
+
   it('does not call the model for a clean project', async () => {
     const clean = ['FILE: src/a.ts', '```ts', 'export const a = 1;', '```'].join('\n');
     const ask = vi.fn<AskFn>();
