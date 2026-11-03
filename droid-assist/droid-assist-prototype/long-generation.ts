@@ -23,7 +23,11 @@ export interface LongGenerationResult {
 export function appendWithoutOverlap(existing: string, next: string, maxOverlap = 2_000): string {
   const limit = Math.min(existing.length, next.length, Math.max(0, maxOverlap));
   for (let size = limit; size >= 8; size--) {
-    if (existing.slice(-size) === next.slice(0, size)) return existing + next.slice(size).trimStart();
+    if (existing.slice(-size) === next.slice(0, size)) {
+      // Keep the continuation's leading whitespace: trimming here can join words
+      // that were separated at the overlap boundary (for example "ending next").
+      return existing + next.slice(size);
+    }
   }
   return existing + (existing && next ? '\n' : '') + next.trimStart();
 }
