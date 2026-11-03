@@ -1287,6 +1287,9 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
   const [answer, setAnswer] = useState('');
   const [report, setReport] = useState('');
   const [liveTestRunning, setLiveTestRunning] = useState(false);
+  const [longRunning, setLongRunning] = useState(false);
+  const [longAnswer, setLongAnswer] = useState('');
+  const [longStatus, setLongStatus] = useState('');
   const groups = [...new Set(files.map((file) => file.group.trim() || 'Ungrouped'))];
   const visible = files.filter((file) => groupFilter === 'All files' || (file.group.trim() || 'Ungrouped') === groupFilter);
   const selected = visible.filter((file) => file.selected);
@@ -1390,6 +1393,24 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
         <button type="button" disabled={running || !selected.length} onClick={() => void run()}>{running ? 'Analyzing…' : `Analyze ${selected.length} selected file(s)`}</button>
         <button type="button" disabled={running || !files.length} onClick={() => { setFiles([]); setAnswer(''); setReport(''); setError(''); setProgress(''); }}>Clear files/results</button>
       </div>
+      <details>
+        <summary>Long-form generation (multi-call continuation)</summary>
+        <p className={styles.muted}>Generates a long response through sequential bounded calls to the existing AI session. It assembles sections, removes echoed overlap, supports cancellation via the app's normal AI stop, and reports when a round or character limit is reached. This is not token streaming.</p>
+        <button type="button" disabled={longRunning || running || !question.trim()} onClick={async () => {
+          setLongRunning(true); setLongAnswer(''); setLongStatus('Starting…');
+          try {
+            const result = await engine.runLongGeneration(question, { onProgress: (event) => setLongStatus(`Section ${event.round}/${event.maxRounds} · ${event.totalChars.toLocaleString()} characters assembled`) });
+            setLongAnswer(result.content);
+            setLongStatus(result.complete ? `Complete · ${result.rounds} calls · ${result.content.length.toLocaleString()} characters` : `Partial · ${result.stoppedBecause} · ${result.rounds} calls`);
+          } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+          } finally {
+            setLongRunning(false);
+          }
+        }}>{longRunning ? 'Generating continuation…' : 'Generate long response'}</button>
+        {longStatus && <p role="status">{longStatus}</p>}
+        {longAnswer && <pre className={styles.log}>{longAnswer}</pre>}
+      </details>
       <details>
         <summary>Live application test</summary>
         <p className={styles.muted}>This invokes the app's existing end-to-end self-test, not the document pipeline. It is available only while the computer-control bridge is connected and input is armed. It is never run automatically.</p>
