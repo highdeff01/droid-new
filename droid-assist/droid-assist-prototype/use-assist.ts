@@ -10,6 +10,7 @@ import { OVERLAP_PREFIX, firstValid } from './ai-overlap.js';
 import { STAGE_LABEL, appContextSections, escalationNotice, suggestedGoal, type EscalationEvent, type EscalationHooks } from './ai-escalation.js';
 import type { AiReply, AiStatus, AskFn, AskRequest, AutoSaveFn, HistoryChangeFn } from './ai.js';
 import { HISTORY_WINDOW_DEFAULT, historyChangeText } from './ai-history.js';
+import { repairGeneratedProject as repairGeneratedProjectText, type GeneratedProjectRepairResult } from './generated-project-repair.js';
 import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type StageId } from './loop-control.js';
 import { DEFAULT_AI_MAX_IN_FLIGHT, createAiQueue, type AiQueue, type AiQueueStats } from './ai-queue.js';
 import { confirmTarget, decidePopup, describeScreen, judgeStep, reflectOn, verifyGoal, type GoalCheck, type PopupDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
@@ -7642,12 +7643,31 @@ export function useAssist() {
     }
   };
 
+  const repairLongGeneration = async (output: string): Promise<GeneratedProjectRepairResult> => {
+    if (!aiOnline()) throw new Error('AI is unavailable. Connect the configured AI endpoint before repairing generated files.');
+    if (!output.trim()) throw new Error('There is no generated project output to repair.');
+    addLog('Project repair', 'Reviewing diagnostics and preparing targeted file repairs.', 'info');
+    try {
+      const result = await repairGeneratedProjectText(askFor('planner'), output);
+      addLog('Project repair', result.repaired
+        ? `Repaired flagged files in ${result.attempts} attempt(s); static review now passes.`
+        : `Repair finished with ${result.review.issues.length} remaining issue(s) after ${result.attempts} attempt(s).`,
+      result.repaired ? 'ok' : 'warn');
+      return result;
+    } catch (error) {
+      addLog('Project repair', error instanceof Error ? error.message : String(error), 'error');
+      throw error;
+    }
+  };
+
   return {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     /** Read-only file analysis through the app's existing configured AI session; it never dispatches input actions. */
     runDocumentPipeline,
     /** Bounded sequential long-form generation through the existing AI session. */
     runLongGeneration,
+    /** Targeted text-only repair of files flagged by static project review. */
+    repairLongGeneration,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
     armed, aborted, abortedAt, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, avoidRules, clearBlacklist, supervisor, superviseRun,
