@@ -57,6 +57,7 @@ describe('long-form generation', () => {
     } catch (error) {
       expect(error).toBeInstanceOf(LongGenerationError);
       expect((error as LongGenerationError).partial.content).toContain('First durable section.');
+      expect((error as LongGenerationError).partial.stoppedBecause).toBe('model_error');
       expect(checkpoints).toHaveLength(1);
     }
   });
