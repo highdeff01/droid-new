@@ -1294,6 +1294,7 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
   const [longCodeMode, setLongCodeMode] = useState(false);
   const [repairRunning, setRepairRunning] = useState(false);
   const [repairStatus, setRepairStatus] = useState('');
+  const [repairCandidate, setRepairCandidate] = useState('');
   const longProjectReview = longCodeMode && longAnswer ? reviewGeneratedProject(longAnswer) : null;
   const groups = [...new Set(files.map((file) => file.group.trim() || 'Ungrouped'))];
   const visible = files.filter((file) => groupFilter === 'All files' || (file.group.trim() || 'Ungrouped') === groupFilter);
@@ -1426,17 +1427,37 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
         {longProjectReview && longProjectReview.issues.length > 0 && (
           <div className={styles.group}>
             <button type="button" disabled={repairRunning || longRunning} onClick={() => {
-              setRepairRunning(true); setRepairStatus('Repairing only files identified by static review…');
+              setRepairRunning(true); setRepairCandidate(''); setRepairStatus('Repairing only files identified by static review…');
               void engine.repairLongGeneration(longAnswer).then((result) => {
                 if (result.repaired) {
-                  setLongAnswer(result.output);
-                  setRepairStatus(`Static review passed after ${result.attempts} repair attempt(s). The repaired text replaced the original in this panel.`);
+                  setRepairCandidate(result.output);
+                  setRepairStatus(`Candidate passed static review after ${result.attempts} repair attempt(s). Inspect it below; the original remains unchanged until you accept.`);
                 } else {
                   setRepairStatus(`Repair attempted ${result.attempts} time(s); ${result.review.issues.length} issue(s) remain. The original generated output is unchanged. Review the diagnostics and retry after adjusting the source or model.`);
                 }
               }).catch((e) => setRepairStatus(e instanceof Error ? e.message : String(e))).finally(() => setRepairRunning(false));
             }}>{repairRunning ? 'Repairing flagged files…' : 'Repair flagged files'}</button>
             {repairStatus && <p role="status">{repairStatus}</p>}
+            {repairCandidate && <div className={styles.group}>
+              <h4>Verified repair candidate</h4>
+              <p>The candidate passed static checks. Nothing has been written to disk; accepting replaces only the text in this generation panel.</p>
+              <pre className={styles.log}>{repairCandidate}</pre>
+              <div className={styles.row}>
+                <button type="button" onClick={() => {
+                  if (reviewGeneratedProject(repairCandidate).complete) {
+                    setLongAnswer(repairCandidate);
+                    setRepairCandidate('');
+                    setRepairStatus('Repair accepted in this panel. The original source remains available in the conversation history if needed.');
+                  } else {
+                    setRepairStatus('Candidate no longer passes static review; it was not applied.');
+                  }
+                }}>Accept repair in panel</button>
+                <button type="button" className={styles.secondary} onClick={() => {
+                  setRepairCandidate('');
+                  setRepairStatus('Repair candidate rejected. Original generated output retained.');
+                }}>Reject candidate</button>
+              </div>
+            </div>}
           </div>
         )}
         {longProjectReview && (
