@@ -58,6 +58,17 @@ describe('generated project review', () => {
     expect(result.issues.map((issue) => issue.code)).toContain('unresolved_relative_import');
   });
 
+  it('rejects relative imports that escape the generated project root', () => {
+    const result = reviewGeneratedProject([
+      'FILE: src/main.ts',
+      '```ts',
+      "import '../../../outside';",
+      'export const main = true;',
+      '```',
+    ].join('\n'));
+    expect(result.issues.some((issue) => issue.code === 'unsafe_path')).toBe(true);
+  });
+
   it('reports output without explicit file headers', () => {
     const result = reviewGeneratedProject('Just prose, no file sections.');
     expect(result.issues[0]?.code).toBe('missing_file_header');
