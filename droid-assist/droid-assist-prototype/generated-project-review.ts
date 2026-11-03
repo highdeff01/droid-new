@@ -86,7 +86,7 @@ export function reviewGeneratedProject(output: string, expectedPaths: string[] =
   const generated = new Set(files.map((file) => file.path));
   for (const file of files) {
     for (const match of file.content.matchAll(IMPORT_PATH)) {
-      const specifier = match[2];
+      const specifier = match[1];
       if (!specifier) continue;
       const base = file.path.split('/').slice(0, -1);
       const parts = [...base];
