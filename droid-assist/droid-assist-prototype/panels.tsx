@@ -3,6 +3,7 @@ import type { AssistEngine } from './use-assist.js';
 import { createExternalModelBridge, type ExternalChatProtocol } from './external-model-adapters.js';
 import { getDocumentFileReadiness } from './document-file-formats.js';
 import { reviewGeneratedProject } from './generated-project-review.js';
+import { getGeneratedProjectDiff } from './generated-project-diff.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { DRY_RUN } from './run-step.js';
@@ -1296,6 +1297,7 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
   const [repairStatus, setRepairStatus] = useState('');
   const [repairCandidate, setRepairCandidate] = useState('');
   const longProjectReview = longCodeMode && longAnswer ? reviewGeneratedProject(longAnswer) : null;
+  const repairDiff = repairCandidate ? getGeneratedProjectDiff(longAnswer, repairCandidate) : [];
   const groups = [...new Set(files.map((file) => file.group.trim() || 'Ungrouped'))];
   const visible = files.filter((file) => groupFilter === 'All files' || (file.group.trim() || 'Ungrouped') === groupFilter);
   const selected = visible.filter((file) => file.selected);
@@ -1441,7 +1443,14 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
             {repairCandidate && <div className={styles.group}>
               <h4>Verified repair candidate</h4>
               <p>The candidate passed static checks. Nothing has been written to disk; accepting replaces only the text in this generation panel.</p>
-              <pre className={styles.log}>{repairCandidate}</pre>
+              <ul className={styles.log} aria-label="Repair file changes">
+                {repairDiff.map((change) => <li key={change.path}>
+                  <b>{change.kind.toUpperCase()}</b> · {change.path} · {change.beforeLines} → {change.afterLines} lines
+                  {change.removedLines.length > 0 && <pre>{change.removedLines.map((line) => `− ${line}`).join('\n')}</pre>}
+                  {change.addedLines.length > 0 && <pre>{change.addedLines.map((line) => `+ ${line}`).join('\n')}</pre>}
+                </li>)}
+              </ul>
+              <details><summary>Full verified repair candidate</summary><pre className={styles.log}>{repairCandidate}</pre></details>
               <div className={styles.row}>
                 <button type="button" onClick={() => {
                   if (reviewGeneratedProject(repairCandidate).complete) {
