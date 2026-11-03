@@ -22,21 +22,22 @@ export interface GeneratedProjectReview {
   complete: boolean;
 }
 
-const FILE_HEADER = /^\s*FILE\s*:\s*(.*?)\s*$/gm;
+const FILE_HEADER = /^[ \\t]*FILE[ \\t]*:[ \\t]*(.*?)[ \\t]*$/gm;
 const IMPORT_PATH = /(?:from\s*|import\s*(?:\(\s*)?)(['"])(\.\.?\/[^'"]+)\1/g;
 
 function isSafeRelativePath(path: string): boolean {
-  if (!path || path.length > 240 || path.includes('\\\\') || path.startsWith('/') || /^[a-zA-Z]:/.test(path)) return false;
+  if (!path || path.length > 240 || path.includes('\\') || path.startsWith('/') || /^[a-zA-Z]:/.test(path)) return false;
   const segments = path.split('/');
-  const reservedWindowsName = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\\..*)?$/i;
+  const reservedWindowsName = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
   return segments.every((part) =>
     part.length > 0 &&
     part !== '.' &&
     part !== '..' &&
     !/[. ]$/.test(part) &&
     !reservedWindowsName.test(part)
-  ) && !/[<>:"|?*\\u0000-\\u001f]/.test(path);
+  ) && !/[<>:"|?*\u0000-\u001f]/.test(path);
 }
+
 function stripFence(source: string): { content: string; language?: string; closed: boolean } {
   const trimmed = source.trim();
   const opening = trimmed.match(/^\x60\x60\x60([^\r\n]*)\r?\n/);
