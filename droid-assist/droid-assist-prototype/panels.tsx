@@ -1428,10 +1428,12 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
             <button type="button" disabled={repairRunning || longRunning} onClick={() => {
               setRepairRunning(true); setRepairStatus('Repairing only files identified by static review…');
               void engine.repairLongGeneration(longAnswer).then((result) => {
-                setLongAnswer(result.output);
-                setRepairStatus(result.repaired
-                  ? `Static review passed after ${result.attempts} repair attempt(s).`
-                  : `Repair attempted ${result.attempts} time(s); ${result.review.issues.length} issue(s) remain. Original output is preserved in the repair result until this panel is refreshed.`);
+                if (result.repaired) {
+                  setLongAnswer(result.output);
+                  setRepairStatus(`Static review passed after ${result.attempts} repair attempt(s). The repaired text replaced the original in this panel.`);
+                } else {
+                  setRepairStatus(`Repair attempted ${result.attempts} time(s); ${result.review.issues.length} issue(s) remain. The original generated output is unchanged. Review the diagnostics and retry after adjusting the source or model.`);
+                }
               }).catch((e) => setRepairStatus(e instanceof Error ? e.message : String(e))).finally(() => setRepairRunning(false));
             }}>{repairRunning ? 'Repairing flagged files…' : 'Repair flagged files'}</button>
             {repairStatus && <p role="status">{repairStatus}</p>}
