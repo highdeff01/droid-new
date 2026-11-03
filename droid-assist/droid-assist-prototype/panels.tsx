@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { createExternalModelBridge, type ExternalChatProtocol } from './external-model-adapters.js';
 import { getDocumentFileReadiness } from './document-file-formats.js';
+import { reviewGeneratedProject } from './generated-project-review.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { DRY_RUN } from './run-step.js';
@@ -1291,6 +1292,7 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
   const [longAnswer, setLongAnswer] = useState('');
   const [longStatus, setLongStatus] = useState('');
   const [longCodeMode, setLongCodeMode] = useState(false);
+  const longProjectReview = longCodeMode && longAnswer ? reviewGeneratedProject(longAnswer) : null;
   const groups = [...new Set(files.map((file) => file.group.trim() || 'Ungrouped'))];
   const visible = files.filter((file) => groupFilter === 'All files' || (file.group.trim() || 'Ungrouped') === groupFilter);
   const selected = visible.filter((file) => file.selected);
@@ -1419,6 +1421,16 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
         }}>{longRunning ? 'Generating continuation…' : longCodeMode ? 'Generate multi-file code' : 'Generate long response'}</button>
         {longStatus && <p role="status">{longStatus}</p>}
         {longAnswer && <pre className={styles.log}>{longAnswer}</pre>}
+        {longProjectReview && (
+          <section aria-label="Generated project review">
+            <h4>Generated project review <small>{longProjectReview.files.length} file(s) · {longProjectReview.issues.length} issue(s)</small></h4>
+            <p role="status">{longProjectReview.complete ? 'Static checks passed.' : 'Review found items that need attention.'} This check does not execute generated code or write files.</p>
+            <ul className={styles.log}>
+              {longProjectReview.files.map((file) => <li key={file.path}><b>{file.path}</b> · {file.content.length.toLocaleString()} characters{file.language ? ` · ${file.language}` : ''}</li>)}
+              {longProjectReview.issues.map((issue, index) => <li key={`${issue.code}:${issue.path ?? index}`} data-tone="warn"><b>{issue.code}</b> · {issue.message}</li>)}
+            </ul>
+          </section>
+        )}
       </details>
       {progress && <p role="status">{progress}</p>}
       {error && <p role="alert" data-tone="error">{error}</p>}
