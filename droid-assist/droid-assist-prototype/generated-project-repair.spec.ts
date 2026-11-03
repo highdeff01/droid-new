@@ -59,13 +59,12 @@ describe('generated project repair', () => {
     expect(result.attempts).toBe(0);
   });
 
-
   it('rejects the entire patch when the model includes an unrelated file', async () => {
     const ask = vi.fn<AskFn>().mockResolvedValue({
       content: [
-        'FILE: src/main.ts', ```ts`, 'export const main = true;', ```,
-        'FILE: src/untouched.ts', ```ts`, 'export const changed = true;', ```,
-      ].join('\\n'),
+        'FILE: src/main.ts', '```ts', 'export const main = true;', '```',
+        'FILE: src/untouched.ts', '```ts', 'export const changed = true;', '```',
+      ].join('\n'),
       thinking: null,
     });
     const result = await repairGeneratedProject(ask, broken);
@@ -76,11 +75,11 @@ describe('generated project repair', () => {
 
   it('rejects a partial patch when one of multiple required targets is omitted', async () => {
     const output = [
-      'FILE: src/one.ts', ```ts`, "import './missing-one';", ```,
-      'FILE: src/two.ts', ```ts`, "import './missing-two';", ```,
-    ].join('\\n');
+      'FILE: src/one.ts', '```ts', "import './missing-one';", '```',
+      'FILE: src/two.ts', '```ts', "import './missing-two';", '```',
+    ].join('\n');
     const ask = vi.fn<AskFn>().mockResolvedValue({
-      content: ['FILE: src/one.ts', ```ts`, 'export const one = true;', ```].join('\\n'),
+      content: ['FILE: src/one.ts', '```ts', 'export const one = true;', '```'].join('\n'),
       thinking: null,
     });
     const result = await repairGeneratedProject(ask, output);
