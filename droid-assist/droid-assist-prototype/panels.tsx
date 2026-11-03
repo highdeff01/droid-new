@@ -1290,6 +1290,7 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
   const [longRunning, setLongRunning] = useState(false);
   const [longAnswer, setLongAnswer] = useState('');
   const [longStatus, setLongStatus] = useState('');
+  const [longCodeMode, setLongCodeMode] = useState(false);
   const groups = [...new Set(files.map((file) => file.group.trim() || 'Ungrouped'))];
   const visible = files.filter((file) => groupFilter === 'All files' || (file.group.trim() || 'Ungrouped') === groupFilter);
   const selected = visible.filter((file) => file.selected);
@@ -1395,29 +1396,29 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
       </div>
       <details>
         <summary>Long-form generation (multi-call continuation)</summary>
-        <p className={styles.muted}>Generates a long response through sequential bounded calls to the existing AI session. It assembles sections, removes echoed overlap, supports cancellation via the app's normal AI stop, and reports when a round or character limit is reached. This is not token streaming.</p>
+        <p className={styles.muted}>Generates through sequential bounded calls to the existing AI session. Each completed section is checkpointed immediately, so a later failure does not discard earlier output. Multi-file mode asks for explicit FILE: path headers and carries a file manifest between calls. This is not token streaming.</p>
+        <label><input type="checkbox" checked={longCodeMode} onChange={(event) => setLongCodeMode(event.currentTarget.checked)} disabled={longRunning} /> Multi-file code mode (FILE: relative/path headers)</label>
         <button type="button" disabled={longRunning || running || !question.trim()} onClick={async () => {
-          setLongRunning(true); setLongAnswer(''); setLongStatus('Starting…');
+          setLongRunning(true); setLongAnswer(''); setLongStatus('Starting…'); setError('');
           try {
-            const result = await engine.runLongGeneration(question, { onProgress: (event) => setLongStatus(`Section ${event.round}/${event.maxRounds} · ${event.totalChars.toLocaleString()} characters assembled`) });
+            const result = await engine.runLongGeneration(question, {
+              mode: longCodeMode ? 'multi_file_code' : 'answer',
+              onProgress: (event) => setLongStatus(`Section ${event.round}/${event.maxRounds} · ${event.totalChars.toLocaleString()} characters assembled`),
+              onPartial: (content, round) => { setLongAnswer(content); setLongStatus(`Checkpoint saved · ${round} call(s) · ${content.length.toLocaleString()} characters`); },
+            });
             setLongAnswer(result.content);
             setLongStatus(result.complete ? `Complete · ${result.rounds} calls · ${result.content.length.toLocaleString()} characters` : `Partial · ${result.stoppedBecause} · ${result.rounds} calls`);
           } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
+            const failure = e as Error & { partial?: { content: string; rounds: number } };
+            if (failure.partial?.content) setLongAnswer(failure.partial.content);
+            setError(failure.message);
+            if (failure.partial?.content) setLongStatus(`Recovered partial output · ${failure.partial.rounds} completed call(s)`);
           } finally {
             setLongRunning(false);
           }
-        }}>{longRunning ? 'Generating continuation…' : 'Generate long response'}</button>
+        }}>{longRunning ? 'Generating continuation…' : longCodeMode ? 'Generate multi-file code' : 'Generate long response'}</button>
         {longStatus && <p role="status">{longStatus}</p>}
         {longAnswer && <pre className={styles.log}>{longAnswer}</pre>}
-      </details>
-      <details>
-        <summary>Live application test</summary>
-        <p className={styles.muted}>This invokes the app's existing end-to-end self-test, not the document pipeline. It is available only while the computer-control bridge is connected and input is armed. It is never run automatically.</p>
-        <button type="button" disabled={!engine.bridgeOnline || !engine.armed || liveTestRunning || engine.replaying} onClick={async () => { setLiveTestRunning(true); try { await engine.invoke('selftest.run'); } finally { setLiveTestRunning(false); } }}>{liveTestRunning ? 'Running live self-test…' : 'Run authorized live self-test'}</button>
-        {!engine.bridgeOnline && <small>Connect the computer-control bridge first.</small>}
-        {engine.bridgeOnline && !engine.armed && <small>Arm authorized input before running a live test.</small>}
-        {engine.selfTestReport && <p data-tone={engine.selfTestReport.pass ? 'ok' : 'error'}>Latest self-test: {engine.selfTestReport.pass ? 'passed' : 'failed'} — {engine.selfTestReport.stages.map((stage) => `${stage.stage}: ${stage.ok ? 'ok' : 'failed'}`).join(' · ')}</p>}
       </details>
       {progress && <p role="status">{progress}</p>}
       {error && <p role="alert" data-tone="error">{error}</p>}
