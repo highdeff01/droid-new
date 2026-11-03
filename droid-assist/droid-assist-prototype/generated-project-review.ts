@@ -90,10 +90,24 @@ export function reviewGeneratedProject(output: string, expectedPaths: string[] =
       if (!specifier) continue;
       const base = file.path.split('/').slice(0, -1);
       const parts = [...base];
+      let escapesProjectRoot = false;
       for (const segment of specifier.split('/')) {
         if (segment === '.') continue;
-        if (segment === '..') parts.pop();
-        else parts.push(segment);
+        if (segment === '..') {
+          if (!parts.length) {
+            escapesProjectRoot = true;
+            break;
+          }
+          parts.pop();
+        } else parts.push(segment);
+      }
+      if (escapesProjectRoot) {
+        issues.push({
+          code: 'unsafe_path',
+          path: file.path,
+          message: `Relative import "${specifier}" in ${file.path} escapes the generated project root.`,
+        });
+        continue;
       }
       const resolved = parts.join('/');
       const candidates = [resolved, resolved + '.ts', resolved + '.tsx', resolved + '.js', resolved + '.jsx', resolved + '/index.ts', resolved + '/index.tsx'];
