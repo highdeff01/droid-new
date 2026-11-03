@@ -36,7 +36,7 @@ describe('generated project repair', () => {
       '```ts',
       'export const helper = () => true;',
       '```',
-    ].join('\\n');
+    ].join('\n');
     const ask = vi.fn<AskFn>().mockImplementation(async (request) => {
       expect(request.prompt).toContain('READ-ONLY DEPENDENCY FILE: src/helper.ts');
       expect(request.prompt).toContain('export const helper = () => true;');
