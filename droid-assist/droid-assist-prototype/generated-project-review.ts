@@ -23,7 +23,7 @@ export interface GeneratedProjectReview {
 }
 
 const FILE_HEADER = /^\s*FILE\s*:\s*(.*?)\s*$/gm;
-const IMPORT_PATH = /(?:from\s*|import\s*\()(['"])(\.\.?\/[^'"]+)\1/g;
+const IMPORT_PATH = /(?:from\s*|import\s*(?:\(\s*)?)(['"])(\.\.?\/[^'"]+)\1/g;
 
 function isSafeRelativePath(path: string): boolean {
   if (!path || path.length > 240 || path.includes('\\') || path.startsWith('/') || /^[a-zA-Z]:/.test(path)) return false;
