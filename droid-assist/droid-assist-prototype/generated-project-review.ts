@@ -36,8 +36,8 @@ function stripFence(source: string): { content: string; language?: string; close
   const opening = trimmed.match(/^\x60\x60\x60([^\r\n]*)\r?\n/);
   if (!opening) return { content: trimmed, closed: true };
   const bodyStart = opening[0].length;
-  const closing = trimmed.lastIndexOf('\n\x60\x60\x60');
-  if (closing < bodyStart) return { content: trimmed.slice(bodyStart), language: opening[1].trim() || undefined, closed: false };
+  const closing = trimmed.indexOf('\n\x60\x60\x60', Math.max(0, bodyStart - 1));
+  if (closing < 0) return { content: trimmed.slice(bodyStart), language: opening[1].trim() || undefined, closed: false };
   return {
     content: trimmed.slice(bodyStart, closing).replace(/\r?\n$/, ''),
     language: opening[1].trim() || undefined,
@@ -86,7 +86,7 @@ export function reviewGeneratedProject(output: string, expectedPaths: string[] =
   const generated = new Set(files.map((file) => file.path));
   for (const file of files) {
     for (const match of file.content.matchAll(IMPORT_PATH)) {
-      const specifier = match[1];
+      const specifier = match[2];
       if (!specifier) continue;
       const base = file.path.split('/').slice(0, -1);
       const parts = [...base];
