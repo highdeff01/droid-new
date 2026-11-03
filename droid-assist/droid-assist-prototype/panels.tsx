@@ -1292,6 +1292,8 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
   const [longAnswer, setLongAnswer] = useState('');
   const [longStatus, setLongStatus] = useState('');
   const [longCodeMode, setLongCodeMode] = useState(false);
+  const [repairRunning, setRepairRunning] = useState(false);
+  const [repairStatus, setRepairStatus] = useState('');
   const longProjectReview = longCodeMode && longAnswer ? reviewGeneratedProject(longAnswer) : null;
   const groups = [...new Set(files.map((file) => file.group.trim() || 'Ungrouped'))];
   const visible = files.filter((file) => groupFilter === 'All files' || (file.group.trim() || 'Ungrouped') === groupFilter);
@@ -1421,6 +1423,20 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
         }}>{longRunning ? 'Generating continuation…' : longCodeMode ? 'Generate multi-file code' : 'Generate long response'}</button>
         {longStatus && <p role="status">{longStatus}</p>}
         {longAnswer && <pre className={styles.log}>{longAnswer}</pre>}
+        {longProjectReview && longProjectReview.issues.length > 0 && (
+          <div className={styles.group}>
+            <button type="button" disabled={repairRunning || longRunning} onClick={() => {
+              setRepairRunning(true); setRepairStatus('Repairing only files identified by static review…');
+              void engine.repairLongGeneration(longAnswer).then((result) => {
+                setLongAnswer(result.output);
+                setRepairStatus(result.repaired
+                  ? `Static review passed after ${result.attempts} repair attempt(s).`
+                  : `Repair attempted ${result.attempts} time(s); ${result.review.issues.length} issue(s) remain. Original output is preserved in the repair result until this panel is refreshed.`);
+              }).catch((e) => setRepairStatus(e instanceof Error ? e.message : String(e))).finally(() => setRepairRunning(false));
+            }}>{repairRunning ? 'Repairing flagged files…' : 'Repair flagged files'}</button>
+            {repairStatus && <p role="status">{repairStatus}</p>}
+          </div>
+        )}
         {longProjectReview && (
           <section aria-label="Generated project review">
             <h4>Generated project review <small>{longProjectReview.files.length} file(s) · {longProjectReview.issues.length} issue(s)</small></h4>
