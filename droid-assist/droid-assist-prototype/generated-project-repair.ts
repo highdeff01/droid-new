@@ -86,10 +86,22 @@ export async function repairGeneratedProject(
     });
     attempts++;
     const patch = reviewGeneratedProject(reply.content, targets);
-    if (!patch.files.length || patch.issues.some((issue) => issue.code === 'unsafe_path' || issue.code === 'duplicate_file' || issue.code === 'missing_file_header' || issue.code === 'unclosed_fence' || issue.code === 'empty_file')) break;
     const allowed = new Set(targets);
-    const replacements = new Map(patch.files.filter((file) => allowed.has(file.path)).map((file) => [file.path, file]));
-    if (!replacements.size) break;
+    // Treat the patch as an atomic transaction: reject it if it contains any
+    // path outside the review-derived allow-list or omits any required target.
+    const hasUnexpectedPath = patch.files.some((file) => !allowed.has(file.path));
+    const hasMissingTarget = targets.some((path) => !patch.files.some((file) => file.path === path));
+    const hasStructuralError = patch.issues.some((issue) =>
+      issue.code === 'unsafe_path' ||
+      issue.code === 'duplicate_file' ||
+      issue.code === 'missing_file_header' ||
+      issue.code === 'unclosed_fence' ||
+      issue.code === 'empty_file' ||
+      issue.code === 'missing_file'
+    );
+    if (!patch.files.length || hasUnexpectedPath || hasMissingTarget || hasStructuralError) break;
+    const replacements = new Map(patch.files.map((file) => [file.path, file]));
+    if (replacements.size !== allowed.size) break;
     const merged = review.files.map((file) => replacements.get(file.path) ?? file);
     for (const file of patch.files) {
       if (!review.files.some((existing) => existing.path === file.path) && allowed.has(file.path)) merged.push(file);
