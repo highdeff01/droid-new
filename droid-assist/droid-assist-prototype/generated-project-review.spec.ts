@@ -69,6 +69,38 @@ describe('generated project review', () => {
     expect(result.issues.some((issue) => issue.code === 'unsafe_path')).toBe(true);
   });
 
+  it('rejects Windows device names and trailing-dot or trailing-space segments', () => {
+    const result = reviewGeneratedProject([
+      'FILE: src/CON.ts',
+      '```ts',
+      'export const a = 1;',
+      '```',
+      'FILE: src/folder./a.ts',
+      '```ts',
+      'export const b = 1;',
+      '```',
+      'FILE: src/name /b.ts',
+      '```ts',
+      'export const c = 1;',
+      '```',
+    ].join('\\n'));
+    expect(result.issues.filter((issue) => issue.code === 'unsafe_path')).toHaveLength(3);
+  });
+
+  it('treats case-only path differences as duplicates on Windows', () => {
+    const result = reviewGeneratedProject([
+      'FILE: src/App.ts',
+      '```ts',
+      'export const a = 1;',
+      '```',
+      'FILE: src/app.ts',
+      '```ts',
+      'export const b = 1;',
+      '```',
+    ].join('\\n'));
+    expect(result.issues.some((issue) => issue.code === 'duplicate_file')).toBe(true);
+  });
+
   it('reports output without explicit file headers', () => {
     const result = reviewGeneratedProject('Just prose, no file sections.');
     expect(result.issues[0]?.code).toBe('missing_file_header');
