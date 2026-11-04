@@ -4771,14 +4771,22 @@ export function useAssist() {
     const pageTransition = classifyPageTransition(previous, next, changeRatio);
     // Re-check prior decisions against this later frame; this only annotates evidence.
     const previousDecisions = decisionHistoryRef.current;
+    const previousLearning = decisionLearningRef.current;
     const reconciledDecisions = reconcileDecisionHistory(previousDecisions, next, frame.id, pageTransition, 'unknown');
     for (const record of reconciledDecisions) {
       const previous = previousDecisions.find(item => item.id === record.id);
       if (previous?.status === 'uncertain' && record.status !== 'uncertain') decisionLearningRef.current = updateDecisionLearning(decisionLearningRef.current, record);
     }
     decisionHistoryRef.current = reconciledDecisions;
-    saveDecisionHistory(decisionHistoryRef.current);
-    saveDecisionLearning(decisionLearningRef.current);
+    // Reconciliation commonly returns the same records on ordinary frames. Avoid serializing
+    // and writing the entire history on every capture tick; persist only actual record changes.
+    if (reconciledDecisions.length !== previousDecisions.length
+      || reconciledDecisions.some((record, index) => record !== previousDecisions[index])) {
+      saveDecisionHistory(reconciledDecisions);
+    }
+    if (decisionLearningRef.current !== previousLearning) {
+      saveDecisionLearning(decisionLearningRef.current);
+    }
     const audits = auditCommands(stepsRef.current, frame.time);
     const prospects = prospectPoints(next, relations, audits);
     const latestAction = historyRef.current[0];
