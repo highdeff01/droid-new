@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import { createExternalModelBridge, type ExternalChatProtocol } from './external-model-adapters.js';
 import { getDocumentFileReadiness } from './document-file-formats.js';
@@ -1292,6 +1292,7 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
   const [report, setReport] = useState('');
   const [liveTestRunning, setLiveTestRunning] = useState(false);
   const [longRunning, setLongRunning] = useState(false);
+  const longAbortRef = useRef<AbortController | null>(null);
   const [longAnswer, setLongAnswer] = useState(savedLongCheckpoint?.content ?? '');
   const [longStatus, setLongStatus] = useState(savedLongCheckpoint ? `Restored local checkpoint · ${savedLongCheckpoint.rounds} call(s) · ${savedLongCheckpoint.content.length.toLocaleString()} characters` : '');
   const [longCodeMode, setLongCodeMode] = useState(savedLongCheckpoint?.mode === 'multi_file_code');
@@ -1411,9 +1412,12 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
           setLongRunning(true); setLongAnswer(''); setLongStatus('Starting…'); setError('');
           const checkpointId = `generation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           const mode = longCodeMode ? 'multi_file_code' : 'answer';
+          const controller = new AbortController();
+          longAbortRef.current = controller;
           try {
             const result = await engine.runLongGeneration(question, {
               mode,
+              signal: controller.signal,
               onProgress: (event) => setLongStatus(`Section ${event.round}/${event.maxRounds} · ${event.totalChars.toLocaleString()} characters assembled`),
               onPartial: (content, round) => {
                 setLongAnswer(content);
@@ -1433,9 +1437,11 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
             }
             setError(failure.message);
           } finally {
+            if (longAbortRef.current === controller) longAbortRef.current = null;
             setLongRunning(false);
           }
         }}>{longRunning ? 'Generating continuation…' : longCodeMode ? 'Generate multi-file code' : 'Generate long response'}</button>
+        {longRunning && <button type="button" className={styles.secondary} onClick={() => longAbortRef.current?.abort()}>Cancel generation</button>}
         <button type="button" className={styles.secondary} disabled={longRunning || !longAnswer} onClick={() => {
           clearLongGenerationCheckpoint(); setLongAnswer(''); setLongStatus('Local checkpoint cleared.'); setRepairCandidate(''); setRepairStatus('');
         }}>Clear saved generation</button>
