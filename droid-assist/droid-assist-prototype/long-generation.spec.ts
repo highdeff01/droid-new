@@ -44,6 +44,22 @@ describe('long-form generation', () => {
     expect(ask).not.toHaveBeenCalled();
   });
 
+  it('keeps the latest checkpoint when cancelled between continuation calls', async () => {
+    const controller = new AbortController();
+    const ask = vi.fn().mockResolvedValue({ content: 'Completed before cancellation.', thinking: null });
+    await expect(generateLongResponse(ask as unknown as AskFn, 'Continue writing.', {
+      signal: controller.signal,
+      onPartial: () => controller.abort(),
+    })).rejects.toMatchObject({
+      partial: {
+        content: 'Completed before cancellation.',
+        rounds: 1,
+        stoppedBecause: 'cancelled',
+      },
+    });
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
   it('checkpoints completed sections and preserves them when a later call fails', async () => {
     const ask = vi.fn()
       .mockResolvedValueOnce({ content: 'First durable section.', thinking: null })
