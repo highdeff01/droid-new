@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AskFn } from './ai.js';
-import { planDocument, processDocument, splitDocumentEvenly } from './document-pipeline.js';
+import { combineDocumentMaterial, DOCUMENT_COMBINE_BATCH_CHARS, planDocument, processDocument, splitDocumentEvenly } from './document-pipeline.js';
 
 describe('adaptive document pipeline planning', () => {
   it('splits source without losing, duplicating, or reordering characters', () => {
@@ -87,5 +87,34 @@ describe('configurable worker allocations and independent reviewers', () => {
     expect(result.review).toContain('INDEPENDENT REVIEWER Independent A');
     expect(result.answer).toContain('INDEPENDENT REVIEW WARNINGS');
     expect(reviewer).toHaveBeenCalled();
+  });
+});
+
+
+describe('large multi-file evidence combination', () => {
+  it('reduces every batch hierarchically instead of truncating material after 55,000 characters', async () => {
+    const source = 'SOURCE-START\\n' + Array.from({ length: 140 }, (_, i) => 'FILE-' + i + ' ' + 'distinct-evidence-'.repeat(40)).join('\\n') + '\\nSOURCE-END';
+    const prompts: string[] = [];
+    const ask = vi.fn(async (request: { system?: string; prompt?: string }) => {
+      prompts.push(request.prompt ?? '');
+      return {
+        content: request.system?.includes('Evidence-preserving document reducer')
+          ? 'Evidence ledger ' + prompts.length + ': preserved source identifiers and claims.'
+          : 'FINAL: all source batches were reviewed.',
+        thinking: null,
+      };
+    }) as unknown as AskFn;
+    const result = await combineDocumentMaterial(ask, 'Compare all evidence', source);
+    expect(result).toContain('all source batches were reviewed');
+    expect(prompts.length).toBeGreaterThan(2);
+    expect(prompts.some((prompt) => prompt.includes('SOURCE-END'))).toBe(true);
+    expect(prompts.every((prompt) => prompt.length < DOCUMENT_COMBINE_BATCH_CHARS + 1_000)).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes('REDUCTION LEVEL: 2'))).toBe(true);
+  });
+
+  it('fails visibly if an evidence-reduction call returns no content', async () => {
+    const ask = vi.fn(async () => ({ content: '', thinking: null })) as unknown as AskFn;
+    await expect(combineDocumentMaterial(ask, 'Review', 'x'.repeat(DOCUMENT_COMBINE_BATCH_CHARS + 1)))
+      .rejects.toThrow(/empty evidence reduction/);
   });
 });
