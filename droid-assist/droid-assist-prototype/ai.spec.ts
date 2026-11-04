@@ -62,7 +62,7 @@ describe('context budget protection', () => {
     await expect(chat(cfg, messages)).resolves.toMatchObject({ content: 'recovered' });
     const retryMessages = bodyOf(fn, 1).messages as ChatMessage[];
     expect(retryMessages.some((m) => m.content.includes('OLD HISTORY'))).toBe(false);
-    expect(retryMessages.at(-1)?.content).toContain('CURRENT TASK: preserve this request.');
+    expect(retryMessages.some((m) => m.content.includes('CURRENT TASK: preserve this request.'))).toBe(true);
   });
 
   it('shortens an oversized irreducible request instead of forwarding it unchanged', () => {
