@@ -14,7 +14,7 @@ describe('long context chunking', () => {
 
   it('keeps very long reads in bounded requests while preserving every source character', async () => {
     const source = Array.from({ length: 70 }, (_, i) => 'SECTION ' + i + ' ' + 'source-detail '.repeat(35)).join('\\n\\n');
-    const ask = vi.fn(async () => ({ content: 'analysis-note '.repeat(180), thinking: null }));
+    const ask = vi.fn(async (_request: Parameters<AskFn>[0]) => ({ content: 'analysis-note '.repeat(180), thinking: null }));
     const result = await readLongText(ask, 'Extract every important fact', source);
     expect(result.sections.map(section => section.source).join('')).toBe(source);
     expect(result.sections.length).toBeGreaterThan(5);
