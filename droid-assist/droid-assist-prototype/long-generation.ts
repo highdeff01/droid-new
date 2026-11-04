@@ -14,6 +14,9 @@ export interface LongGenerationOptions {
   contextTailChars?: number;
   signal?: AbortSignal;
   mode?: LongGenerationMode;
+  /** Resume from a previously persisted partial answer without regenerating its prefix. */
+  initialContent?: string;
+  initialRounds?: number;
   onProgress?: (event: { round: number; maxRounds: number; totalChars: number; detail: string }) => void;
   /** Receives a durable snapshot after every completed model call. */
   onPartial?: (content: string, round: number) => void;
@@ -66,12 +69,12 @@ export async function generateLongResponse(
   const maxChars = Math.max(1_000, Math.min(500_000, Math.floor(options.maxChars ?? LONG_GENERATION_MAX_CHARS)));
   const tailChars = Math.max(200, Math.min(8_000, Math.floor(options.contextTailChars ?? LONG_GENERATION_CONTEXT_TAIL_CHARS)));
   const mode = options.mode ?? 'answer';
-  let content = '';
-  let rounds = 0;
+  let content = (options.initialContent ?? '').slice(0, maxChars);
+  let rounds = Math.max(0, Math.min(maxRounds, Math.floor(options.initialRounds ?? 0)));
   const snapshot = (complete: boolean, stoppedBecause: LongGenerationResult['stoppedBecause']): LongGenerationResult => ({
     content, rounds, complete, stoppedBecause,
   });
-  for (let round = 1; round <= maxRounds; round++) {
+  for (let round = rounds + 1; round <= maxRounds; round++) {
     if (options.signal?.aborted) {
       throw new LongGenerationError('Long generation cancelled.', snapshot(false, 'cancelled'));
     }
