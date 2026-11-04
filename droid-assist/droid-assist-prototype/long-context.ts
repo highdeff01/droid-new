@@ -1,7 +1,7 @@
 import type { AskFn, AskRequest } from './ai.js';
 import type { Frame } from './types.js';
 
-export const LONG_CONTEXT_DEFAULT_CHUNK_CHARS = 9000;
+export const LONG_CONTEXT_DEFAULT_CHUNK_CHARS = 5000;
 export const LONG_CONTEXT_MAX_CHUNKS_PER_RUN = 500;
 export const LONG_CONTEXT_DONE_MARKER = '[[DROID_DONE]]';
 
@@ -32,7 +32,7 @@ export function splitLongText(text: string, chunkChars = LONG_CONTEXT_DEFAULT_CH
 function refsBlock(refs?: string[]): string { const v = (refs ?? []).map(s => s.trim()).filter(Boolean); return v.length ? '\n\nREFERENCES FROM EARLIER TURNS / ANSWERS:\n' + v.join('\n\n') : ''; }
 function emit(o: LongWorkOptions, phase: LongWorkProgress['phase'], completed: number, total: number, detail: string) { o.onProgress?.({ phase, completed, total, detail }); }
 function checkAbort(signal?: AbortSignal) { if (signal?.aborted) throw new Error('Long-context operation cancelled.'); }
-function compactNotes(a: string, b: string): string { const joined = [a.trim(), b.trim()].filter(Boolean).join('\n\n'); if (joined.length <= 6000) return joined; const marker = '\n\n[… earlier notes compacted; full sections remain available …]\n\n'; const left = Math.floor((6000 - marker.length) * 0.45); return joined.slice(0, left) + marker + joined.slice(-(6000 - marker.length - left)); }
+function compactNotes(a: string, b: string): string { const joined = [a.trim(), b.trim()].filter(Boolean).join('\n\n'); const limit = 4000; if (joined.length <= limit) return joined; const marker = '\n\n[… earlier notes compacted; full sections remain available …]\n\n'; const left = Math.floor((limit - marker.length) * 0.45); return joined.slice(0, left) + marker + joined.slice(-(limit - marker.length - left)); }
 
 /** Reads long extracted text section-by-section, preserving every source section and every answer. */
 export async function readLongText(ask: AskFn, task: string, source: string, options: LongWorkOptions = {}): Promise<LongReadResult> {
