@@ -65,6 +65,18 @@ describe('context budget protection', () => {
     expect(retryMessages.some((m) => m.content.includes('CURRENT TASK: preserve this request.'))).toBe(true);
   });
 
+  it('fits an 8,292-token-sized single request before sending it to the endpoint', async () => {
+    const fn = stubFetch(reply('ok'));
+    const source = 'REQUEST-START ' + 'dense-code-and-context '.repeat(690) + ' REQUEST-END';
+    await expect(chat(cfg, [{ role: 'user', content: source }])).resolves.toMatchObject({ content: 'ok' });
+    const sent = bodyOf(fn).messages as ChatMessage[];
+    const estimatedTokens = sent.reduce((sum, message) => sum + 8 + Math.ceil(message.content.length / 2) + (message.images?.length ?? 0) * 1024, 0);
+    expect(estimatedTokens).toBeLessThanOrEqual(8192 - 1024);
+    expect(sent.at(-1)?.content).toContain('REQUEST-START');
+    expect(sent.at(-1)?.content).toContain('REQUEST-END');
+    expect(sent.at(-1)?.content).toContain('context shortened to fit the model window');
+  });
+
   it('shortens an oversized irreducible request instead of forwarding it unchanged', () => {
     const oversized: ChatMessage[] = [
       { role: 'system', content: 'System instructions. '.repeat(900) },
