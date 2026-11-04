@@ -65,6 +65,8 @@ export type InputAction = 'move' | 'click' | 'double_click' | 'drag' | 'type' | 
 /** One executed mouse or keyboard action, persisted for viewing and export. */
 export interface ActionRecord {
   id: string;
+  /** Exact workflow step that dispatched this input; absent for manual/user actions. */
+  stepId?: string;
   time: number;
   action: InputAction;
   /** Native screen pixels the action targeted (a drag's start). */
