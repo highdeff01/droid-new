@@ -188,8 +188,14 @@ export async function combineDocumentMaterial(ask: AskFn, question: string, mate
       if (!reply.content.trim()) throw new Error('Document combination returned an empty evidence reduction at level ' + (depth + 1) + ', batch ' + (index + 1) + '.');
       next.push(reply.content.trim());
     }
+    const previousSize = level.reduce((total, item) => total + item.length, 0);
+    const nextSize = next.reduce((total, item) => total + item.length, 0);
+    if (nextSize >= previousSize) {
+      throw new Error('Document evidence reduction did not become smaller; stopping rather than looping or silently dropping source material.');
+    }
     level = next;
     depth++;
+    if (depth > 8) throw new Error('Document evidence reduction exceeded eight levels; source evidence remains available in the per-file reports.');
   }
   const final = await ask({
     system: 'Final answer editor. Answer the exact user question. Prioritise source evidence, compare files where useful, distinguish facts from inference, and state missing or conflicting evidence. Never invent facts or claim tests were run.',
