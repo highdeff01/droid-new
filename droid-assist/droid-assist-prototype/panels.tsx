@@ -1276,7 +1276,7 @@ export function DecisionHistoryPanel({ engine }: { engine: AssistEngine }) {
 export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
   type QueuedFile = { id: string; name: string; text: string; selected: boolean; group: string; workers: number };
   const [files, setFiles] = useState<QueuedFile[]>([]);
-  const [savedLongCheckpoint] = useState(() => loadLongGenerationCheckpoint());
+  const [savedLongCheckpoint, setSavedLongCheckpoint] = useState(() => loadLongGenerationCheckpoint());
   const [question, setQuestion] = useState(savedLongCheckpoint?.prompt || 'Summarize the key information and answer the question using source evidence.');
   const [groupFilter, setGroupFilter] = useState('All files');
   const [reviewers, setReviewers] = useState(1);
@@ -1409,30 +1409,41 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
         <p className={styles.muted}>Generates through sequential bounded calls to the existing AI session. Each completed section is checkpointed immediately, so a later failure does not discard earlier output. Multi-file mode asks for explicit FILE: path headers and carries a file manifest between calls. This is not token streaming.</p>
         <label><input type="checkbox" checked={longCodeMode} onChange={(event) => setLongCodeMode(event.currentTarget.checked)} disabled={longRunning} /> Multi-file code mode (FILE: relative/path headers)</label>
         <button type="button" disabled={longRunning || running || !question.trim()} onClick={async () => {
-          setLongRunning(true); setLongAnswer(''); setLongStatus('Starting…'); setError('');
-          const checkpointId = `generation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           const mode = longCodeMode ? 'multi_file_code' : 'answer';
+          const resume = savedLongCheckpoint && savedLongCheckpoint.prompt === question && savedLongCheckpoint.mode === mode && savedLongCheckpoint.content === longAnswer;
+          const checkpointId = resume ? savedLongCheckpoint.id : `generation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const initialContent = resume ? savedLongCheckpoint.content : '';
+          const initialRounds = resume ? savedLongCheckpoint.rounds : 0;
+          setLongRunning(true); if (!resume) setLongAnswer(''); setLongStatus(resume ? 'Resuming saved checkpoint…' : 'Starting…'); setError('');
           const controller = new AbortController();
           longAbortRef.current = controller;
           try {
             const result = await engine.runLongGeneration(question, {
               mode,
+              initialContent,
+              initialRounds,
               signal: controller.signal,
               onProgress: (event) => setLongStatus(`Section ${event.round}/${event.maxRounds} · ${event.totalChars.toLocaleString()} characters assembled`),
               onPartial: (content, round) => {
                 setLongAnswer(content);
-                const saved = saveLongGenerationCheckpoint({ id: checkpointId, prompt: question, content, mode, rounds: round, updatedAt: Date.now() });
+                const checkpoint = { id: checkpointId, prompt: question, content, mode, rounds: round, updatedAt: Date.now() };
+                const saved = saveLongGenerationCheckpoint(checkpoint);
+                setSavedLongCheckpoint(saved ? checkpoint : null);
                 setLongStatus(`${saved ? 'Saved locally' : 'Checkpoint is session-only (browser storage unavailable)'} · ${round} call(s) · ${content.length.toLocaleString()} characters`);
               },
             });
             setLongAnswer(result.content);
-            const finalSaved = saveLongGenerationCheckpoint({ id: checkpointId, prompt: question, content: result.content, mode, rounds: result.rounds, updatedAt: Date.now() });
+            const finalCheckpoint = { id: checkpointId, prompt: question, content: result.content, mode, rounds: result.rounds, updatedAt: Date.now() };
+            const finalSaved = saveLongGenerationCheckpoint(finalCheckpoint);
+            setSavedLongCheckpoint(finalSaved ? finalCheckpoint : null);
             setLongStatus(`${result.complete ? 'Complete' : `Partial · ${result.stoppedBecause}`} · ${result.rounds} calls · ${result.content.length.toLocaleString()} characters · ${finalSaved ? 'saved locally' : 'session-only checkpoint'}`);
           } catch (e) {
             const failure = e as Error & { partial?: { content: string; rounds: number } };
             if (failure.partial?.content) {
               setLongAnswer(failure.partial.content);
-              const recoveredSaved = saveLongGenerationCheckpoint({ id: checkpointId, prompt: question, content: failure.partial.content, mode, rounds: failure.partial.rounds, updatedAt: Date.now() });
+              const recoveredCheckpoint = { id: checkpointId, prompt: question, content: failure.partial.content, mode, rounds: failure.partial.rounds, updatedAt: Date.now() };
+              const recoveredSaved = saveLongGenerationCheckpoint(recoveredCheckpoint);
+              setSavedLongCheckpoint(recoveredSaved ? recoveredCheckpoint : null);
               setLongStatus(`Recovered partial output · ${failure.partial.rounds} completed call(s) · ${recoveredSaved ? 'saved locally' : 'session-only checkpoint'}`);
             }
             setError(failure.message);
@@ -1440,10 +1451,10 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
             if (longAbortRef.current === controller) longAbortRef.current = null;
             setLongRunning(false);
           }
-        }}>{longRunning ? 'Generating continuation…' : longCodeMode ? 'Generate multi-file code' : 'Generate long response'}</button>
+        }}>{longRunning ? 'Generating continuation…' : savedLongCheckpoint && savedLongCheckpoint.prompt === question && savedLongCheckpoint.mode === (longCodeMode ? 'multi_file_code' : 'answer') && savedLongCheckpoint.content === longAnswer ? 'Resume saved generation' : longCodeMode ? 'Generate multi-file code' : 'Generate long response'}</button>
         {longRunning && <button type="button" className={styles.secondary} onClick={() => longAbortRef.current?.abort()}>Cancel generation</button>}
         <button type="button" className={styles.secondary} disabled={longRunning || !longAnswer} onClick={() => {
-          clearLongGenerationCheckpoint(); setLongAnswer(''); setLongStatus('Local checkpoint cleared.'); setRepairCandidate(''); setRepairStatus('');
+          clearLongGenerationCheckpoint(); setSavedLongCheckpoint(null); setLongAnswer(''); setLongStatus('Local checkpoint cleared.'); setRepairCandidate(''); setRepairStatus('');
         }}>Clear saved generation</button>
         {longStatus && <p role="status">{longStatus}</p>}
         {longAnswer && <pre className={styles.log}>{longAnswer}</pre>}
