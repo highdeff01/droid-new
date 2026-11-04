@@ -3,7 +3,7 @@ import type { AssistEngine } from './use-assist.js';
 import { createExternalModelBridge, type ExternalChatProtocol } from './external-model-adapters.js';
 import { getDocumentFileReadiness } from './document-file-formats.js';
 import { reviewGeneratedProject } from './generated-project-review.js';
-import { clearLongGenerationCheckpoint, loadLongGenerationCheckpoint, saveLongGenerationCheckpoint } from './long-generation-checkpoint.js';
+import { clearLongGenerationCheckpoint, loadLongGenerationCheckpoint, saveLongGenerationCheckpoint, type LongGenerationCheckpointMode } from './long-generation-checkpoint.js';
 import { getGeneratedProjectDiff } from './generated-project-diff.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
@@ -1409,7 +1409,7 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
         <p className={styles.muted}>Generates through sequential bounded calls to the existing AI session. Each completed section is checkpointed immediately, so a later failure does not discard earlier output. Multi-file mode asks for explicit FILE: path headers and carries a file manifest between calls. This is not token streaming.</p>
         <label><input type="checkbox" checked={longCodeMode} onChange={(event) => setLongCodeMode(event.currentTarget.checked)} disabled={longRunning} /> Multi-file code mode (FILE: relative/path headers)</label>
         <button type="button" disabled={longRunning || running || !question.trim()} onClick={async () => {
-          const mode = longCodeMode ? 'multi_file_code' : 'answer';
+          const mode: LongGenerationCheckpointMode = longCodeMode ? 'multi_file_code' : 'answer';
           const resume = savedLongCheckpoint && savedLongCheckpoint.prompt === question && savedLongCheckpoint.mode === mode && savedLongCheckpoint.content === longAnswer;
           const checkpointId = resume ? savedLongCheckpoint.id : `generation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           const initialContent = resume ? savedLongCheckpoint.content : '';
