@@ -1925,7 +1925,7 @@ export function useAssist() {
     const px = (p: { x: number; y: number }) => ({ x: Math.round(p.x * srcW), y: Math.round(p.y * srcH) });
     const prev = lastPointerRef.current ? px(lastPointerRef.current) : null;
     const message = dryRun ? dryRunMessage(out.message, simulated) : out.message;
-    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message, ...(via === 'bridge' && out.executed && out.check && !out.check.changed ? { dispatched: true } : {}), ...(dryRun ? { dryRun } : {}), ...(simulated ? { simulated } : {}) };
+    const rec: ActionRecord = { id: uid('act'), stepId: step.id, time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message, ...(via === 'bridge' && out.executed && out.check && !out.check.changed ? { dispatched: true } : {}), ...(dryRun ? { dryRun } : {}), ...(simulated ? { simulated } : {}) };
     if (out.executed && POINTER_ACTIONS.has(step.action)) lastPointerRef.current = out.end ?? out.target;
     if (out.executed) noteInput(out.target, USER_ACTORS.has(actor) ? 'user' : 'ai');
     lastRecordRef.current = rec;
@@ -4795,9 +4795,7 @@ export function useAssist() {
     if (newEffect) {
       lastEffectActionRef.current = newEffect.actionId;
       elementEffectsRef.current = [newEffect, ...elementEffectsRef.current].slice(0, 60);
-      const runningStep = stepsRef.current.find(step => step.status === 'running');
-      const declaredExpectation = runningStep?.expectedOutcome?.trim();
-      const explicitExpectation = declaredExpectation || (runningStep && /\\b(appears|appeared|visible|shown|disappears|disappeared|closed|opened)\\b/i.test(runningStep.name) ? runningStep.name : undefined);
+      const explicitExpectation = expectedOutcomeForAction(latestAction, stepsRef.current);
       const decision = recordDecisionOutcome({ effect: newEffect, frameId: frame.id, expected: explicitExpectation, at: frame.time });
       decisionHistoryRef.current = appendDecisionHistory(decisionHistoryRef.current, decision, 100);
       saveDecisionHistory(decisionHistoryRef.current);
