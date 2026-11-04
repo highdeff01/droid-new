@@ -26,6 +26,21 @@ describe('long context chunking', () => {
     }
   });
 
+  it('bounds oversized prior notes and references without changing source sections', async () => {
+    const source = 'SOURCE-START ' + 'document fact '.repeat(500) + ' SOURCE-END';
+    const ask = vi.fn(async (_request: Parameters<AskFn>[0]) => ({ content: 'reviewed', thinking: null }));
+    const result = await readLongText(ask, 'Review source', source, {
+      chunkChars: 1000,
+      previousNotes: 'PRIOR-START ' + 'old note '.repeat(3000) + ' PRIOR-END',
+      references: ['REFERENCE-START ' + 'reference detail '.repeat(500) + ' REFERENCE-END'],
+    });
+    expect(result.sections.map(section => section.source).join('')).toBe(source);
+    const firstPrompt = ask.mock.calls[0]?.[0].prompt ?? '';
+    expect(firstPrompt).toContain('shortened for request budget');
+    expect(firstPrompt).toContain('SOURCE TEXT (data to analyse):');
+    expect(firstPrompt.length).toBeLessThan(10000);
+  });
+
   it('reads each source section with cumulative notes and returns all source and answers', async () => {
     const source = 'A'.repeat(1300) + 'B'.repeat(1300) + 'C'.repeat(1300);
     const ask = makeAsk(['notes alpha', 'notes beta', 'notes gamma']);
