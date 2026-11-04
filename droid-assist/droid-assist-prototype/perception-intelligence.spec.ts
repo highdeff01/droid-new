@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActionRecord, Frame, WorkflowStep } from './types.js';
 import type { InventoryElement } from './screen-inventory.js';
 import {
-  actionForFrame, appendDecisionHistory, expectedOutcomeForAction, loadDecisionHistory, saveDecisionHistory, DECISION_HISTORY_KEY, assessElementIdentity, calibrateEvidenceConfidence, decisionLearningContext, updateDecisionLearning, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
+  actionForFrame, selectEvidenceFrames, appendDecisionHistory, expectedOutcomeForAction, loadDecisionHistory, saveDecisionHistory, DECISION_HISTORY_KEY, assessElementIdentity, calibrateEvidenceConfidence, decisionLearningContext, updateDecisionLearning, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
   matchVisualPrototype, outcomeRates, prospectPoints, recognizeElements, relateElements, visualDescriptor,
 } from './perception-intelligence.js';
 
@@ -22,6 +22,13 @@ const step = (over: Partial<WorkflowStep> = {}): WorkflowStep => ({
 });
 
 describe('visual perception intelligence', () => {
+  it('retains the current and preceding screenshots independently of action attribution', () => {
+    const frames = [frame(4), frame(3), frame(2), frame(1)];
+    expect(selectEvidenceFrames(frames, 3, 3).map(item => item.id)).toEqual([3, 4, 2]);
+    expect(selectEvidenceFrames(frames, 99, 2).map(item => item.id)).toEqual([4, 3]);
+    expect(selectEvidenceFrames(frames, 4, 0).map(item => item.id)).toEqual([4]);
+  });
+
   it('associates a frame only with the newest action at or before its capture time', () => {
     const earlier = { id: 'a1', time: 1000, source: 'user', action: 'click', x: 1, y: 1, ok: true, dispatched: true } as ActionRecord;
     const later = { ...earlier, id: 'a2', time: 3000 };
