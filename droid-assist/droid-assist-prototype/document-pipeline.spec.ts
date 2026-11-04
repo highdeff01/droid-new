@@ -93,7 +93,7 @@ describe('configurable worker allocations and independent reviewers', () => {
 
 describe('large multi-file evidence combination', () => {
   it('reduces every batch hierarchically instead of truncating material after 55,000 characters', async () => {
-    const source = 'SOURCE-START\\n' + Array.from({ length: 140 }, (_, i) => 'FILE-' + i + ' ' + 'distinct-evidence-'.repeat(40)).join('\\n') + '\\nSOURCE-END';
+    const source = 'SOURCE-START\n' + Array.from({ length: 140 }, (_, i) => 'FILE-' + i + ' ' + 'distinct-evidence-'.repeat(40)).join('\n') + '\nSOURCE-END';
     const prompts: string[] = [];
     const ask = vi.fn(async (request: { system?: string; prompt?: string }) => {
       prompts.push(request.prompt ?? '');
