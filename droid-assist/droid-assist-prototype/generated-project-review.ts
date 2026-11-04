@@ -42,20 +42,27 @@ function findFileHeaders(output: string): Array<{ path: string; index: number; l
   let offset = 0;
   let fenceChar: string | undefined;
   let fenceLength = 0;
-  for (const line of output.match(/[^\r\n]*(?:\r?\n|$)/g) ?? []) {
+  const lines = output.match(/[^\r\n]*(?:\r?\n|$)/g) ?? [];
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
     if (!line) continue;
     const text = line.replace(/\r?\n$/, '');
     const fence = text.match(/^\s*(\x60{3,}|~{3,})/);
-    if (fence) {
+    const header = text.match(/^[ \t]*FILE[ \t]*:[ \t]*(.*?)[ \t]*$/);
+    // A FILE header followed immediately by a new opening fence is an unambiguous
+    // next-file boundary, even if the previous file forgot its closing fence.
+    const nextText = (lines[lineIndex + 1] ?? '').replace(/\r?\n$/, '');
+    const nextIsFence = /^\s*(?:\x60{3,}|~{3,})/.test(nextText);
+    if (header && (!fenceChar || nextIsFence)) {
+      headers.push({ path: header[1].trim(), index: offset, length: line.length });
+      if (fenceChar && nextIsFence) { fenceChar = undefined; fenceLength = 0; }
+    } else if (fence) {
       const token = fence[1];
       const char = token[0];
       if (!fenceChar) { fenceChar = char; fenceLength = token.length; }
       else if (char === fenceChar && token.length >= fenceLength && /^\s*(?:\x60{3,}|~{3,})\s*$/.test(text)) {
         fenceChar = undefined; fenceLength = 0;
       }
-    } else if (!fenceChar) {
-      const header = text.match(/^[ \t]*FILE[ \t]*:[ \t]*(.*?)[ \t]*$/);
-      if (header) headers.push({ path: header[1].trim(), index: offset, length: line.length });
     }
     offset += line.length;
   }
