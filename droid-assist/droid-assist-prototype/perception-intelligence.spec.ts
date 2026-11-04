@@ -134,7 +134,7 @@ describe('visual perception intelligence', () => {
   it('turns uncertainty into bounded AI review questions without creating actions', () => {
     const unknown = { ...element('button A1', 0.2, 0.3), known: false };
     const snapshot = {
-      frameId: 9, capturedAt: 9000, elements: [unknown], relations: [], pageTransition: 'navigation-likely' as const,
+      frameId: 9, capturedAt: 9000, evidenceFrames: [], elements: [unknown], relations: [], pageTransition: 'navigation-likely' as const,
       changeRatio: 0.42, notes: ['Step "Save" needs review: unverified'],
       effects: [{ actionId: 'a1', actor: 'User', action: 'click', target: '(unmatched coordinate)', nearbyBefore: [], appeared: ['Dialog'], disappeared: [], moved: [], evidence: 'after-frame comparison' }],
     };
