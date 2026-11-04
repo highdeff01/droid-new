@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActionRecord, Frame, WorkflowStep } from './types.js';
 import type { InventoryElement } from './screen-inventory.js';
 import {
-  appendDecisionHistory, expectedOutcomeForAction, loadDecisionHistory, saveDecisionHistory, DECISION_HISTORY_KEY, assessElementIdentity, calibrateEvidenceConfidence, decisionLearningContext, updateDecisionLearning, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
+  actionForFrame, appendDecisionHistory, expectedOutcomeForAction, loadDecisionHistory, saveDecisionHistory, DECISION_HISTORY_KEY, assessElementIdentity, calibrateEvidenceConfidence, decisionLearningContext, updateDecisionLearning, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
   matchVisualPrototype, outcomeRates, prospectPoints, recognizeElements, relateElements, visualDescriptor,
 } from './perception-intelligence.js';
 
@@ -22,6 +22,16 @@ const step = (over: Partial<WorkflowStep> = {}): WorkflowStep => ({
 });
 
 describe('visual perception intelligence', () => {
+  it('associates a frame only with the newest action at or before its capture time', () => {
+    const earlier = { id: 'a1', time: 1000, source: 'user', action: 'click', x: 1, y: 1, ok: true, dispatched: true } as ActionRecord;
+    const later = { ...earlier, id: 'a2', time: 3000 };
+    expect(actionForFrame([later, earlier], null, 2000)?.id).toBe('a1');
+    expect(actionForFrame([later, earlier], null, 4000)?.id).toBe('a2');
+    expect(actionForFrame([later, earlier], null, 500)?.id).toBeUndefined();
+    expect(actionForFrame([earlier], null, 12_000)).toBeNull();
+    expect(actionForFrame([later, earlier], 'a1', 2000)).toBeNull();
+  });
+
   it('associates expected outcomes only with the exact step that dispatched an action', () => {
     const first = step({ id: 'first', status: 'done', expectedOutcome: 'Save confirmation appears' });
     const second = step({ id: 'second', status: 'running', expectedOutcome: 'Dashboard becomes visible' });
