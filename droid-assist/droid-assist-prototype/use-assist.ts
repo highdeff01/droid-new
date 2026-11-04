@@ -117,7 +117,7 @@ const AI: Requester = { kind: 'ai' };
 const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
 import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
-import { appendDecisionHistory, expectedOutcomeForAction, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, loadDecisionHistory, saveDecisionHistory, decisionLearningContext, frameChangeRatio, learnVisualPrototype, loadDecisionLearning, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveDecisionLearning, saveVisualPrototypes, updateDecisionLearning, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
+import { actionForFrame, appendDecisionHistory, expectedOutcomeForAction, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, loadDecisionHistory, saveDecisionHistory, decisionLearningContext, frameChangeRatio, learnVisualPrototype, loadDecisionLearning, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveDecisionLearning, saveVisualPrototypes, updateDecisionLearning, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
 
 import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
 import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
@@ -4789,13 +4789,12 @@ export function useAssist() {
     }
     const audits = auditCommands(stepsRef.current, frame.time);
     const prospects = prospectPoints(next, relations, audits);
-    const latestAction = historyRef.current[0];
-    const newEffect = latestAction && latestAction.id !== lastEffectActionRef.current && Math.abs(frame.time - latestAction.time) <= 10_000
-      ? compareElementEffect(latestAction, previous, next) : null;
+    const eligibleAction = actionForFrame(historyRef.current, lastEffectActionRef.current, frame.time);
+    const newEffect = eligibleAction ? compareElementEffect(eligibleAction, previous, next) : null;
     if (newEffect) {
       lastEffectActionRef.current = newEffect.actionId;
       elementEffectsRef.current = [newEffect, ...elementEffectsRef.current].slice(0, 60);
-      const explicitExpectation = expectedOutcomeForAction(latestAction, stepsRef.current);
+      const explicitExpectation = expectedOutcomeForAction(eligibleAction!, stepsRef.current);
       const decision = recordDecisionOutcome({ effect: newEffect, frameId: frame.id, expected: explicitExpectation, at: frame.time });
       decisionHistoryRef.current = appendDecisionHistory(decisionHistoryRef.current, decision, 100);
       saveDecisionHistory(decisionHistoryRef.current);
