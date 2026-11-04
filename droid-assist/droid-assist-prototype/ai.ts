@@ -328,7 +328,7 @@ export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false,
   if (first.content) return first;
   if (!first.thinking) throw new AiError('AI endpoint returned no message content and no thinking');
   if (cfg.think && escalation) return escalate((msgs, signal) => post(cfg, fitMessagesToContext(msgs), json, timeoutMs, linkSignals(cancel, signal)), fittedMessages, json, first.thinking, escalation);
-  const send = (msgs: ChatMessage[]) => post(cfg, msgs, json, timeoutMs, cancel);
+  const send = (msgs: ChatMessage[]) => post(cfg, fitMessagesToContext(msgs), json, timeoutMs, cancel);
   let thinking = first.thinking;
   try {
     for (const reply of retryTries(fittedMessages, json)) {
