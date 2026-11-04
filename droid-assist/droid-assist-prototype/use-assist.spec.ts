@@ -1374,6 +1374,32 @@ describe('useAssist screen capture', () => {
     expect(api.setCaptureInterval).toHaveBeenLastCalledWith(250);
   });
 
+  it('ignores a delayed loss callback from a capture that has been replaced', async () => {
+    const callbacks: { onError: (message: string) => void }[] = [];
+    const api: NativeCaptureApi = {
+      startCapture: vi.fn(async (_ms, _onFrame, onError) => {
+        callbacks.push({ onError });
+      }),
+      setCaptureInterval: vi.fn(),
+      stopCapture: vi.fn(),
+      listDisplays: vi.fn(async () => []),
+      selectDisplay: vi.fn(),
+      grabDisplay: vi.fn(),
+    };
+    window.droidNative = api;
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.shareScreen());
+    await act(() => result.current.shareScreen());
+
+    expect(callbacks).toHaveLength(2);
+    act(() => callbacks[0].onError('old display disconnected'));
+    expect(result.current.captureLost).toBeNull();
+    expect(result.current.source).toBe('screen');
+
+    act(() => callbacks[1].onError('active display disconnected'));
+    expect(result.current.captureLost).toBe('active display disconnected');
+  });
+
   it('raises a loud error and never falls back to the demo when capture is lost', async () => {
     const { hooks } = installNative();
     const { result } = renderHook(() => useAssist());
