@@ -101,6 +101,26 @@ describe('generated project review', () => {
     expect(result.issues.some((issue) => issue.code === 'duplicate_file')).toBe(true);
   });
 
+  it('keeps FILE header-like lines inside source fences as file content', () => {
+    const output = [
+      'FILE: src/template.ts',
+      '```ts',
+      'const example = `',
+      'FILE: this-is-source-content.ts',
+      '`;',
+      'export default example;',
+      '```',
+      'FILE: src/next.ts',
+      '```ts',
+      'export const next = true;',
+      '```',
+    ].join('\\n');
+    const result = reviewGeneratedProject(output, ['src/template.ts', 'src/next.ts']);
+    expect(result.files.map((file) => file.path)).toEqual(['src/template.ts', 'src/next.ts']);
+    expect(result.files[0]?.content).toContain('FILE: this-is-source-content.ts');
+    expect(result.complete).toBe(true);
+  });
+
   it('reports output without explicit file headers', () => {
     const result = reviewGeneratedProject('Just prose, no file sections.');
     expect(result.issues[0]?.code).toBe('missing_file_header');
