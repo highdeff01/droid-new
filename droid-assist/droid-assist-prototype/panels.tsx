@@ -1492,12 +1492,17 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
                   } else if (reviewGeneratedProject(repairCandidate).complete) {
                     const accepted = repairCandidate;
                     setLongAnswer(accepted);
-                    if (savedLongCheckpoint) {
-                      const checkpoint = { ...savedLongCheckpoint, content: accepted, updatedAt: Date.now() };
-                      const saved = saveLongGenerationCheckpoint(checkpoint);
-                      setSavedLongCheckpoint(saved ? checkpoint : null);
-                      setLongStatus(saved ? 'Accepted repair saved locally.' : 'Accepted repair applied in this panel; browser storage unavailable.');
-                    }
+                    const checkpoint = {
+                      id: savedLongCheckpoint?.id ?? `generation-${Date.now()}-repair`,
+                      prompt: savedLongCheckpoint?.prompt ?? question,
+                      content: accepted,
+                      mode: savedLongCheckpoint?.mode ?? (longCodeMode ? 'multi_file_code' : 'answer'),
+                      rounds: savedLongCheckpoint?.rounds ?? 0,
+                      updatedAt: Date.now(),
+                    };
+                    const saved = saveLongGenerationCheckpoint(checkpoint);
+                    setSavedLongCheckpoint(saved ? checkpoint : null);
+                    setLongStatus(saved ? 'Accepted repair saved locally.' : 'Accepted repair applied in this panel; browser storage unavailable.');
                     setRepairCandidate('');
                     setRepairStatus('Repair accepted in this panel. No project files were written to disk.');
                   } else {
