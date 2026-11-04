@@ -53,4 +53,52 @@ describe('physical input authority', () => {
     const a = createInputAuthority();
     await expect(a.run('droid-main', () => 1)).rejects.toBeInstanceOf(InputLeaseError);
   });
+  it('fences an active lease immediately when the user pauses input', async () => {
+    const a = createInputAuthority();
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    let leaseSignal!: AbortSignal;
+    let guarded = false;
+    const active = a.run('droid-new', async lease => {
+      leaseSignal = lease.signal;
+      started();
+      await gate;
+      expect(() => lease.assertCurrent()).toThrow(InputLeaseError);
+      guarded = true;
+    });
+    await ready;
+    a.setPaused(true);
+    expect(leaseSignal.aborted).toBe(true);
+    release();
+    await expect(active).rejects.toBeInstanceOf(InputLeaseError);
+    expect(guarded).toBe(true);
+    expect(a.snapshot().paused).toBe(true);
+  });
+
+  it('continues draining after a task fails', async () => {
+    const a = createInputAuthority();
+    const first = a.run('droid-new', () => { throw new Error('adapter failed'); });
+    const second = a.run('droid-new', () => 'next task ran');
+    await expect(first).rejects.toThrow('adapter failed');
+    await expect(second).resolves.toBe('next task ran');
+    expect(a.snapshot()).toMatchObject({ active: false, queued: 0 });
+  });
+
+  it('invalidates queued work even when ownership remains unchanged', async () => {
+    const a = createInputAuthority();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const active = a.run('droid-new', () => gate);
+    const queued = a.run('droid-new', () => 'must not run');
+    const previousGeneration = a.snapshot().generation;
+    a.invalidate('workflow cancelled');
+    expect(a.snapshot().generation).toBe(previousGeneration + 1);
+    await expect(queued).rejects.toBeInstanceOf(InputLeaseError);
+    release();
+    await expect(active).rejects.toBeInstanceOf(InputLeaseError);
+    await expect(a.run('droid-new', () => 'fresh lease')).resolves.toBe('fresh lease');
+  });
+
 });
