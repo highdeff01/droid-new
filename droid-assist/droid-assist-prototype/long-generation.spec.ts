@@ -36,6 +36,36 @@ describe('long-form generation', () => {
     expect(result.content).toHaveLength(1_000);
   });
 
+  it('resumes from saved content and continues the original round count', async () => {
+    const ask = vi.fn().mockResolvedValue({
+      content: 'Second section completed. ' + LONG_GENERATION_END_MARKER,
+      thinking: null,
+    });
+    const result = await generateLongResponse(ask as unknown as AskFn, 'Write a complete guide.', {
+      initialContent: 'First section already saved.',
+      initialRounds: 2,
+    });
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(ask.mock.calls[0][0].prompt).toContain('First section already saved.');
+    expect(result.content).toContain('First section already saved.');
+    expect(result.content).toContain('Second section completed.');
+    expect(result.rounds).toBe(3);
+    expect(result.complete).toBe(true);
+  });
+
+  it('does not issue another call when the restored checkpoint already reached the round limit', async () => {
+    const ask = vi.fn();
+    const result = await generateLongResponse(ask as unknown as AskFn, 'Continue.', {
+      maxRounds: 2,
+      initialContent: 'Saved content.',
+      initialRounds: 2,
+    });
+    expect(ask).not.toHaveBeenCalled();
+    expect(result.content).toBe('Saved content.');
+    expect(result.rounds).toBe(2);
+    expect(result.stoppedBecause).toBe('round_limit');
+  });
+
   it('honors cancellation before starting another model call', async () => {
     const controller = new AbortController();
     controller.abort();
