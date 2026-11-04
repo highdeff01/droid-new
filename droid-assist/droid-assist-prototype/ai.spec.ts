@@ -51,6 +51,20 @@ describe('context budget protection', () => {
     expect(messages).toHaveLength(32); // the caller's history is not mutated
   });
 
+  it('keeps context trimming in effect on empty-answer retries', async () => {
+    const fn = stubFetch(reply('', 200, 'thinking only'), reply('recovered'));
+    const messages: ChatMessage[] = [
+      { role: 'system', content: 'System instructions.' },
+      { role: 'user', content: 'OLD HISTORY ' + 'old-detail '.repeat(5000) },
+      { role: 'assistant', content: 'OLD ASSISTANT ' + 'old-answer '.repeat(5000) },
+      { role: 'user', content: 'CURRENT TASK: preserve this request.' },
+    ];
+    await expect(chat(cfg, messages)).resolves.toMatchObject({ content: 'recovered' });
+    const retryMessages = bodyOf(fn, 1).messages as ChatMessage[];
+    expect(retryMessages.some((m) => m.content.includes('OLD HISTORY'))).toBe(false);
+    expect(retryMessages.at(-1)?.content).toContain('CURRENT TASK: preserve this request.');
+  });
+
   it('shortens an oversized irreducible request instead of forwarding it unchanged', () => {
     const oversized: ChatMessage[] = [
       { role: 'system', content: 'System instructions. '.repeat(900) },
