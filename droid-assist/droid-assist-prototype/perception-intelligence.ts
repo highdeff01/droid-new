@@ -276,6 +276,22 @@ export function auditCommands(steps: readonly WorkflowStep[], now = Date.now(), 
   });
 }
 
+/** Select the newest action that had already occurred when a frame was captured. */
+export function actionForFrame(
+  history: readonly ActionRecord[],
+  lastProcessedActionId: string | null | undefined,
+  frameTime: number,
+  windowMs = 10_000,
+): ActionRecord | null {
+  let candidate: ActionRecord | null = null;
+  for (const action of history) {
+    const age = frameTime - action.time;
+    if (age < 0 || age > windowMs) continue;
+    if (!candidate || action.time > candidate.time) candidate = action;
+  }
+  return candidate && candidate.id !== lastProcessedActionId ? candidate : null;
+}
+
 /** Resolve a visual postcondition only from the exact workflow step that dispatched the action. */
 export function expectedOutcomeForAction(action: Pick<ActionRecord, 'stepId'>, steps: readonly WorkflowStep[]): string | undefined {
   if (!action.stepId) return undefined;
