@@ -174,9 +174,19 @@ export async function combineDocumentMaterial(ask: AskFn, question: string, mate
   while (level.length > 1 || level[0].length > batchSize) {
     if (signal?.aborted) throw new Error('Document combination cancelled.');
     const batches: string[] = [];
+    let currentBatch = '';
     for (const item of level) {
-      for (let offset = 0; offset < item.length; offset += batchSize) batches.push(item.slice(offset, offset + batchSize));
+      for (let offset = 0; offset < item.length; offset += batchSize) {
+        const part = item.slice(offset, offset + batchSize);
+        const separator = currentBatch ? '\\n\\n---\\n\\n' : '';
+        if (currentBatch && currentBatch.length + separator.length + part.length > batchSize) {
+          batches.push(currentBatch);
+          currentBatch = '';
+        }
+        currentBatch += (currentBatch ? '\\n\\n---\\n\\n' : '') + part;
+      }
     }
+    if (currentBatch) batches.push(currentBatch);
     const next: string[] = [];
     for (let index = 0; index < batches.length; index++) {
       if (signal?.aborted) throw new Error('Document combination cancelled.');
