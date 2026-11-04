@@ -22,7 +22,6 @@ export interface GeneratedProjectReview {
   complete: boolean;
 }
 
-const FILE_HEADER = /^[ \\t]*FILE[ \\t]*:[ \\t]*(.*?)[ \\t]*$/gm;
 const IMPORT_PATH = /(?:from\s*|import\s*(?:\(\s*)?)(['"])(\.\.?\/[^'"]+)\1/g;
 
 function isSafeRelativePath(path: string): boolean {
@@ -36,6 +35,35 @@ function isSafeRelativePath(path: string): boolean {
     !/[. ]$/.test(part) &&
     !reservedWindowsName.test(part)
   ) && !/[<>:"|?*\u0000-\u001f]/.test(path);
+}
+
+function findFileHeaders(output: string): Array<{ path: string; index: number; length: number }> {
+  const headers: Array<{ path: string; index: number; length: number }> = [];
+  let offset = 0;
+  let fenceChar: string | undefined;
+  let fenceLength = 0;
+
+  for (const line of output.match(/[^\\r\\n]*(?:\\r?\\n|$)/g) ?? []) {
+    if (!line) continue;
+    const text = line.replace(/\\r?\\n$/, '');
+    const fence = text.match(/^\\s*(`{3,}|~{3,})/);
+    if (fence) {
+      const token = fence[1];
+      const char = token[0];
+      if (!fenceChar) {
+        fenceChar = char;
+        fenceLength = token.length;
+      } else if (char === fenceChar && token.length >= fenceLength && /^\\s*(?:`{3,}|~{3,})\\s*$/.test(text)) {
+        fenceChar = undefined;
+        fenceLength = 0;
+      }
+    } else if (!fenceChar) {
+      const header = text.match(/^[ \\t]*FILE[ \\t]*:[ \\t]*(.*?)[ \\t]*$/);
+      if (header) headers.push({ path: header[1].trim(), index: offset, length: line.length });
+    }
+    offset += line.length;
+  }
+  return headers;
 }
 
 function stripFence(source: string): { content: string; language?: string; closed: boolean } {
@@ -58,7 +86,7 @@ function stripFence(source: string): { content: string; language?: string; close
  */
 export function reviewGeneratedProject(output: string, expectedPaths: string[] = []): GeneratedProjectReview {
   const issues: GeneratedProjectIssue[] = [];
-  const matches = [...output.matchAll(FILE_HEADER)];
+  const matches = findFileHeaders(output);
   const files: GeneratedFile[] = [];
   const seen = new Set<string>();
   const seenCanonical = new Set<string>();
@@ -69,9 +97,9 @@ export function reviewGeneratedProject(output: string, expectedPaths: string[] =
 
   for (let index = 0; index < matches.length; index++) {
     const match = matches[index];
-    const path = match[1]?.trim() ?? '';
-    const start = (match.index ?? 0) + match[0].length;
-    const end = index + 1 < matches.length ? (matches[index + 1].index ?? output.length) : output.length;
+    const path = match.path;
+    const start = match.index + match.length;
+    const end = index + 1 < matches.length ? matches[index + 1].index : output.length;
     if (!isSafeRelativePath(path)) {
       issues.push({ code: 'unsafe_path', path, message: `Rejected unsafe or invalid generated path: ${path || '(empty)'}` });
       continue;
