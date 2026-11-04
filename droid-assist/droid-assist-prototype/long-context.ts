@@ -29,7 +29,20 @@ export function splitLongText(text: string, chunkChars = LONG_CONTEXT_DEFAULT_CH
   while (offset < text.length) { const len = boundary(text.slice(offset), Math.min(size, text.length - offset), granularity); const end = Math.min(text.length, offset + Math.max(1, len)); chunks.push(text.slice(offset, end)); offset = end; }
   return chunks;
 }
-function refsBlock(refs?: string[]): string { const v = (refs ?? []).map(s => s.trim()).filter(Boolean); return v.length ? '\n\nREFERENCES FROM EARLIER TURNS / ANSWERS:\n' + v.join('\n\n') : ''; }
+function boundedContext(text: string, limit: number, label: string): string {
+  const value = text.trim();
+  if (value.length <= limit) return value;
+  const marker = '\\n\\n[… ' + label + ' shortened for request budget; full source remains in the retained sections …]\\n\\n';
+  const available = Math.max(0, limit - marker.length);
+  const head = Math.ceil(available * 0.65);
+  return value.slice(0, head) + marker + value.slice(-(available - head));
+}
+function refsBlock(refs?: string[]): string {
+  const v = (refs ?? []).map(s => s.trim()).filter(Boolean);
+  if (!v.length) return '';
+  const joined = v.join('\\n\\n');
+  return '\\n\\nREFERENCES FROM EARLIER TURNS / ANSWERS:\\n' + boundedContext(joined, 2000, 'references');
+}
 function emit(o: LongWorkOptions, phase: LongWorkProgress['phase'], completed: number, total: number, detail: string) { o.onProgress?.({ phase, completed, total, detail }); }
 function checkAbort(signal?: AbortSignal) { if (signal?.aborted) throw new Error('Long-context operation cancelled.'); }
 function compactNotes(a: string, b: string): string { const joined = [a.trim(), b.trim()].filter(Boolean).join('\n\n'); const limit = 4000; if (joined.length <= limit) return joined; const marker = '\n\n[… earlier notes compacted; full sections remain available …]\n\n'; const left = Math.floor((limit - marker.length) * 0.45); return joined.slice(0, left) + marker + joined.slice(-(limit - marker.length - left)); }
@@ -38,7 +51,7 @@ function compactNotes(a: string, b: string): string { const joined = [a.trim(), 
 export async function readLongText(ask: AskFn, task: string, source: string, options: LongWorkOptions = {}): Promise<LongReadResult> {
   const chunks = splitLongText(source, options.chunkChars, options.granularity); const max = clamp(options.maxChunks, LONG_CONTEXT_MAX_CHUNKS_PER_RUN, 1, LONG_CONTEXT_MAX_CHUNKS_PER_RUN);
   if (chunks.length > max) throw new Error('Input requires ' + chunks.length + ' sections; maxChunks is ' + max + '. Raise the limit or process batches. No source was discarded.');
-  const sections: LongReadSection[] = []; let notes = options.previousNotes?.trim() ?? ''; let offset = 0; const refs = refsBlock(options.references);
+  const sections: LongReadSection[] = []; let notes = boundedContext(options.previousNotes ?? '', 4000, 'prior notes'); let offset = 0; const refs = refsBlock(options.references);
   for (let i = 0; i < chunks.length; i++) {
     checkAbort(options.signal); const chunk = chunks[i]; const end = offset + chunk.length; emit(options, 'reading', i, chunks.length, 'Reading section ' + (i + 1) + '/' + chunks.length);
     const req: AskRequest = { system: 'Carefully analyse the supplied section of a long document. Preserve facts, names, numbers, decisions, paths and uncertainty. Return section notes and an answer. Do not claim to have read sections not supplied.', prompt: ['TASK: ' + task, 'SECTION ' + (i + 1) + '/' + chunks.length + ', character range [' + offset + ', ' + end + ').', notes ? 'CUMULATIVE NOTES FROM EARLIER SECTIONS:\n' + notes : '', refs, 'SOURCE TEXT (data to analyse):\n' + chunk, 'Return SECTION NOTES and SECTION ANSWER; retain details needed for the overall task.'].filter(Boolean).join('\n\n'), signal: options.signal };
@@ -54,7 +67,7 @@ export async function readLongText(ask: AskFn, task: string, source: string, opt
 export async function readLongImages(ask: AskFn, task: string, frames: Frame[], options: LongWorkOptions = {}): Promise<LongReadResult> {
   const max = clamp(options.maxChunks, LONG_CONTEXT_MAX_CHUNKS_PER_RUN, 1, LONG_CONTEXT_MAX_CHUNKS_PER_RUN);
   if (frames.length > max) throw new Error('Image sequence has ' + frames.length + ' frames; maxChunks is ' + max + '. No frames were discarded.');
-  const sections: LongReadSection[] = []; let notes = options.previousNotes?.trim() ?? ''; const refs = refsBlock(options.references);
+  const sections: LongReadSection[] = []; let notes = boundedContext(options.previousNotes ?? '', 4000, 'prior notes'); const refs = refsBlock(options.references);
   for (let i = 0; i < frames.length; i++) {
     checkAbort(options.signal); const frame = frames[i];
     emit(options, 'reading', i, frames.length, 'Analysing image ' + (i + 1) + '/' + frames.length);
@@ -70,7 +83,7 @@ export async function readLongImages(ask: AskFn, task: string, frames: Frame[], 
 /** Generates an answer as sequential append-only chunks. A model may stop with [[DROID_DONE]]. */
 export async function writeLongAnswer(ask: AskFn, prompt: string, options: LongWorkOptions & { targetChunks?: number; finalCombine?: boolean } = {}): Promise<LongWriteResult> {
   const target = clamp(options.targetChunks, 4, 1, LONG_CONTEXT_MAX_CHUNKS_PER_RUN); const max = clamp(options.maxChunks, LONG_CONTEXT_MAX_CHUNKS_PER_RUN, target, LONG_CONTEXT_MAX_CHUNKS_PER_RUN);
-  const sections: string[] = []; let notes = options.previousNotes?.trim() ?? ''; let stoppedByModel = false; const refs = refsBlock(options.references);
+  const sections: string[] = []; let notes = boundedContext(options.previousNotes ?? '', 4000, 'prior notes'); let stoppedByModel = false; const refs = refsBlock(options.references);
   for (let i = 0; i < Math.min(target, max); i++) {
     checkAbort(options.signal); emit(options, 'writing', i, target, 'Writing chunk ' + (i + 1) + '/' + target); const accumulated = sections.join('\n\n');
     const req: AskRequest = { system: 'Write one continuous long-form answer or artifact. Continue from prior text; never restart or repeat earlier content. Output only the next new section. If and only if the complete requested artifact is finished, end with [[DROID_DONE]].', prompt: ['ORIGINAL REQUEST:\n' + prompt, 'CHUNK ' + (i + 1) + ' OF AT MOST ' + target + '. Write substantial useful content, not a placeholder.', notes ? 'COMPACT NOTES / PRIOR DECISIONS:\n' + notes : '', refs, accumulated ? 'ALREADY APPENDED (tail only; do not repeat):\n' + accumulated.slice(-5000) : 'First chunk: begin the requested artifact directly.', 'Continue with new content only.'].filter(Boolean).join('\n\n'), signal: options.signal };
