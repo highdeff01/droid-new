@@ -1422,12 +1422,16 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
               },
             });
             setLongAnswer(result.content);
-            setLongStatus(result.complete ? `Complete · ${result.rounds} calls · ${result.content.length.toLocaleString()} characters` : `Partial · ${result.stoppedBecause} · ${result.rounds} calls`);
+            const finalSaved = saveLongGenerationCheckpoint({ id: checkpointId, prompt: question, content: result.content, mode, rounds: result.rounds, updatedAt: Date.now() });
+            setLongStatus(`${result.complete ? 'Complete' : `Partial · ${result.stoppedBecause}`} · ${result.rounds} calls · ${result.content.length.toLocaleString()} characters · ${finalSaved ? 'saved locally' : 'session-only checkpoint'}`);
           } catch (e) {
             const failure = e as Error & { partial?: { content: string; rounds: number } };
-            if (failure.partial?.content) setLongAnswer(failure.partial.content);
+            if (failure.partial?.content) {
+              setLongAnswer(failure.partial.content);
+              const recoveredSaved = saveLongGenerationCheckpoint({ id: checkpointId, prompt: question, content: failure.partial.content, mode, rounds: failure.partial.rounds, updatedAt: Date.now() });
+              setLongStatus(`Recovered partial output · ${failure.partial.rounds} completed call(s) · ${recoveredSaved ? 'saved locally' : 'session-only checkpoint'}`);
+            }
             setError(failure.message);
-            if (failure.partial?.content) setLongStatus(`Recovered partial output · ${failure.partial.rounds} completed call(s)`);
           } finally {
             setLongRunning(false);
           }
