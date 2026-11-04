@@ -16,6 +16,11 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: droid-assist/droid-assist-prototype/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npx vitest run
+      - name: Test desktop bridge
+        run: python -m unittest discover -s bridge-service -p 'test_*.py' -v
