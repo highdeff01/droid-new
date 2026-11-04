@@ -50,7 +50,9 @@ export interface ChatMessage {
 export const AI_CONTEXT_LIMIT_TOKENS = 8192;
 export const AI_CONTEXT_OUTPUT_RESERVE_TOKENS = 1024;
 export const AI_CONTEXT_INPUT_BUDGET = AI_CONTEXT_LIMIT_TOKENS - AI_CONTEXT_OUTPUT_RESERVE_TOKENS;
-const APPROX_CHARS_PER_TOKEN = 3;
+// Code, paths and punctuation tokenize more densely than ordinary prose. Two characters/token
+// is intentionally conservative to leave margin for tokenizer and server-side message overhead.
+const APPROX_CHARS_PER_TOKEN = 2;
 const APPROX_IMAGE_TOKENS = 1024;
 const MESSAGE_OVERHEAD_TOKENS = 8;
 
@@ -325,11 +327,11 @@ export async function chat(cfg: AiConfig, messages: ChatMessage[], json = false,
   const first = await postOrRephrase(cfg, fittedMessages, json, timeoutMs, cancel);
   if (first.content) return first;
   if (!first.thinking) throw new AiError('AI endpoint returned no message content and no thinking');
-  if (cfg.think && escalation) return escalate((msgs, signal) => post(cfg, msgs, json, timeoutMs, linkSignals(cancel, signal)), messages, json, first.thinking, escalation);
+  if (cfg.think && escalation) return escalate((msgs, signal) => post(cfg, fitMessagesToContext(msgs), json, timeoutMs, linkSignals(cancel, signal)), fittedMessages, json, first.thinking, escalation);
   const send = (msgs: ChatMessage[]) => post(cfg, msgs, json, timeoutMs, cancel);
   let thinking = first.thinking;
   try {
-    for (const reply of retryTries(messages, json)) {
+    for (const reply of retryTries(fittedMessages, json)) {
       const next = await send(reply);
       if (next.content) return { content: next.content, thinking: next.thinking ?? thinking };
       thinking = next.thinking ?? thinking;
