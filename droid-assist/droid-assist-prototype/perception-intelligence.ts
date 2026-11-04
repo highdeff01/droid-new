@@ -276,6 +276,12 @@ export function auditCommands(steps: readonly WorkflowStep[], now = Date.now(), 
   });
 }
 
+/** Resolve a visual postcondition only from the exact workflow step that dispatched the action. */
+export function expectedOutcomeForAction(action: Pick<ActionRecord, 'stepId'>, steps: readonly WorkflowStep[]): string | undefined {
+  if (!action.stepId) return undefined;
+  return steps.find(step => step.id === action.stepId)?.expectedOutcome?.trim() || undefined;
+}
+
 export interface ElementEffect {
   actionId: string;
   actor: string;
