@@ -37,6 +37,8 @@ describe('long context chunking', () => {
     expect(result.sections.map(section => section.source).join('')).toBe(source);
     const firstPrompt = ask.mock.calls[0]?.[0].prompt ?? '';
     expect(firstPrompt).toContain('shortened for request budget');
+    expect(firstPrompt).toContain('\n\nREFERENCES FROM EARLIER TURNS / ANSWERS:\nREFERENCE-START');
+    expect(firstPrompt).not.toContain('\\n\\nREFERENCES FROM EARLIER TURNS');
     expect(firstPrompt).toContain('SOURCE TEXT (data to analyse):');
     expect(firstPrompt.length).toBeLessThan(10000);
   });
