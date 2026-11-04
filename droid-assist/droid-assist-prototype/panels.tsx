@@ -3,6 +3,7 @@ import type { AssistEngine } from './use-assist.js';
 import { createExternalModelBridge, type ExternalChatProtocol } from './external-model-adapters.js';
 import { getDocumentFileReadiness } from './document-file-formats.js';
 import { reviewGeneratedProject } from './generated-project-review.js';
+import { clearLongGenerationCheckpoint, loadLongGenerationCheckpoint, saveLongGenerationCheckpoint } from './long-generation-checkpoint.js';
 import { getGeneratedProjectDiff } from './generated-project-diff.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
@@ -1275,7 +1276,8 @@ export function DecisionHistoryPanel({ engine }: { engine: AssistEngine }) {
 export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
   type QueuedFile = { id: string; name: string; text: string; selected: boolean; group: string; workers: number };
   const [files, setFiles] = useState<QueuedFile[]>([]);
-  const [question, setQuestion] = useState('Summarize the key information and answer the question using source evidence.');
+  const [savedLongCheckpoint] = useState(() => loadLongGenerationCheckpoint());
+  const [question, setQuestion] = useState(savedLongCheckpoint?.prompt || 'Summarize the key information and answer the question using source evidence.');
   const [groupFilter, setGroupFilter] = useState('All files');
   const [reviewers, setReviewers] = useState(1);
   const [externalLabel, setExternalLabel] = useState('External reviewer');
@@ -1290,9 +1292,9 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
   const [report, setReport] = useState('');
   const [liveTestRunning, setLiveTestRunning] = useState(false);
   const [longRunning, setLongRunning] = useState(false);
-  const [longAnswer, setLongAnswer] = useState('');
-  const [longStatus, setLongStatus] = useState('');
-  const [longCodeMode, setLongCodeMode] = useState(false);
+  const [longAnswer, setLongAnswer] = useState(savedLongCheckpoint?.content ?? '');
+  const [longStatus, setLongStatus] = useState(savedLongCheckpoint ? `Restored local checkpoint · ${savedLongCheckpoint.rounds} call(s) · ${savedLongCheckpoint.content.length.toLocaleString()} characters` : '');
+  const [longCodeMode, setLongCodeMode] = useState(savedLongCheckpoint?.mode === 'multi_file_code');
   const [repairRunning, setRepairRunning] = useState(false);
   const [repairStatus, setRepairStatus] = useState('');
   const [repairCandidate, setRepairCandidate] = useState('');
@@ -1407,11 +1409,17 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
         <label><input type="checkbox" checked={longCodeMode} onChange={(event) => setLongCodeMode(event.currentTarget.checked)} disabled={longRunning} /> Multi-file code mode (FILE: relative/path headers)</label>
         <button type="button" disabled={longRunning || running || !question.trim()} onClick={async () => {
           setLongRunning(true); setLongAnswer(''); setLongStatus('Starting…'); setError('');
+          const checkpointId = `generation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const mode = longCodeMode ? 'multi_file_code' : 'answer';
           try {
             const result = await engine.runLongGeneration(question, {
-              mode: longCodeMode ? 'multi_file_code' : 'answer',
+              mode,
               onProgress: (event) => setLongStatus(`Section ${event.round}/${event.maxRounds} · ${event.totalChars.toLocaleString()} characters assembled`),
-              onPartial: (content, round) => { setLongAnswer(content); setLongStatus(`Checkpoint saved · ${round} call(s) · ${content.length.toLocaleString()} characters`); },
+              onPartial: (content, round) => {
+                setLongAnswer(content);
+                const saved = saveLongGenerationCheckpoint({ id: checkpointId, prompt: question, content, mode, rounds: round, updatedAt: Date.now() });
+                setLongStatus(`${saved ? 'Saved locally' : 'Checkpoint is session-only (browser storage unavailable)'} · ${round} call(s) · ${content.length.toLocaleString()} characters`);
+              },
             });
             setLongAnswer(result.content);
             setLongStatus(result.complete ? `Complete · ${result.rounds} calls · ${result.content.length.toLocaleString()} characters` : `Partial · ${result.stoppedBecause} · ${result.rounds} calls`);
@@ -1424,6 +1432,9 @@ export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
             setLongRunning(false);
           }
         }}>{longRunning ? 'Generating continuation…' : longCodeMode ? 'Generate multi-file code' : 'Generate long response'}</button>
+        <button type="button" className={styles.secondary} disabled={longRunning || !longAnswer} onClick={() => {
+          clearLongGenerationCheckpoint(); setLongAnswer(''); setLongStatus('Local checkpoint cleared.'); setRepairCandidate(''); setRepairStatus('');
+        }}>Clear saved generation</button>
         {longStatus && <p role="status">{longStatus}</p>}
         {longAnswer && <pre className={styles.log}>{longAnswer}</pre>}
         {longProjectReview && longProjectReview.issues.length > 0 && (
