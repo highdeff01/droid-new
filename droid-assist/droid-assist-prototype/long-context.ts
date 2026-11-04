@@ -32,7 +32,7 @@ export function splitLongText(text: string, chunkChars = LONG_CONTEXT_DEFAULT_CH
 function boundedContext(text: string, limit: number, label: string): string {
   const value = text.trim();
   if (value.length <= limit) return value;
-  const marker = '\\n\\n[… ' + label + ' shortened for request budget; full source remains in the retained sections …]\\n\\n';
+  const marker = '\n\n[… ' + label + ' shortened for request budget; full source remains in the retained sections …]\n\n';
   const available = Math.max(0, limit - marker.length);
   const head = Math.ceil(available * 0.65);
   return value.slice(0, head) + marker + value.slice(-(available - head));
@@ -40,8 +40,8 @@ function boundedContext(text: string, limit: number, label: string): string {
 function refsBlock(refs?: string[]): string {
   const v = (refs ?? []).map(s => s.trim()).filter(Boolean);
   if (!v.length) return '';
-  const joined = v.join('\\n\\n');
-  return '\\n\\nREFERENCES FROM EARLIER TURNS / ANSWERS:\\n' + boundedContext(joined, 2000, 'references');
+  const joined = v.join('\n\n');
+  return '\n\nREFERENCES FROM EARLIER TURNS / ANSWERS:\n' + boundedContext(joined, 2000, 'references');
 }
 function emit(o: LongWorkOptions, phase: LongWorkProgress['phase'], completed: number, total: number, detail: string) { o.onProgress?.({ phase, completed, total, detail }); }
 function checkAbort(signal?: AbortSignal) { if (signal?.aborted) throw new Error('Long-context operation cancelled.'); }
