@@ -117,7 +117,7 @@ const AI: Requester = { kind: 'ai' };
 const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
 import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
-import { actionForFrame, appendDecisionHistory, expectedOutcomeForAction, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, loadDecisionHistory, saveDecisionHistory, decisionLearningContext, frameChangeRatio, learnVisualPrototype, loadDecisionLearning, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveDecisionLearning, saveVisualPrototypes, updateDecisionLearning, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
+import { actionForFrame, selectEvidenceFrames, appendDecisionHistory, expectedOutcomeForAction, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, loadDecisionHistory, saveDecisionHistory, decisionLearningContext, frameChangeRatio, learnVisualPrototype, loadDecisionLearning, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveDecisionLearning, saveVisualPrototypes, updateDecisionLearning, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
 
 import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
 import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
@@ -4806,7 +4806,7 @@ export function useAssist() {
       ...audits.filter(a => a.issue !== 'clear').slice(0, 4).map(a => `Step "${a.name}" needs review: ${a.issue} — ${a.detail}`),
       ...(pageTransition === 'navigation-likely' ? ['Known-element overlap is low while many pixels changed: verify whether navigation moved to a different page or app'] : []),
     ];
-    perceptionRef.current = { frameId: frame.id, capturedAt: frame.time, elements: next, relations, pageTransition, changeRatio, notes, effects: elementEffectsRef.current.slice(0, 20) };
+    perceptionRef.current = { frameId: frame.id, capturedAt: frame.time, evidenceFrames: selectEvidenceFrames(framesRef.current, frame.id), elements: next, relations, pageTransition, changeRatio, notes, effects: elementEffectsRef.current.slice(0, 20) };
     inventoryRef.current = next;
     inventoryFrameRef.current = frame;
     setInventory(next);
@@ -7759,6 +7759,8 @@ export function useAssist() {
     capabilities: capabilities.registry.list, invocations: capabilities.invocations, invoke: capabilities.invoke, requestCapability, relaxed: !!relaxedRef.current,
     /** Passive, bounded action-outcome trace for the read-only review panel. */
     decisionHistory: decisionHistoryRef.current,
+    /** Current perception snapshot plus bounded screenshot references for follow-up reasoning. */
+    perception: perceptionRef.current,
     inventory, routes, routeProfiles, plotRoute, runRoute, fixMethods, pendingFix, runFixScript, dismissFix, retest, retestFlow,
     /** The last end-to-end AI self-test (plan → ground → execute → verify) and running one. */
     selfTestReport, runSelfTestNow,
