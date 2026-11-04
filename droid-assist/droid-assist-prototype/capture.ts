@@ -132,16 +132,28 @@ export function displayMediaCapture(media: MediaDevices = navigator.mediaDevices
       release();
       stream = await media.getDisplayMedia({ video: true });
       handlers = next;
-      video = document.createElement('video');
-      video.muted = true;
-      video.srcObject = stream;
-      await video.play();
-      stream.getVideoTracks()[0]?.addEventListener('ended', () => {
-        const lost = handlers;
+      try {
+        const track = stream.getVideoTracks()[0];
+        if (!track) throw new Error('Screen share did not provide a video track');
+        track.addEventListener('ended', () => {
+          const lost = handlers;
+          if (!lost) return;
+          release();
+          lost.onLost('Screen share ended');
+        });
+        video = document.createElement('video');
+        video.muted = true;
+        video.srcObject = stream;
+        await video.play();
+        // The user may have stopped sharing while the video element was starting.
+        if (!handlers || !stream) throw new Error('Screen share ended before capture started');
+        schedule(intervalMs);
+      } catch (error) {
+        // getDisplayMedia has already granted access at this point. Always stop its tracks
+        // and clear references if video startup fails, so a retry does not leak a live share.
         release();
-        lost?.onLost('Screen share ended');
-      });
-      schedule(intervalMs);
+        throw error;
+      }
     },
     setInterval: (intervalMs) => { if (stream) schedule(intervalMs); },
     selectDisplay: () => {},
