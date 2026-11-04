@@ -42,6 +42,8 @@ export interface ProspectPoint {
 export interface PerceptionSnapshot {
   frameId: number;
   capturedAt: number;
+  /** Bounded screenshot references retained for later/current and follow-up reasoning. */
+  evidenceFrames: Frame[];
   elements: InventoryElement[];
   relations: ElementRelation[];
   pageTransition: PageTransition;
@@ -276,6 +278,14 @@ export function auditCommands(steps: readonly WorkflowStep[], now = Date.now(), 
   });
 }
 
+/** Keep a bounded, newest-first screenshot evidence window; attribution is deliberately separate. */
+export function selectEvidenceFrames(frames: readonly Frame[], currentFrameId: number, limit = 6): Frame[] {
+  const bounded = Math.max(1, Math.min(20, Math.floor(limit) || 1));
+  const current = frames.find(frame => frame.id === currentFrameId);
+  const prior = frames.filter(frame => frame.id !== currentFrameId).slice(0, bounded - (current ? 1 : 0));
+  return current ? [current, ...prior] : frames.slice(0, bounded);
+}
+
 /** Select the newest action that had already occurred when a frame was captured. */
 export function actionForFrame(
   history: readonly ActionRecord[],
@@ -408,6 +418,7 @@ export function perceptionContext(snapshot: PerceptionSnapshot, rates: readonly 
   const questions = derivePerceptionQuestions(snapshot);
   return [
     `[Perception frame #${snapshot.frameId}] page=${snapshot.pageTransition}; changed pixels≈${(snapshot.changeRatio * 100).toFixed(1)}%; elements=${snapshot.elements.length}; relations=${snapshot.relations.length}`,
+    `[Retained screenshot evidence] ${snapshot.evidenceFrames.map(frame => `#${frame.id}@${frame.time}ms(${frame.source})`).join(', ') || 'none'}; newest first; review current and preceding frames together when uncertain`,
     ...snapshot.notes.slice(0, 8).map(n => `[Perception note] ${n}`),
     ...rates.slice(0, 8).map(r => `[Verified outcome] ${r.target}: ${r.successPercent === null ? 'not enough screenshot-verified outcomes' : `${r.successPercent}% (${r.verifiedSuccesses}/${r.verifiedSuccesses + r.verifiedFailures})`} confidence=${r.confidence}`),
     ...prospects.slice(0, 8).map(p => `[Prospect ${p.priority}] ${p.reason} at ${(p.point.x * 100).toFixed(1)}%, ${(p.point.y * 100).toFixed(1)}% — ${p.evidence}`),
