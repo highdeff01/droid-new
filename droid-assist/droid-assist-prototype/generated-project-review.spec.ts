@@ -114,7 +114,7 @@ describe('generated project review', () => {
       '```ts',
       'export const next = true;',
       '```',
-    ].join('\\n');
+    ].join('\n');
     const result = reviewGeneratedProject(output, ['src/template.ts', 'src/next.ts']);
     expect(result.files.map((file) => file.path)).toEqual(['src/template.ts', 'src/next.ts']);
     expect(result.files[0]?.content).toContain('FILE: this-is-source-content.ts');
