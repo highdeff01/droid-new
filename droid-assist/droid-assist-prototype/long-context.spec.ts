@@ -12,6 +12,20 @@ describe('long context chunking', () => {
     expect(chunks.join('')).toBe(source);
   });
 
+  it('keeps very long reads in bounded requests while preserving every source character', async () => {
+    const source = Array.from({ length: 70 }, (_, i) => 'SECTION ' + i + ' ' + 'source-detail '.repeat(35)).join('\\n\\n');
+    const ask = vi.fn(async () => ({ content: 'analysis-note '.repeat(180), thinking: null }));
+    const result = await readLongText(ask, 'Extract every important fact', source);
+    expect(result.sections.map(section => section.source).join('')).toBe(source);
+    expect(result.sections.length).toBeGreaterThan(5);
+    expect(Math.max(...result.sections.map(section => section.source.length))).toBeLessThanOrEqual(5000);
+    expect(result.notes.length).toBeLessThanOrEqual(4000);
+    for (const [request] of ask.mock.calls) {
+      expect(request.prompt.length).toBeLessThan(10000);
+      expect(request.prompt).toContain('SOURCE TEXT (data to analyse):');
+    }
+  });
+
   it('reads each source section with cumulative notes and returns all source and answers', async () => {
     const source = 'A'.repeat(1300) + 'B'.repeat(1300) + 'C'.repeat(1300);
     const ask = makeAsk(['notes alpha', 'notes beta', 'notes gamma']);
