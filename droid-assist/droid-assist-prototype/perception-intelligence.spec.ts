@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActionRecord, Frame, WorkflowStep } from './types.js';
 import type { InventoryElement } from './screen-inventory.js';
 import {
-  appendDecisionHistory, loadDecisionHistory, saveDecisionHistory, DECISION_HISTORY_KEY, assessElementIdentity, calibrateEvidenceConfidence, decisionLearningContext, updateDecisionLearning, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
+  appendDecisionHistory, expectedOutcomeForAction, loadDecisionHistory, saveDecisionHistory, DECISION_HISTORY_KEY, assessElementIdentity, calibrateEvidenceConfidence, decisionLearningContext, updateDecisionLearning, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
   matchVisualPrototype, outcomeRates, prospectPoints, recognizeElements, relateElements, visualDescriptor,
 } from './perception-intelligence.js';
 
@@ -22,6 +22,14 @@ const step = (over: Partial<WorkflowStep> = {}): WorkflowStep => ({
 });
 
 describe('visual perception intelligence', () => {
+  it('associates expected outcomes only with the exact step that dispatched an action', () => {
+    const first = step({ id: 'first', status: 'done', expectedOutcome: 'Save confirmation appears' });
+    const second = step({ id: 'second', status: 'running', expectedOutcome: 'Dashboard becomes visible' });
+    expect(expectedOutcomeForAction({ stepId: 'first' }, [first, second])).toBe('Save confirmation appears');
+    expect(expectedOutcomeForAction({ stepId: 'second' }, [first, second])).toBe('Dashboard becomes visible');
+    expect(expectedOutcomeForAction({ stepId: 'missing' }, [first, second])).toBeUndefined();
+    expect(expectedOutcomeForAction({}, [first, second])).toBeUndefined();
+  });
   it('extracts a stable appearance descriptor and compares it', () => {
     const a = visualDescriptor(frame(1, 50), { x: 0, y: 0, w: 1, h: 1 });
     const b = visualDescriptor(frame(2, 50), { x: 0, y: 0, w: 1, h: 1 });
