@@ -4796,7 +4796,8 @@ export function useAssist() {
       lastEffectActionRef.current = newEffect.actionId;
       elementEffectsRef.current = [newEffect, ...elementEffectsRef.current].slice(0, 60);
       const runningStep = stepsRef.current.find(step => step.status === 'running');
-      const explicitExpectation = runningStep && /\\b(appears|appeared|visible|shown|disappears|disappeared|closed|opened)\\b/i.test(runningStep.name) ? runningStep.name : undefined;
+      const declaredExpectation = runningStep?.expectedOutcome?.trim();
+      const explicitExpectation = declaredExpectation || (runningStep && /\\b(appears|appeared|visible|shown|disappears|disappeared|closed|opened)\\b/i.test(runningStep.name) ? runningStep.name : undefined);
       const decision = recordDecisionOutcome({ effect: newEffect, frameId: frame.id, expected: explicitExpectation, at: frame.time });
       decisionHistoryRef.current = appendDecisionHistory(decisionHistoryRef.current, decision, 100);
       saveDecisionHistory(decisionHistoryRef.current);
