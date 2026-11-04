@@ -42,23 +42,19 @@ function findFileHeaders(output: string): Array<{ path: string; index: number; l
   let offset = 0;
   let fenceChar: string | undefined;
   let fenceLength = 0;
-
-  for (const line of output.match(/[^\\r\\n]*(?:\\r?\\n|$)/g) ?? []) {
+  for (const line of output.match(/[^\r\n]*(?:\r?\n|$)/g) ?? []) {
     if (!line) continue;
-    const text = line.replace(/\\r?\\n$/, '');
-    const fence = text.match(/^\\s*(`{3,}|~{3,})/);
+    const text = line.replace(/\r?\n$/, '');
+    const fence = text.match(/^\s*(\x60{3,}|~{3,})/);
     if (fence) {
       const token = fence[1];
       const char = token[0];
-      if (!fenceChar) {
-        fenceChar = char;
-        fenceLength = token.length;
-      } else if (char === fenceChar && token.length >= fenceLength && /^\\s*(?:`{3,}|~{3,})\\s*$/.test(text)) {
-        fenceChar = undefined;
-        fenceLength = 0;
+      if (!fenceChar) { fenceChar = char; fenceLength = token.length; }
+      else if (char === fenceChar && token.length >= fenceLength && /^\s*(?:\x60{3,}|~{3,})\s*$/.test(text)) {
+        fenceChar = undefined; fenceLength = 0;
       }
     } else if (!fenceChar) {
-      const header = text.match(/^[ \\t]*FILE[ \\t]*:[ \\t]*(.*?)[ \\t]*$/);
+      const header = text.match(/^[ \t]*FILE[ \t]*:[ \t]*(.*?)[ \t]*$/);
       if (header) headers.push({ path: header[1].trim(), index: offset, length: line.length });
     }
     offset += line.length;
