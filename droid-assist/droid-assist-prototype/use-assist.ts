@@ -5936,7 +5936,14 @@ export function useAssist() {
     const capture = createScreenCapture();
     capture.selectDisplay(settingsRef.current.displayId);
     try {
-      await capture.start(monitorInterval(settingsRef.current.monitorMode, modeCaptureMs(settingsRef.current.executionMode, settingsRef.current.captureMs)), { onImage: onScreenImage, onLost: onCaptureLost });
+      await capture.start(monitorInterval(settingsRef.current.monitorMode, modeCaptureMs(settingsRef.current.executionMode, settingsRef.current.captureMs)), {
+        onImage: onScreenImage,
+        onLost: (reason) => {
+          // A delayed ended event from a replaced capture must not tear down the newer source.
+          if (captureRef.current !== capture) return;
+          onCaptureLost(reason);
+        },
+      });
     } catch (error) {
       capture.stop();
       addLog('Screen', `Screen capture failed to start: ${errorText(error)}`, 'error');
