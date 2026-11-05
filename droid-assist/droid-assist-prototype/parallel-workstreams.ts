@@ -389,7 +389,13 @@ export async function runParallelWorkstreams(options: ParallelWorkstreamOptions)
     if (PARALLEL_STREAM_IDS.every((id) => ['passed', 'failed', 'cancelled'].includes(state.streams[id].status))) break;
   }
 
-  if (state.status !== 'cancelled') {
+  if (cancelled()) {
+    state.status = 'cancelled';
+    for (const streamId of PARALLEL_STREAM_IDS) {
+      const stream = state.streams[streamId];
+      if (!['passed', 'failed'].includes(stream.status)) stream.status = 'cancelled';
+    }
+  } else {
     state.status = PARALLEL_STREAM_IDS.some((id) => state.streams[id].status === 'passed') ? 'completed' : 'failed';
     for (const streamId of PARALLEL_STREAM_IDS) {
       const stream = state.streams[streamId];
