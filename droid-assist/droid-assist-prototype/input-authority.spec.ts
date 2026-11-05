@@ -215,4 +215,20 @@ describe('physical input authority', () => {
     await expect(a.run('droid-main', () => 'automation resumed')).resolves.toBe('automation resumed');
   });
 
+  it('never lets an agent override active user ownership, even with approval or failure evidence', () => {
+    const a = createInputAuthority();
+    a.changeOwner('user', 'user took control');
+    const decision = a.requestTakeover('droid-main', {
+      verifiedProgressCount: 0,
+      lastVerifiedAt: null,
+      startedAt: 0,
+      now: 100_000,
+      currentControllerFailed: true,
+      userDecision: 'approve',
+    });
+    expect(decision.accepted).toBe(false);
+    expect(decision.reason).toContain('user currently owns');
+    expect(a.snapshot().owner).toBe('user');
+  });
+
 });
