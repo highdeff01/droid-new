@@ -84,12 +84,12 @@ new file mode 100644
     await f.manager.prepare(f.base);
     const results = await f.manager.runChecks('stream-a');
     expect(results).toHaveLength(3);
-    expect(results.map((item) => item.exitCode)).toEqual([0, 0]);
+    expect(results.map((item) => item.exitCode)).toEqual([0, 0, 0]);
     expect(results[1].stdout).toContain('tests passed');
     await expect(f.manager.runChecks('stream-a', ['npm install' as never])).rejects.toThrow('Run both checks together');
   });
 
-  it('does not allow a branch commit until both test and lint pass', async () => {
+  it('does not allow a branch commit until dependency install, tests and lint pass', async () => {
     const f = await fixture();
     await f.manager.prepare(f.base);
     await f.manager.applyPatch('stream-a', patch);
