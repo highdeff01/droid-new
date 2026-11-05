@@ -204,7 +204,7 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
 
 export function ParallelStreamsPanel({ engine }: { engine: AssistEngine }) {
   const [task, setTask] = useState('');
-  const [baseCommit, setBaseCommit] = useState('95d22ba9d06439f6d502e1e6cdf6d03a9b96b28d');
+  const [baseCommit, setBaseCommit] = useState('');
   const [error, setError] = useState('');
   const run = engine.parallelAgentRun;
   const busy = run?.status === 'running';
@@ -234,9 +234,9 @@ export function ParallelStreamsPanel({ engine }: { engine: AssistEngine }) {
       <label style={{ display: 'block', fontSize: 12, marginBottom: 5 }}>Task / feature</label>
       <textarea value={task} onChange={(event) => setTask(event.target.value)} rows={3} style={field}
         placeholder="Describe the feature, bug, or engineering task for both streams…" disabled={busy} />
-      <label style={{ display: 'block', fontSize: 12, margin: '9px 0 5px' }}>Exact base commit (recommended)</label>
+      <label style={{ display: 'block', fontSize: 12, margin: '9px 0 5px' }}>Exact base commit (optional)</label>
       <input value={baseCommit} onChange={(event) => setBaseCommit(event.target.value)} style={field}
-        placeholder="Paste the SHA both branches should start from" disabled={busy} />
+        placeholder="Optional SHA; leave blank to use the selected local repository HEAD" disabled={busy} />
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
         <button type="button" style={button} onClick={() => void start()} disabled={busy || !task.trim()}>
           {busy ? 'Running both streams…' : 'Start both streams'}
