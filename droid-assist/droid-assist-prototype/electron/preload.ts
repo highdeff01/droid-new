@@ -5,6 +5,7 @@ import { MAIN_BRIDGE_CHANNELS, type MainBridgeNativeApi } from './main-bridge-ap
 import { WINDOW_CHANNELS, type NativeWindowApi } from './window-api.js';
 import { UPDATE_CHANNELS, type NativeUpdateApi } from './update-api.js';
 import { PHONE_CHANNELS, type PhoneAction, type PhoneNativeApi } from './phone-api.js';
+import { AGENT_WORKTREE_CHANNELS, type NativeAgentWorktreeApi } from './agent-worktree-api.js';
 
 let frameListener: ((event: IpcRendererEvent, frame: NativeFrame) => void) | null = null;
 let errorListener: ((event: IpcRendererEvent, message: string) => void) | null = null;
@@ -122,3 +123,15 @@ const phoneApi: PhoneNativeApi = {
 };
 
 contextBridge.exposeInMainWorld('droidPhone', phoneApi);
+
+/** The local Git worktree API. It exposes only explicit operations, never arbitrary shell execution. */
+const agentWorktrees: NativeAgentWorktreeApi = {
+  chooseRepository: () => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.chooseRepository),
+  prepare: (repository, baseCommit) => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.prepare, repository, baseCommit),
+  applyPatch: (id, patch) => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.applyPatch, id, patch),
+  runChecks: (id) => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.runChecks, id),
+  getDiff: (id) => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.getDiff, id),
+  commit: (id, paths, message) => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.commit, id, paths, message),
+  push: (id) => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.push, id),
+};
+contextBridge.exposeInMainWorld('droidAgentWorktrees', agentWorktrees);
