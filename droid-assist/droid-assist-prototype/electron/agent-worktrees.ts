@@ -30,6 +30,10 @@ export interface AgentCheckResult {
   stderr: string;
   startedAt: number;
   finishedAt: number;
+  /** Saved log artifact outside the source checkout. */
+  artifactPath?: string;
+  /** Saved diff snapshot from the same verification attempt. */
+  diffArtifactPath?: string;
 }
 export interface AgentDiffResult {
   id: AgentWorktreeId;
@@ -71,6 +75,7 @@ export class AgentWorktreeManager {
   private readonly passedChecks = new Map<AgentWorktreeId, Set<CheckName>>();
   private readonly testedFingerprint = new Map<AgentWorktreeId, string>();
   private readonly committedHeads = new Map<AgentWorktreeId, string>();
+  private artifactSequence = 0;
 
   constructor(options: AgentWorktreeManagerOptions) {
     this.root = path.resolve(options.rootDirectory);
@@ -132,6 +137,16 @@ export class AgentWorktreeManager {
     return this.snapshot ? structuredClone(this.snapshot) : null;
   }
 
+  private async saveArtifact(id: AgentWorktreeId, suffix: string, content: string): Promise<string> {
+    const directory = path.join(this.worktreeRoot, 'artifacts', id);
+    await fs.mkdir(directory, { recursive: true });
+    const safeSuffix = suffix.replace(/[^a-z0-9.-]/gi, '-');
+    const filename = `${Date.now()}-${++this.artifactSequence}-${safeSuffix}`;
+    const destination = path.join(directory, filename);
+    await fs.writeFile(destination, content, 'utf8');
+    return destination;
+  }
+
   private getWorktree(id: AgentWorktreeId): AgentWorktree {
     const worktree = this.snapshot?.worktrees[id];
     if (!worktree?.prepared) throw new Error(`Worktree ${id} has not been prepared in this session.`);
@@ -143,6 +158,7 @@ export class AgentWorktreeManager {
     if (!patch.trim()) throw new Error('Patch is empty.');
     if (patch.length > PATCH_LIMIT) throw new Error(`Patch exceeds ${PATCH_LIMIT} characters.`);
     if (!patch.includes('diff --git ')) throw new Error('Only a unified Git diff is accepted; source snippets are not auto-applied.');
+    const artifactPath = await this.saveArtifact(id, 'candidate.patch', patch);
     const pathLines = patch.split(/\r?\n/).filter((line) => line.startsWith('+++ b/') || line.startsWith('--- a/'));
     for (const line of pathLines) {
       const value = line.slice(6).split('\t')[0];
@@ -156,7 +172,7 @@ export class AgentWorktreeManager {
       this.passedChecks.delete(id);
       this.testedFingerprint.delete(id);
       this.committedHeads.delete(id);
-      return { applied: true, check: checked.stdout || 'git apply --check passed' };
+      return { applied: true, check: checked.stdout || 'git apply --check passed', artifactPath };
     } finally {
       await fs.rm(patchFile, { force: true });
     }
@@ -190,6 +206,15 @@ export class AgentWorktreeManager {
     } else {
       this.passedChecks.delete(id);
       this.testedFingerprint.delete(id);
+    }
+    const diff = await this.getDiff(id);
+    const diffArtifactPath = diff.diff ? await this.saveArtifact(id, 'review.diff', diff.diff) : undefined;
+    const artifactPath = await this.saveArtifact(id, 'checks.json', JSON.stringify({
+      id, baseCommit: this.snapshot?.baseCommit, createdAt: new Date().toISOString(), results,
+    }, null, 2));
+    for (const result of results) {
+      result.artifactPath = artifactPath;
+      result.diffArtifactPath = diffArtifactPath;
     }
     return results;
   }
@@ -226,6 +251,7 @@ export class AgentWorktreeManager {
     await this.git(['commit', '-m', message], worktree.path);
     const committed = (await this.git(['rev-parse', 'HEAD'], worktree.path)).stdout.trim();
     this.committedHeads.set(id, committed);
+    await this.saveArtifact(id, 'commit.json', JSON.stringify({ id, committed, message, paths, createdAt: new Date().toISOString() }, null, 2));
     return committed;
   }
 
@@ -240,6 +266,8 @@ export class AgentWorktreeManager {
     const passed = this.passedChecks.get(id);
     if (!passed || CHECKS.some((command) => !passed.has(command))) throw new Error('npm ci, npm test, and npm run lint must all pass before pushing.');
     await this.git(['push', '--set-upstream', 'origin', worktree.branch], worktree.path);
-    return (await this.git(['rev-parse', 'HEAD'], worktree.path)).stdout.trim();
+    const pushed = (await this.git(['rev-parse', 'HEAD'], worktree.path)).stdout.trim();
+    await this.saveArtifact(id, 'push.json', JSON.stringify({ id, branch: worktree.branch, pushed, createdAt: new Date().toISOString() }, null, 2));
+    return pushed;
   }
 }
