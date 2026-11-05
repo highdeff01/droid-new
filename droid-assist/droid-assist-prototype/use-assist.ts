@@ -26,6 +26,7 @@ import { radarStatus, radarStatusText, radarTick, startRadar, type RadarEvent, t
 import { predictNextPosition, selfMoveSightings } from './mobility.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, pointerAction, selfTestBridge, sendNative, sendToBridge, type BridgeResult } from './bridge.js';
 import { DRY_RUN, dragEndError, groundTarget, runStep, type Grounding, type SendFn, type StepDeps, type StepOutcome } from './run-step.js';
+import { createInputAuthority, type InputLease } from './input-authority.js';
 import { NO_SOURCE, captureLabel, captureStatus, stepPlan, type FrameProvider, type StepPlan } from './capture-source.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
@@ -427,6 +428,10 @@ export interface Agent {
  * slash commands, action history and saved workflows.
  */
 export function useAssist() {
+  /** One shared FIFO authority for every automated real-input route in this hook instance. */
+  const inputAuthorityRef = useRef<ReturnType<typeof createInputAuthority> | null>(null);
+  inputAuthorityRef.current ??= createInputAuthority('droid-new');
+  const inputAuthority = inputAuthorityRef.current;
   /** Startup recovery runs before any store is loaded, so every loader reads repaired data. */
   const [recovery, setRecovery] = useState<RecoveryReport>(() => recoverStorage());
   const [settings, setSettings] = useState<AssistSettings>(() => loadSettings({ ...DEFAULT_SETTINGS, mainBridgeMode: defaultBridgeMode() }));
@@ -2285,7 +2290,14 @@ export function useAssist() {
       bridgeUrl,
       bridgeToken,
       capture: () => stepFrame(plan.frames, dryRun ? reference : undefined),
-      send: plan.input === 'main-app' ? sendToMainApp : undefined,
+      send: async (step, w, h, origin) => inputAuthority.run('droid-new', async (lease) => {
+        lease.assertCurrent();
+        const result = plan.input === 'main-app'
+          ? await sendToMainApp(step, w, h, origin)
+          : await sendToBridge(bridgeUrl, step, w, h, { token: bridgeToken, origin });
+        lease.assertCurrent();
+        return result;
+      }),
       attempts: Math.max(1, checkpoints),
       retryMs: 400,
       drift: driftThresholds(),
@@ -2320,7 +2332,14 @@ export function useAssist() {
     if (!plan) return null;
     if (plan.input === 'demo') return { capture: async () => demoSnapshot() ?? Promise.reject(new Error('no demo canvas')), send: sendToDemo };
     const budget = createBudget(settingsRef.current.actionBudget);
-    const real: SendFn = plan.input === 'main-app' ? sendToMainApp : (step, w, h, origin) => sendToBridge(settingsRef.current.bridgeUrl, step, w, h, { token: settingsRef.current.bridgeToken, origin });
+    const real: SendFn = (step, w, h, origin) => inputAuthority.run('droid-new', async (lease) => {
+      lease.assertCurrent();
+      const result = plan.input === 'main-app'
+        ? await sendToMainApp(step, w, h, origin)
+        : await sendToBridge(settingsRef.current.bridgeUrl, step, w, h, { token: settingsRef.current.bridgeToken, origin });
+      lease.assertCurrent();
+      return result;
+    });
     return {
       capture: () => stepFrame(plan.frames),
       send: async (step, w, h, origin) => {
