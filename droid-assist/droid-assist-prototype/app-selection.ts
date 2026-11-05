@@ -46,7 +46,7 @@ export type AppTally = Record<JointApp, { ok: number; failed: number }>;
 /** single: one app does both halves; split: one calculates, the other performs; both: split plus cross-app verification. */
 export type JointMode = 'single' | 'split' | 'both';
 
-export interface AppDecision {
+export interface JointDecision {
   operation: string;
   calculate: JointApp;
   perform: JointApp;
@@ -54,7 +54,7 @@ export interface AppDecision {
   reason: string;
 }
 
-export type Selection = { ok: true; decision: AppDecision } | { ok: false; reason: string };
+export type Selection = { ok: true; decision: JointDecision } | { ok: false; reason: string };
 
 /** A tally with nothing remembered. */
 export const emptyTally = (): AppTally => ({ 'droid-new': { ok: 0, failed: 0 }, 'droid-main': { ok: 0, failed: 0 } });
@@ -98,7 +98,7 @@ export function selectApps(op: JointOperation, profiles: readonly AppProfile[], 
 }
 
 /** One-line log text of a decision. */
-export const decisionText = (d: AppDecision) => `"${d.operation}" → ${d.mode}: ${d.reason}`;
+export const decisionText = (d: JointDecision) => `"${d.operation}" → ${d.mode}: ${d.reason}`;
 /** The two apps: droid-new (assist, the boss) and droid-main. */
 export type AppId = 'assist' | 'main';
 /** Where a job goes: one app, split (calculate in one, perform in the other), or both. */

@@ -584,7 +584,7 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       />
       <label className={styles.setting}>Bridge auth token
         <input type="password" value={settings.bridgeToken} onChange={(e) => setSettings({ ...settings, bridgeToken: e.target.value })} aria-label="Bridge auth token" autoComplete="off" />
-        <small>Must match DROID_BRIDGE_TOKEN on the bridge; sent as a Bearer token on every bridge call and never written to the activity log.</small>
+        <small>Must match DROID_BRIDGE_TOKEN on the bridge; sent as a Bearer token on every bridge call and never written to the activity log. On Windows, run resources/bridge-service/start-windows.ps1, then use http://127.0.0.1:3000.</small>
       </label>
       <MainBridgeSettings engine={engine} />
       <label className={styles.setting}>AI endpoint (Ollama /api/chat)

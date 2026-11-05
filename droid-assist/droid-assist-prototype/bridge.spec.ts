@@ -1,4 +1,6 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { loadConfigFromFile, type ProxyOptions } from 'vite';
 import { BRIDGE_REQUIRED, BRIDGE_UNAUTHORIZED, captureDesktop, checkBridge, humanMoveMs, insecureBridgeUrl, nativeActions, selfTestBridge, sendToBridge } from './bridge.js';
 import type { WorkflowStep } from './types.js';
 
@@ -201,6 +203,22 @@ describe('insecureBridgeUrl', () => {
 
   it('accepts localhost, loopback, https and same-origin proxy URLs', () => {
     for (const url of ['', '/bridge', 'http://localhost:3000', 'http://127.0.0.1:3000', 'http://127.4.5.6', 'http://[::1]:3000', 'http://pc.localhost', 'https://192.168.1.50:3000']) expect(insecureBridgeUrl(url)).toBe(false);
+  });
+});
+
+describe('bridge proxy configuration', () => {
+  it('proxies bridge API requests without intercepting app modules', async () => {
+    const loaded = await loadConfigFromFile({ command: 'serve', mode: 'test' }, './vite.config.js');
+    expect(loaded).toBeTruthy();
+    for (const proxy of [loaded!.config.server?.proxy, loaded!.config.preview?.proxy]) {
+      expect(proxy).toBeTruthy();
+      const contexts = Object.keys(proxy!);
+      expect(contexts.find((context) => '/bridge/api/health'.startsWith(context))).toBe('/bridge/');
+      expect(contexts.some((context) => '/bridge-toolbar.tsx'.startsWith(context))).toBe(false);
+      expect(contexts.some((context) => '/bridge-tabs.tsx'.startsWith(context))).toBe(false);
+      const bridge = proxy!['/bridge/'] as ProxyOptions;
+      expect(bridge.rewrite?.('/bridge/api/health')).toBe('/api/health');
+    }
   });
 });
 

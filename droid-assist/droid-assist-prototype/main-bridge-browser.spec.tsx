@@ -1,5 +1,7 @@
 import { act, cleanup, fireEvent, render, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
+import { DroidAssistPrototype } from './droid-assist-prototype.js';
 import { defaultBridgeMode, inBrowser, LISTEN_NEEDS_DESKTOP } from './main-bridge.js';
 import { useAssist } from './use-assist.js';
 import { SettingsPanel } from './panels.js';
@@ -23,6 +25,12 @@ class FakeImage {
 }
 
 const fakeContext = {
+  clearRect: () => {},
+  beginPath: () => {},
+  moveTo: () => {},
+  lineTo: () => {},
+  stroke: () => {},
+  fillText: () => {},
   drawImage: () => {},
   getImageData: (_x: number, _y: number, w: number, h: number) => new ImageData(new Uint8ClampedArray(w * h * 4), w, h),
 };
@@ -62,6 +70,17 @@ function SettingsHost() {
   const engine = useAssist();
   return <SettingsPanel engine={engine} />;
 }
+
+describe('app startup', () => {
+  it('renders the workspace and lets a panel collapse', async () => {
+    const { container, getByRole } = render(<MemoryRouter><DroidAssistPrototype /></MemoryRouter>);
+    await act(async () => {});
+    expect(container.textContent).toContain('Droid Assist');
+    expect(container.querySelector('main')).toBeTruthy();
+    fireEvent.click(getByRole('button', { name: 'Collapse workflow panel' }));
+    expect(getByRole('button', { name: 'Expand workflow panel' })).toBeTruthy();
+  });
+});
 
 describe('browser dial-mode suggestion', () => {
   describe('inBrowser / defaultBridgeMode', () => {

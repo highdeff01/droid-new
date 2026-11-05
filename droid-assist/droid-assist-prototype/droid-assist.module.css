@@ -164,11 +164,6 @@ fieldset.setting { border: 1px solid var(--line); border-radius: 10px; padding: 
 .panelHandle:focus-visible, .panelToggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .panelSlot[data-collapsed='true'] .panelBody { display: none; }
 .panelSlot[data-collapsed='true'] .panelTitle { display: inline; margin-right: 4px; }
-/* User-arrangeable panels: each panel sits in a slot with a drag handle and an undock control; empty panels hide their slot. */
-.panelSlot { position: relative; min-width: 0; }
-.panelSlot:has(> .panelBody:empty) { display: none; }
-.panelBody { min-width: 0; }
-.panelControls { position: absolute; top: var(--sp-1); right: var(--sp-2); z-index: 1; display: flex; gap: var(--sp-1); align-items: center; }
 .app .panelHandle, .app .panelControl { min-height: 0; padding: 2px 6px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--muted); font-size: var(--fs-sm); line-height: 1; }
 .app .panelHandle:hover, .app .panelControl:hover { color: var(--accent); border-color: var(--line); background: #0b1220; }
 .app .panelHandle { cursor: grab; }
