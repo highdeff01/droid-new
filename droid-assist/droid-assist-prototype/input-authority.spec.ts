@@ -101,4 +101,101 @@ describe('physical input authority', () => {
     await expect(a.run('droid-new', () => 'fresh lease')).resolves.toBe('fresh lease');
   });
 
+  it('rejects takeover while the current controller is making verified progress', () => {
+    const a = createInputAuthority();
+    const decision = a.requestTakeover('droid-main', {
+      verifiedProgressCount: 4,
+      lastVerifiedAt: 9_500,
+      startedAt: 1_000,
+      now: 10_000,
+      stallThresholdMs: 5_000,
+    });
+    expect(decision).toMatchObject({ accepted: false, previousOwner: 'droid-new', requestedOwner: 'droid-main', generation: 0 });
+    expect(decision.reason).toContain('recent verified progress');
+    expect(a.snapshot().owner).toBe('droid-new');
+  });
+
+  it('accepts takeover when verified progress has stalled and invalidates the old generation', async () => {
+    const a = createInputAuthority();
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const active = a.run('droid-new', async lease => { started(); await gate; lease.assertCurrent(); });
+    await ready;
+    const decision = a.requestTakeover('droid-main', {
+      verifiedProgressCount: 2,
+      lastVerifiedAt: 1_000,
+      startedAt: 500,
+      now: 20_000,
+      stallThresholdMs: 10_000,
+    });
+    expect(decision.accepted).toBe(true);
+    expect(decision.reason).toContain('no verified progress');
+    expect(a.snapshot()).toMatchObject({ owner: 'droid-main', generation: 1 });
+    release();
+    await expect(active).rejects.toBeInstanceOf(InputLeaseError);
+    await expect(a.run('droid-main', () => 'new owner')).resolves.toBe('new owner');
+  });
+
+  it('lets explicit user approval authorize takeover before the stall threshold', () => {
+    const a = createInputAuthority();
+    const decision = a.requestTakeover('droid-main', {
+      verifiedProgressCount: 3,
+      lastVerifiedAt: 9_900,
+      startedAt: 1_000,
+      now: 10_000,
+      userDecision: 'approve',
+    });
+    expect(decision.accepted).toBe(true);
+    expect(decision.reason).toContain('explicit user approval');
+    expect(a.snapshot().owner).toBe('droid-main');
+  });
+
+  it('honors user rejection even when a controller is reported failed', () => {
+    const a = createInputAuthority();
+    const decision = a.requestTakeover('droid-main', {
+      verifiedProgressCount: 0,
+      lastVerifiedAt: null,
+      startedAt: 0,
+      now: 60_000,
+      currentControllerFailed: true,
+      userDecision: 'reject',
+    });
+    expect(decision.accepted).toBe(false);
+    expect(decision.reason).toContain('rejected by the user');
+    expect(a.snapshot().owner).toBe('droid-new');
+  });
+
+  it('does not transfer control after the goal is verified complete', () => {
+    const a = createInputAuthority();
+    const decision = a.requestTakeover('droid-main', {
+      goalReached: true,
+      verifiedProgressCount: 10,
+      lastVerifiedAt: 9_000,
+      startedAt: 0,
+      now: 100_000,
+      currentControllerFailed: true,
+      userDecision: 'approve',
+    });
+    expect(decision.accepted).toBe(false);
+    expect(decision.reason).toContain('goal is complete');
+    expect(a.snapshot().owner).toBe('droid-new');
+  });
+
+  it('does not permit agent takeover while the user has paused physical input', () => {
+    const a = createInputAuthority();
+    a.setPaused(true);
+    const decision = a.requestTakeover('droid-main', {
+      verifiedProgressCount: 0,
+      lastVerifiedAt: null,
+      startedAt: 0,
+      now: 60_000,
+      userDecision: 'approve',
+    });
+    expect(decision.accepted).toBe(false);
+    expect(decision.reason).toContain('paused by the user');
+    expect(a.snapshot()).toMatchObject({ owner: 'droid-new', paused: true });
+  });
+
 });
