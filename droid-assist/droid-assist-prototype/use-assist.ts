@@ -7661,6 +7661,18 @@ export function useAssist() {
     addLog('Input authority', paused ? 'Physical input paused by user' : 'Physical input resumed with a fresh generation', paused ? 'warn' : 'info');
     return inputAuthority.snapshot();
   };
+  /** User takes exclusive ownership; all automated leases are invalidated immediately. */
+  const takeUserInputControl = () => {
+    const generation = inputAuthority.changeOwner('user', 'User took direct physical input control');
+    addLog('Input authority', 'User has exclusive physical input control; automated dispatch is fenced', 'warn');
+    return { ...inputAuthority.snapshot(), generation };
+  };
+  /** Explicitly return control to one automation controller after the user is finished. */
+  const resumeAutomatedInput = (owner: 'droid-new' | 'droid-main' = 'droid-new') => {
+    const generation = inputAuthority.changeOwner(owner, 'User returned physical input control to automation');
+    addLog('Input authority', `Physical input returned to ${owner}`, 'info');
+    return { ...inputAuthority.snapshot(), generation };
+  };
 
   const runDocumentPipeline = async (files: DocumentInput[], question: string, options: DocumentPipelineOptions = {}, reviewerCount = 0): Promise<DocumentPipelineResult> => {
     if (!aiOnline()) throw new Error('AI is unavailable. Connect the configured AI endpoint before running document analysis.');
@@ -7727,7 +7739,7 @@ export function useAssist() {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     /** Single shared physical-input authority and evidence-based cooperative takeover controls. */
     getInputAuthority: () => inputAuthority.snapshot(),
-    requestInputTakeover, setInputPaused,
+    requestInputTakeover, setInputPaused, takeUserInputControl, resumeAutomatedInput,
     /** Resolve reviewer-requested frame IDs from the current bounded gallery; returns existing references only. */
     getEvidenceFrames: (requestedIds?: readonly number[], limit = 6) => retrieveEvidenceFrames(framesRef.current, requestedIds, limit),
     /** Read-only file analysis through the app's existing configured AI session; it never dispatches input actions. */
