@@ -134,8 +134,25 @@ export async function runParallelAgentReview(options: ParallelAgentRunnerOptions
       }
     }
     if (alternative) {
-      // A distinct strategy is attempted after the same-method retries are exhausted.
-      return askWithRetry(stream, alternative.method, alternative.prompt, undefined);
+      // Carry the complete failure history into the alternate strategy so it can
+      // deliberately avoid the failed approach instead of blindly repeating it.
+      stream.currentMethod += 1;
+      const failurePacket = stream.attempts
+        .map((item) => ({
+          method: item.method,
+          attempt: item.attempt,
+          status: item.status,
+          error: item.error,
+          outputExcerpt: item.output.slice(0, 2_500),
+        }));
+      const recoveryPrompt = [
+        alternative.prompt,
+        '',
+        'AUTOMATIC RECOVERY CONTEXT — DO NOT REPEAT THE FAILED METHOD:',
+        JSON.stringify({ lastError: lastError || 'No successful response', failedMethod: method, priorAttempts: failurePacket }, null, 2).slice(0, 10_000),
+        'Use a materially different method. Preserve any useful findings from earlier attempts, explicitly explain what changed, and return a complete patch-ready unified diff when code changes are appropriate.',
+      ].join('\n');
+      return askWithRetry(stream, alternative.method, recoveryPrompt, undefined);
     }
     throw new Error(`${stream.id} exhausted retries for ${method}: ${lastError}`);
   };
