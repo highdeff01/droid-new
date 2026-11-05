@@ -140,7 +140,7 @@ export class AgentWorktreeManager {
     if (!patch.trim()) throw new Error('Patch is empty.');
     if (patch.length > PATCH_LIMIT) throw new Error(`Patch exceeds ${PATCH_LIMIT} characters.`);
     if (!patch.includes('diff --git ')) throw new Error('Only a unified Git diff is accepted; source snippets are not auto-applied.');
-    const pathLines = patch.split(/\\r?\\n/).filter((line) => line.startsWith('+++ b/') || line.startsWith('--- a/'));
+    const pathLines = patch.split(/\r?\n/).filter((line) => line.startsWith('+++ b/') || line.startsWith('--- a/'));
     for (const line of pathLines) {
       const value = line.slice(6).split('\t')[0];
       if (value !== '/dev/null' && !safeRelativePath(value)) throw new Error(`Unsafe patch path rejected: ${value}`);
