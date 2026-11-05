@@ -21,7 +21,7 @@ const state = (over: Partial<PhoneState> = {}): PhoneState => ({
 let running: PhoneCompanion | null = null;
 afterEach(() => { running?.stop(); running = null; });
 
-async function serve(over: Partial<PhoneState> = {}, token = '') {
+async function serve(over: Partial<PhoneState> = {}, token = 't') {
   const actions = { approve: vi.fn(), reject: vi.fn(), runWorkflow: vi.fn() };
   const companion = startPhoneCompanion({ host: HOST, port: randomPort(), token }, () => state(over), actions);
   running = companion;
@@ -59,7 +59,7 @@ describe('statusPayload / pagePayload', () => {
 describe('startPhoneCompanion', () => {
   it('serves the mobile page', async () => {
     const { base } = await serve();
-    const res = await get(`${base}/`);
+    const res = await get(`${base}/?token=t`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
     const html = await res.text();
@@ -69,7 +69,7 @@ describe('startPhoneCompanion', () => {
 
   it('reports the live state without the frame bytes', async () => {
     const { base } = await serve();
-    const body = await (await get(`${base}/api/state`)).json();
+    const body = await (await get(`${base}/api/state?token=t`)).json();
     expect(body.success).toBe(true);
     expect(body.apps).toHaveLength(2);
     expect(body.driving).toBe('droid-new');
@@ -79,7 +79,7 @@ describe('startPhoneCompanion', () => {
 
   it('serves the latest frame as image/jpeg', async () => {
     const { base } = await serve();
-    const res = await get(`${base}/api/frame`);
+    const res = await get(`${base}/api/frame?token=t`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('image/jpeg');
     expect(Buffer.from(await res.arrayBuffer()).length).toBe(8);
@@ -87,24 +87,31 @@ describe('startPhoneCompanion', () => {
 
   it('answers 404 for the frame when there is none', async () => {
     const { base } = await serve({ frame: '' });
-    expect((await get(`${base}/api/frame`)).status).toBe(404);
+    expect((await get(`${base}/api/frame?token=t`)).status).toBe(404);
   });
 
   it('approves and rejects queued approvals, refusing unknown ids', async () => {
     const { base, actions } = await serve();
-    expect((await post(`${base}/api/approvals/a1/approve`)).status).toBe(200);
+    expect((await post(`${base}/api/approvals/a1/approve?token=t`)).status).toBe(200);
     expect(actions.approve).toHaveBeenCalledWith('a1');
-    expect((await post(`${base}/api/approvals/a1/reject`)).status).toBe(200);
+    expect((await post(`${base}/api/approvals/a1/reject?token=t`)).status).toBe(200);
     expect(actions.reject).toHaveBeenCalledWith('a1');
-    expect((await post(`${base}/api/approvals/nope/approve`)).status).toBe(404);
+    expect((await post(`${base}/api/approvals/nope/approve?token=t`)).status).toBe(404);
     expect(actions.approve).toHaveBeenCalledTimes(1);
   });
 
   it('triggers a saved workflow, refusing an unknown one', async () => {
     const { base, actions } = await serve();
-    expect((await post(`${base}/api/workflows/w1/run`)).status).toBe(200);
+    expect((await post(`${base}/api/workflows/w1/run?token=t`)).status).toBe(200);
     expect(actions.runWorkflow).toHaveBeenCalledWith('w1');
-    expect((await post(`${base}/api/workflows/nope/run`)).status).toBe(404);
+    expect((await post(`${base}/api/workflows/nope/run?token=t`)).status).toBe(404);
+  });
+
+  it('refuses every route when no token is set on the companion', async () => {
+    const { base } = await serve({}, '');
+    expect((await get(`${base}/`)).status).toBe(401);
+    expect((await get(`${base}/api/state?token=t`)).status).toBe(401);
+    expect((await post(`${base}/api/approvals/a1/approve`)).status).toBe(401);
   });
 
   it('requires the token on every route when one is set', async () => {

@@ -405,7 +405,7 @@ export interface AssistSettings {
   voiceVolume: number;
   /** Phone companion: the port the small mobile page is served on. */
   phonePort: number;
-  /** Phone companion: the token a phone must present (empty = no token, open on the local network). */
+  /** Phone companion: the token a phone must present (empty = the companion refuses every request until one is set). */
   phoneToken: string;
   /** User arrangement of the workspace panels, per area; validated on load so no panel is ever lost. */
   panelLayout: PanelLayout;
