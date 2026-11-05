@@ -3773,6 +3773,9 @@ export function useAssist() {
         const { full, crop } = await boxedFrames(cur, change.box);
         return assessChange(askFor('screenResponder'), full, crop, change, {
           goal: goalRef.current, next,
+          // Send at most two retained prior captures alongside the current full frame and crop.
+          // This is reviewer-only evidence; it never enters the dispatch/input path.
+          evidenceFrames: retrieveEvidenceFrames(framesRef.current, undefined, 3).filter(frame => frame.id !== cur.id).slice(0, 2),
           context: [
             ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),
             ...decisionHistoryContext(decisionHistoryRef.current),
