@@ -67,7 +67,7 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
   });
   const apply = (id: AgentWorktreeId) => withBusy(id, async () => {
     const result = await native.applyPatch(id, patches[id]);
-    setMessage(`${id}: patch applied after validation (${result.check}).`);
+    setMessage(`${id}: patch applied after validation (${result.check}). Saved candidate: ${result.artifactPath}`);
     const diff = await native.getDiff(id);
     setDiffs((old) => ({ ...old, [id]: diff }));
     setChecks((old) => ({ ...old, [id]: undefined }));
@@ -130,6 +130,8 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
                 {result?.map((item) => (
                   <div key={item.command} style={{ borderTop: '1px solid var(--line, #334155)', marginTop: 8, paddingTop: 7 }}>
                     <div style={{ fontSize: 12, color: item.exitCode === 0 ? '#86efac' : '#fca5a5' }}>{item.command}: {item.exitCode === 0 ? 'passed' : `failed (exit ${item.exitCode})`}</div>
+                    {item.artifactPath && <div style={muted}>Saved log: {item.artifactPath}</div>}
+                    {item.diffArtifactPath && <div style={muted}>Saved diff: {item.diffArtifactPath}</div>}
                     <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 150, overflow: 'auto', fontSize: 10 }}>{[item.stdout, item.stderr].filter(Boolean).join('\n')}</pre>
                   </div>
                 ))}
