@@ -167,7 +167,9 @@ export class AgentWorktreeManager {
       const startedAt = Date.now();
       const [program, ...args] = command.split(' ');
       try {
-        const result = await execFile(program, args, { cwd: worktree.path, timeout: this.timeoutMs, maxBuffer: this.maxBuffer, windowsHide: true });
+        const result = process.platform === 'win32'
+          ? await execFile('cmd.exe', ['/d', '/s', '/c', `${program}.cmd ${args.join(' ')}`], { cwd: worktree.path, timeout: this.timeoutMs, maxBuffer: this.maxBuffer, windowsHide: true })
+          : await execFile(program, args, { cwd: worktree.path, timeout: this.timeoutMs, maxBuffer: this.maxBuffer, windowsHide: true });
         results.push({ id, command, exitCode: 0, stdout: result.stdout.slice(0, OUTPUT_LIMIT), stderr: result.stderr.slice(0, OUTPUT_LIMIT), startedAt, finishedAt: Date.now() });
       } catch (error) {
         const e = error as Error & { code?: number | string; stdout?: string; stderr?: string };
