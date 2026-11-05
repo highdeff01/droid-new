@@ -117,7 +117,7 @@ const AI: Requester = { kind: 'ai' };
 const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
 import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
-import { actionForFrame, selectEvidenceFrames, appendDecisionHistory, expectedOutcomeForAction, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, loadDecisionHistory, saveDecisionHistory, decisionLearningContext, frameChangeRatio, learnVisualPrototype, loadDecisionLearning, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveDecisionLearning, saveVisualPrototypes, updateDecisionLearning, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
+import { actionForFrame, selectEvidenceFrames, retrieveEvidenceFrames, appendDecisionHistory, expectedOutcomeForAction, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, loadDecisionHistory, saveDecisionHistory, decisionLearningContext, frameChangeRatio, learnVisualPrototype, loadDecisionLearning, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveDecisionLearning, saveVisualPrototypes, updateDecisionLearning, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
 
 import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
 import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
@@ -7675,6 +7675,8 @@ export function useAssist() {
 
   return {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
+    /** Resolve reviewer-requested frame IDs from the current bounded gallery; returns existing references only. */
+    getEvidenceFrames: (requestedIds?: readonly number[], limit = 6) => retrieveEvidenceFrames(framesRef.current, requestedIds, limit),
     /** Read-only file analysis through the app's existing configured AI session; it never dispatches input actions. */
     runDocumentPipeline,
     /** Bounded sequential long-form generation through the existing AI session. */
