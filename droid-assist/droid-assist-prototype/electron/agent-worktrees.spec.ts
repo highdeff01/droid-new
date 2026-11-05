@@ -62,6 +62,22 @@ describe('AgentWorktreeManager', () => {
     expect(await fs.readFile(path.join(result.worktrees['stream-b'].path, 'README.md'), 'utf8')).toBe('base\n');
   });
 
+  it('includes newly-created files in the review diff', async () => {
+    const f = await fixture();
+    await f.manager.prepare(f.base);
+    const newFilePatch = `diff --git a/new-agent-file.txt b/new-agent-file.txt
+new file mode 100644
+--- /dev/null
++++ b/new-agent-file.txt
+@@ -0,0 +1 @@
++created by stream
+`;
+    await f.manager.applyPatch('stream-b', newFilePatch);
+    const diff = await f.manager.getDiff('stream-b');
+    expect(diff.changedFiles).toContain('new-agent-file.txt');
+    expect(diff.diff).toContain('+created by stream');
+  });
+
   it('runs allowlisted tests and lint and rejects other commands', async () => {
     const f = await fixture();
     await f.manager.prepare(f.base);
