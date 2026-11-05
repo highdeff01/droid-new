@@ -30,6 +30,7 @@ import { DatabasePanel } from './database-panel.js';
 import { PresentationPanel } from './presentation-panel.js';
 import { NotificationStack } from './notification-stack.js';
 import { HelpGuide } from './help-guide.js';
+import { ParallelStreamsPanel } from './parallel-streams-panel.js';
 import { OperationsPanel } from './operations-panel.js';
 import { OperationsPanel as OpsAgentsPanel } from './ops-panel.js';
 import { PanelBoard } from './panel-board.js';
@@ -104,6 +105,7 @@ function AssistScreen() {
         <BridgeToolbar engine={engine} />
         <LiveBriefingPanel engine={engine} />
         <CurrentOperationPanel engine={engine} />
+        <ParallelStreamsPanel engine={engine} />
         <PopupPanel engine={engine} />
         <div className={styles.work}>
           <div className={styles.workMain}>
