@@ -133,6 +133,14 @@ describe('decisionText', () => {
   });
 });
 
+import {
+  APP_SELECTION_SOURCE,
+  decideApp,
+  selectApp,
+  standingCapabilities,
+  type AppCapability,
+  type Job,
+} from './app-selection.js';
 
 const capability = (overrides: Partial<AppCapability> = {}): AppCapability => ({
   calculate: true,

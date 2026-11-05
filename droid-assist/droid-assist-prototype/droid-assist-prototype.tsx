@@ -4,10 +4,10 @@ import { Stage } from './stage.js';
 import { Hud } from './hud.js';
 import { BridgeToolbar } from './bridge-toolbar.js';
 import { BridgeTabs } from './bridge-tabs.js';
-import { ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BlacklistPanel, BriefingPanel, CapabilitiesPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel, SnipGalleryPanel, SectionsPanel, WakePanel } from './panels.js';
+import { DecisionHistoryPanel, DocumentPipelinePanel, ActionHistoryPanel, AgentsPanel, AiHelpPanel, AiHistoryPanel, BlacklistPanel, BriefingPanel, CapabilitiesPanel, ComparisonGallery, ElementMapPanel, ElementsPanel, ErrorsPanel, LearnedCoordsPanel, LibraryPanel, LogPanel, LoopControlPanel, PatternsPanel, QwenThinkingPanel, RulerPanel, SettingsPanel, SupervisorPanel, WatcherPanel, WorkflowPanel, SnipGalleryPanel, SectionsPanel, WakePanel } from './panels.js';
 import { AgentBusPanel, AgentCrewPanel, SubagentReportPanel, CrewPanel, ResolutionPanel } from './bus-panels.js';
 import { CurrentOperationPanel as OperationProgressPanel } from './current-operation-panel.js';
-import { CurrentOperationPanel as AiActivityPanel, PopupPanel } from './attention-panels.js';
+import { CurrentOperationPanel, CurrentOperationPanel as AiActivityPanel, PopupPanel } from './attention-panels.js';
 import { SelfTestPanel } from './screen-ai-panels.js';
 import { TriggersPanel } from './triggers-panel.js';
 import { ProjectsPanel } from './projects-panel.js';
@@ -29,6 +29,8 @@ import { NotificationsPanel } from './notifications-panel.js';
 import { DatabasePanel } from './database-panel.js';
 import { PresentationPanel } from './presentation-panel.js';
 import { NotificationStack } from './notification-stack.js';
+import { HelpGuide } from './help-guide.js';
+import { ParallelStreamsPanel } from './parallel-streams-panel.js';
 import { OperationsPanel } from './operations-panel.js';
 import { OperationsPanel as OpsAgentsPanel } from './ops-panel.js';
 import { PanelBoard } from './panel-board.js';
@@ -39,6 +41,8 @@ import styles from './droid-assist.module.css';
 
 /** Every user-arrangeable panel by its layout id; the panels themselves render unchanged. */
 const PANELS: Record<PanelId, (props: { engine: AssistEngine }) => JSX.Element | null> = {
+  documentPipeline: DocumentPipelinePanel,
+  perceptionReview: DecisionHistoryPanel,
   workflow: WorkflowPanel, operationProgress: OperationProgressPanel, liveBriefing: LiveBriefingPanel, aiActivity: AiActivityPanel,
   popups: PopupPanel, selfTest: SelfTestPanel, variations: VariationsPanel, persona: PersonaPanel, ruler: RulerPanel, elements: ElementsPanel,
   elementMap: ElementMapPanel, snipGallery: SnipGalleryPanel, inventory: InventoryPanel, routes: RoutesPanel, retest: RetestPanel,
@@ -48,6 +52,7 @@ const PANELS: Record<PanelId, (props: { engine: AssistEngine }) => JSX.Element |
   initiative: InitiativePanel, triggers: TriggersPanel, projects: ProjectsPanel, accessPaths: AccessPathsPanel, approvals: ApprovalsPanel, artifacts: ArtifactsPanel,
   presentation: PresentationPanel, operations: OperationsPanel,
   comparisonGallery: ComparisonGallery, aiHelp: AiHelpPanel, briefing: BriefingPanel, aiHistory: AiHistoryPanel,
+  helpGuide: HelpGuide,
   qwenThinking: QwenThinkingPanel, aiResponses: AiResponsesPanel, supervisor: SupervisorPanel, agents: AgentsPanel, portfolios: PortfoliosPanel,
   loopControl: LoopControlPanel, capabilities: CapabilitiesPanel, settings: SettingsPanel, agentBus: AgentBusPanel, crew: CrewPanel,
   agentCrew: AgentCrewPanel, opsAgents: OpsAgentsPanel, subagentReport: SubagentReportPanel, resolution: ResolutionPanel,
@@ -80,11 +85,28 @@ function AssistScreen() {
           </svg>
           <span>Droid Assist <small>accessibility · screen AI · automation</small></span>
         </div>
+        <div className={styles.headerControls} aria-label="Physical input authority">
+          <span role="status" aria-live="polite">
+            Input: {engine.getInputAuthority().owner} · {engine.getInputAuthority().paused ? 'paused' : 'active'}
+          </span>
+          {engine.getInputAuthority().owner !== 'user' ? (
+            <button type="button" onClick={engine.takeUserInputControl}>Take PC control</button>
+          ) : (
+            <button type="button" onClick={() => engine.resumeAutomatedInput('droid-new')}>Return to Droid-New</button>
+          )}
+          <button type="button" onClick={() => engine.setInputPaused(!engine.getInputAuthority().paused)}>
+            {engine.getInputAuthority().paused ? 'Resume input' : 'Pause automation'}
+          </button>
+        </div>
       </header>
       <NotificationStack engine={engine} />
       <main className={styles.main}>
         <Hud engine={engine} />
         <BridgeToolbar engine={engine} />
+        <LiveBriefingPanel engine={engine} />
+        <CurrentOperationPanel engine={engine} />
+        <ParallelStreamsPanel engine={engine} />
+        <PopupPanel engine={engine} />
         <div className={styles.work}>
           <div className={styles.workMain}>
             <Stage engine={engine} />

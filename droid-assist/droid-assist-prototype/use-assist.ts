@@ -10,6 +10,7 @@ import { OVERLAP_PREFIX, firstValid } from './ai-overlap.js';
 import { STAGE_LABEL, appContextSections, escalationNotice, suggestedGoal, type EscalationEvent, type EscalationHooks } from './ai-escalation.js';
 import type { AiReply, AiStatus, AskFn, AskRequest, AutoSaveFn, HistoryChangeFn } from './ai.js';
 import { HISTORY_WINDOW_DEFAULT, historyChangeText } from './ai-history.js';
+import { repairGeneratedProject as repairGeneratedProjectText, type GeneratedProjectRepairResult } from './generated-project-repair.js';
 import { DEFAULT_STAGES, createStageControllers, stageOff, toggleMessage, type StageId } from './loop-control.js';
 import { DEFAULT_AI_MAX_IN_FLIGHT, createAiQueue, type AiQueue, type AiQueueStats } from './ai-queue.js';
 import { confirmTarget, decidePopup, describeScreen, judgeStep, reflectOn, verifyGoal, type GoalCheck, type PopupDecision, type StepResult, type TargetCheck, type Thought } from './assist-ai.js';
@@ -25,6 +26,9 @@ import { radarStatus, radarStatusText, radarTick, startRadar, type RadarEvent, t
 import { predictNextPosition, selfMoveSightings } from './mobility.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, pointerAction, selfTestBridge, sendNative, sendToBridge, type BridgeResult } from './bridge.js';
 import { DRY_RUN, dragEndError, groundTarget, runStep, type Grounding, type SendFn, type StepDeps, type StepOutcome } from './run-step.js';
+import { createInputAuthority } from './input-authority.js';
+import { createWorkflowHandoff, restoreWorkflowHandoff, type WorkflowHandoffSnapshot, type WorkflowHandoffResult } from './workflow-handoff.js';
+import { runParallelAgentReview, parallelAgentRunText, type ParallelAgentRun } from './parallel-agent-runner.js';
 import { NO_SOURCE, captureLabel, captureStatus, stepPlan, type FrameProvider, type StepPlan } from './capture-source.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
@@ -37,6 +41,8 @@ import { loadAvoidRules, saveAvoidRules } from './storage.js';
 import { DEFAULT_AVOID_TTL_HOURS, deadlockRules, isBlocking, recordFailure, ruleLine, ruleScope, ttlMs, withoutRules, type AvoidRule } from './blacklist.js';
 import { LOG_LIMIT, loadCards, loadElementMap, loadFamiliar, loadHabits, loadLog, loadOperationMemory, loadPatterns, loadRunSummaries, loadSettings, loadTriggers, loadWatcher, saveCards, saveElementMap, saveFamiliar, saveHabits, saveLog, saveOperationMemory, savePatterns, saveRunSummaries, saveSettings, saveTriggers, saveWatcher, loadAccessPaths, saveAccessPaths, loadRouteProfiles, loadFixMethods, saveRouteProfiles, saveFixMethods, loadDossiers, saveDossiers, loadScreenSections, saveScreenSections, loadPersonas, savePersonas, loadOpsState, saveOpsState } from './storage.js';
 import { DEFAULT_PANEL_LAYOUT } from './panel-layout.js';
+import { processDocuments, type DocumentInput, type DocumentPipelineOptions, type DocumentPipelineResult } from './document-pipeline.js';
+import { generateLongResponse, type LongGenerationOptions, type LongGenerationResult } from './long-generation.js';
 import { mirrorMode, mirrorStep, type MirrorEvent } from './mirror-input.js';
 import { addEntry as addPortfolioEntry, createPersona, upsertPersona, type Persona, type PortfolioKind } from './persona.js';
 import { logSightings, monitorChanges, perspective, planLanes, type ElementReport, type Lane, type Perspective, type Sighting } from './element-relevance.js';
@@ -68,6 +74,10 @@ import { NO_ASSESSMENT, SUPERVISOR_INTERVAL_MS, SUPERVISOR_REPLAN_LIMIT, SUPERVI
 import { BUS_AGENTS, BUS_AGENT_IDS, elementLine, forward, isGridLabel, markHandled, predefine, type BusAgentId, type BusMessage, type ForwardedElement } from './agent-bus.js';
 import { isTestGoal, listSections, parseTestSpec, planSubagents, reportPatterns, runSubagents, summaryText, type SubagentOutcome, type SubagentReport, type SubagentTask, type TestRequest } from './subagents.js';
 import { useErrorForwarding } from './use-error-forwarding.js';
+import { useAutoUpdate, UPDATE_SOURCE } from './use-update.js';
+import { browserEngines, createVoiceControl } from './voice.js';
+import { usePhoneCompanion } from './use-phone.js';
+import { usePlugins } from './use-plugins.js';
 import { useApprovals } from './use-approvals.js';
 import { DEFAULT_OPERATION_POLICY, decisionLesson, editedStep, type ApprovalItem, type OperationPolicy } from './approvals.js';
 import { buildElementMap } from './element-map.js';
@@ -91,6 +101,8 @@ import { MAX_DISCOVERY, OBJECTIVE_TONE, chainReport, discoverTarget, isChainGoal
 import { applyReach, currentPath, deletePath, editPath, isHopAction, learnPaths, parseHops, pathLine, pathOutcome, pathSteps, reachTarget, relevantPaths, runPath, usablePath, type AccessProfile, type Reach } from './access-paths.js';
 import { useResolution } from './use-resolution.js';
 import { useBridgeV2 } from './use-bridge-v2.js';
+import { planStream, planChanged, streamLine, type FrameConsumer, type StreamPlan } from './frame-stream.js';
+import { crossReference as crossAppContext, crossTestLine, type CrossTest } from './cross-testing.js';
 import { AUTO_RETRY_LABEL, AUTO_RETRY_TICK_MS, countAttempts, retryDue, retryText, type RetryCounts } from './auto-retry.js';
 import { DISAGREEMENT_THRESHOLD } from './resolution-center.js';
 import { dropGoal, loadGoals, projectId, queueGoal, saveGoals, settleGoal, startGoal, type GoalRecord } from './goal-objectives.js';
@@ -108,6 +120,8 @@ const AI: Requester = { kind: 'ai' };
 const MAIN_APP: Requester = { kind: 'main-app' };
 import { usePacks } from './use-packs.js';
 import { buildInventory, inventoryLines, type InventoryElement } from './screen-inventory.js';
+import { actionForFrame, selectEvidenceFrames, retrieveEvidenceFrames, appendDecisionHistory, expectedOutcomeForAction, assessElementIdentity, auditCommands, classifyPageTransition, compareElementEffect, decisionHistoryContext, loadDecisionHistory, saveDecisionHistory, decisionLearningContext, frameChangeRatio, learnVisualPrototype, loadDecisionLearning, loadVisualPrototypes, outcomeRates, perceptionContext, prospectPoints, recognizeElements, recordDecisionOutcome, reconcileDecisionHistory, relateElements, saveDecisionLearning, saveVisualPrototypes, updateDecisionLearning, visualDescriptor, type DecisionHistoryRecord, type ElementEffect, type PerceptionSnapshot, type VisualPrototype } from './perception-intelligence.js';
+
 import { plotRoutes, recordProfileResult, resolveHop, routeSteps, routeText, saveProfile, type Route, type RouteProfile } from './route-plot.js';
 import { FAIL_THRESHOLD, failureKey, fixScriptText, generateFixScript, needsFix, noteResult, saveFixMethod, type FixContext, type FixMethod, type FixScript } from './fix-script.js';
 import { refreshStep, retestSummary, retestText, retestedSteps, runRetest, selectSteps, type RetestStepResult, type RetestSummary } from './retest.js';
@@ -150,7 +164,7 @@ import { CROSS_REFERENCE_LINES } from './joint-followup.js';
 import { loadOperations } from './operation-db.js';
 import { DEFAULT_OPERATION_RETRIES } from './operation-retry.js';
 import { DEFAULT_PLAYBACK_WINDOW_SEC } from './playback.js';
-import { CREW_AGENTS, createScreenLock, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
+import { CREW_AGENTS, CREW_SYSTEM, decideCrew, reportNote, runCrew, type CrewAgent, type CrewCommand, type CrewDecision, type CrewReport, type CrewStop } from './agent-crew.js';
 import { runLiveDrag, type DragIntervention, type LiveDragResult, type SwarmAgent } from './drag-swarm.js';
 import { AUTO_OPS_SYSTEM, OPS_AGENTS, OPS_SYSTEM, addEvidence, addOpsReport, changeKey, changeLine, dedupeLog, enabledOps, loopReport, mapDelta, markEvidence, monitorChange, opsAgent, opsFor, parseOpsTarget, patchOpsAgent, shouldReport, tagLog, type MonitorChange, type OpsAgentId, type OpsState, type TestCandidate } from './operations.js';
 import { AUTO_OPS_INTERVAL_MS, automaticOpsPlan, type AutomaticOpsPlan } from './agent-autopilot.js';
@@ -380,6 +394,17 @@ export const DEFAULT_SETTINGS: AssistSettings = {
   systemRefreshSec: DEFAULT_SYSTEM_REFRESH_SEC,
   notifyAutoAct: DEFAULT_AUTO_ACT,
   systemFolders: [],
+  autoUpdate: true,
+  updateStatus: '',
+  voiceEnabled: false,
+  voiceMode: 'push-to-talk',
+  voiceLang: 'en-US',
+  voiceSpeakNotifications: false,
+  voiceSpeakResponses: false,
+  voiceRate: 1,
+  voiceVolume: 1,
+  phonePort: 8788,
+  phoneToken: '',
   panelLayout: DEFAULT_PANEL_LAYOUT,
   mainBridgeEnabled: true,
   mainBridgeMode: 'listen',
@@ -405,6 +430,10 @@ export interface Agent {
  * slash commands, action history and saved workflows.
  */
 export function useAssist() {
+  /** One shared FIFO authority for every automated real-input route in this hook instance. */
+  const inputAuthorityRef = useRef<ReturnType<typeof createInputAuthority> | null>(null);
+  inputAuthorityRef.current ??= createInputAuthority('droid-new');
+  const inputAuthority = inputAuthorityRef.current;
   /** Startup recovery runs before any store is loaded, so every loader reads repaired data. */
   const [recovery, setRecovery] = useState<RecoveryReport>(() => recoverStorage());
   const [settings, setSettings] = useState<AssistSettings>(() => loadSettings({ ...DEFAULT_SETTINGS, mainBridgeMode: defaultBridgeMode() }));
@@ -412,6 +441,15 @@ export function useAssist() {
   /** The app the assistant is attached to via /use. */
   const [target, setTarget] = useState<string | null>(null);
   const [history, setHistory] = useState<ActionRecord[]>(() => loadHistory());
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  /** Latest shared perception snapshot and screenshot-verified visual prototypes. */
+  const perceptionRef = useRef<PerceptionSnapshot | null>(null);
+  const visualPrototypesRef = useRef<VisualPrototype[]>(loadVisualPrototypes());
+  const elementEffectsRef = useRef<ElementEffect[]>([]);
+  /** Bounded, in-memory decision trace; compact evidence only, never screenshots/raw page text. */
+  const decisionHistoryRef = useRef<DecisionHistoryRecord[]>(loadDecisionHistory());
+  const lastEffectActionRef = useRef<string | null>(null);
   /** Normalized point the last executed pointer action left the cursor at: the previously-focused point of the next action. */
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   /** The last action written to the history, so a side test can backtrack exactly what it did. */
@@ -481,8 +519,26 @@ export function useAssist() {
   const [replicas, setReplicas] = useState<Replica[]>([]);
   const [sideResults, setSideResults] = useState<SideTestResult[]>([]);
   const [highlight, setHighlight] = useState<{ x: number; y: number; label: string } | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Shows a highlight and clears it 3 s later. The timer is cancelled on unmount so it can never fire after teardown. */
+  const flashHighlight = (h: { x: number; y: number; label: string }) => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    setHighlight(h);
+    highlightTimerRef.current = setTimeout(() => {
+      highlightTimerRef.current = null;
+      setHighlight((cur) => (cur && cur.x === h.x && cur.y === h.y ? null : cur));
+    }, 3000);
+  };
+  useEffect(() => () => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+  }, []);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
+  const [parallelAgentRun, setParallelAgentRun] = useState<ParallelAgentRun | null>(() => {
+    try { const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('droid.parallel-agent-run.v1') : null; return raw ? JSON.parse(raw) as ParallelAgentRun : null; } catch { return null; }
+  });
+  const parallelAgentAbortRef = useRef<AbortController | null>(null);
   const [progress, setProgress] = useState({ done: 0, manual: 0 });
   const [agents, setAgents] = useState<Agent[]>([
     { id: 'popup', name: 'Popup watcher', description: 'Flags ads & intrusive popups, auto-closes when Auto act is on', on: true },
@@ -578,6 +634,7 @@ export function useAssist() {
   const [inventory, setInventory] = useState<InventoryElement[]>([]);
   const inventoryRef = useRef<InventoryElement[]>([]);
   const inventoryFrameRef = useRef<Frame | null>(null);
+  const decisionLearningRef = useRef(loadDecisionLearning());
   /** The ranked routes last plotted for the goal. */
   const [routes, setRoutes] = useState<Route[]>([]);
   const routesRef = useRef<Route[]>([]);
@@ -737,8 +794,6 @@ export function useAssist() {
   const subRunningRef = useRef(false);
   const crewRef = useRef<CrewAgent[]>([]);
   const crewRunningRef = useRef(false);
-  /** Real input from crew agents goes through one lock: two agents never move the pointer at once. */
-  const screenLockRef = useRef(createScreenLock());
   const opsRef = useRef(ops);
   const opsRunningRef = useRef(false);
   const lastAutoOpsAtRef = useRef(0);
@@ -861,6 +916,9 @@ export function useAssist() {
   scopeRef.current = scope;
 
   const intervalMs = relaxInterval(monitorInterval(settings.monitorMode, modeCaptureMs(settings.executionMode, settings.captureMs)), settings.relaxMode);
+  /** The frame stream's adaptive rate: faster for verification, lower when several consumers pull. */
+  const [streamInterval, setStreamInterval] = useState(intervalMs);
+  const [frameStream, setFrameStream] = useState<StreamPlan | null>(null);
 
   // Persistence: settings, log and cards.
   useEffect(() => saveSettings(settings), [settings]);
@@ -966,6 +1024,9 @@ export function useAssist() {
       .forEach((f) => addLog('Memory', `${actor} — a similar operation failed before, adjusting: ${failureLine(f)}`, 'warn', f.shots));
   };
 
+  /** Voice control: spoken commands route into runInput; notifications and AI answers can be spoken. */
+  const voiceRef = useRef<ReturnType<typeof createVoiceControl> | null>(null);
+
   /** What runs for every new notification: auto-act (assigned below, once the executor exists). */
   const onNotifiedRef = useRef<(n: AssistNotification) => void>(() => undefined);
   const notifier = useNotifications((n) => onNotifiedRef.current(n));
@@ -1034,6 +1095,8 @@ export function useAssist() {
   /** Error forwarding: reports carry the recent log and the current frame. */
   const errorForwarding = useErrorForwarding(settings, addLog, () => ({ log: logRef.current, frame: framesRef.current[0] ?? null }), (what, ok) =>
     notify({ source: 'Error forwarding', category: 'errors', severity: ok ? 'info' : 'warning', title: `${what} ${ok ? 'delivered' : 'not delivered'}` }));
+  /** Auto-update: on start, check GitHub and pull/rebuild/relaunch when the branch is behind. */
+  const update = useAutoUpdate(settings.autoUpdate, (message, tone) => addLog(UPDATE_SOURCE, message, tone ?? 'info'));
   /** The approval system: the dispatch gate, the point filter, the queue and its run-check. */
   const approvals = useApprovals(settings, () => patternsRef.current, addLog);
   /** The operation database: every element, track, capture, error and idea operation with its input and output. */
@@ -1873,7 +1936,7 @@ export function useAssist() {
     const px = (p: { x: number; y: number }) => ({ x: Math.round(p.x * srcW), y: Math.round(p.y * srcH) });
     const prev = lastPointerRef.current ? px(lastPointerRef.current) : null;
     const message = dryRun ? dryRunMessage(out.message, simulated) : out.message;
-    const rec: ActionRecord = { id: uid('act'), time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message, ...(via === 'bridge' && out.executed && out.check && !out.check.changed ? { dispatched: true } : {}), ...(dryRun ? { dryRun } : {}), ...(simulated ? { simulated } : {}) };
+    const rec: ActionRecord = { id: uid('act'), stepId: step.id, time: Date.now(), action: kind, ...px(out.target), ...(end ? { endX: end.x, endY: end.y } : {}), ...(prev ? { prevX: prev.x, prevY: prev.y } : {}), srcW, srcH, text: step.text, ...(step.priorText !== undefined ? { priorText: step.priorText } : {}), source: actor, via, ok: out.ok, message, ...(via === 'bridge' && out.executed && out.check && !out.check.changed ? { dispatched: true } : {}), ...(dryRun ? { dryRun } : {}), ...(simulated ? { simulated } : {}) };
     if (out.executed && POINTER_ACTIONS.has(step.action)) lastPointerRef.current = out.end ?? out.target;
     if (out.executed) noteInput(out.target, USER_ACTORS.has(actor) ? 'user' : 'ai');
     lastRecordRef.current = rec;
@@ -2233,7 +2296,14 @@ export function useAssist() {
       bridgeUrl,
       bridgeToken,
       capture: () => stepFrame(plan.frames, dryRun ? reference : undefined),
-      send: plan.input === 'main-app' ? sendToMainApp : undefined,
+      send: async (step, w, h, origin) => inputAuthority.run('droid-new', async (lease) => {
+        lease.assertCurrent();
+        const result = plan.input === 'main-app'
+          ? await sendToMainApp(step, w, h, origin)
+          : await sendToBridge(bridgeUrl, step, w, h, { token: bridgeToken, origin });
+        lease.assertCurrent();
+        return result;
+      }),
       attempts: Math.max(1, checkpoints),
       retryMs: 400,
       drift: driftThresholds(),
@@ -2268,7 +2338,14 @@ export function useAssist() {
     if (!plan) return null;
     if (plan.input === 'demo') return { capture: async () => demoSnapshot() ?? Promise.reject(new Error('no demo canvas')), send: sendToDemo };
     const budget = createBudget(settingsRef.current.actionBudget);
-    const real: SendFn = plan.input === 'main-app' ? sendToMainApp : (step, w, h, origin) => sendToBridge(settingsRef.current.bridgeUrl, step, w, h, { token: settingsRef.current.bridgeToken, origin });
+    const real: SendFn = (step, w, h, origin) => inputAuthority.run('droid-new', async (lease) => {
+      lease.assertCurrent();
+      const result = plan.input === 'main-app'
+        ? await sendToMainApp(step, w, h, origin)
+        : await sendToBridge(settingsRef.current.bridgeUrl, step, w, h, { token: settingsRef.current.bridgeToken, origin });
+      lease.assertCurrent();
+      return result;
+    });
     return {
       capture: () => stepFrame(plan.frames),
       send: async (step, w, h, origin) => {
@@ -2307,7 +2384,9 @@ export function useAssist() {
     if (plan.needsBridge && !settingsRef.current.bridgeUrl) return refused(step, BRIDGE_REQUIRED);
     const gate = dryRun ? null : gateRealInput(budget);
     if (gate) return refused(step, gate);
-    if (!dryRun && plan.input === 'desktop-bridge' && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) return performLiveDrag(step, actor);
+    if (!dryRun && plan.input === 'desktop-bridge' && step.action === 'drag' && settingsRef.current.liveDrag && stageOn('dragTrackers')) {
+      return performLiveDrag(step, actor);
+    }
     const out = await runStep(relaxStep(step, settingsRef.current.relaxMode), stepDeps(plan, actor, budget, dryRun, step.refFrame));
     noteRoute(plan, step, out, actor, dryRun);
     if (dryRun && out.ok) {
@@ -2347,7 +2426,8 @@ export function useAssist() {
   };
 
   /** Why a live drag must let go before its next segment: abort, disarm or Stop plan; null to go on. */
-  const liveDragHalt = (): string | null => {
+  const liveDragHalt = (lease?: { assertCurrent(): void }): string | null => {
+    try { lease?.assertCurrent(); } catch { return 'Input authority changed'; }
     if (abortedRef.current) return 'Aborted';
     if (!armedRef.current) return 'Real input disarmed';
     return abortRef.current ? 'Plan stopped' : null;
@@ -2367,7 +2447,9 @@ export function useAssist() {
    * swarm tracks every segment on the live frames and the executor sends press → corrected segment moves →
    * release. The guardrails are checked before every segment and the button is always released on a stop.
    */
-  const performLiveDrag = async (step: WorkflowStep, actor: string): Promise<Performed> => {
+  const performLiveDrag = async (step: WorkflowStep, actor: string): Promise<Performed> =>
+    inputAuthority.run('droid-new', async (lease) => {
+    lease.assertCurrent();
     const { bridgeUrl, bridgeToken } = settingsRef.current;
     const end = { x: step.endX ?? step.x, y: step.endY ?? step.y };
     const start = { x: step.correctedX ?? step.x, y: step.correctedY ?? step.y };
@@ -2378,7 +2460,11 @@ export function useAssist() {
       return { ok: false, executed: false, halt: true, bridgeFailed: true, message: `${BRIDGE_REQUIRED} (unreachable: ${errorText(error)})`, target: start };
     }
     const origin = { x: before.originX ?? 0, y: before.originY ?? 0 };
-    const send = (input: 'mouse_down' | 'move' | 'mouse_up', p: { x: number; y: number }) => sendNative(bridgeUrl, { id: step.id, name: step.name }, [pointerAction(input, p, before.srcW, before.srcH, origin)], { token: bridgeToken, pollMs: 50, timeoutMs: 10000 });
+    const send = (input: 'mouse_down' | 'move' | 'mouse_up', p: { x: number; y: number }) => {
+      // A release is cleanup and must remain possible after lease invalidation; all other events are fenced.
+      if (input !== 'mouse_up') lease.assertCurrent();
+      return sendNative(bridgeUrl, { id: step.id, name: step.name }, [pointerAction(input, p, before.srcW, before.srcH, origin)], { token: bridgeToken, pollMs: 50, timeoutMs: 10000 });
+    };
     dragControlRef.current = null;
     liveDragRef.current = true;
     setLiveDragging(true);
@@ -2393,7 +2479,7 @@ export function useAssist() {
           return popup ? [{ x: popup.x, y: popup.y, w: popup.w, h: popup.h }] : [];
         },
         live: () => framesRef.current[0]?.data ?? null,
-        halt: liveDragHalt,
+        halt: () => liveDragHalt(lease),
         intervention: () => {
           const ask = dragControlRef.current;
           dragControlRef.current = null;
@@ -2412,7 +2498,7 @@ export function useAssist() {
     if (out.executed) recordAction(step, out, actor, 'bridge', before.srcW, before.srcH);
     noteBridge(step, out, actor);
     return out;
-  };
+  });
 
   /** Tracks the bridge's reachability from a bridge step; a bridge failure is logged and forwarded as a bridge error. */
   const noteBridge = (step: WorkflowStep, out: Performed, actor: string) => {
@@ -2611,8 +2697,23 @@ export function useAssist() {
     if (actor !== OPS_APPLY_ACTOR) recordStepEvidence(step, out, before, out.shot ?? null);
     if (!out.ok && !out.bridgeFailed) captureError({ kind: actor === 'Self-test' ? 'watcher' : 'step', message: out.message, goal: goalRef.current, step: step.name });
     if (out.halt || !aiOnline()) return out;
-    const verdict = await reflectAfter(step, out.shot ?? framesRef.current[0] ?? null, out, actor);
+    const afterFrame = out.shot ?? framesRef.current[0] ?? null;
+    const verdict = await reflectAfter(step, afterFrame, out, actor);
     if (verdict && !dryRun) learnHabit(step, verdict);
+    // The visual prototype model learns only from a successful, screenshot-backed verdict.
+    if (verdict?.success && out.ok && !dryRun && afterFrame) {
+      const observed = buildInventory({ frame: afterFrame, mapped: elementMapRef.current, familiar: familiarRef.current });
+      const target = observed.find(e => (step.target ?? step.name).trim().toLowerCase() === e.name.trim().toLowerCase())
+        ?? observed.find(e => e.known && (step.target ?? step.name).toLowerCase().includes(e.name.toLowerCase()));
+      if (target) {
+        visualPrototypesRef.current = learnVisualPrototype(visualPrototypesRef.current, {
+          name: target.name, kind: target.kind, descriptor: visualDescriptor(afterFrame, target.box),
+          frameId: afterFrame.id, verifiedSuccess: true, at: afterFrame.time,
+        });
+        saveVisualPrototypes(visualPrototypesRef.current);
+        addLog('Visual learner', `Updated verified appearance prototype for "${target.name}" from frame #${afterFrame.id} (${visualPrototypesRef.current.find(p => p.key === target.name.trim().toLowerCase())?.samples ?? 1} sample(s))`, 'ok');
+      }
+    }
     return { ...out, verdict };
   };
 
@@ -3206,8 +3307,7 @@ export function useAssist() {
    * through the same gated pipeline (abort, arm, a fresh one-click budget). Disarmed is a dry run.
    */
   const testClick = async (el: ScreenElement) => {
-    setHighlight({ x: el.x, y: el.y, label: el.name });
-    setTimeout(() => setHighlight((h) => (h && h.x === el.x && h.y === el.y ? null : h)), 3000);
+    flashHighlight({ x: el.x, y: el.y, label: el.name });
     const where = `${gridRef(el)} (${pct(el.x)}, ${pct(el.y)})`;
     if (!armedRef.current) {
       addLog('Test click', `"${el.name}" highlighted at ${where} — real input disarmed, ${DRY_RUN}`, 'info');
@@ -3703,12 +3803,39 @@ export function useAssist() {
     try {
       const a = await thought('Screen change', async () => {
         const { full, crop } = await boxedFrames(cur, change.box);
-        return assessChange(askFor('screenResponder'), full, crop, change, { goal: goalRef.current, next });
+        return assessChange(askFor('screenResponder'), full, crop, change, {
+          goal: goalRef.current, next,
+          // Send at most two retained prior captures alongside the current full frame and crop.
+          // This is reviewer-only evidence; it never enters the dispatch/input path.
+          evidenceFrames: retrieveEvidenceFrames(framesRef.current, undefined, 3).filter(frame => frame.id !== cur.id).slice(0, 2),
+          context: [
+            ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),
+            ...decisionHistoryContext(decisionHistoryRef.current),
+            ...decisionLearningContext(decisionLearningRef.current),
+      ...recentEvidenceContext(),
+          ].join(String.fromCharCode(10)),
+        });
       }, changeText, 'change');
       lastChangeRef.current = { at: Date.now(), assessment: a };
-      addLog('Screen-change responder', `Change at ${where}: ${changeText(a)}`, a.stale ? 'warn' : 'info');
+      addLog('Screen-change responder', `Change at ${where}: ${changeText(a)}${a.background ? ` · background: ${a.background}` : ''}`, a.stale ? 'warn' : 'info');
       if (a.kind === 'popup') flagPopup(prev, cur, change.box);
-      else setAnnotations((list) => [{ id: uid('ann'), ...change.box, label: `Changed: ${a.summary}`, tone: 'warn' as const }, ...list.filter((x) => x.tone === 'error')].slice(0, 6));
+      const visualMarkers: Annotation[] = a.elements.filter(e => e.confidence >= 0.55).slice(0, 5).map(e => ({
+        id: uid('vision'), ...e.box, label: `${e.name} · ${Math.round(e.confidence * 100)}%`,
+        tone: e.kind === 'button' || e.kind === 'input' ? 'info' : 'warn',
+        actX: e.box.x + e.box.w / 2, actY: e.box.y + e.box.h / 2,
+      }));
+      if (visualMarkers.length) {
+        setAnnotations(list => [...visualMarkers, ...list.filter(x => x.tone === 'error')].slice(0, 6));
+        // Send candidate detections to the shared bus for independent review, not direct clicking.
+        for (const e of a.elements.filter(e => e.confidence >= 0.7).slice(0, 8)) {
+          forwardElement('screen', { name: e.name, x: e.box.x + e.box.w / 2, y: e.box.y + e.box.h / 2, w: e.box.w, h: e.box.h });
+        }
+      } else if (a.kind !== 'popup') setAnnotations(list => [{ id: uid('ann'), ...change.box, label: `Changed: ${a.summary}`, tone: 'warn' as const }, ...list.filter(x => x.tone === 'error')].slice(0, 6));
+      if (a.kind === 'navigation' || perceptionRef.current?.pageTransition === 'navigation-likely') {
+        const message = `Possible page transition detected: ${a.summary}. Re-identify targets, inspect the new page, and research unfamiliar controls before continuing the old step.`;
+        addLog('Planner', message, 'warn');
+        projectInjectRef.current('agent', 'Screen-change responder', message);
+      }
     } catch (error) {
       addLog('Screen-change responder', `Change at ${where} not assessed — AI unavailable: ${errorText(error)}`, 'error');
       flagPopup(prev, cur, change.box);
@@ -3738,11 +3865,25 @@ export function useAssist() {
     });
   };
 
+  /**
+   * Compact, read-only cross-reference of recent conversation and recorded user/agent operations.
+   * This is context for reasoning only; it is never consulted by the execution or dispatch path.
+   */
+  const recentEvidenceContext = (): string[] => [
+    ...aiHistory.slice(-8).map(message => `[Conversation ${message.role}] ${message.content.slice(0, 320)}`),
+    ...historyRef.current.slice(0, 8).map(action => `[Recorded ${action.source} action] ${action.action} at ${action.x},${action.y}; bridge=${action.ok ? 'accepted' : 'failed'}; dispatched=${action.dispatched}; dryRun=${action.dryRun}`),
+  ];
+
   /** The planning context a proposal for `step` by `actor` is justified against; `redo` marks a re-proposal. */
   const proposalContext = (actor: string, step: WorkflowStep, redo?: string): ProposalContext => ({
     goal: goalRef.current,
     change: currentChange(),
-    patterns: [...relevantPatterns(goalRef.current, patternsRef.current).map(patternLine), ...crossReference(actor, goalRef.current)],
+    patterns: [
+      ...relevantPatterns(goalRef.current, patternsRef.current).map(patternLine),
+      ...crossReference(actor, goalRef.current),
+      ...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []),
+      ...recentEvidenceContext(),
+    ],
     related: operationDb.related(`${step.name} ${step.target ?? ''}`, goalRef.current),
     redo,
   });
@@ -4172,9 +4313,9 @@ export function useAssist() {
     const id = setInterval(() => {
       const c = demoCanvasRef.current;
       if (c && !pausedWhileHidden()) processRef.current(toFrame(c, DEMO_W, DEMO_H, ++frameId.current, 'demo'));
-    }, intervalMs);
+    }, streamInterval);
     return () => clearInterval(id);
-  }, [intervalMs, source]);
+  }, [streamInterval, source]);
 
   // Bridge monitor: a real desktop screenshot at the mode's interval; failures are logged, never faked.
   useEffect(() => {
@@ -4193,14 +4334,14 @@ export function useAssist() {
         .finally(() => {
           pollBusyRef.current = false;
         });
-    }, intervalMs);
+    }, streamInterval);
     return () => clearInterval(id);
-  }, [addLog, captureError, intervalMs, source]);
+  }, [addLog, captureError, streamInterval, source]);
 
-  // The running screen capture follows the monitor mode's interval live.
+  // The running screen capture follows the adaptive stream rate live.
   useEffect(() => {
-    captureRef.current?.setInterval(intervalMs);
-  }, [intervalMs]);
+    captureRef.current?.setInterval(streamInterval);
+  }, [streamInterval]);
 
   // The running native capture follows the chosen display live (Settings or the HUD quick-switch).
   useEffect(() => {
@@ -4651,10 +4792,70 @@ export function useAssist() {
 
   /** Full-screen reading of `frame`: every detectable element, classified against the previous reading. */
   const readScreen = (frame: Frame) => {
-    const next = buildInventory({ frame, mapped: elementMapRef.current, familiar: familiarRef.current, prev: inventoryRef.current, prevFrame: inventoryFrameRef.current });
+    const previous = inventoryRef.current;
+    const previousFrame = inventoryFrameRef.current;
+    const detected = buildInventory({ frame, mapped: elementMapRef.current, familiar: familiarRef.current, prev: previous, prevFrame: previousFrame });
+    const next = recognizeElements(detected, frame, visualPrototypesRef.current);
+    const changeRatio = frameChangeRatio(previousFrame, frame);
+    const relations = relateElements(next);
+    const identityReviews = next.map(element => assessElementIdentity({
+      element, frame,
+      prototypes: visualPrototypesRef.current,
+      previous: previous.find(old => old.id === element.id || old.name.toLowerCase() === element.name.toLowerCase()),
+    })).filter(review => review.stability !== 'stable' || review.confidence < 0.5);
+    const pageTransition = classifyPageTransition(previous, next, changeRatio);
+    // Re-check prior decisions against this later frame; this only annotates evidence.
+    const previousDecisions = decisionHistoryRef.current;
+    const previousLearning = decisionLearningRef.current;
+    const reconciledDecisions = reconcileDecisionHistory(previousDecisions, next, frame.id, pageTransition, 'unknown');
+    for (const record of reconciledDecisions) {
+      const previous = previousDecisions.find(item => item.id === record.id);
+      if (previous?.status === 'uncertain' && record.status !== 'uncertain') decisionLearningRef.current = updateDecisionLearning(decisionLearningRef.current, record);
+    }
+    decisionHistoryRef.current = reconciledDecisions;
+    // Reconciliation commonly returns the same records on ordinary frames. Avoid serializing
+    // and writing the entire history on every capture tick; persist only actual record changes.
+    if (reconciledDecisions.length !== previousDecisions.length
+      || reconciledDecisions.some((record, index) => record !== previousDecisions[index])) {
+      saveDecisionHistory(reconciledDecisions);
+    }
+    if (decisionLearningRef.current !== previousLearning) {
+      saveDecisionLearning(decisionLearningRef.current);
+    }
+    const audits = auditCommands(stepsRef.current, frame.time);
+    const prospects = prospectPoints(next, relations, audits);
+    const eligibleAction = actionForFrame(historyRef.current, lastEffectActionRef.current, frame.time);
+    const newEffect = eligibleAction ? compareElementEffect(eligibleAction, previous, next) : null;
+    if (newEffect) {
+      lastEffectActionRef.current = newEffect.actionId;
+      elementEffectsRef.current = [newEffect, ...elementEffectsRef.current].slice(0, 60);
+      const explicitExpectation = expectedOutcomeForAction(eligibleAction!, stepsRef.current);
+      const decision = recordDecisionOutcome({ effect: newEffect, frameId: frame.id, expected: explicitExpectation, at: frame.time });
+      decisionHistoryRef.current = appendDecisionHistory(decisionHistoryRef.current, decision, 100);
+      saveDecisionHistory(decisionHistoryRef.current);
+    }
+    const notes = [
+      ...next.filter(e => e.state !== 'static').map(e => `"${e.name}" is ${e.state} at ${e.cell}`),
+      ...identityReviews.slice(0, 6).map(review => 'Identity ' + review.stability + ': "' + review.name + '" confidence ' + Math.round(review.confidence * 100) + '% — ' + review.reasons.join('; ')),
+      ...(newEffect ? [`After ${newEffect.actor} ${newEffect.action} on "${newEffect.target}": appeared [${newEffect.appeared.join(', ') || 'none'}], disappeared [${newEffect.disappeared.join(', ') || 'none'}], moved [${newEffect.moved.join(', ') || 'none'}]`] : []),
+      ...audits.filter(a => a.issue !== 'clear').slice(0, 4).map(a => `Step "${a.name}" needs review: ${a.issue} — ${a.detail}`),
+      ...(pageTransition === 'navigation-likely' ? ['Known-element overlap is low while many pixels changed: verify whether navigation moved to a different page or app'] : []),
+    ];
+    perceptionRef.current = { frameId: frame.id, capturedAt: frame.time, evidenceFrames: selectEvidenceFrames(framesRef.current, frame.id), elements: next, relations, pageTransition, changeRatio, notes, effects: elementEffectsRef.current.slice(0, 20) };
     inventoryRef.current = next;
     inventoryFrameRef.current = frame;
     setInventory(next);
+    if (prospects.some(p => p.priority === 'high')) {
+      const markers: Annotation[] = prospects.filter(p => p.priority === 'high').slice(0, 3).map((p, i) => ({
+        id: `prospect-${frame.id}-${i}`, x: Math.max(0, p.point.x - 0.035), y: Math.max(0, p.point.y - 0.025),
+        w: 0.07, h: 0.05, label: p.reason, tone: 'warn', actX: p.point.x, actY: p.point.y,
+      }));
+      setAnnotations(old => [...markers, ...old.filter(a => !a.id.startsWith('prospect-') && a.tone === 'error')].slice(0, 6));
+    }
+    // Keep the shared perception context current for the next planner, reviewer and crew round.
+    if (notes.length && previousFrame && pageTransition !== 'same-page') {
+      addLog('Perception controller', `Frame #${frame.id}: ${pageTransition}; ${next.length} elements, ${relations.length} geometric relationships; ${notes.slice(0, 3).join('; ')}`, pageTransition === 'navigation-likely' ? 'warn' : 'info');
+    }
   };
 
   const commitProfiles = (next: RouteProfile[]) => {
@@ -4907,17 +5108,30 @@ export function useAssist() {
    */
   const runCrewAgent = async (command: CrewCommand, budget: ActionBudget, dryRun: boolean): Promise<CrewReport> => {
     const label = `Crew ${command.agent}`;
-    const report = (ok: boolean, found: string, point?: { x: number; y: number }): CrewReport => ({ agent: command.agent, task: command.task, ok, found, ...(point ? { point } : {}) });
+    const report = (ok: boolean, found: string, point?: { x: number; y: number }): CrewReport => {
+      const frame = framesRef.current[0] ?? null;
+      const evidenceRegion = point ? {
+        x: Math.max(0, point.x - 0.04), y: Math.max(0, point.y - 0.04),
+        w: Math.min(0.08, 1 - Math.max(0, point.x - 0.04)),
+        h: Math.min(0.08, 1 - Math.max(0, point.y - 0.04)),
+      } : undefined;
+      return {
+        agent: command.agent, task: command.task, ok, found,
+        ...(point ? { point } : {}),
+        ...(frame ? { screenshotId: frame.id } : {}),
+        ...(evidenceRegion ? { evidenceRegion } : {}),
+      };
+    };
     const plan = await thought(`${label}: ${command.task}`, () => planFromGoal(command.task, [], framesRef.current[0] ?? null, askFor('crew'), knownRef.current.map(elementLine), patternsRef.current), planSummary);
     if (!plan.steps.length) return report(true, plan.thinking ?? 'nothing to act on — the task needs no input');
     let point: { x: number; y: number } | undefined;
     for (const step of plan.steps) {
       if (crewStopped()) return report(false, `parked before "${step.name}" — nothing more sent`, point);
-      const out = await screenLockRef.current(async () => {
-        const local = recordLocal(label, step, `the main AI asked ${command.agent} to "${command.task}"`);
-        const briefed = await brief(label, { kind: 'go', step, proposal: local });
-        return briefed.kind === 'go' ? execute(briefed.step, label, budget, dryRun, briefed.proposal) : refused(step, `"${step.name}" not justified by the pre-action briefing`);
-      });
+      const local = recordLocal(label, step, `the main AI asked ${command.agent} to "${command.task}"`);
+      const briefed = await brief(label, { kind: 'go', step, proposal: local });
+      const out = briefed.kind === 'go'
+        ? await execute(briefed.step, label, budget, dryRun, briefed.proposal)
+        : refused(step, `"${step.name}" not justified by the pre-action briefing`);
       if (!out.ok) return report(false, `${step.name}: ${out.message}`, point);
       point = out.target;
     }
@@ -4947,7 +5161,7 @@ export function useAssist() {
         const out = await runCrew({
           agents: CREW_AGENTS,
           maxRounds: settingsRef.current.maxIterations,
-          decide: (reports, round) => thought(`Crew round ${round}: ${text}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, text, crewRef.current, reports), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
+          decide: (reports, round) => thought(`Crew round ${round}: ${text}`, () => decideCrew(askFor('planner'), framesRef.current[0] ?? null, text, crewRef.current, reports, CREW_SYSTEM, [...(perceptionRef.current ? perceptionContext(perceptionRef.current, outcomeRates(historyRef.current, stepsRef.current), prospectPoints(inventoryRef.current, perceptionRef.current.relations, auditCommands(stepsRef.current))) : []), ...recentEvidenceContext()].join('\n')), (d: CrewDecision) => `${d.done ? 'DONE' : `${d.commands.length} command(s)`}: ${d.commands.map((c) => `${c.agent} → ${c.task}`).join('; ') || d.summary}`),
           work: (c) => runCrewAgent(c, budget, dryRun),
           shouldStop: crewStopped,
           onAgents: (agents) => {
@@ -5036,11 +5250,13 @@ export function useAssist() {
     test: (step, proposalId, dryRun) => testStep(step, { proposalId, context: step.target ?? step.name, source: 'Testing agent' }, dryRun, opsBudgetRef.current),
     armed: () => armedRef.current,
     plan: async (task) => (await thought(`Apply agent: ${task}`, () => planFromGoal(task, [], framesRef.current[0] ?? null, askFor('opsApply'), knownRef.current.map(elementLine), patternsRef.current), planSummary)).steps,
-    apply: (step) => screenLockRef.current(async () => {
+    apply: async (step) => {
       const local = recordLocal(OPS_APPLY_ACTOR, step, `the main AI asked the Apply agent to apply "${step.name}"`);
       const briefed = await brief(OPS_APPLY_ACTOR, { kind: 'go', step, proposal: local });
-      return briefed.kind === 'go' ? execute(briefed.step, OPS_APPLY_ACTOR, opsBudgetRef.current, !armedRef.current, briefed.proposal) : refused(step, `"${step.name}" not justified by the pre-action briefing`);
-    }),
+      return briefed.kind === 'go'
+        ? execute(briefed.step, OPS_APPLY_ACTOR, opsBudgetRef.current, !armedRef.current, briefed.proposal)
+        : refused(step, `"${step.name}" not justified by the pre-action briefing`);
+    },
     capture: evidenceFrame,
     store: (f) => void putStoredFrame(toStoredFrame(f), settingsRef.current.gallerySize).catch(() => undefined),
     addEvidence: (e) => {
@@ -5578,12 +5794,27 @@ export function useAssist() {
     }
   };
 
-  /** A link/route test's passed and failed slices as habit outcomes on their targets (coordinate learner stage). */
+  /**
+   * A link/route test's passed and failed slices as habit outcomes on their targets (coordinate
+   * learner stage). The test cross-references both apps' routes — the habits store already holds
+   * droid-main's synced routes — so a method that works in either app strengthens the habit in both
+   * (the strengthened habits then cross the bridge by the store sync).
+   */
   const learnTestHabits = (results: SubagentReport['results'], kind: TestRequest['kind']) => {
     if (!stageOn('coords')) return;
     const context = `${kind}-test:${habitContext()}`;
     const tested = results.filter((r) => r.status === 'pass' || r.status === 'fail');
-    commitHabits(tested.reduce((h, r) => recordOutcome(h, { target: r.target, context, success: r.status === 'pass', avoid: r.avoid, add: r.add }), habitsRef.current));
+    const outcomes = tested.map((r) => ({ target: r.target, context, success: r.status === 'pass', avoid: r.avoid, add: r.add }));
+    commitHabits(outcomes.reduce((h, o) => recordOutcome(h, o), habitsRef.current));
+    const crossTests: CrossTest[] = tested.map((r) => ({ app: 'droid-new', subject: r.target, method: context, ok: r.status === 'pass', evidence: `${r.status}${r.message ? `: ${r.message}` : ''}`, at: Date.now() }));
+    // The habits store already holds droid-main's routes (merged by the store sync), so the context
+    // below cross-references both apps' learned methods even though the store carries no provenance.
+    const prior = habitsRef.current.map((h) => ({ app: 'droid-new' as const, subject: h.target, method: h.context, ok: h.successes > 0, at: h.lastUsed }));
+    for (const subject of new Set(tested.map((r) => r.target))) {
+      const lines = crossAppContext(subject, prior, logRef.current.slice(0, 3).map((l) => l.message));
+      if (lines.length) addLog('Supervisor', `Cross-app context for "${subject}": ${lines.join(' · ')}`, 'info');
+    }
+    if (crossTests.length) addLog('Supervisor', crossTestLine(crossTests), 'info');
   };
 
   /**
@@ -5646,6 +5877,7 @@ export function useAssist() {
         answered = answer;
         setAiAnswer(answer);
         setAnnotations(items);
+        voiceRef.current?.sayAnswer(answer);
         addLog('AI help', answer, 'info');
         items.filter((a) => a.actX !== undefined && a.actY !== undefined).forEach((a) => forwardElement('screen', { name: a.label, x: a.actX!, y: a.actY!, w: a.w, h: a.h }));
       } catch (error) {
@@ -5737,7 +5969,14 @@ export function useAssist() {
     const capture = createScreenCapture();
     capture.selectDisplay(settingsRef.current.displayId);
     try {
-      await capture.start(monitorInterval(settingsRef.current.monitorMode, modeCaptureMs(settingsRef.current.executionMode, settingsRef.current.captureMs)), { onImage: onScreenImage, onLost: onCaptureLost });
+      await capture.start(monitorInterval(settingsRef.current.monitorMode, modeCaptureMs(settingsRef.current.executionMode, settingsRef.current.captureMs)), {
+        onImage: onScreenImage,
+        onLost: (reason) => {
+          // A delayed ended event from a replaced capture must not tear down the newer source.
+          if (captureRef.current !== capture) return;
+          onCaptureLost(reason);
+        },
+      });
     } catch (error) {
       capture.stop();
       addLog('Screen', `Screen capture failed to start: ${errorText(error)}`, 'error');
@@ -5970,6 +6209,26 @@ export function useAssist() {
     disputedElements: resolution.disagreements.map((d) => d.element),
     arbitrate: resolution.arbitrate,
     act: (element) => testClick({ id: uid('swarm'), name: element.name, x: element.x, y: element.y, source: 'familiar' }),
+    health: () => ({
+      aiUp: aiOnline(),
+      latencyMs: 0,
+      crewLoad: Math.min(1, aiCalls / Math.max(1, settingsRef.current.crewSize)),
+      armed: armedRef.current,
+      canExecute: !abortedRef.current,
+    }),
+    decideApproval: (id, decision, text) => {
+      if (decision === 'rejected') rejectItem(id);
+      else if (decision === 'edited' && text) void editItem(id, text);
+      else void approveItem(id);
+    },
+    snapshot: () => (goalRef.current || stepsRef.current.length
+      ? { runId: flowRef.current ?? goalRef.current, goal: goalRef.current, steps: stepsRef.current.map((s) => s.name), activeIndex: activeIndex ?? 0, replay: logRef.current.slice(0, 40).reverse().map((l) => `[${l.source}] ${l.message}`), at: Date.now() }
+      : null),
+    onResume: (plan) => {
+      addLog('Resume', plan.summary, 'ok');
+      plan.replay.forEach((line) => addLog('Resume (while down)', line));
+      if (activeIndex === null && stepsRef.current.length) setActiveIndex(plan.resumeAt);
+    },
   });
   const bridgeV2Ref = useRef(bridgeV2);
   bridgeV2Ref.current = bridgeV2;
@@ -6125,6 +6384,7 @@ export function useAssist() {
   // Auto-act: a new notification with a proposed action runs it when its category is switched on (default off).
   onNotifiedRef.current = (n) => {
     if (n.action && settingsRef.current.notifyAutoAct[n.category]) void runNotificationAction(n, 'Auto-act');
+    voiceRef.current?.announce(`${n.source}: ${n.title}`);
   };
 
   /** The notification center's "Run" button. */
@@ -6507,6 +6767,8 @@ export function useAssist() {
     if (!bridgeUrl) return { ok: false, reason: 'no desktop / main-app bridge configured' };
     return { ok: true, value: await desktopFrame(bridgeUrl, bridgeToken, ++frameId.current) };
   };
+  /** The plugin host: plugins register capabilities, commands and panels through a sandboxed API. */
+  const plugins = usePlugins((message, tone) => addLog('Plugin', message, tone ?? 'info'));
   /** The presentation studio: slideshows, movies, projects, approvals, rich notifications and the in-world embed. */
   const studio = usePresentations({
     ...capDeps,
@@ -6524,7 +6786,7 @@ export function useAssist() {
       },
     },
   });
-  const caps = useCapabilities(capDeps, studio.capabilities);
+  const caps = useCapabilities(capDeps, [...studio.capabilities, ...plugins.capabilities]);
 
   /** /crew locate <element> asks its sentinel; /crew test <what> runs a background-then-main test; any other /crew text is a goal for the AI-directed crew. */
   const crewCommand = async (text: string) => {
@@ -6559,24 +6821,107 @@ export function useAssist() {
     section: sectionCommand, scope: scopeCommand, replicate: replicateCommand, sidetest: sideTestCommand, research: researchCommand,
   };
 
-  /** Submits the assist input: slash commands run, anything else is planned as a goal. */
-  const submitInput = async () => {
-    const command = parseCommand(goal);
+  /** Runs one line of input as a command or a goal: the shared path for typed input and voice. */
+  const runInput = async (text: string) => {
+    const pluginCmd = plugins.commandFor(text);
+    if (pluginCmd) {
+      kb.noteSignal('command', text.trim());
+      try {
+        await pluginCmd.command.run(pluginCmd.target);
+      } catch (error) {
+        addLog('Plugin', `/${pluginCmd.command.name} failed — ${errorText(error)}`, 'error');
+      }
+      return;
+    }
+    const command = parseCommand(text);
     if (!command) {
-      if (isTestGoal(goal)) await testRoutes(parseTestSpec(goal));
-      else if (isChainGoal(goal)) await runChain(goal);
-      else await autoPlan(goal);
+      if (isTestGoal(text)) await testRoutes(parseTestSpec(text));
+      else if (isChainGoal(text)) await runChain(text);
+      else await autoPlan(text);
       return;
     }
     if (command.kind === 'error') {
       addLog('Command', command.message, 'warn');
       return;
     }
-    setGoal('');
-    kb.noteSignal('command', goal.trim());
+    kb.noteSignal('command', text.trim());
     if (command.kind === 'test') await testRoutes(parseTestSpec(command.target));
     else await COMMAND_RUNNERS[command.kind](command.target);
   };
+
+  /** Submits the assist input: slash commands run, anything else is planned as a goal. */
+  const submitInput = async () => {
+    const text = goal;
+    setGoal('');
+    await runInput(text);
+  };
+
+  /** Voice control: spoken commands route into runInput; notifications and AI answers can be spoken. */
+  voiceRef.current ??= createVoiceControl(browserEngines(), {
+    submit: (text) => void runInput(text),
+    log: (message, tone) => addLog('Voice', message, tone ?? 'info'),
+  });
+  const voice = voiceRef.current;
+  useEffect(() => {
+    voice.configure({
+      enabled: settings.voiceEnabled,
+      mode: settings.voiceMode,
+      lang: settings.voiceLang,
+      speakNotifications: settings.voiceSpeakNotifications,
+      speakResponses: settings.voiceSpeakResponses,
+      rate: settings.voiceRate,
+      volume: settings.voiceVolume,
+    });
+  }, [voice, settings.voiceEnabled, settings.voiceMode, settings.voiceLang, settings.voiceSpeakNotifications, settings.voiceSpeakResponses, settings.voiceRate, settings.voiceVolume]);
+
+  // Push-to-talk: hold Ctrl+Space to talk while voice is on and the mode is push-to-talk.
+  useEffect(() => {
+    if (!settings.voiceEnabled || settings.voiceMode !== 'push-to-talk') return undefined;
+    const down = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && e.ctrlKey && !e.repeat) { e.preventDefault(); voice.press(); }
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.ctrlKey) voice.release();
+    };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); voice.release(); };
+  }, [voice, settings.voiceEnabled, settings.voiceMode]);
+
+  /** The phone companion: the bridge serves a small mobile page over the engine's live state. */
+  const phone = usePhoneCompanion({
+    apps: () => [
+      { name: 'droid-new', status: aiOnline() ? 'connected' : 'offline', detail: aiStatus.detail },
+      { name: 'droid-main', status: mainBridge.status, detail: mainBridge.peer ?? 'the main Droid app' },
+    ],
+    approvals: () => approvals.items.filter((i) => i.status === 'pending').map((i) => ({ id: i.id, title: i.summary, detail: `${i.requestedBy} · ${i.goal || 'no goal'}` })),
+    workflows: () => cardsRef.current.map((c) => ({ id: c.id, name: c.name })),
+    driving: () => bridgeV2.driving.driver,
+    frame: () => framesRef.current[0]?.url ?? '',
+    approve: (id) => void approveItem(id),
+    reject: (id) => rejectItem(id),
+    runWorkflow: (id) => loadWorkflow(id),
+    log: (message, tone) => addLog('Phone', message, tone ?? 'info'),
+  });
+
+  /** Bandwidth-aware frame streaming: verification frames first, quality/rate lowered for many consumers. */
+  useEffect(() => {
+    const consumers: FrameConsumer[] = [];
+    if (phone.view.running) consumers.push({ id: 'phone', budgetBytes: 400_000, use: 'monitoring' });
+    if (replaying) consumers.push({ id: 'verification', budgetBytes: 1_500_000, use: 'verification' });
+    // With no extra consumers the stream keeps the user's configured monitor rate.
+    if (!consumers.length) {
+      setFrameStream(null);
+      setStreamInterval(intervalMs);
+      return;
+    }
+    const plan = planStream(consumers);
+    if (!planChanged(frameStream, plan)) return;
+    setFrameStream(plan);
+    setStreamInterval(plan.intervalMs);
+    addLog('Frame stream', streamLine(plan), 'info');
+    // Re-planned whenever the consumers or the configured rate change.
+  }, [phone.view.running, replaying, intervalMs, frameStream, addLog]);
 
   /** Explicit demo mode. */
   const useDemo = () => {
@@ -6792,6 +7137,7 @@ export function useAssist() {
   const approveWith = async (id: string, status: 'approved' | 'edited', edit?: string) => {
     const item = approvals.current(id);
     if (!item || item.status !== 'pending') return;
+    void bridgeV2Ref.current.sendApprovalDecision(id, status, edit);
     if (item.step) {
       await runApproved(item, edit === undefined ? item.step : editedStep(item.step, edit), status, edit);
       return;
@@ -6810,6 +7156,7 @@ export function useAssist() {
   const rejectItem = (id: string) => {
     const item = approvals.decide(id, 'rejected');
     if (!item) return;
+    void bridgeV2Ref.current.sendApprovalDecision(id, 'rejected');
     if (item.proposalId) dismissProposal(item.proposalId);
     learnDecision(item);
   };
@@ -6874,8 +7221,7 @@ export function useAssist() {
 
   /** Highlights a point on the preview for 3 s. */
   const flash = (h: { x: number; y: number; label: string }) => {
-    setHighlight(h);
-    setTimeout(() => setHighlight((cur) => (cur && cur.x === h.x && cur.y === h.y ? null : cur)), 3000);
+    flashHighlight(h);
   };
 
   const initiativeApi = useInitiative({
@@ -7301,8 +7647,208 @@ export function useAssist() {
   }, recording);
   packCaptureRef.current = packs.capture;
 
+  /** Export a bounded workflow checkpoint for a cooperating controller; screenshots remain in the local frame gallery. */
+  const exportWorkflowHandoff = (workflowId: string, fromController = 'droid-new'): WorkflowHandoffSnapshot =>
+    createWorkflowHandoff(workflowId, goalRef.current, stepsRef.current, fromController);
+
+  /** Restore only matching, still-evidenced progress; stale or changed steps are reset to pending. */
+  const importWorkflowHandoff = (snapshot: WorkflowHandoffSnapshot, workflowId: string): WorkflowHandoffResult => {
+    const result = restoreWorkflowHandoff(
+      snapshot,
+      workflowId,
+      goalRef.current,
+      stepsRef.current,
+      new Set(framesRef.current.map((frame) => frame.id)),
+    );
+    if (!result.rejected) {
+      stepsRef.current = result.steps;
+      setSteps(result.steps);
+      setActiveIndex(result.resumedIndex < result.steps.length ? result.resumedIndex : null);
+      addLog('Workflow handoff', result.reason, result.preservedVerified ? 'ok' : 'warn');
+    } else {
+      addLog('Workflow handoff', result.reason, 'warn');
+    }
+    return result;
+  };
+
+  /** Public takeover request surface for the coordinator; evidence must come from verified task state. */
+  const requestInputTakeover = (nextOwner: 'droid-new' | 'droid-main', evidence: {
+    goalReached?: boolean;
+    verifiedProgressCount: number;
+    lastVerifiedAt: number | null;
+    startedAt: number;
+    now: number;
+    stallThresholdMs?: number;
+    currentControllerFailed?: boolean;
+    userDecision?: 'approve' | 'reject';
+  }) => {
+    const decision = inputAuthority.requestTakeover(nextOwner, evidence);
+    addLog('Input authority', decision.reason, decision.accepted ? 'warn' : 'info');
+    return decision;
+  };
+  const setInputPaused = (paused: boolean) => {
+    inputAuthority.setPaused(paused);
+    addLog('Input authority', paused ? 'Physical input paused by user' : 'Physical input resumed with a fresh generation', paused ? 'warn' : 'info');
+    return inputAuthority.snapshot();
+  };
+  /** User takes exclusive ownership; all automated leases are invalidated immediately. */
+  const takeUserInputControl = () => {
+    const generation = inputAuthority.changeOwner('user', 'User took direct physical input control');
+    addLog('Input authority', 'User has exclusive physical input control; automated dispatch is fenced', 'warn');
+    return { ...inputAuthority.snapshot(), generation };
+  };
+  /** Explicitly return control to one automation controller after the user is finished. */
+  const resumeAutomatedInput = (owner: 'droid-new' | 'droid-main' = 'droid-new') => {
+    const generation = inputAuthority.changeOwner(owner, 'User returned physical input control to automation');
+    addLog('Input authority', `Physical input returned to ${owner}`, 'info');
+    return { ...inputAuthority.snapshot(), generation };
+  };
+
+  /** Run two independent AI work streams: implementation proposal and independent test/alternative review. */
+  const runParallelAgents = async (task: string, baseCommit: string): Promise<ParallelAgentRun> => {
+    if (!aiOnline()) throw new Error('AI is unavailable. Connect the configured AI endpoint before starting parallel agents.');
+    if (!task.trim()) throw new Error('Enter a task for the two work streams.');
+    if (parallelAgentAbortRef.current) throw new Error('A parallel agent run is already active.');
+    const controller = new AbortController();
+    parallelAgentAbortRef.current = controller;
+    const isolatedAsk = (stage: StageId): AskFn => {
+      const session = createAiSession(null, renderView, undefined, {
+        appContext: async () => ({ sections: [] }),
+        onStage: () => undefined,
+      }, undefined, null);
+      return (request) => {
+        if (!settingsRef.current.stages[stage]) return Promise.reject(new AiCancelled(stageOff(stage)));
+        const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage), request.signal, controller.signal);
+        return aiQueueRef.current.run(stage, (timeoutMs) => {
+          const current = settingsRef.current;
+          return session.ask({
+            url: current.aiUrl,
+            model: current.aiModel,
+            view: AI_VIEWS[current.aiView],
+            timeoutMs,
+            masterPrompt: current.masterPrompt,
+            think: current.aiThink,
+            historyWindow: current.aiHistoryWindow,
+          }, { ...request, signal });
+        }, signal);
+      };
+    };
+    const askA = isolatedAsk('planner');
+    const askB = isolatedAsk('planner');
+    addLog('Parallel agents', 'Starting two isolated AI sessions: Stream A implementation and Stream B independent testing.', 'info');
+    try {
+      const result = await runParallelAgentReview({
+        ask: askA,
+        askA,
+        askB,
+        task: task.trim(),
+        baseCommit: baseCommit.trim() || 'current checked-out HEAD — exact SHA must be confirmed by the host',
+        signal: controller.signal,
+        onState: (snapshot) => {
+          setParallelAgentRun(snapshot);
+          try {
+            const serialized = JSON.stringify(snapshot);
+            if (serialized.length <= 180_000) localStorage.setItem('droid.parallel-agent-run.v1', serialized);
+          } catch { /* UI state remains available for this session. */ }
+        },
+        onCrossReference: (message) => {
+          addLog('Cross-reference', `${message.from} → ${message.to}: ${message.content.slice(0, 220)}`, 'info');
+        },
+      });
+      setParallelAgentRun(result);
+      addLog('Parallel agents', result.status === 'needs-verification'
+        ? 'Both streams returned cross-reviewed proposals. Apply them on their isolated branches and run executable tests before accepting either.'
+        : `Parallel run ended: ${result.status}. Review preserved attempts and errors.`,
+      result.status === 'needs-verification' ? 'ok' : 'warn');
+      return result;
+    } finally {
+      parallelAgentAbortRef.current = null;
+    }
+  };
+  const stopParallelAgents = () => {
+    parallelAgentAbortRef.current?.abort();
+    addLog('Parallel agents', 'Cancellation requested for both AI work streams.', 'warn');
+  };
+  const exportParallelAgentRun = () => parallelAgentRun ? parallelAgentRunText(parallelAgentRun) : '';
+
+  const runDocumentPipeline = async (files: DocumentInput[], question: string, options: DocumentPipelineOptions = {}, reviewerCount = 0): Promise<DocumentPipelineResult> => {
+    if (!aiOnline()) throw new Error('AI is unavailable. Connect the configured AI endpoint before running document analysis.');
+    if (!files.length) throw new Error('Choose at least one file to analyze.');
+    addLog('Document pipeline', `Starting analysis of ${files.length} file(s).`, 'info');
+    const ask = askFor('planner');
+    const reviewerTotal = Math.max(0, Math.min(5, Math.floor(reviewerCount)));
+    const reviewers = Array.from({ length: reviewerTotal }, (_, index) => ({ id: `session-reviewer-${index + 1}`, label: `Session reviewer ${index + 1}`, ask: askFor('supervisor') }));
+    return processDocuments(ask, files, question, {
+      ...options,
+      reviewers: [...(options.reviewers ?? []), ...reviewers],
+      conversationHistory: aiSessionRef.current.history().map((m) => `${m.role}: ${m.content}`).join('\n').slice(-12000),
+      onProgress: (event) => {
+        options.onProgress?.(event);
+        if (event.phase === 'planning' || event.phase === 'combining') addLog('Document pipeline', event.detail, 'info');
+      },
+    }).then((result) => {
+      addLog('Document pipeline', `Completed ${result.files.length} file(s); combined answer is ready.`, 'ok');
+      return result;
+    }).catch((error) => {
+      addLog('Document pipeline', error instanceof Error ? error.message : String(error), 'error');
+      throw error;
+    });
+  };
+
+  const runLongGeneration = async (question: string, options: LongGenerationOptions = {}): Promise<LongGenerationResult> => {
+    if (!aiOnline()) throw new Error('AI is unavailable. Connect the configured AI endpoint before generating a long response.');
+    if (!question.trim()) throw new Error('Enter a prompt for long-form generation.');
+    addLog('Long generation', 'Starting bounded multi-call response generation.', 'info');
+    try {
+      const result = await generateLongResponse(askFor('planner'), question, {
+        ...options,
+        onProgress: (event) => {
+          options.onProgress?.(event);
+          addLog('Long generation', `Section ${event.round}/${event.maxRounds}: ${event.totalChars.toLocaleString()} characters assembled.`, 'info');
+        },
+      });
+      addLog('Long generation', result.complete ? `Completed ${result.content.length.toLocaleString()} characters in ${result.rounds} calls.` : `Stopped at ${result.stoppedBecause}; ${result.content.length.toLocaleString()} characters assembled.`, result.complete ? 'ok' : 'warn');
+      return result;
+    } catch (error) {
+      addLog('Long generation', error instanceof Error ? error.message : String(error), 'error');
+      throw error;
+    }
+  };
+
+  const repairLongGeneration = async (output: string): Promise<GeneratedProjectRepairResult> => {
+    if (!aiOnline()) throw new Error('AI is unavailable. Connect the configured AI endpoint before repairing generated files.');
+    if (!output.trim()) throw new Error('There is no generated project output to repair.');
+    addLog('Project repair', 'Reviewing diagnostics and preparing targeted file repairs.', 'info');
+    try {
+      const result = await repairGeneratedProjectText(askFor('planner'), output);
+      addLog('Project repair', result.repaired
+        ? `Repaired flagged files in ${result.attempts} attempt(s); static review now passes.`
+        : `Repair finished with ${result.review.issues.length} remaining issue(s) after ${result.attempts} attempt(s).`,
+      result.repaired ? 'ok' : 'warn');
+      return result;
+    } catch (error) {
+      addLog('Project repair', error instanceof Error ? error.message : String(error), 'error');
+      throw error;
+    }
+  };
+
   return {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
+    /** Single shared physical-input authority and evidence-based cooperative takeover controls. */
+    getInputAuthority: () => inputAuthority.snapshot(),
+    /** Two concurrent AI proposal/review streams with retries and preserved cross-references. */
+    parallelAgentRun, runParallelAgents, stopParallelAgents, exportParallelAgentRun,
+    /** Portable progress transfer between cooperating controllers; import rechecks current frame evidence. */
+    exportWorkflowHandoff, importWorkflowHandoff,
+    requestInputTakeover, setInputPaused, takeUserInputControl, resumeAutomatedInput,
+    /** Resolve reviewer-requested frame IDs from the current bounded gallery; returns existing references only. */
+    getEvidenceFrames: (requestedIds?: readonly number[], limit = 6) => retrieveEvidenceFrames(framesRef.current, requestedIds, limit),
+    /** Read-only file analysis through the app's existing configured AI session; it never dispatches input actions. */
+    runDocumentPipeline,
+    /** Bounded sequential long-form generation through the existing AI session. */
+    runLongGeneration,
+    /** Targeted text-only repair of files flagged by static project review. */
+    repairLongGeneration,
     activeIndex, sync, annotations, cursor, log, cards, draftCard, setDraftCard, goal, setGoal, progress, setProgress,
     agents, setAgents, toggleStage, plays, demoCanvasRef, captureLost, DEMO_W, DEMO_H, intervalMs, shotCount, history,
     armed, aborted, abortedAt, aiStatus, aiAnswer, aiBusy, timeline, patterns, deletePattern, avoidRules, clearBlacklist, supervisor, superviseRun,
@@ -7351,6 +7897,16 @@ export function useAssist() {
     mainBridge, selectMainApp,
     /** Protocol v2 with droid-main: agreements, coordination, request flows, browser logs, the swarm, user requests and regulation. */
     bridgeV2,
+    /** Auto-update: check GitHub on start, pull/rebuild/relaunch when behind, and the manual controls. */
+    update,
+    /** The plugin host: registered capabilities, commands and panels, plus load/unload. */
+    plugins,
+    /** Voice control: spoken commands route into the command parser; notifications and answers can be spoken. */
+    voice,
+    /** The phone companion: the bridge serves a small mobile page over the engine's live state. */
+    phone,
+    /** Bandwidth-aware frame streaming: the current adaptive plan (quality/rate, consumers). */
+    frameStream,
     /** The active capture source, its kind and whether replay/drift are armed for it (HUD). */
     captureSource: captureStatus({ source, kind: captureRef.current?.kind, hasFrame: frames.length > 0, bridgeUrl: settings.bridgeUrl, mainConnected: mainBridge.status === 'connected' }),
     /** Whether input really reaches the PC right now (armed + bridge connected + executor stage on, not aborted). */
@@ -7369,6 +7925,10 @@ export function useAssist() {
     artifactCapabilities: caps.registry, invokeCapability: caps.invoke, presentations: caps.presentations, scripts: caps.scripts, artifactKnowledge: caps.knowledge,
     /** The capability registry: the single dispatch surface for buttons, the AI, agents and the main app. */
     capabilities: capabilities.registry.list, invocations: capabilities.invocations, invoke: capabilities.invoke, requestCapability, relaxed: !!relaxedRef.current,
+    /** Passive, bounded action-outcome trace for the read-only review panel. */
+    decisionHistory: decisionHistoryRef.current,
+    /** Current perception snapshot plus bounded screenshot references for follow-up reasoning. */
+    perception: perceptionRef.current,
     inventory, routes, routeProfiles, plotRoute, runRoute, fixMethods, pendingFix, runFixScript, dismissFix, retest, retestFlow,
     /** The last end-to-end AI self-test (plan → ground → execute → verify) and running one. */
     selfTestReport, runSelfTestNow,

@@ -8,6 +8,7 @@ import type { AutoActMap } from './notifications.js';
 import type { ExecutionMode } from './execution-mode.js';
 import type { AutoApplyBounds } from './aggressive.js';
 import type { PanelLayout } from './panel-layout.js';
+import type { VoiceMode } from './voice.js';
 
 /** What the stage shows: nothing yet, the explicit demo desktop, a shared screen, the PC via the bridge, or the main Droid app's preview. */
 export type ScreenSource = 'none' | 'demo' | 'screen' | 'bridge' | 'main-app';
@@ -64,6 +65,8 @@ export type InputAction = 'move' | 'click' | 'double_click' | 'drag' | 'type' | 
 /** One executed mouse or keyboard action, persisted for viewing and export. */
 export interface ActionRecord {
   id: string;
+  /** Exact workflow step that dispatched this input; absent for manual/user actions. */
+  stepId?: string;
   time: number;
   action: InputAction;
   /** Native screen pixels the action targeted (a drag's start). */
@@ -175,6 +178,8 @@ export interface WorkflowStep {
   repeat?: number;
   /** The on-screen thing a pointer step acts on ("files icon"); its coordinates are confirmed against it before dispatch. */
   target?: string;
+  /** Explicit, screenshot-verifiable postcondition; advisory only and never triggers a retry. */
+  expectedOutcome?: string;
   /** Set when the planner gave no point for this pointer step's target (it ran at a default). */
   unlocated?: boolean;
   /** A drag's release point, normalized 0..1 like x/y. Required for a drag step. */
@@ -380,6 +385,28 @@ export interface AssistSettings {
   notifyAutoAct: AutoActMap;
   /** Folders (native paths) the System panel reports file specs for. */
   systemFolders: string[];
+  /** Check GitHub for a newer build on start and, when behind, pull/rebuild/relaunch automatically. */
+  autoUpdate: boolean;
+  /** The last update check's one-line result, shown in Settings → Updates. */
+  updateStatus: string;
+  /** Voice control: listen for spoken commands and route them into the command parser. */
+  voiceEnabled: boolean;
+  /** Voice control: hold to talk, or leave the microphone open. */
+  voiceMode: VoiceMode;
+  /** Voice control: speech-to-text language, e.g. `en-US`. */
+  voiceLang: string;
+  /** Voice control: speak notifications aloud. */
+  voiceSpeakNotifications: boolean;
+  /** Voice control: speak AI answers aloud. */
+  voiceSpeakResponses: boolean;
+  /** Voice control: speech rate (0.5–2). */
+  voiceRate: number;
+  /** Voice control: speech volume (0–1). */
+  voiceVolume: number;
+  /** Phone companion: the port the small mobile page is served on. */
+  phonePort: number;
+  /** Phone companion: the token a phone must present (empty = the companion refuses every request until one is set). */
+  phoneToken: string;
   /** User arrangement of the workspace panels, per area; validated on load so no panel is ever lost. */
   panelLayout: PanelLayout;
 }

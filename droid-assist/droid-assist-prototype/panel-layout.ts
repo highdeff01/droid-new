@@ -5,13 +5,14 @@ export type PanelArea = (typeof PANEL_AREAS)[number];
 /** Panel ids per area, in their default order. The AI thinking / responses panels lead the layout, under the stage. */
 const DEFAULT_TOP = ['qwenThinking', 'aiResponses'] as const;
 const DEFAULT_SIDE = [
-  'operationProgress', 'workflow', 'selfTest', 'variations', 'persona', 'ruler', 'elements', 'elementMap', 'snipGallery', 'inventory', 'routes', 'retest',
+  'operationProgress', 'workflow', 'documentPipeline', 'perceptionReview', 'selfTest', 'variations', 'persona', 'ruler', 'elements', 'elementMap', 'snipGallery', 'inventory', 'routes', 'retest',
   'sections', 'learnedCoords', 'library', 'accessPaths', 'patterns', 'blacklist', 'operationMemory', 'knowledge', 'profile', 'stats', 'memory', 'goals',
   'notifications', 'system', 'watcher', 'wake', 'initiative', 'triggers', 'projects', 'approvals', 'artifacts', 'presentation',
   'operations',
 ] as const;
 const DEFAULT_BOTTOM = [
   'liveBriefing', 'aiActivity', 'popups', 'comparisonGallery', 'aiHelp', 'briefing', 'aiHistory', 'supervisor', 'agents', 'portfolios', 'loopControl',
+  'liveBriefing', 'aiActivity', 'popups', 'comparisonGallery', 'aiHelp', 'helpGuide', 'briefing', 'aiHistory', 'supervisor', 'agents', 'portfolios', 'loopControl',
   'capabilities', 'settings', 'agentBus', 'crew', 'agentCrew', 'opsAgents', 'subagentReport', 'resolution', 'log', 'errors',
   'actionHistory', 'database',
 ] as const;

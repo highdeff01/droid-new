@@ -3,6 +3,9 @@ import { CAPTURE_CHANNELS, type NativeCaptureApi, type NativeFrame } from './cap
 import { SYSTEM_CHANNELS, type NativeSystemApi } from './system-api.js';
 import { MAIN_BRIDGE_CHANNELS, type MainBridgeNativeApi } from './main-bridge-api.js';
 import { WINDOW_CHANNELS, type NativeWindowApi } from './window-api.js';
+import { UPDATE_CHANNELS, type NativeUpdateApi } from './update-api.js';
+import { PHONE_CHANNELS, type PhoneAction, type PhoneNativeApi } from './phone-api.js';
+import { AGENT_WORKTREE_CHANNELS, type NativeAgentWorktreeApi } from './agent-worktree-api.js';
 
 let frameListener: ((event: IpcRendererEvent, frame: NativeFrame) => void) | null = null;
 let errorListener: ((event: IpcRendererEvent, message: string) => void) | null = null;
@@ -95,3 +98,40 @@ const windowApi: NativeWindowApi = {
 };
 
 contextBridge.exposeInMainWorld('droidWindow', windowApi);
+/** The auto-update API the renderer sees as `window.droidUpdate`. */
+const updateApi: NativeUpdateApi = {
+  check: () => ipcRenderer.invoke(UPDATE_CHANNELS.check),
+  run: () => ipcRenderer.invoke(UPDATE_CHANNELS.run),
+};
+
+contextBridge.exposeInMainWorld('droidUpdate', updateApi);
+/** The phone-companion API the renderer sees as `window.droidPhone`. */
+let phoneActionListener: ((event: IpcRendererEvent, action: PhoneAction) => void) | null = null;
+const phoneApi: PhoneNativeApi = {
+  start: (options) => ipcRenderer.invoke(PHONE_CHANNELS.start, options),
+  push: (state) => ipcRenderer.send(PHONE_CHANNELS.state, state),
+  stop: () => ipcRenderer.send(PHONE_CHANNELS.stop),
+  onAction(handler) {
+    if (phoneActionListener) ipcRenderer.removeListener(PHONE_CHANNELS.action, phoneActionListener);
+    phoneActionListener = (_event, action) => handler(action);
+    ipcRenderer.on(PHONE_CHANNELS.action, phoneActionListener);
+    return () => {
+      if (phoneActionListener) ipcRenderer.removeListener(PHONE_CHANNELS.action, phoneActionListener);
+      phoneActionListener = null;
+    };
+  },
+};
+
+contextBridge.exposeInMainWorld('droidPhone', phoneApi);
+
+/** The local Git worktree API. It exposes only explicit operations, never arbitrary shell execution. */
+const agentWorktrees: NativeAgentWorktreeApi = {
+  chooseRepository: () => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.chooseRepository),
+  prepare: (repository, baseCommit) => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.prepare, repository, baseCommit),
+  applyPatch: (id, patch) => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.applyPatch, id, patch),
+  runChecks: (id) => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.runChecks, id),
+  getDiff: (id) => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.getDiff, id),
+  commit: (id, paths, message) => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.commit, id, paths, message),
+  push: (id) => ipcRenderer.invoke(AGENT_WORKTREE_CHANNELS.push, id),
+};
+contextBridge.exposeInMainWorld('droidAgentWorktrees', agentWorktrees);

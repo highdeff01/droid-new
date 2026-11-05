@@ -41,6 +41,10 @@ export interface CrewReport {
   found: string;
   /** Where on screen the agent ended (normalized), when it acted on something. */
   point?: { x: number; y: number };
+  /** ID of the screenshot/frame used to ground this report. */
+  screenshotId?: number;
+  /** Normalized region the report refers to; reviewers can inspect the same frame region. */
+  evidenceRegion?: { x: number; y: number; w: number; h: number };
 }
 
 /** The main AI's decision for one round. */
@@ -110,32 +114,27 @@ export function parseCrewDecision(raw: Record<string, unknown>, agents: readonly
 
 /** System prompt of the main AI directing the crew. */
 export const CREW_SYSTEM = `You are Droid Assist's main AI directing a crew of agents on the user's screen.
-Think about the goal and the agents' reports, then decide what each agent must find or do next. Several agents may work at once; give each at most one command and coordinate them so they do not fight over the same element.
+Think about the goal and the agents' reports, then decide what each agent must find or do next. Several agents may work at once; give each at most one command and coordinate them so they do not fight over the same element. Treat every report as a claim to verify, not a fact to accept. Compare reports against the current screenshot and each other's findings; call out contradictions, stale coordinates, covered/missing targets, and evidence that the current controller is blocked or still making verified progress. When evidence conflicts, assign an independent cross-check or a small test of the competing route. Prefer the route that passes screenshot-backed verification and the user's goal criteria, not the agent with the highest confidence alone. Agents may independently inspect screenshots, compare one another's evidence, challenge uncertain labels or coordinates, and suggest a better explanation or next inspection. These are advisory reports: they do not grant ownership, interrupt another workflow, or create a second execution controller. Any actual operation remains on Droid Assist's existing execution path and must not wait for perception review. Every agent may plan click, type, scroll, and drag/drop workflows; drag proposals must identify both the source and destination element/region, preserve the full press-move-release gesture as one exclusive action, and verify the drop result from a new screenshot. Replies should identify the screenshot/frame ID and the relevant normalized region when discussing a visual finding.
 Reply ONLY with JSON {"done":boolean,"summary":string,"commands":[{"agent":string,"task":string}]}. Set "done" true (and no commands) when the goal is complete or cannot progress.`;
 
 /** One report as a prompt line. */
-const reportLine = (r: CrewReport) => `${r.agent} (${r.ok ? 'ok' : 'failed'}) on "${r.task}": ${r.found}`;
+const reportLine = (r: CrewReport) => {
+  const region = r.evidenceRegion ? ` region x=${r.evidenceRegion.x.toFixed(3)},y=${r.evidenceRegion.y.toFixed(3)},w=${r.evidenceRegion.w.toFixed(3)},h=${r.evidenceRegion.h.toFixed(3)}` : '';
+  const frame = r.screenshotId !== undefined ? ` [frame #${r.screenshotId}${region}]` : '';
+  const point = r.point ? ` at (${r.point.x.toFixed(3)}, ${r.point.y.toFixed(3)})` : '';
+  return `${r.agent} (${r.ok ? 'ok' : 'failed'}) on "${r.task}"${frame}${point}: ${r.found}`;
+};
 
 /** Asks the main AI for the next round's commands (`system` names the roster's roles; the crew prompt by default). */
-export async function decideCrew(ask: AskFn, frame: Frame | null, goal: string, agents: readonly CrewAgent[], reports: CrewReport[], system = CREW_SYSTEM): Promise<CrewDecision> {
+export async function decideCrew(ask: AskFn, frame: Frame | null, goal: string, agents: readonly CrewAgent[], reports: CrewReport[], system = CREW_SYSTEM, perception = ''): Promise<CrewDecision> {
   const roster = agents.map((a) => `${a.id}: ${a.status}${a.lastReport ? ` — last report: ${a.lastReport}` : ''}`).join('\n');
-  const prompt = `Goal: ${goal}\nAgents:\n${roster}\n${reports.length ? `Reports from the last round:\n${reports.map(reportLine).join('\n')}` : 'No reports yet: this is the first round.'}`;
+  const prompt = `Goal: ${goal}\nAgents:\n${roster}\n${reports.length ? `Reports from the last round:\n${reports.map(reportLine).join('\n')}` : 'No reports yet: this is the first round.'}${perception ? `\nShared live perception and prospect checks:\n${perception}` : ''}`;
   const reply = await ask({ system, prompt, frame, json: true });
   return { ...parseCrewDecision(parseJsonReply(reply.content), agents.map((a) => a.id)), thinking: reply.thinking };
 }
 
 /** An agent report as a Screen watcher note. */
 export const reportNote = (r: CrewReport): NoteDraft => ({ kind: r.ok ? 'element' : 'unusual', text: `Crew ${reportLine(r)}` });
-
-/** Serializes real screen input: two agents never move the pointer at once. */
-export function createScreenLock() {
-  let tail: Promise<unknown> = Promise.resolve();
-  return <T>(fn: () => Promise<T>): Promise<T> => {
-    const run = tail.then(fn, fn);
-    tail = run.catch(() => undefined);
-    return run;
-  };
-}
 
 /**
  * The command loop: the main AI decides, every commanded agent works in parallel and reports, then

@@ -854,8 +854,14 @@ describe('useAssist auto-continue and AI stop', () => {
       run = result.current.replay(false);
     });
     await vi.waitFor(() => expect(m.verifies()).toBe(1));
-    expect(result.current.aiWorking).toBe(true);
-    expect(result.current.continuing).toBe(true);
+    // Wait for the working state itself: the mock counts the request when it
+    // is sent, but aiWorking lands a tick later — asserting it immediately
+    // raced under full-suite load and flaked. The verify call hangs, so once
+    // true it stays true until the abort below.
+    await vi.waitFor(() => {
+      expect(result.current.aiWorking).toBe(true);
+      expect(result.current.continuing).toBe(true);
+    });
     const calls = m.bodies.length;
     act(() => result.current.triggerAbort('stop button'));
     await act(() => run);
@@ -1082,7 +1088,7 @@ describe('useAssist screen-change responder and proposals', () => {
     const change = result.current.timeline.find((e) => e.kind === 'change');
     expect(change?.text).toBe('[navigation] the Settings page — PLAN STALE: the Files icon moved');
     const changeReq = fetchMock.mock.calls.map((c) => JSON.parse(String(c[1].body))).find((b) => b.messages[0].content.includes('screen-change responder. The first image'));
-    expect(changeReq.messages.at(-1).images).toHaveLength(2);
+    expect(changeReq.messages.at(-1).images).toHaveLength(3);
     const log = [...result.current.log].reverse();
     const assessed = log.findIndex((l) => l.source === 'Screen-change responder' && /PLAN STALE/.test(l.message));
     const proposed = log.findIndex((l) => l.source === 'Auto-Actor' && /^Re-proposal for "Hover Files": WHAT: move "files icon" at \(20%, 80%\) · WHY: The screen now shows the Settings page, so I will/.test(l.message));
@@ -1366,6 +1372,32 @@ describe('useAssist screen capture', () => {
     await act(() => result.current.shareScreen());
     act(() => result.current.setSettings({ ...result.current.settings, captureMs: 250 }));
     expect(api.setCaptureInterval).toHaveBeenLastCalledWith(250);
+  });
+
+  it('ignores a delayed loss callback from a capture that has been replaced', async () => {
+    const callbacks: { onError: (message: string) => void }[] = [];
+    const api: NativeCaptureApi = {
+      startCapture: vi.fn(async (_ms, _onFrame, onError) => {
+        callbacks.push({ onError });
+      }),
+      setCaptureInterval: vi.fn(),
+      stopCapture: vi.fn(),
+      listDisplays: vi.fn(async () => []),
+      selectDisplay: vi.fn(),
+      grabDisplay: vi.fn(),
+    };
+    window.droidNative = api;
+    const { result } = renderHook(() => useAssist());
+    await act(() => result.current.shareScreen());
+    await act(() => result.current.shareScreen());
+
+    expect(callbacks).toHaveLength(2);
+    act(() => callbacks[0].onError('old display disconnected'));
+    expect(result.current.captureLost).toBeNull();
+    expect(result.current.source).toBe('screen');
+
+    act(() => callbacks[1].onError('active display disconnected'));
+    expect(result.current.captureLost).toBe('active display disconnected');
   });
 
   it('raises a loud error and never falls back to the demo when capture is lost', async () => {

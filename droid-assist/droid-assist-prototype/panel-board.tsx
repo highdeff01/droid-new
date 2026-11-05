@@ -83,6 +83,11 @@ function PanelSlot({ id, onDragOver, onDrop, onFloat, children }: PanelSlotProps
       <div className={styles.panelBody} hidden={collapsed}>
         <PanelErrorBoundary>{children}</PanelErrorBoundary>
       </div>
+        {onFloat && (
+          <button type="button" className={styles.panelControl} onClick={(e) => float(e.currentTarget.closest('[data-panel-id]'))} aria-label={`Float ${id} panel`} title="Undock into a floating window">⧉</button>
+        )}
+      </div>
+      <div className={styles.panelBody} hidden={collapsed}><PanelErrorBoundary>{children}</PanelErrorBoundary></div>
     </div>
   );
 }
