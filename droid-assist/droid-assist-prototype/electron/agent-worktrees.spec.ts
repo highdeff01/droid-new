@@ -85,7 +85,7 @@ new file mode 100644
     expect(results).toHaveLength(2);
     expect(results.map((item) => item.exitCode)).toEqual([0, 0]);
     expect(results[0].stdout).toContain('tests passed');
-    await expect(f.manager.runChecks('stream-a', ['npm install' as never])).rejects.toThrow('Only these allowlisted checks');
+    await expect(f.manager.runChecks('stream-a', ['npm install' as never])).rejects.toThrow('Run both checks together');
   });
 
   it('does not allow a branch commit until both test and lint pass', async () => {
@@ -97,6 +97,15 @@ new file mode 100644
     expect(checks.every((item) => item.exitCode === 0)).toBe(true);
     const sha = await f.manager.commit('stream-a', ['README.md'], 'commit after checks');
     expect(sha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('requires rerunning checks if files change after testing', async () => {
+    const f = await fixture();
+    await f.manager.prepare(f.base);
+    await f.manager.applyPatch('stream-a', patch);
+    await f.manager.runChecks('stream-a');
+    await fs.writeFile(path.join(f.worktreeDirectory, 'stream-a', 'README.md'), 'changed after test\n');
+    await expect(f.manager.commit('stream-a', ['README.md'], 'stale test approval')).rejects.toThrow('changed after its last successful test run');
   });
 
   it('rejects invalid base SHA and unsafe patch paths', async () => {
