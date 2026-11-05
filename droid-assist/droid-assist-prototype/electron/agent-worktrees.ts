@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -54,7 +55,7 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 function safeRelativePath(value: string): boolean {
-  return value.length > 0 && !path.isAbsolute(value) && !value.split(/[\\/]/).some((part) => part === '..' || part === '.git');
+  return value.length > 0 && !/^[a-z]:/i.test(value) && !/^[\\\\/]{2}/.test(value) && !path.isAbsolute(value) && !value.split(/[\\/]/).some((part) => part === '..' || part === '.git');
 }
 
 /**
@@ -68,6 +69,8 @@ export class AgentWorktreeManager {
   private readonly maxBuffer: number;
   private snapshot: AgentWorktreeSnapshot | null = null;
   private readonly passedChecks = new Map<AgentWorktreeId, Set<CheckName>>();
+  private readonly testedFingerprint = new Map<AgentWorktreeId, string>();
+  private readonly committedHeads = new Map<AgentWorktreeId, string>();
 
   constructor(options: AgentWorktreeManagerOptions) {
     this.root = path.resolve(options.rootDirectory);
@@ -151,6 +154,8 @@ export class AgentWorktreeManager {
       const checked = await this.git(['apply', '--check', '--', patchFile], worktree.path);
       await this.git(['apply', '--', patchFile], worktree.path);
       this.passedChecks.delete(id);
+      this.testedFingerprint.delete(id);
+      this.committedHeads.delete(id);
       return { applied: true, check: checked.stdout || 'git apply --check passed' };
     } finally {
       await fs.rm(patchFile, { force: true });
@@ -159,8 +164,8 @@ export class AgentWorktreeManager {
 
   async runChecks(id: AgentWorktreeId, commands: CheckName[] = [...CHECKS]): Promise<AgentCheckResult[]> {
     const worktree = this.getWorktree(id);
-    if (!commands.length || commands.some((command) => !CHECKS.includes(command))) {
-      throw new Error(`Only these allowlisted checks may run: ${CHECKS.join(', ')}`);
+    if (commands.length !== CHECKS.length || commands.some((command, index) => command !== CHECKS[index])) {
+      throw new Error(`Run both checks together in this order: ${CHECKS.join(', ')}`);
     }
     const results: AgentCheckResult[] = [];
     for (const command of commands) {
@@ -178,10 +183,14 @@ export class AgentWorktreeManager {
       }
     }
     if (results.length === commands.length && results.every((result) => result.exitCode === 0)) {
-      const passed = this.passedChecks.get(id) ?? new Set<CheckName>();
-      commands.forEach((command) => passed.add(command));
-      this.passedChecks.set(id, passed);
-    } else this.passedChecks.delete(id);
+      this.passedChecks.set(id, new Set(CHECKS));
+      const diff = await this.getDiff(id);
+      const status = (await this.git(['status', '--porcelain=v1'], worktree.path)).stdout;
+      this.testedFingerprint.set(id, createHash('sha256').update(diff.diff).update(String.fromCharCode(0)).update(status).digest('hex'));
+    } else {
+      this.passedChecks.delete(id);
+      this.testedFingerprint.delete(id);
+    }
     return results;
   }
 
@@ -205,13 +214,19 @@ export class AgentWorktreeManager {
     if (!message.trim() || message.length > 200) throw new Error('Commit message must be 1–200 characters.');
     const passed = this.passedChecks.get(id);
     if (!passed || CHECKS.some((command) => !passed.has(command))) throw new Error('Both npm test and npm run lint must pass after the latest patch before committing.');
+    const currentDiff = await this.getDiff(id);
+    const currentStatus = (await this.git(['status', '--porcelain=v1'], worktree.path)).stdout;
+    const currentFingerprint = createHash('sha256').update(currentDiff.diff).update(String.fromCharCode(0)).update(currentStatus).digest('hex');
+    if (currentFingerprint !== this.testedFingerprint.get(id)) throw new Error('The worktree changed after its last successful test run. Run both checks again.');
     if (!paths.length || paths.length > 100) throw new Error('Select between 1 and 100 changed paths.');
     for (const value of paths) if (!safeRelativePath(value)) throw new Error(`Unsafe commit path rejected: ${value}`);
     const changed = new Set((await this.getDiff(id)).changedFiles);
     if (paths.some((value) => !changed.has(value))) throw new Error('Commit paths must be changed files in this worktree diff.');
     await this.git(['add', '--', ...paths], worktree.path);
     await this.git(['commit', '-m', message], worktree.path);
-    return (await this.git(['rev-parse', 'HEAD'], worktree.path)).stdout.trim();
+    const committed = (await this.git(['rev-parse', 'HEAD'], worktree.path)).stdout.trim();
+    this.committedHeads.set(id, committed);
+    return committed;
   }
 
   /** Push is deliberately separate from commit and must be triggered by an explicit user action. */
@@ -221,6 +236,7 @@ export class AgentWorktreeManager {
     if (!current.clean) throw new Error('Commit all reviewed changes before pushing this branch.');
     const head = (await this.git(['rev-parse', 'HEAD'], worktree.path)).stdout.trim();
     if (head === worktree.baseCommit) throw new Error('There is no new commit to push.');
+    if (head !== this.committedHeads.get(id)) throw new Error('The branch head differs from the reviewed commit. Review and test the latest changes before pushing.');
     const passed = this.passedChecks.get(id);
     if (!passed || CHECKS.some((command) => !passed.has(command))) throw new Error('Both npm test and npm run lint must pass before pushing.');
     await this.git(['push', '--set-upstream', 'origin', worktree.branch], worktree.path);
