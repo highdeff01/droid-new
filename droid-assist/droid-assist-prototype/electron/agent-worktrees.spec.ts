@@ -54,6 +54,18 @@ describe('AgentWorktreeManager', () => {
     expect(await fs.readFile(path.join(result.worktrees['stream-b'].path, 'README.md'), 'utf8')).toBe('base\n');
   });
 
+  it('restores both existing branches after constructing a new manager instance', async () => {
+    const f = await fixture();
+    const original = await f.manager.prepare(f.base);
+    await f.manager.applyPatch('stream-a', patch);
+    const restarted = new AgentWorktreeManager({ rootDirectory: f.root, worktreeDirectory: f.worktreeDirectory });
+    const restored = await restarted.restoreExisting();
+    expect(restored?.baseCommit).toBe(f.base);
+    expect(restored?.worktrees['stream-a'].path).toBe(original.worktrees['stream-a'].path);
+    expect(restored?.worktrees['stream-b'].branch).toBe(original.worktrees['stream-b'].branch);
+    expect(await fs.readFile(path.join(original.worktrees['stream-a'].path, 'README.md'), 'utf8')).toBe('stream-a\n');
+  });
+
   it('applies patches to one stream and returns a diff without changing the other', async () => {
     const f = await fixture();
     const result = await f.manager.prepare(f.base);
