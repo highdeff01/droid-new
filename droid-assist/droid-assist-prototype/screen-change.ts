@@ -56,6 +56,8 @@ export interface PlanContext {
   next: string | null;
   /** Shared interaction/perception notes, including page-change and element-effect evidence. */
   context?: string;
+  /** Optional prior captures for temporal comparison; current full frame remains the primary image. */
+  evidenceFrames?: Frame[];
 }
 
 /** The summary of an assessment whose reply described no change: said plainly, never left blank. */
@@ -76,6 +78,7 @@ export async function assessChange(ask: AskFn, full: Frame, crop: Frame, change:
     system: CHANGE_SYSTEM,
     prompt: `The screen changed in the region x=${pct(box.x)}..${pct(box.x + box.w)}, y=${pct(box.y)}..${pct(box.y + box.h)}.\nGoal: ${plan.goal || '(none)'}\nNext planned step: ${plan.next ?? '(none)'}${plan.context ? `\nShared interaction and page evidence:\n${plan.context}` : ''}\nWhat changed on the screen, and does it affect the current plan? Separately describe the surrounding background, identify visible foreground elements with tight normalized bounding boxes, and provide confidence/role for each. Return an empty elements array if uncertain. Set stale=true only if the next planned step can no longer run as planned (its target moved, is covered or gone, or the screen is somewhere else).`,
     frame: full,
+    frames: (plan.evidenceFrames ?? []).filter(candidate => candidate.id !== full.id).slice(0, 2),
     crops: [crop],
     json: true,
   });
