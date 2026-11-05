@@ -21,6 +21,7 @@ async function fixture() {
   await git(['config', 'user.name', 'Droid Test'], root);
   await git(['config', 'user.email', 'test@example.com'], root);
   await fs.writeFile(path.join(root, 'README.md'), 'base\n');
+  await fs.writeFile(path.join(root, '.gitignore'), 'node_modules/\n');
   await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
     name: 'fixture', version: '1.0.0', private: true,
     scripts: { test: "node -e \"console.log('tests passed')\"", lint: "node -e \"console.log('lint passed')\"" },
