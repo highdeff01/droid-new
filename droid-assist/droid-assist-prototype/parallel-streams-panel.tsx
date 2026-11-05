@@ -92,6 +92,22 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
     const latest = await native.getDiff(id);
     setDiffs((old) => ({ ...old, [id]: latest }));
   });
+  const copyVerificationPacket = async (id: AgentWorktreeId) => {
+    const diff = diffs[id] ?? await native.getDiff(id);
+    const packet = {
+      task: run?.task,
+      baseCommit: snapshot?.baseCommit,
+      stream: id,
+      branch: snapshot?.worktrees[id].branch,
+      aiAttempts: run?.streams[id].attempts,
+      checks: checks[id],
+      diff: diff.diff,
+      changedFiles: diff.changedFiles,
+      artifacts: (checks[id] ?? []).flatMap((item) => [item.artifactPath, item.diffArtifactPath]).filter(Boolean),
+    };
+    await navigator.clipboard.writeText(JSON.stringify(packet, null, 2));
+    setMessage(`Copied ${id} verification packet for another tab or review method.`);
+  };
   const push = (id: AgentWorktreeId) => withBusy(id, async () => {
     const sha = await native.push(id);
     setMessage(`${id}: pushed ${sha.slice(0, 12)} to origin. No merge was performed.`);
@@ -129,6 +145,8 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
                     onClick={() => void commit(id)}>Commit reviewed changes</button>
                   <button type="button" style={{ ...button, background: '#475569' }} disabled={running || !result?.length || result.some((item) => item.exitCode !== 0) || !diff?.clean}
                     onClick={() => void push(id)}>Push branch</button>
+                  <button type="button" style={{ ...button, background: 'transparent', color: 'var(--text, #e2e8f0)' }}
+                    disabled={!result?.length || !diff} onClick={() => void copyVerificationPacket(id)}>Copy test packet to other tabs</button>
                 </div>
                 {result?.map((item) => (
                   <div key={item.command} style={{ borderTop: '1px solid var(--line, #334155)', marginTop: 8, paddingTop: 7 }}>
