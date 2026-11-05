@@ -61,11 +61,13 @@ describe('parallel AI agent runner', () => {
 
   it('switches both streams to distinct alternative methods after retry exhaustion', async () => {
     const attempts: string[] = [];
+    const recoveryPrompts: string[] = [];
     const makeAsk = (prefix: string): AskFn => {
       let initialCalls = 0;
       return async (request) => {
         const method = request.context?.find((line) => line.startsWith('METHOD:')) ?? '';
         attempts.push(prefix + method);
+        if (method.includes('alternative-')) recoveryPrompts.push(request.prompt);
         if (method.includes('primary-implementation') || method.includes('independent-test-and-alternative')) {
           initialCalls++;
           if (initialCalls <= 2) throw new Error('primary method blocked');
@@ -85,6 +87,11 @@ describe('parallel AI agent runner', () => {
     expect(attempts).toContain('B:METHOD: alternative-black-box-test-method');
     expect(run.streams['stream-a'].attempts.some((a) => a.method === 'alternative-minimal-implementation')).toBe(true);
     expect(run.streams['stream-b'].attempts.some((a) => a.method === 'alternative-black-box-test-method')).toBe(true);
+    expect(recoveryPrompts).toHaveLength(2);
+    expect(recoveryPrompts.every((prompt) => prompt.includes('AUTOMATIC RECOVERY CONTEXT'))).toBe(true);
+    expect(recoveryPrompts.every((prompt) => prompt.includes('primary method blocked'))).toBe(true);
+    expect(run.streams['stream-a'].currentMethod).toBe(1);
+    expect(run.streams['stream-b'].currentMethod).toBe(1);
     expect(run.status).toBe('needs-verification');
   });
 
