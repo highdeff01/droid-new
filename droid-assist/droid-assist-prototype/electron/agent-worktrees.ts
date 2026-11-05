@@ -153,7 +153,7 @@ export class AgentWorktreeManager {
     return worktree;
   }
 
-  async applyPatch(id: AgentWorktreeId, patch: string): Promise<{ applied: boolean; check: string }> {
+  async applyPatch(id: AgentWorktreeId, patch: string): Promise<{ applied: boolean; check: string; artifactPath: string }> {
     const worktree = this.getWorktree(id);
     if (!patch.trim()) throw new Error('Patch is empty.');
     if (patch.length > PATCH_LIMIT) throw new Error(`Patch exceeds ${PATCH_LIMIT} characters.`);
