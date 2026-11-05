@@ -130,11 +130,12 @@ export function restoreWorkflowHandoff(
 
   let preservedVerified = 0;
   let resetUnverified = 0;
+  let blockedByEarlierStep = false;
   const steps = currentSteps.map((step, index) => {
     const prior = snapshot.steps[index];
     const sameStep = !!prior && prior.id === step.id && prior.fingerprint === workflowStepFingerprint(step);
     const evidenceAvailable = prior?.evidenceFrameId !== undefined && availableFrameIds.has(prior.evidenceFrameId);
-    const canPreserve = sameStep && Number.isFinite(prior?.verifiedAt) && evidenceAvailable;
+    const canPreserve = !blockedByEarlierStep && sameStep && Number.isFinite(prior?.verifiedAt) && evidenceAvailable;
 
     if (canPreserve) {
       preservedVerified++;
@@ -148,6 +149,7 @@ export function restoreWorkflowHandoff(
     }
 
     resetUnverified++;
+    blockedByEarlierStep = true;
     return {
       ...step,
       status: 'pending' as const,
