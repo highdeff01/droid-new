@@ -49,6 +49,12 @@ describe('assessChange', () => {
     const req = ask.mock.calls[0][0];
     expect(req.frame).toBe(full);
     expect(req.crops).toEqual([crop]);
+    const priorA = { ...full, id: 0 } as Frame;
+    const priorB = { ...full, id: 2 } as Frame;
+    const priorC = { ...full, id: 3 } as Frame;
+    const withHistory = askReturning('{"kind":"content","summary":"same page"}');
+    await assessChange(withHistory, full, crop, change, { goal: '', next: null, evidenceFrames: [priorA, full, priorB, priorC] });
+    expect(withHistory.mock.calls[0][0].frames).toEqual([priorA, priorB]);
     expect(req.prompt).toMatch(/x=25%\.\.50%/);
     expect(req.prompt).toMatch(/Goal: play the video/);
     expect(req.prompt).toMatch(/Next planned step: "Press play"/);
