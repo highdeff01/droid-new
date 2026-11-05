@@ -84,7 +84,7 @@ export async function runParallelAgentReview(options: ParallelAgentRunnerOptions
     await options.persist?.(structuredClone(run));
   };
   const stopped = () => options.signal?.aborted === true;
-  const askWithRetry = async (stream: AgentStreamRecord, method: string, prompt: string): Promise<string> => {
+  const askWithRetry = async (stream: AgentStreamRecord, method: string, prompt: string, alternative?: { method: string; prompt: string }): Promise<string> => {
     let lastError = '';
     for (let retry = 0; retry <= maxRetries; retry++) {
       if (stopped()) throw new DOMException('Parallel agent run cancelled', 'AbortError');
@@ -133,22 +133,40 @@ export async function runParallelAgentReview(options: ParallelAgentRunnerOptions
         if (stopped()) throw error;
       }
     }
+    if (alternative) {
+      // A distinct strategy is attempted after the same-method retries are exhausted.
+      return askWithRetry(stream, alternative.method, alternative.prompt, undefined);
+    }
     throw new Error(`${stream.id} exhausted retries for ${method}: ${lastError}`);
   };
 
   try {
-    const [primary, independent] = await Promise.all([
+    const initial = await Promise.allSettled([
       askWithRetry(
         run.streams['stream-a'],
         'primary-implementation',
         `TASK: ${run.task}\nBASE COMMIT: ${run.baseCommit}\n\nDevelop the primary implementation. Work as if editing only branch ${run.streams['stream-a'].branch}. Return: proposed architecture, exact files, complete patch-ready code or diff, risks, and how to test it. Do not assume Stream B's work exists yet.`,
+        {
+          method: 'alternative-minimal-implementation',
+          prompt: `TASK: ${run.task}\nBASE COMMIT: ${run.baseCommit}\n\nALTERNATIVE METHOD: abandon the primary architecture if it is blocked. Propose a materially different minimal vertical slice or adapter-based design, with exact files, patch-ready code, risks, and tests. Keep it isolated to branch ${run.streams['stream-a'].branch}.`,
+        },
       ),
       askWithRetry(
         run.streams['stream-b'],
         'independent-test-and-alternative',
         `TASK: ${run.task}\nBASE COMMIT: ${run.baseCommit}\n\nIndependently inspect the problem from scratch on branch ${run.streams['stream-b'].branch}. Do not copy Stream A. Return: baseline assumptions, independent test matrix with executable commands, likely failure modes, and a materially different solution if appropriate.`,
+        {
+          method: 'alternative-black-box-test-method',
+          prompt: `TASK: ${run.task}\nBASE COMMIT: ${run.baseCommit}\n\nALTERNATIVE METHOD: if the original test plan is blocked, switch to a black-box contract test, mocked dependency test, or isolated integration harness. Give executable commands, test fixtures, expected assertions, and an independent alternative design on branch ${run.streams['stream-b'].branch}.`,
+        },
       ),
     ]);
+    if (initial.some((result) => result.status === 'rejected')) {
+      const failure = initial.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      throw failure?.reason ?? new Error('Both initial streams failed');
+    }
+    const primary = (initial[0] as PromiseFulfilledResult<string>).value;
+    const independent = (initial[1] as PromiseFulfilledResult<string>).value;
     if (stopped()) throw new DOMException('Parallel agent run cancelled', 'AbortError');
 
     const messageA: AgentCrossReference = {
@@ -163,18 +181,32 @@ export async function runParallelAgentReview(options: ParallelAgentRunnerOptions
     await Promise.all([options.onCrossReference?.(messageA), options.onCrossReference?.(messageB)]);
     await publish();
 
-    const [revisionA, revisionB] = await Promise.all([
+    const revisions = await Promise.allSettled([
       askWithRetry(
         run.streams['stream-a'],
         'cross-reviewed-revision',
         `TASK: ${run.task}\n\nYOUR ORIGINAL IMPLEMENTATION:\n${primary.slice(0, 12_000)}\n\nINDEPENDENT STREAM B REVIEW:\n${independent.slice(0, 12_000)}\n\nRevise the implementation. Address valid test concerns, reject incorrect criticisms with reasons, and preserve the best working approach. Return exact changes and unresolved risks.`,
+        {
+          method: 'alternative-cross-review-rewrite',
+          prompt: `TASK: ${run.task}\n\nThe primary revision method is blocked. Rebuild the solution from the independent test findings below, using a different architecture or smaller safe implementation.\n\nSTREAM A ORIGINAL:\n${primary.slice(0, 8_000)}\n\nSTREAM B REVIEW:\n${independent.slice(0, 8_000)}\n\nReturn exact files, patch-ready changes, and unresolved risks.`,
+        },
       ),
       askWithRetry(
         run.streams['stream-b'],
         'cross-reviewed-test-and-alternative',
         `TASK: ${run.task}\n\nYOUR INDEPENDENT TEST PLAN:\n${independent.slice(0, 12_000)}\n\nSTREAM A IMPLEMENTATION:\n${primary.slice(0, 12_000)}\n\nChallenge the implementation against your tests. Return concrete expected failures, additional test cases, and whether your independent alternative is preferable. Do not claim tests were executed.`,
+        {
+          method: 'alternative-reproduction-harness',
+          prompt: `TASK: ${run.task}\n\nThe initial cross-review method is blocked. Design a minimal isolated reproduction harness and a different validation strategy for the implementation below. Identify likely defects and precise assertions. Do not claim execution.\n\nIMPLEMENTATION:\n${primary.slice(0, 10_000)}\n\nYOUR TEST PLAN:\n${independent.slice(0, 10_000)}`,
+        },
       ),
     ]);
+    if (revisions.some((result) => result.status === 'rejected')) {
+      const failure = revisions.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      throw failure?.reason ?? new Error('Both cross-review streams failed');
+    }
+    const revisionA = (revisions[0] as PromiseFulfilledResult<string>).value;
+    const revisionB = (revisions[1] as PromiseFulfilledResult<string>).value;
     const finalA: AgentCrossReference = {
       id: `xref-${now().toString(36)}-final-a`, from: 'stream-a', to: 'stream-b', createdAt: now(),
       content: `Revised primary proposal:\n\n${revisionA.slice(0, 12_000)}`,
