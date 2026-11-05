@@ -198,3 +198,14 @@ fieldset.setting { border: 1px solid var(--line); border-radius: 10px; padding: 
 .guideFeatureHead small { color: var(--muted); font-weight: 400; }
 .guideSteps { margin: 0; padding: var(--sp-2) var(--sp-3) var(--sp-2) calc(var(--sp-3) + 12px); color: var(--text); font-size: 13px; line-height: 1.5; }
 .guideSteps li { margin: 0 0 var(--sp-1); }
+
+
+/* Physical-input ownership controls remain visible independently of agent panels. */
+.headerControls { margin-left: auto; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 12px; }
+.headerControls button { border: 1px solid var(--line); border-radius: 7px; padding: 7px 10px; background: rgba(15, 23, 42, .8); color: var(--text); font: inherit; cursor: pointer; }
+.headerControls button:hover { border-color: var(--accent, #0891b2); }
+.headerControls button:focus-visible { outline: 2px solid var(--accent, #0891b2); outline-offset: 2px; }
+@media (max-width: 720px) {
+  .header { align-items: flex-start; flex-wrap: wrap; }
+  .headerControls { width: 100%; margin-left: 0; justify-content: flex-start; }
+}
