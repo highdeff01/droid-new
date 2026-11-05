@@ -89,6 +89,21 @@ new file mode 100644
     await expect(f.manager.runChecks('stream-a', ['npm install' as never])).rejects.toThrow('Run both checks together');
   });
 
+  it('runs both independent worktree test suites concurrently without sharing directories', async () => {
+    const f = await fixture();
+    await f.manager.prepare(f.base);
+    const [a, b] = await Promise.all([
+      f.manager.runChecks('stream-a'),
+      f.manager.runChecks('stream-b'),
+    ]);
+    expect(a).toHaveLength(3);
+    expect(b).toHaveLength(3);
+    expect(a.every((item) => item.exitCode === 0)).toBe(true);
+    expect(b.every((item) => item.exitCode === 0)).toBe(true);
+    expect(a.every((item) => item.id === 'stream-a')).toBe(true);
+    expect(b.every((item) => item.id === 'stream-b')).toBe(true);
+  });
+
   it('does not allow a branch commit until dependency install, tests and lint pass', async () => {
     const f = await fixture();
     await f.manager.prepare(f.base);
