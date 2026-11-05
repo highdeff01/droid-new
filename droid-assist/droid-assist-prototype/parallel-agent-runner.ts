@@ -148,7 +148,7 @@ export async function runParallelAgentReview(options: ParallelAgentRunnerOptions
         `TASK: ${run.task}\nBASE COMMIT: ${run.baseCommit}\n\nDevelop the primary implementation. Work as if editing only branch ${run.streams['stream-a'].branch}. Return: proposed architecture, exact files, risks, and how to test it. When code changes are appropriate, provide a complete unified Git diff inside a fenced code block labelled diff with repository-relative paths and all required hunks. Do not put prose inside the diff block. Do not assume Stream B's work exists yet.`,
         {
           method: 'alternative-minimal-implementation',
-          prompt: `TASK: ${run.task}\nBASE COMMIT: ${run.baseCommit}\n\nALTERNATIVE METHOD: abandon the primary architecture if it is blocked. Propose a materially different minimal vertical slice or adapter-based design, with exact files, patch-ready code, risks, and tests. Keep it isolated to branch ${run.streams['stream-a'].branch}.`,
+          prompt: `TASK: ${run.task}\nBASE COMMIT: ${run.baseCommit}\n\nALTERNATIVE METHOD: abandon the primary architecture if it is blocked. Propose a materially different minimal vertical slice or adapter-based design, with exact files, a complete unified Git diff in a fenced code block labelled diff when code changes are appropriate, risks, and tests. Keep it isolated to branch ${run.streams['stream-a'].branch}.`,
         },
       ),
       askWithRetry(
