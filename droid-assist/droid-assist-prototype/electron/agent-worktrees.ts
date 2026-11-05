@@ -89,9 +89,10 @@ export class AgentWorktreeManager {
     return { root, branch, head };
   }
 
-  async prepare(baseCommit: string): Promise<AgentWorktreeSnapshot> {
-    if (!SHA.test(baseCommit)) throw new Error('Base commit must be a full 40-character Git SHA.');
+  async prepare(requestedBaseCommit = ''): Promise<AgentWorktreeSnapshot> {
     const repo = await this.inspectRepository();
+    const baseCommit = requestedBaseCommit.trim() || repo.head;
+    if (!SHA.test(baseCommit)) throw new Error('Base commit must be a full 40-character Git SHA.');
     const resolved = (await this.git(['rev-parse', '--verify', `${baseCommit}^{commit}`])).stdout.trim();
     if (resolved.toLowerCase() !== baseCommit.toLowerCase()) throw new Error('The requested base commit did not resolve exactly.');
     await fs.mkdir(this.worktreeRoot, { recursive: true });
