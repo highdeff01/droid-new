@@ -67,6 +67,7 @@ export class AgentWorktreeManager {
   private readonly timeoutMs: number;
   private readonly maxBuffer: number;
   private snapshot: AgentWorktreeSnapshot | null = null;
+  private readonly passedChecks = new Map<AgentWorktreeId, Set<CheckName>>();
 
   constructor(options: AgentWorktreeManagerOptions) {
     this.root = path.resolve(options.rootDirectory);
@@ -97,6 +98,7 @@ export class AgentWorktreeManager {
     if (resolved.toLowerCase() !== baseCommit.toLowerCase()) throw new Error('The requested base commit did not resolve exactly.');
     await fs.mkdir(this.worktreeRoot, { recursive: true });
     const created: string[] = [];
+    const createdBranches: string[] = [];
     try {
       const worktrees = {} as Record<AgentWorktreeId, AgentWorktree>;
       for (const id of ['stream-a', 'stream-b'] as const) {
@@ -108,6 +110,7 @@ export class AgentWorktreeManager {
         await this.git(['worktree', 'add', '--detach', directory, baseCommit]);
         created.push(directory);
         await this.git(['switch', '-c', branch, baseCommit], directory);
+        createdBranches.push(branch);
         worktrees[id] = { id, branch, path: directory, baseCommit, prepared: true };
       }
       this.snapshot = { repository: repo.root, baseCommit, worktrees };
@@ -117,6 +120,7 @@ export class AgentWorktreeManager {
       for (const directory of created.reverse()) {
         await this.git(['worktree', 'remove', '--force', directory]).catch(() => undefined);
       }
+      for (const branch of createdBranches.reverse()) await this.git(['branch', '-D', branch]).catch(() => undefined);
       throw new Error(`Could not prepare both isolated worktrees: ${errorText(error)}`);
     }
   }
@@ -146,6 +150,7 @@ export class AgentWorktreeManager {
       await fs.writeFile(patchFile, patch, { encoding: 'utf8', flag: 'wx' });
       const checked = await this.git(['apply', '--check', '--', patchFile], worktree.path);
       await this.git(['apply', '--', patchFile], worktree.path);
+      this.passedChecks.delete(id);
       return { applied: true, check: checked.stdout || 'git apply --check passed' };
     } finally {
       await fs.rm(patchFile, { force: true });
@@ -170,17 +175,25 @@ export class AgentWorktreeManager {
         break;
       }
     }
+    if (results.length === commands.length && results.every((result) => result.exitCode === 0)) {
+      const passed = this.passedChecks.get(id) ?? new Set<CheckName>();
+      commands.forEach((command) => passed.add(command));
+      this.passedChecks.set(id, passed);
+    } else this.passedChecks.delete(id);
     return results;
   }
 
   async getDiff(id: AgentWorktreeId): Promise<AgentDiffResult> {
     const worktree = this.getWorktree(id);
+    const untracked = (await this.git(['ls-files', '--others', '--exclude-standard', '-z'], worktree.path)).stdout.split(String.fromCharCode(0)).filter(Boolean);
+    for (const value of untracked) if (!safeRelativePath(value)) throw new Error(`Unsafe untracked path found: ${value}`);
+    if (untracked.length) await this.git(['add', '-N', '--', ...untracked], worktree.path);
     const [diff, names, status] = await Promise.all([
       this.git(['diff', '--no-ext-diff', '--binary', worktree.baseCommit, '--'], worktree.path),
       this.git(['diff', '--name-only', worktree.baseCommit, '--'], worktree.path),
       this.git(['status', '--porcelain=v1'], worktree.path),
     ]);
-    const changedFiles = names.stdout.split(/\\r?\\n/).filter(Boolean);
+    const changedFiles = names.stdout.split(/\r?\n/).filter(Boolean);
     return { id, branch: worktree.branch, baseCommit: worktree.baseCommit, diff: diff.stdout.slice(0, OUTPUT_LIMIT), changedFiles, clean: status.stdout.trim().length === 0 };
   }
 
@@ -188,6 +201,8 @@ export class AgentWorktreeManager {
   async commit(id: AgentWorktreeId, paths: string[], message: string): Promise<string> {
     const worktree = this.getWorktree(id);
     if (!message.trim() || message.length > 200) throw new Error('Commit message must be 1–200 characters.');
+    const passed = this.passedChecks.get(id);
+    if (!passed || CHECKS.some((command) => !passed.has(command))) throw new Error('Both npm test and npm run lint must pass after the latest patch before committing.');
     if (!paths.length || paths.length > 100) throw new Error('Select between 1 and 100 changed paths.');
     for (const value of paths) if (!safeRelativePath(value)) throw new Error(`Unsafe commit path rejected: ${value}`);
     const changed = new Set((await this.getDiff(id)).changedFiles);
