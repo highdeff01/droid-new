@@ -140,6 +140,7 @@ export class AgentWorktreeManager {
         worktrees[id] = { id, branch, path: directory, baseCommit, prepared: true };
       }
       this.snapshot = { repository: repo.root, baseCommit, worktrees };
+      await fs.writeFile(path.join(this.worktreeRoot, '.droid-agent-worktrees.json'), JSON.stringify({ repository: repo.root, baseCommit }, null, 2), 'utf8');
       return structuredClone(this.snapshot);
     } catch (error) {
       // Roll back only worktrees created by this prepare attempt. Never remove pre-existing directories.
@@ -149,6 +150,37 @@ export class AgentWorktreeManager {
       for (const branch of createdBranches.reverse()) await this.git(['branch', '-D', branch]).catch(() => undefined);
       throw new Error(`Could not prepare both isolated worktrees: ${errorText(error)}`);
     }
+  }
+
+  /** Reattach to the exact two worktrees created by prepare without resetting either branch. */
+  async restoreExisting(): Promise<AgentWorktreeSnapshot | null> {
+    const manifestPath = path.join(this.worktreeRoot, '.droid-agent-worktrees.json');
+    let manifest: { repository?: string; baseCommit?: string };
+    try {
+      manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as { repository?: string; baseCommit?: string };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw new Error(`Could not read saved worktree manifest: ${errorText(error)}`);
+    }
+    const repo = await this.inspectRepository();
+    if (path.resolve(manifest.repository ?? '') !== repo.root) throw new Error('Saved worktrees belong to a different repository.');
+    const baseCommit = manifest.baseCommit ?? '';
+    if (!SHA.test(baseCommit)) throw new Error('Saved worktree manifest contains an invalid base commit.');
+    const worktrees = {} as Record<AgentWorktreeId, AgentWorktree>;
+    for (const id of ['stream-a', 'stream-b'] as const) {
+      const directory = path.join(this.worktreeRoot, id);
+      const expectedBranch = AGENT_WORKTREE_BRANCHES[id];
+      const actualRoot = path.resolve((await this.git(['rev-parse', '--show-toplevel'], directory)).stdout.trim());
+      const actualBranch = (await this.git(['branch', '--show-current'], directory)).stdout.trim();
+      if (actualRoot !== directory || actualBranch !== expectedBranch) {
+        throw new Error(`Saved ${id} worktree failed repository/path/branch validation.`);
+      }
+      const baseExists = (await this.git(['cat-file', '-e', `${baseCommit}^{commit}`], directory)).stdout;
+      void baseExists;
+      worktrees[id] = { id, branch: expectedBranch, path: directory, baseCommit, prepared: true };
+    }
+    this.snapshot = { repository: repo.root, baseCommit, worktrees };
+    return structuredClone(this.snapshot);
   }
 
   getSnapshot(): AgentWorktreeSnapshot | null {
