@@ -108,6 +108,11 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
     await navigator.clipboard.writeText(JSON.stringify(packet, null, 2));
     setMessage(`Copied ${id} verification packet for another tab or review method.`);
   };
+  const comparison = diffs['stream-a'] && diffs['stream-b'] ? {
+    aOnly: diffs['stream-a'].changedFiles.filter((file) => !diffs['stream-b']!.changedFiles.includes(file)),
+    bOnly: diffs['stream-b'].changedFiles.filter((file) => !diffs['stream-a']!.changedFiles.includes(file)),
+    shared: diffs['stream-a'].changedFiles.filter((file) => diffs['stream-b']!.changedFiles.includes(file)),
+  } : null;
   const push = (id: AgentWorktreeId) => withBusy(id, async () => {
     const sha = await native.push(id);
     setMessage(`${id}: pushed ${sha.slice(0, 12)} to origin. No merge was performed.`);
@@ -164,6 +169,17 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
             );
           })}
         </div>
+      )}
+      {comparison && (
+        <section style={{ border: '1px solid var(--line, #334155)', borderRadius: 9, padding: 10, marginTop: 12 }}>
+          <strong>Actual branch diff comparison</strong>
+          <div style={muted}>Both candidates are compared against the same base commit: {snapshot?.baseCommit}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, marginTop: 8 }}>
+            <div><strong>Only Stream A ({comparison.aOnly.length})</strong><pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{comparison.aOnly.join('\n') || 'None'}</pre></div>
+            <div><strong>Only Stream B ({comparison.bOnly.length})</strong><pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{comparison.bOnly.join('\n') || 'None'}</pre></div>
+            <div><strong>Shared files ({comparison.shared.length})</strong><pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{comparison.shared.join('\n') || 'None'}</pre></div>
+          </div>
+        </section>
       )}
     </section>
   );
