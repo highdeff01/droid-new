@@ -191,6 +191,8 @@ export function createInputAuthority(initialOwner: InputOwner = 'droid-new') {
       reason = 'Takeover not needed: requester already owns physical input';
     } else if (paused) {
       reason = 'Takeover rejected: physical input is paused by the user';
+    } else if (owner === 'user') {
+      reason = 'Takeover rejected: the user currently owns physical input; automation must wait for an explicit return-control action';
     } else if (evidence.userDecision === 'reject') {
       reason = 'Takeover rejected by the user';
     } else if (evidence.goalReached) {
