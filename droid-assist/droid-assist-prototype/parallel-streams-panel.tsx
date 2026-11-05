@@ -40,6 +40,18 @@ function AgentWorktreeExecutionPanel() {
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy((old) => ({ ...old, [key]: false })); }
   };
+  const loadCandidatePatch = (id: AgentWorktreeId) => {
+    const attempts = run?.streams[id].attempts ?? [];
+    const candidate = [...attempts].reverse().find((attempt) => attempt.status === 'completed');
+    const patch = candidate ? extractUnifiedGitDiff(candidate.output) : null;
+    if (!patch) {
+      setError(`No complete unified diff found in the latest completed ${id} response.`);
+      return;
+    }
+    setPatches((old) => ({ ...old, [id]: patch }));
+    setError('');
+    setMessage(`Loaded ${id} diff. Review it before applying.`);
+  };
   const prepare = () => withBusy('prepare', async () => {
     const selected = await native.chooseRepository();
     if (!selected) return;
@@ -101,6 +113,9 @@ function AgentWorktreeExecutionPanel() {
                 <div style={muted}>{snapshot.worktrees[id].branch}</div>
                 <textarea rows={5} value={patches[id]} onChange={(event) => setPatches((old) => ({ ...old, [id]: event.target.value }))}
                   placeholder="Paste a complete unified Git diff for this branch…" style={{ ...field, marginTop: 8 }} disabled={running} />
+                <button type="button" style={{ ...button, marginTop: 7, background: 'transparent', color: 'var(--text, #e2e8f0)' }}
+                  disabled={running || !run?.streams[id].attempts.some((attempt) => attempt.status === 'completed')}
+                  onClick={() => loadCandidatePatch(id)}>Load latest AI diff</button>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
                   <button type="button" style={button} disabled={running || !patches[id].trim()} onClick={() => void apply(id)}>Validate and apply patch</button>
                   <button type="button" style={button} disabled={running} onClick={() => void test(id)}>{running ? 'Working…' : 'Run tests + lint'}</button>
