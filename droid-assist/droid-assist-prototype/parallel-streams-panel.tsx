@@ -121,7 +121,7 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
                   <button type="button" style={button} disabled={running || !patches[id].trim()} onClick={() => void apply(id)}>Validate and apply patch</button>
                   <button type="button" style={button} disabled={running} onClick={() => void test(id)}>{running ? 'Working…' : 'Install dependencies + run tests/lint'}</button>
-                  <button type="button" style={button} disabled={running || !result?.length || result.some((item) => item.exitCode !== 0) || !diff?.changedFiles.length}
+                  <button type="button" style={button} disabled={running || !result?.length || result.some((item) => item.exitCode !== 0) || !diff?.changedFiles.length || diff.clean}
                     onClick={() => void commit(id)}>Commit reviewed changes</button>
                   <button type="button" style={{ ...button, background: '#475569' }} disabled={running || !result?.length || result.some((item) => item.exitCode !== 0) || !diff?.clean}
                     onClick={() => void push(id)}>Push branch</button>
