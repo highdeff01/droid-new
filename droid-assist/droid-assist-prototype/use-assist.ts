@@ -7711,12 +7711,36 @@ export function useAssist() {
     if (parallelAgentAbortRef.current) throw new Error('A parallel agent run is already active.');
     const controller = new AbortController();
     parallelAgentAbortRef.current = controller;
-    addLog('Parallel agents', 'Starting Stream A implementation and Stream B independent testing concurrently.', 'info');
+    const isolatedAsk = (stage: StageId): AskFn => {
+      const session = createAiSession(null, renderView, undefined, {
+        appContext: async () => ({ sections: [] }),
+        onStage: () => undefined,
+      }, undefined, null);
+      return (request) => {
+        if (!settingsRef.current.stages[stage]) return Promise.reject(new AiCancelled(stageOff(stage)));
+        const signal = linkSignals(aiCtrlRef.current.signal, stageCtrlsRef.current.signal(stage), request.signal, controller.signal);
+        return aiQueueRef.current.run(stage, (timeoutMs) => {
+          const current = settingsRef.current;
+          return session.ask({
+            url: current.aiUrl,
+            model: current.aiModel,
+            view: AI_VIEWS[current.aiView],
+            timeoutMs,
+            masterPrompt: current.masterPrompt,
+            think: current.aiThink,
+            historyWindow: current.aiHistoryWindow,
+          }, { ...request, signal });
+        }, signal);
+      };
+    };
+    const askA = isolatedAsk('planner');
+    const askB = isolatedAsk('supervisor');
+    addLog('Parallel agents', 'Starting two isolated AI sessions: Stream A implementation and Stream B independent testing.', 'info');
     try {
       const result = await runParallelAgentReview({
-        ask: askFor('planner'),
-        askA: askFor('planner'),
-        askB: askFor('supervisor'),
+        ask: askA,
+        askA,
+        askB,
         task: task.trim(),
         baseCommit: baseCommit.trim() || 'current checked-out HEAD — exact SHA must be confirmed by the host',
         signal: controller.signal,
