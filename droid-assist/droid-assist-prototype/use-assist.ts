@@ -7641,6 +7641,27 @@ export function useAssist() {
   }, recording);
   packCaptureRef.current = packs.capture;
 
+  /** Public takeover request surface for the coordinator; evidence must come from verified task state. */
+  const requestInputTakeover = (nextOwner: 'droid-new' | 'droid-main', evidence: {
+    goalReached?: boolean;
+    verifiedProgressCount: number;
+    lastVerifiedAt: number | null;
+    startedAt: number;
+    now: number;
+    stallThresholdMs?: number;
+    currentControllerFailed?: boolean;
+    userDecision?: 'approve' | 'reject';
+  }) => {
+    const decision = inputAuthority.requestTakeover(nextOwner, evidence);
+    addLog('Input authority', decision.reason, decision.accepted ? 'warn' : 'info');
+    return decision;
+  };
+  const setInputPaused = (paused: boolean) => {
+    inputAuthority.setPaused(paused);
+    addLog('Input authority', paused ? 'Physical input paused by user' : 'Physical input resumed with a fresh generation', paused ? 'warn' : 'info');
+    return inputAuthority.snapshot();
+  };
+
   const runDocumentPipeline = async (files: DocumentInput[], question: string, options: DocumentPipelineOptions = {}, reviewerCount = 0): Promise<DocumentPipelineResult> => {
     if (!aiOnline()) throw new Error('AI is unavailable. Connect the configured AI endpoint before running document analysis.');
     if (!files.length) throw new Error('Choose at least one file to analyze.');
@@ -7704,6 +7725,9 @@ export function useAssist() {
 
   return {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
+    /** Single shared physical-input authority and evidence-based cooperative takeover controls. */
+    inputAuthority: inputAuthority.snapshot(),
+    requestInputTakeover, setInputPaused,
     /** Resolve reviewer-requested frame IDs from the current bounded gallery; returns existing references only. */
     getEvidenceFrames: (requestedIds?: readonly number[], limit = 6) => retrieveEvidenceFrames(framesRef.current, requestedIds, limit),
     /** Read-only file analysis through the app's existing configured AI session; it never dispatches input actions. */
