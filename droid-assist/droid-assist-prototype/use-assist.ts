@@ -27,6 +27,7 @@ import { predictNextPosition, selfMoveSightings } from './mobility.js';
 import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, pointerAction, selfTestBridge, sendNative, sendToBridge, type BridgeResult } from './bridge.js';
 import { DRY_RUN, dragEndError, groundTarget, runStep, type Grounding, type SendFn, type StepDeps, type StepOutcome } from './run-step.js';
 import { createInputAuthority } from './input-authority.js';
+import { createWorkflowHandoff, restoreWorkflowHandoff, type WorkflowHandoffSnapshot, type WorkflowHandoffResult } from './workflow-handoff.js';
 import { NO_SOURCE, captureLabel, captureStatus, stepPlan, type FrameProvider, type StepPlan } from './capture-source.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
@@ -7641,6 +7642,30 @@ export function useAssist() {
   }, recording);
   packCaptureRef.current = packs.capture;
 
+  /** Export a bounded workflow checkpoint for a cooperating controller; screenshots remain in the local frame gallery. */
+  const exportWorkflowHandoff = (workflowId: string, fromController = 'droid-new'): WorkflowHandoffSnapshot =>
+    createWorkflowHandoff(workflowId, goalRef.current, stepsRef.current, fromController);
+
+  /** Restore only matching, still-evidenced progress; stale or changed steps are reset to pending. */
+  const importWorkflowHandoff = (snapshot: WorkflowHandoffSnapshot, workflowId: string): WorkflowHandoffResult => {
+    const result = restoreWorkflowHandoff(
+      snapshot,
+      workflowId,
+      goalRef.current,
+      stepsRef.current,
+      new Set(framesRef.current.map((frame) => frame.id)),
+    );
+    if (!result.rejected) {
+      stepsRef.current = result.steps;
+      setSteps(result.steps);
+      setActiveIndex(result.resumedIndex < result.steps.length ? result.resumedIndex : null);
+      addLog('Workflow handoff', result.reason, result.preservedVerified ? 'ok' : 'warn');
+    } else {
+      addLog('Workflow handoff', result.reason, 'warn');
+    }
+    return result;
+  };
+
   /** Public takeover request surface for the coordinator; evidence must come from verified task state. */
   const requestInputTakeover = (nextOwner: 'droid-new' | 'droid-main', evidence: {
     goalReached?: boolean;
@@ -7739,6 +7764,8 @@ export function useAssist() {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     /** Single shared physical-input authority and evidence-based cooperative takeover controls. */
     getInputAuthority: () => inputAuthority.snapshot(),
+    /** Portable progress transfer between cooperating controllers; import rechecks current frame evidence. */
+    exportWorkflowHandoff, importWorkflowHandoff,
     requestInputTakeover, setInputPaused, takeUserInputControl, resumeAutomatedInput,
     /** Resolve reviewer-requested frame IDs from the current bounded gallery; returns existing references only. */
     getEvidenceFrames: (requestedIds?: readonly number[], limit = 6) => retrieveEvidenceFrames(framesRef.current, requestedIds, limit),
