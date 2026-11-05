@@ -58,7 +58,8 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
     const selected = await native.chooseRepository();
     if (!selected) return;
     setRepository(selected);
-    const result = await native.prepare(selected);
+    const sharedBase = /^[0-9a-f]{40}$/i.test(run?.baseCommit ?? '') ? run!.baseCommit : undefined;
+    const result = await native.prepare(selected, sharedBase);
     setSnapshot(result);
     setChecks({});
     setDiffs({});
