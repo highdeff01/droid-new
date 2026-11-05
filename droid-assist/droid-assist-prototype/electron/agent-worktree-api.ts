@@ -1,3 +1,5 @@
+import type { AgentCheckResult, AgentDiffResult, AgentWorktreeSnapshot, AgentWorktreeId } from './agent-worktrees.js';
+
 export const AGENT_WORKTREE_CHANNELS = {
   chooseRepository: 'agent-worktree:choose-repository',
   prepare: 'agent-worktree:prepare',
@@ -7,8 +9,6 @@ export const AGENT_WORKTREE_CHANNELS = {
   commit: 'agent-worktree:commit',
   push: 'agent-worktree:push',
 } as const;
-
-import type { AgentCheckResult, AgentDiffResult, AgentWorktreeSnapshot, AgentWorktreeId } from './agent-worktrees.js';
 
 export interface NativeAgentWorktreeApi {
   chooseRepository(): Promise<string | null>;
