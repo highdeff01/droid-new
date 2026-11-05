@@ -23,6 +23,33 @@ export interface InputAuthoritySnapshot {
   active: boolean;
 }
 
+export interface TakeoverEvidence {
+  /** The current controller has explicitly reported that the goal is complete. */
+  goalReached?: boolean;
+  /** Number of steps verified as successful by post-action evidence. */
+  verifiedProgressCount: number;
+  /** Timestamp of the most recent verified step; null when none has been verified. */
+  lastVerifiedAt: number | null;
+  /** When the current controller began this attempt. */
+  startedAt: number;
+  /** Evaluation time, injectable so policy is deterministic and testable. */
+  now: number;
+  /** How long without verified progress is considered a stall. */
+  stallThresholdMs?: number;
+  /** A monitor has concrete evidence that the current controller failed or became unresponsive. */
+  currentControllerFailed?: boolean;
+  /** Explicit user decision takes precedence over agent evidence. */
+  userDecision?: 'approve' | 'reject';
+}
+
+export interface TakeoverDecision {
+  accepted: boolean;
+  reason: string;
+  previousOwner: InputOwner;
+  requestedOwner: InputOwner;
+  generation: number;
+}
+
 export class InputLeaseError extends Error {
   override name = 'InputLeaseError';
   constructor(message = 'Physical input lease is no longer current') {
@@ -146,10 +173,52 @@ export function createInputAuthority(initialOwner: InputOwner = 'droid-new') {
     return invalidate(value ? 'User paused physical input' : 'Physical input resumed with a fresh lease');
   };
 
+  /**
+   * Evidence-based cooperative takeover. A requester never steals control merely by asking:
+   * user rejection and a completed goal always win; otherwise require user approval, a failed
+   * controller, or a verified-progress stall. A successful transfer fences every old lease.
+   */
+  const requestTakeover = (nextOwner: InputOwner, evidence: TakeoverEvidence): TakeoverDecision => {
+    const previousOwner = owner;
+    const threshold = Math.max(1_000, evidence.stallThresholdMs ?? 15_000);
+    const lastProgress = evidence.lastVerifiedAt ?? evidence.startedAt;
+    const elapsed = Math.max(0, evidence.now - lastProgress);
+    const stalled = elapsed >= threshold;
+
+    let accepted = false;
+    let reason = 'Takeover rejected: current controller has not been shown to be stalled or failed';
+    if (nextOwner === owner) {
+      reason = 'Takeover not needed: requester already owns physical input';
+    } else if (paused) {
+      reason = 'Takeover rejected: physical input is paused by the user';
+    } else if (evidence.userDecision === 'reject') {
+      reason = 'Takeover rejected by the user';
+    } else if (evidence.goalReached) {
+      reason = 'Takeover rejected: current controller has verified the goal is complete';
+    } else if (evidence.userDecision === 'approve') {
+      accepted = true;
+      reason = 'Takeover accepted by explicit user approval';
+    } else if (evidence.currentControllerFailed) {
+      accepted = true;
+      reason = 'Takeover accepted: current controller failure was reported';
+    } else if (stalled) {
+      accepted = true;
+      reason = `Takeover accepted: no verified progress for ${elapsed}ms (stall threshold ${threshold}ms)`;
+    } else if (evidence.verifiedProgressCount > 0) {
+      reason = `Takeover rejected: current controller has recent verified progress (${elapsed}ms since last success)`;
+    } else {
+      reason = `Takeover rejected: controller has not yet exceeded the ${threshold}ms no-progress window`;
+    }
+
+    if (accepted) changeOwner(nextOwner, reason);
+    return { accepted, reason, previousOwner, requestedOwner: nextOwner, generation };
+  };
+
   return {
     run,
     changeOwner,
     setPaused,
+    requestTakeover,
     invalidate,
     snapshot: (): InputAuthoritySnapshot => ({
       owner,
