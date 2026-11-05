@@ -2420,7 +2420,8 @@ export function useAssist() {
   };
 
   /** Why a live drag must let go before its next segment: abort, disarm or Stop plan; null to go on. */
-  const liveDragHalt = (): string | null => {
+  const liveDragHalt = (lease?: { assertCurrent(): void }): string | null => {
+    try { lease?.assertCurrent(); } catch { return 'Input authority changed'; }
     if (abortedRef.current) return 'Aborted';
     if (!armedRef.current) return 'Real input disarmed';
     return abortRef.current ? 'Plan stopped' : null;
@@ -2440,7 +2441,9 @@ export function useAssist() {
    * swarm tracks every segment on the live frames and the executor sends press → corrected segment moves →
    * release. The guardrails are checked before every segment and the button is always released on a stop.
    */
-  const performLiveDrag = async (step: WorkflowStep, actor: string): Promise<Performed> => {
+  const performLiveDrag = async (step: WorkflowStep, actor: string): Promise<Performed> =>
+    inputAuthority.run('droid-new', async (lease) => {
+    lease.assertCurrent();
     const { bridgeUrl, bridgeToken } = settingsRef.current;
     const end = { x: step.endX ?? step.x, y: step.endY ?? step.y };
     const start = { x: step.correctedX ?? step.x, y: step.correctedY ?? step.y };
@@ -2451,7 +2454,11 @@ export function useAssist() {
       return { ok: false, executed: false, halt: true, bridgeFailed: true, message: `${BRIDGE_REQUIRED} (unreachable: ${errorText(error)})`, target: start };
     }
     const origin = { x: before.originX ?? 0, y: before.originY ?? 0 };
-    const send = (input: 'mouse_down' | 'move' | 'mouse_up', p: { x: number; y: number }) => sendNative(bridgeUrl, { id: step.id, name: step.name }, [pointerAction(input, p, before.srcW, before.srcH, origin)], { token: bridgeToken, pollMs: 50, timeoutMs: 10000 });
+    const send = (input: 'mouse_down' | 'move' | 'mouse_up', p: { x: number; y: number }) => {
+      // A release is cleanup and must remain possible after lease invalidation; all other events are fenced.
+      if (input !== 'mouse_up') lease.assertCurrent();
+      return sendNative(bridgeUrl, { id: step.id, name: step.name }, [pointerAction(input, p, before.srcW, before.srcH, origin)], { token: bridgeToken, pollMs: 50, timeoutMs: 10000 });
+    };
     dragControlRef.current = null;
     liveDragRef.current = true;
     setLiveDragging(true);
@@ -2466,7 +2473,7 @@ export function useAssist() {
           return popup ? [{ x: popup.x, y: popup.y, w: popup.w, h: popup.h }] : [];
         },
         live: () => framesRef.current[0]?.data ?? null,
-        halt: liveDragHalt,
+        halt: () => liveDragHalt(lease),
         intervention: () => {
           const ask = dragControlRef.current;
           dragControlRef.current = null;
@@ -2485,7 +2492,7 @@ export function useAssist() {
     if (out.executed) recordAction(step, out, actor, 'bridge', before.srcW, before.srcH);
     noteBridge(step, out, actor);
     return out;
-  };
+  });
 
   /** Tracks the bridge's reachability from a bridge step; a bridge failure is logged and forwarded as a bridge error. */
   const noteBridge = (step: WorkflowStep, out: Performed, actor: string) => {
