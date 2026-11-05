@@ -145,7 +145,7 @@ export async function runParallelAgentReview(options: ParallelAgentRunnerOptions
       askWithRetry(
         run.streams['stream-a'],
         'primary-implementation',
-        `TASK: ${run.task}\nBASE COMMIT: ${run.baseCommit}\n\nDevelop the primary implementation. Work as if editing only branch ${run.streams['stream-a'].branch}. Return: proposed architecture, exact files, complete patch-ready code or diff, risks, and how to test it. Do not assume Stream B's work exists yet.`,
+        `TASK: ${run.task}\nBASE COMMIT: ${run.baseCommit}\n\nDevelop the primary implementation. Work as if editing only branch ${run.streams['stream-a'].branch}. Return: proposed architecture, exact files, risks, and how to test it. When code changes are appropriate, provide a complete unified Git diff inside a fenced ```diff block with repository-relative paths and all required hunks. Do not put prose inside the diff block. Do not assume Stream B's work exists yet.`,
         {
           method: 'alternative-minimal-implementation',
           prompt: `TASK: ${run.task}\nBASE COMMIT: ${run.baseCommit}\n\nALTERNATIVE METHOD: abandon the primary architecture if it is blocked. Propose a materially different minimal vertical slice or adapter-based design, with exact files, patch-ready code, risks, and tests. Keep it isolated to branch ${run.streams['stream-a'].branch}.`,
@@ -154,7 +154,7 @@ export async function runParallelAgentReview(options: ParallelAgentRunnerOptions
       askWithRetry(
         run.streams['stream-b'],
         'independent-test-and-alternative',
-        `TASK: ${run.task}\nBASE COMMIT: ${run.baseCommit}\n\nIndependently inspect the problem from scratch on branch ${run.streams['stream-b'].branch}. Do not copy Stream A. Return: baseline assumptions, independent test matrix with executable commands, likely failure modes, and a materially different solution if appropriate.`,
+        `TASK: ${run.task}\nBASE COMMIT: ${run.baseCommit}\n\nIndependently inspect the problem from scratch on branch ${run.streams['stream-b'].branch}. Do not copy Stream A. Return: baseline assumptions, independent test matrix with executable commands, likely failure modes, and a materially different solution if appropriate. If proposing code, include a complete unified Git diff in a fenced ```diff block.`,
         {
           method: 'alternative-black-box-test-method',
           prompt: `TASK: ${run.task}\nBASE COMMIT: ${run.baseCommit}\n\nALTERNATIVE METHOD: if the original test plan is blocked, switch to a black-box contract test, mocked dependency test, or isolated integration harness. Give executable commands, test fixtures, expected assertions, and an independent alternative design on branch ${run.streams['stream-b'].branch}.`,
@@ -185,10 +185,10 @@ export async function runParallelAgentReview(options: ParallelAgentRunnerOptions
       askWithRetry(
         run.streams['stream-a'],
         'cross-reviewed-revision',
-        `TASK: ${run.task}\n\nYOUR ORIGINAL IMPLEMENTATION:\n${primary.slice(0, 12_000)}\n\nINDEPENDENT STREAM B REVIEW:\n${independent.slice(0, 12_000)}\n\nRevise the implementation. Address valid test concerns, reject incorrect criticisms with reasons, and preserve the best working approach. Return exact changes and unresolved risks.`,
+        `TASK: ${run.task}\n\nYOUR ORIGINAL IMPLEMENTATION:\n${primary.slice(0, 12_000)}\n\nINDEPENDENT STREAM B REVIEW:\n${independent.slice(0, 12_000)}\n\nRevise the implementation. Address valid test concerns, reject incorrect criticisms with reasons, and preserve the best working approach. Return exact changes as a complete unified Git diff inside a fenced ```diff block when code changes are appropriate, plus unresolved risks.`,
         {
           method: 'alternative-cross-review-rewrite',
-          prompt: `TASK: ${run.task}\n\nThe primary revision method is blocked. Rebuild the solution from the independent test findings below, using a different architecture or smaller safe implementation.\n\nSTREAM A ORIGINAL:\n${primary.slice(0, 8_000)}\n\nSTREAM B REVIEW:\n${independent.slice(0, 8_000)}\n\nReturn exact files, patch-ready changes, and unresolved risks.`,
+          prompt: `TASK: ${run.task}\n\nThe primary revision method is blocked. Rebuild the solution from the independent test findings below, using a different architecture or smaller safe implementation.\n\nSTREAM A ORIGINAL:\n${primary.slice(0, 8_000)}\n\nSTREAM B REVIEW:\n${independent.slice(0, 8_000)}\n\nReturn exact files, a complete unified Git diff inside a fenced ```diff block when code changes are appropriate, and unresolved risks.`,
         },
       ),
       askWithRetry(
