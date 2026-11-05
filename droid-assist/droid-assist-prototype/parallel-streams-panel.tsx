@@ -82,8 +82,8 @@ function AgentWorktreeExecutionPanel() {
     <section style={{ borderTop: '1px solid var(--line, #334155)', marginTop: 16, paddingTop: 14 }}>
       <strong>Isolated branch execution</strong>
       <p style={muted}>Select your local Droid-New repository. The desktop app creates two Git worktrees from its current HEAD. Apply a unified diff, run tests independently, inspect results, then explicitly commit and push. Nothing is auto-merged.</p>
-      <button type="button" style={button} onClick={() => void prepare()} disabled={!!busy.prepare || Object.values(busy).some(Boolean)}>
-        {busy.prepare ? 'Preparing worktrees…' : snapshot ? 'Prepare a fresh pair of worktrees' : 'Choose repository and prepare both branches'}
+      <button type="button" style={button} onClick={() => void prepare()} disabled={!!busy.prepare || !!snapshot || Object.values(busy).some(Boolean)}>
+        {busy.prepare ? 'Preparing worktrees…' : snapshot ? 'Two worktrees prepared' : 'Choose repository and prepare both branches'}
       </button>
       {repository && <p style={muted}>Repository: {repository}</p>}
       {snapshot && <p style={muted}>Shared base: {snapshot.baseCommit}</p>}
@@ -212,7 +212,7 @@ export function ParallelStreamsPanel({ engine }: { engine: AssistEngine }) {
           Both streams completed their AI cross-review. Next: apply each proposal on its own Git branch, execute the test plan, retry failed methods, and compare the resulting diffs. Neither proposal is marked verified yet.
         </p>
       )}
-    </section>
       <AgentWorktreeExecutionPanel />
+    </section>
   );
 }
