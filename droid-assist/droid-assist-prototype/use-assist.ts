@@ -7734,7 +7734,7 @@ export function useAssist() {
       };
     };
     const askA = isolatedAsk('planner');
-    const askB = isolatedAsk('supervisor');
+    const askB = isolatedAsk('planner');
     addLog('Parallel agents', 'Starting two isolated AI sessions: Stream A implementation and Stream B independent testing.', 'info');
     try {
       const result = await runParallelAgentReview({
