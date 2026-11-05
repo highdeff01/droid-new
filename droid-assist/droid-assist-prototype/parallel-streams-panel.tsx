@@ -229,7 +229,7 @@ export function ParallelStreamsPanel({ engine }: { engine: AssistEngine }) {
           Both streams completed their AI cross-review. Next: apply each proposal on its own Git branch, execute the test plan, retry failed methods, and compare the resulting diffs. Neither proposal is marked verified yet.
         </p>
       )}
-      <AgentWorktreeExecutionPanel />
+      <AgentWorktreeExecutionPanel run={run ?? null} />
     </section>
   );
 }
