@@ -7726,7 +7726,7 @@ export function useAssist() {
   return {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     /** Single shared physical-input authority and evidence-based cooperative takeover controls. */
-    inputAuthority: inputAuthority.snapshot(),
+    getInputAuthority: () => inputAuthority.snapshot(),
     requestInputTakeover, setInputPaused,
     /** Resolve reviewer-requested frame IDs from the current bounded gallery; returns existing references only. */
     getEvidenceFrames: (requestedIds?: readonly number[], limit = 6) => retrieveEvidenceFrames(framesRef.current, requestedIds, limit),
