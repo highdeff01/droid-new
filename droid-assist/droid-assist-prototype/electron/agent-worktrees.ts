@@ -59,7 +59,25 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 function safeRelativePath(value: string): boolean {
-  return value.length > 0 && !/^[a-z]:/i.test(value) && !/^[\\\\/]{2}/.test(value) && !path.isAbsolute(value) && !value.split(/[\\/]/).some((part) => part === '..' || part === '.git');
+  return value.length > 0 && !/^[a-z]:/i.test(value) && !/^[\\\\/]{2}/.test(value) && !path.isAbsolute(value) && !value.split(/[\\/]/).some((part) => part === '..' || part === '.' || part === '.git');
+}
+
+async function assertSafeWorktreePath(root: string, relative: string): Promise<void> {
+  if (!safeRelativePath(relative)) throw new Error(`Unsafe patch path rejected: ${relative}`);
+  const absoluteRoot = path.resolve(root);
+  const absoluteTarget = path.resolve(absoluteRoot, relative);
+  const prefix = absoluteRoot.endsWith(path.sep) ? absoluteRoot : absoluteRoot + path.sep;
+  if (!absoluteTarget.startsWith(prefix)) throw new Error(`Patch path escapes its worktree: ${relative}`);
+  let current = absoluteRoot;
+  for (const part of relative.split(/[\\/]/)) {
+    current = path.join(current, part);
+    try {
+      const stat = await fs.lstat(current);
+      if (stat.isSymbolicLink()) throw new Error(`Patch path traverses a symbolic link: ${relative}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
 }
 
 /**
@@ -159,10 +177,11 @@ export class AgentWorktreeManager {
     if (patch.length > PATCH_LIMIT) throw new Error(`Patch exceeds ${PATCH_LIMIT} characters.`);
     if (!patch.includes('diff --git ')) throw new Error('Only a unified Git diff is accepted; source snippets are not auto-applied.');
     const artifactPath = await this.saveArtifact(id, 'candidate.patch', patch);
+    if (patch.split(/\r?\n/).some((line) => /^(new|old) file mode 120000$|^(new|old) mode 120000$/.test(line))) throw new Error('Symbolic-link patches are not accepted.');
     const pathLines = patch.split(/\r?\n/).filter((line) => line.startsWith('+++ b/') || line.startsWith('--- a/'));
     for (const line of pathLines) {
       const value = line.slice(6).split('\t')[0];
-      if (value !== '/dev/null' && !safeRelativePath(value)) throw new Error(`Unsafe patch path rejected: ${value}`);
+      if (value !== '/dev/null') await assertSafeWorktreePath(worktree.path, value);
     }
     const patchFile = path.join(worktree.path, `.droid-agent-${id}.patch`);
     try {
