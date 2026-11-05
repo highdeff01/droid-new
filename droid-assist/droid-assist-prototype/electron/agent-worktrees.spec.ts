@@ -129,6 +129,19 @@ new file mode 100644
     await expect(f.manager.commit('stream-a', ['README.md'], 'stale test approval')).rejects.toThrow('changed after its last successful test run');
   });
 
+  it('rejects symlink patches before applying them', async () => {
+    const f = await fixture();
+    await f.manager.prepare(f.base);
+    const symlinkPatch = `diff --git a/escape-link b/escape-link
+new file mode 120000
+--- /dev/null
++++ b/escape-link
+@@ -0,0 +1 @@
++../../outside
+`;
+    await expect(f.manager.applyPatch('stream-a', symlinkPatch)).rejects.toThrow('Symbolic-link patches are not accepted');
+  });
+
   it('rejects invalid base SHA and unsafe patch paths', async () => {
     const f = await fixture();
     await expect(f.manager.prepare('main')).rejects.toThrow('full 40-character');
