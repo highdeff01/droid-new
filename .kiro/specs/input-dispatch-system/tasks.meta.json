@@ -1,0 +1,673 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Install and configure required npm packages": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290560691
+      },
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290567200
+      },
+      {
+        "executionId": "4caa26c6-11bb-4d3a-935a-b7df6e17c5c9",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290609214
+      }
+    ],
+    "1.2 Create module structure and file organization": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290560788
+      },
+      {
+        "executionId": "b11d75c4-8e7b-41cf-b8b6-3656b03fffe2",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290690116
+      },
+      {
+        "executionId": "45bc5505-88ce-4bc0-9694-090fb8d9e910",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793291443464
+      }
+    ],
+    "1.3 Define core type definitions in types.ts": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290560847
+      },
+      {
+        "executionId": "d6d1e4ee-33af-445a-b5c3-723de66522f2",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793291846842
+      }
+    ],
+    "1.4 Create error type hierarchy in error-types.ts": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290560947
+      },
+      {
+        "executionId": "d6d1e4ee-33af-445a-b5c3-723de66522f2",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793291848312
+      }
+    ],
+    "1.5 Set up test infrastructure and mocking utilities": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561006
+      },
+      {
+        "executionId": "d6d1e4ee-33af-445a-b5c3-723de66522f2",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793291848577
+      }
+    ],
+    "2.1 Implement coordinate-translator.ts (normalize → pixel conversion)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561071
+      },
+      {
+        "executionId": "07c35ff4-1388-47cf-9f2d-79fb59188c57",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793292957666
+      },
+      {
+        "executionId": "07c35ff4-1388-47cf-9f2d-79fb59188c57",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793292970336
+      }
+    ],
+    "2.2 Write coordinate-translator unit tests": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561128
+      },
+      {
+        "executionId": "07c35ff4-1388-47cf-9f2d-79fb59188c57",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793292992136
+      }
+    ],
+    "2.3 Implement keyboard-mapper.ts (cross-platform key name mapping)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561222
+      },
+      {
+        "executionId": "07c35ff4-1388-47cf-9f2d-79fb59188c57",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793292992341
+      }
+    ],
+    "2.4 Write keyboard-mapper unit tests": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561280
+      },
+      {
+        "executionId": "07c35ff4-1388-47cf-9f2d-79fb59188c57",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793292992645
+      }
+    ],
+    "2.5 Implement platform-adapter.ts interface and base class": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561345
+      },
+      {
+        "executionId": "07c35ff4-1388-47cf-9f2d-79fb59188c57",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793292992877
+      }
+    ],
+    "3.1 Implement platform-adapter-win.ts (Windows robotjs integration)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561409
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293092213
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293294982
+      }
+    ],
+    "3.2 Write platform-adapter-win tests": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561475
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293308820
+      }
+    ],
+    "3.3 Implement platform-adapter-mac.ts (macOS stub with robotjs)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561537
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293309246
+      }
+    ],
+    "3.4 Implement platform-adapter-linux.ts (Linux xdotool via child_process)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561596
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293309420
+      }
+    ],
+    "4.1 Implement input-executor.ts (queue, rate limiting, retry)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561658
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293321448
+      }
+    ],
+    "4.2 Write input-executor unit tests": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561712
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293321194
+      }
+    ],
+    "5.1 Implement input-dispatcher.ts (main orchestrator)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561773
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293351487
+      }
+    ],
+    "5.2 Write input-dispatcher unit tests": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561826
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293351809
+      }
+    ],
+    "5.3 Integrate with dispatch-gate.ts": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561879
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293351905
+      }
+    ],
+    "6.1 Integrate input-dispatcher with action-history.ts": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290561969
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293353956
+      }
+    ],
+    "6.2 Create mirror-input dispatcher integration": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562026
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293354208
+      }
+    ],
+    "6.3 Add learning system feedback integration": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562077
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293354496
+      }
+    ],
+    "6.4 Write integration tests (action-history + dispatcher)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562139
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293354711
+      }
+    ],
+    "7.1 Implement dry-run mode with safe preview": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562198
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293356682
+      }
+    ],
+    "7.2 Implement user approval prompts for sensitive operations": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562287
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293356925
+      }
+    ],
+    "7.3 Implement rate limiting safeguards": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562362
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293357183
+      }
+    ],
+    "7.4 Write safety feature tests": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562423
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293357391
+      }
+    ],
+    "8.1 Implement comprehensive error recovery": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562476
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293359720
+      }
+    ],
+    "8.2 Add timeout and interrupt handling": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562541
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293360200
+      }
+    ],
+    "8.3 Implement mouse/keyboard state cleanup": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562610
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293359997
+      }
+    ],
+    "8.4 Write error recovery tests": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562673
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293359567
+      }
+    ],
+    "9.1 Set up Windows-specific test environment": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562728
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293363185
+      }
+    ],
+    "9.2 Create macOS test stub": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562779
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293362898
+      }
+    ],
+    "9.3 Create Linux test stub": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562841
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293362822
+      }
+    ],
+    "9.4 Write end-to-end dry-run verification test": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562897
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293363130
+      }
+    ],
+    "10.1 Add performance benchmarks": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290562958
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293365793
+      }
+    ],
+    "10.2 Optimize coordinate translation caching": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563012
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293366430
+      }
+    ],
+    "10.3 Profile and optimize hot paths": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563063
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293366370
+      }
+    ],
+    "11.1 Write API documentation": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563124
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293366574
+      }
+    ],
+    "11.2 Add inline code comments and type documentation": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563196
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293367290
+      }
+    ],
+    "11.3 Create troubleshooting guide": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563306
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293367052
+      }
+    ],
+    "11.4 Final verification and cleanup": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563364
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293366791
+      }
+    ],
+    "All tests pass: `npm test`": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563428
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293369338
+      }
+    ],
+    "TypeScript compilation: `npm run build` (no errors)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563496
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293369640
+      }
+    ],
+    "Code coverage: > 85% on core modules (coordinate-translator, keyboard-mapper, input-dispatcher, platform-adapter-win)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563563
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293370001
+      }
+    ],
+    "Linting: `npm run lint` (no errors or warnings)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563623
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293370288
+      }
+    ],
+    "Dispatch-gate blocking still works (existing tests pass)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563680
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293370599
+      }
+    ],
+    "Action history records populated correctly with metadata": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563737
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293370885
+      }
+    ],
+    "Dry-run mode simulates without real input": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563796
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293371288
+      }
+    ],
+    "Windows platform fully functional": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563856
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293371620
+      }
+    ],
+    "Cross-platform interfaces defined and macOS/Linux stubs in place": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563926
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293371860
+      }
+    ],
+    "Documentation complete (API docs, troubleshooting, examples)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290563995
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293372183
+      }
+    ],
+    "No performance regressions (benchmarks within budget)": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290564060
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293372487
+      }
+    ],
+    "Code ready for production deployment": [
+      {
+        "executionId": "cacd3a7d-f0ea-492b-a4de-6074212a3f0e",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793290564119
+      },
+      {
+        "executionId": "09075f89-53c9-4eaf-a288-56cb20729e10",
+        "chatSessionId": "sess_5d1933bb-fe4a-4488-af23-21e9a2571bc3",
+        "timestamp": 1793293372618
+      }
+    ]
+  }
+}

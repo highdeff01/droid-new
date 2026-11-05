@@ -1,0 +1,105 @@
+import type { Frame } from './types.js';
+import type { Box } from './assist-ai.js';
+import type { ViewSize } from './ai.js';
+
+/** The frame's highest-resolution image: its full capture when it has one, else its display JPEG. */
+export const fullUrl = (frame: Frame) => frame.full ?? frame.url;
+
+/** A derived image of `live` (a crop or a boxed copy): its own JPEG is all it has. */
+const derived = (live: Frame, url: string): Frame => ({ ...live, url, full: undefined });
+
+/** The frame drawn from its full-resolution image at `view` pixels: the screenshot the model sees. */
+export async function renderView(frame: Frame, view: ViewSize): Promise<string> {
+  const img = await decode(fullUrl(frame));
+  const canvas = document.createElement('canvas');
+  canvas.width = view.w;
+  canvas.height = view.h;
+  canvas.getContext('2d')!.drawImage(img, 0, 0, view.w, view.h);
+  return canvas.toDataURL('image/jpeg', 0.8);
+}
+
+/** Width of the zoomed crop as a share of the screen width. */
+export const ZOOM_SHARE = 0.18;
+/** Pixel size of the square crop the model is shown. */
+export const ZOOM_PX = 240;
+
+/**
+ * The normalized box of the zoomed crop around `p`: square in screen pixels for an
+ * `aspect` (width/height) screen, kept inside the screen.
+ */
+export function zoomBox(p: { x: number; y: number }, aspect = 16 / 9, share = ZOOM_SHARE): Box {
+  const w = share;
+  const h = Math.min(1, share * aspect);
+  const clamp = (v: number, size: number) => Math.min(1 - size, Math.max(0, v - size / 2));
+  return { x: clamp(p.x, w), y: clamp(p.y, h), w, h };
+}
+
+/**
+ * Crops a zoomed region around `p` out of the live frame's full-resolution image and marks the
+ * proposed point with a red ring, so the model can read the target and say whether it is under it.
+ */
+export async function zoomFrame(live: Frame, p: { x: number; y: number }): Promise<Frame> {
+  const img = await decode(fullUrl(live));
+  const box = zoomBox(p, live.srcW / live.srcH);
+  const canvas = document.createElement('canvas');
+  canvas.width = ZOOM_PX;
+  canvas.height = ZOOM_PX;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(img, box.x * img.naturalWidth, box.y * img.naturalHeight, box.w * img.naturalWidth, box.h * img.naturalHeight, 0, 0, ZOOM_PX, ZOOM_PX);
+  ctx.strokeStyle = '#ff0000';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(((p.x - box.x) / box.w) * ZOOM_PX, ((p.y - box.y) / box.h) * ZOOM_PX, 14, 0, Math.PI * 2);
+  ctx.stroke();
+  return derived(live, canvas.toDataURL('image/jpeg', 0.85));
+}
+
+/** Longest side, in pixels, of the zoomed crop of a changed region. */
+export const REGION_PX = 360;
+
+async function decode(url: string): Promise<HTMLImageElement> {
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  return img;
+}
+
+/**
+ * The changed region shown to the model twice: the full frame with the region boxed in red,
+ * and a zoomed crop of just that region.
+ */
+export async function boxedFrames(live: Frame, box: Box): Promise<{ full: Frame; crop: Frame }> {
+  const img = await decode(fullUrl(live));
+  const W = img.naturalWidth;
+  const H = img.naturalHeight;
+  const full = document.createElement('canvas');
+  full.width = W;
+  full.height = H;
+  const fctx = full.getContext('2d')!;
+  fctx.drawImage(img, 0, 0);
+  fctx.strokeStyle = '#ff0000';
+  fctx.lineWidth = 3;
+  fctx.strokeRect(box.x * W, box.y * H, box.w * W, box.h * H);
+  const sw = box.w * W;
+  const sh = box.h * H;
+  const scale = REGION_PX / Math.max(sw, sh);
+  const crop = document.createElement('canvas');
+  crop.width = Math.max(1, Math.round(sw * scale));
+  crop.height = Math.max(1, Math.round(sh * scale));
+  crop.getContext('2d')!.drawImage(img, box.x * W, box.y * H, sw, sh, 0, 0, crop.width, crop.height);
+  return { full: derived(live, full.toDataURL('image/jpeg', 0.85)), crop: derived(live, crop.toDataURL('image/jpeg', 0.85)) };
+}
+
+/** Pixel size of the square screenshot patch kept with a familiar element. */
+export const PATCH_PX = 48;
+
+/** A small JPEG data URL of the live frame around `p`, for the familiar-elements memory. */
+export async function patchAt(live: Frame, p: { x: number; y: number }): Promise<string> {
+  const img = await decode(live.url);
+  const box = zoomBox(p, live.srcW / live.srcH, 0.06);
+  const canvas = document.createElement('canvas');
+  canvas.width = PATCH_PX;
+  canvas.height = PATCH_PX;
+  canvas.getContext('2d')!.drawImage(img, box.x * img.naturalWidth, box.y * img.naturalHeight, box.w * img.naturalWidth, box.h * img.naturalHeight, 0, 0, PATCH_PX, PATCH_PX);
+  return canvas.toDataURL('image/jpeg', 0.7);
+}

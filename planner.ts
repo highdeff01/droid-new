@@ -1,0 +1,334 @@
+import type { Frame, LearnedPattern, SavedCard, StepAction, WorkflowStep } from './types.js';
+import { POINTER_ACTIONS, STEP_ACTIONS } from './types.js';
+import { AiError, SAMPLE_VIEW, parseJsonReply } from './ai.js';
+import type { AskFn, ViewSize } from './ai.js';
+import { gridPrompt, gridRef, parseCell, replyPoint, resolveCell } from './grid.js';
+import { RELATIONS, type Expectation, type Relation } from './rearrange.js';
+import type { CapabilityRequest } from './capabilities.js';
+
+let seq = 0;
+/** A short unique id. */
+export const uid = (p = 'id') => `${p}_${Date.now().toString(36)}_${(seq++).toString(36)}`;
+
+const STOP = new Set(['the', 'and', 'for', 'with', 'then', 'step', 'steps', 'click', 'button', 'main', 'action', 'please', 'into', 'from', 'that', 'this', 'app', 'flow', 'workflow']);
+/** Different wordings of the same intent map to one word. */
+const SYNONYMS: Record<string, string> = {
+  launch: 'open', start: 'open', run: 'open', load: 'open',
+  dismiss: 'close', exit: 'close', quit: 'close', shut: 'close',
+  find: 'search', lookup: 'search', look: 'search', google: 'search',
+  enter: 'type', write: 'type', input: 'type',
+  calculator: 'calc', calculate: 'calc', compute: 'calc',
+  video: 'play', music: 'play', song: 'play', ad: 'popup', ads: 'popup', advert: 'popup',
+};
+/** Drops a plural or verb ending: "files" → "file", "messages" → "message", "running" → "run". */
+function inflect(w: string): string {
+  if (w.length > 4 && /ies$/.test(w)) return w.replace(/ies$/, 'y');
+  if (w.length > 4 && /(ss|sh|ch|x|z)es$/.test(w)) return w.slice(0, -2);
+  if (w.length > 4 && /(ing|ed)$/.test(w)) return w.replace(/(ing|ed)$/, '').replace(/(.)\1$/, '$1');
+  return w.length > 3 ? w.replace(/([^su])s$/, '$1') : w;
+}
+/** Folds endings and a silent final "e" so "closes", "closed" and "close" are one word. */
+const stem = (w: string) => inflect(w).replace(/(.{3,})e$/, '$1');
+const canonical = (w: string) => stem(SYNONYMS[w] ?? SYNONYMS[inflect(w)] ?? w);
+const words = (s: string) => new Set(s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => !STOP.has(w)).map(canonical).filter((w) => w.length > 2 && !STOP.has(w)));
+
+/**
+ * How much of `goal` is covered by `text` (0..1): the share of the goal's meaningful
+ * words found in the candidate. Short goals match long saved descriptions well.
+ */
+export function similarity(goal: string, text: string): number {
+  const A = words(goal);
+  const B = words(text);
+  if (!A.size || !B.size) return 0;
+  let both = 0;
+  A.forEach((w) => B.has(w) && both++);
+  return both / A.size;
+}
+
+/** The saved card most similar to `text`, when it is close enough to reuse. */
+export function findSimilar(text: string, cards: SavedCard[], min = 0.5): SavedCard | null {
+  let best: SavedCard | null = null;
+  let score = min;
+  for (const card of cards) {
+    const s = similarity(text, `${card.name} ${card.description} ${card.steps.map((st) => st.name).join(' ')}`);
+    if (s >= score) {
+      best = card;
+      score = s;
+    }
+  }
+  return best;
+}
+
+const ACTIONS: ReadonlySet<StepAction> = new Set<StepAction>(STEP_ACTIONS);
+const ACTION_LIST = STEP_ACTIONS.map((a) => `"${a}"`).join('|');
+
+/** System prompt for the planner, for a `view`-sized screenshot: the reply contract the model must follow. */
+export const planSystem = (view: ViewSize) => `You are Droid Assist, an agent that controls a computer screen. You see a screenshot (${view.w}x${view.h}) of the user's screen.
+Plan the concrete steps that achieve the user's goal on THIS screen. Look at the screenshot and target real visible controls.
+${gridPrompt(view)}
+Reply ONLY with JSON: {"steps":[{"name":string,"action":${ACTION_LIST},"target":string,"cell":string,"cx":number,"cy":number,"text"?:string,"endTarget"?:string,"endCell"?:string,"endCx"?:number,"endCy"?:number,"endX"?:number,"endY"?:number}],"expect"?:[{"element":string,"relation":"below"|"above"|"left_of"|"right_of","anchor":string}]}
+"cell","cx","cy" locate the target's center on the grid. "target" names the on-screen thing the step points at (e.g. "Files icon in the taskbar").
+"move" only moves (hovers) the mouse cursor onto the target without clicking — use it for "move the mouse to X" / "hover over X", e.g. {"name":"Move to Files icon","action":"move","target":"Files icon","cell":"H6","cx":0.04,"cy":0.76}.
+"click" clicks the target once, "double_click" double-clicks it (open a desktop icon or file), "scroll" scrolls over the target with "text" "up" or "down".
+"drag" presses the mouse on the target, drags it and releases it at a drop point: locate the drop point with "endCell","endCx","endCy" (or "endX","endY" as fractions 0..1) and name what is there in "endTarget" (an empty spot is named by where it is, e.g. "empty space below Game"), e.g. {"name":"Drag Files below Game","action":"drag","target":"Files icon","cell":"B1","cx":0.5,"cy":0.5,"endTarget":"empty space below Game","endCell":"G1","endCx":0.5,"endCy":0.3}.
+To move or rearrange several elements ("move the Files icon below Game", "rearrange the sidebar to Calc, Game, Notes, Files") plan one "drag" per element, in an order where every drop point is free when that drag runs, and list the arrangement the goal asks for in "expect": one relation per requested placement; an order "A, B, C" top to bottom is {"element":"B","relation":"below","anchor":"A"},{"element":"C","relation":"below","anchor":"B"}.
+"text" is the text to type, the key to press, the search query, the arithmetic expression or the scroll direction.
+"measure" sends no input: it measures on-screen distances; "text" lists the endpoints joined by " to " — element names from the element map, "x,y" coordinates or a screen edge ("left edge", "right edge", "top edge", "bottom edge"), e.g. {"name":"Files to Game","action":"measure","target":"Files icon","x":0.42,"y":0.97,"text":"Files icon to Game icon"}. The measured distances are returned to you in the log.
+"snip" sends no input: it screenshots a region of the screen for you to reason over; "text" is the region "x,y,w,h" as fractions 0..1, optionally followed by an output size "WxH" (either side may be left out) and "display <id>" for another monitor, e.g. {"name":"Look at toolbar","action":"snip","target":"toolbar","x":0.5,"y":0.05,"text":"0,0,1,0.1 1600x"}. Without a valid "text" it snips the region around x,y. The snip is shown in the thinking timeline and the snip gallery.
+Never substitute another action for the one the goal asks for; if the target is not visible, return {"steps":[]}.`;
+
+/** The planner's system prompt for a sample-space (480x270) screenshot. */
+export const PLAN_SYSTEM = planSystem(SAMPLE_VIEW);
+
+/**
+ * The planner prompt extended with the app's capabilities (`list`: one compact line each): the
+ * model may request whole operations next to, or instead of, screen steps. Unchanged when empty.
+ */
+export function withCapabilities(system: string, list: string): string {
+  if (!list.trim()) return system;
+  return `${system}
+You can also request Droid Assist operations (capabilities) by adding "capabilities":[{"id":string,"params"?:object}] to the JSON reply; they run through the same guardrails. A goal that is only an operation (e.g. "export a backup now") may reply {"steps":[],"capabilities":[...]}.
+Capabilities (id(param?:type) — what it does):
+${list}`;
+}
+
+/** A plan the assistant proposes, with where it came from and the model's thinking (null when reused or absent). */
+export interface PlanResult {
+  steps: WorkflowStep[];
+  source: string;
+  thinking: string | null;
+  /** The arrangement a rearrangement goal asks for; empty for other goals and reused flows. */
+  expect: Expectation[];
+  /** Operations the model asked to run through the capability registry; empty when none or reused. */
+  capabilities: CapabilityRequest[];
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** The "capabilities" requests of a planner reply; a malformed entry is an AiError, never dropped silently. */
+export function parseCapabilityRequests(reply: string): CapabilityRequest[] {
+  const raw = parseJsonReply(reply).capabilities;
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new AiError('AI "capabilities" is not a list of requests');
+  return raw.map((r: unknown) => {
+    const id = isRecord(r) ? text(r.id) : '';
+    const params = isRecord(r) ? (r.params ?? {}) : null;
+    if (!id || !isRecord(params)) throw new AiError(`AI requested an unusable capability ${JSON.stringify(r)}`);
+    return { id, params };
+  });
+}
+
+/** The steps and capability requests of a planner reply; empty steps are allowed only beside a capability request. */
+function parseReply(content: string, frame: Frame | null, view: ViewSize | undefined): Pick<PlanResult, 'steps' | 'capabilities'> {
+  const capabilities = parseCapabilityRequests(content);
+  const raw = parseJsonReply(content).steps;
+  const capabilityOnly = capabilities.length > 0 && (raw === undefined || (Array.isArray(raw) && !raw.length));
+  return { steps: capabilityOnly ? [] : parsePlan(content, frame, view), capabilities };
+}
+
+const RELATION_SET: ReadonlySet<string> = new Set(RELATIONS);
+const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+
+/** The "expect" relations of a planner reply; a malformed entry is an AiError, never dropped silently. */
+export function parseExpectations(reply: string): Expectation[] {
+  const raw = parseJsonReply(reply).expect;
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new AiError('AI "expect" is not a list of relations');
+  return raw.map((r: unknown) => {
+    const e = (r ?? {}) as Record<string, unknown>;
+    const relation = text(e.relation);
+    if (!text(e.element) || !text(e.anchor) || !RELATION_SET.has(relation)) throw new AiError(`AI proposed an unusable arrangement relation ${JSON.stringify(r)}`);
+    return { element: text(e.element), relation: relation as Relation, anchor: text(e.anchor) };
+  });
+}
+
+/** Converts one model step into a WorkflowStep; throws AiError when it breaks the contract. */
+export function toStep(raw: unknown, frame: Frame | null, view: ViewSize): WorkflowStep {
+  const s = (raw ?? {}) as Record<string, unknown>;
+  const action = s.action as StepAction;
+  if (!ACTIONS.has(action)) throw new AiError(`AI proposed an unknown action "${String(s.action)}"`);
+  const step: WorkflowStep = {
+    id: uid('step'),
+    name: typeof s.name === 'string' && s.name.trim() ? s.name.trim() : action,
+    action,
+    ...replyPoint(s, { x: 0.5, y: 0.5 }, view),
+    status: 'pending',
+  };
+  if (s.text !== undefined && s.text !== null) step.text = String(s.text);
+  if (POINTER_ACTIONS.has(action)) {
+    step.target = typeof s.target === 'string' && s.target.trim() ? s.target.trim() : step.name;
+    if (frame) step.refFrame = frame;
+    if (!parseCell(s.cell) && (s.x === undefined || s.x === null || s.y === undefined || s.y === null)) step.unlocated = true;
+  }
+  if (action === 'drag') Object.assign(step, dropPoint(s, step.name, view));
+  return step;
+}
+
+/** A drag's drop point and target from a model step; throws AiError when the end point is missing. */
+function dropPoint(s: Record<string, unknown>, name: string, view: ViewSize): Pick<WorkflowStep, 'endX' | 'endY' | 'endTarget'> {
+  const end = { cell: s.endCell, cx: s.endCx, cy: s.endCy, x: s.endX, y: s.endY };
+  const hasEnd = resolveCell(end.cell, end.cx, end.cy) !== null || (end.x !== undefined && end.x !== null && end.y !== undefined && end.y !== null);
+  if (!hasEnd) throw new AiError(`AI proposed drag "${name}" without an end point (endCell/endCx/endCy or endX/endY)`);
+  const endTarget = typeof s.endTarget === 'string' && s.endTarget.trim() ? s.endTarget.trim() : name;
+  const p = replyPoint(end, undefined, view);
+  return { endX: p.x, endY: p.y, endTarget };
+}
+
+/**
+ * Parses the planner's JSON reply into steps, reading pixel coordinates in the view the reply's
+ * screenshot was sent at; throws AiError on malformed or empty plans.
+ */
+export function parsePlan(reply: string, frame: Frame | null, view: ViewSize = SAMPLE_VIEW): WorkflowStep[] {
+  const steps = parseJsonReply(reply).steps;
+  if (!Array.isArray(steps) || !steps.length) throw new AiError('AI returned no steps for this goal');
+  return steps.map((s) => toStep(s, frame, view));
+}
+
+/** Most learned patterns sent with one planning ask. */
+export const PATTERN_CONTEXT_LIMIT = 8;
+
+/**
+ * The learned patterns that apply to `goal`: general ones (no context) and those whose
+ * pattern or context shares a meaningful word with the goal, newest first.
+ */
+export function relevantPatterns(goal: string, patterns: LearnedPattern[]): LearnedPattern[] {
+  const goalWords = words(goal);
+  const related = (p: LearnedPattern) => !p.context.trim() || [...words(`${p.context} ${p.pattern}`)].some((w) => goalWords.has(w));
+  return patterns.filter(related).slice(0, PATTERN_CONTEXT_LIMIT);
+}
+
+/** A learned pattern as one planning-context line. */
+export const patternLine = (p: LearnedPattern) => `[Learned ${p.kind}] ${p.pattern}${p.context ? ` (from: ${p.context})` : ''}`;
+
+/** A saved step as a fresh pending step that starts at its drift-corrected position. */
+const reuseStep = (s: WorkflowStep): WorkflowStep => ({
+  ...s,
+  id: uid('step'),
+  status: 'pending',
+  x: s.correctedX ?? s.x,
+  y: s.correctedY ?? s.y,
+  correctedX: undefined,
+  correctedY: undefined,
+});
+
+/** PlanResult.source of a plan the model made (as opposed to a reused saved workflow). */
+export const AI_PLAN_SOURCE = 'AI planned from the goal and the live screen';
+
+/**
+ * Fills a workflow from a goal: reuses a similar saved workflow when one exists (no model
+ * call, steps start at their last drift-corrected positions); otherwise the model plans the
+ * steps from the goal, the live frame, the recent context and the learned patterns relevant
+ * to this goal. `capabilityList` (compact lines) lets the model also request app operations.
+ * Rejects with AiError when the model is unreachable or its reply is unusable.
+ */
+export async function planFromGoal(goal: string, cards: SavedCard[], frame: Frame | null, ask: AskFn, context: string[] = [], patterns: LearnedPattern[] = [], capabilityList = ''): Promise<PlanResult> {
+  // A flow with drags is a rearrangement whose requested relations are not saved with it, so it is always planned fresh.
+  const similar = findSimilar(goal, cards.filter((c) => !c.steps.some((s) => s.action === 'drag')));
+  if (similar) {
+    return {
+      source: `Reused saved workflow "${similar.name}" (similar goal, drift-corrected coordinates)`,
+      steps: similar.steps.map(reuseStep),
+      thinking: null,
+      expect: [],
+      capabilities: [],
+    };
+  }
+  const lessons = relevantPatterns(goal, patterns).map(patternLine);
+  const system = (view: ViewSize) => withCapabilities(planSystem(view), capabilityList);
+  const reply = await ask({ system, prompt: `Goal: ${goal}`, frame, context: [...lessons, ...context], json: true });
+  const source = lessons.length ? `${AI_PLAN_SOURCE}, applying ${lessons.length} learned pattern(s)` : AI_PLAN_SOURCE;
+  return { ...parseReply(reply.content, frame, reply.view), source, thinking: reply.thinking, expect: parseExpectations(reply.content) };
+}
+
+/**
+ * Auto-continue re-plan: the model plans only the steps still needed for `goal` from the live
+ * frame, told what already ran and why the goal is not yet verified. Never reuses a saved flow.
+ */
+export async function planRemaining(ask: AskFn, goal: string, frame: Frame | null, ran: WorkflowStep[], why: string, patterns: LearnedPattern[] = [], capabilityList = ''): Promise<PlanResult> {
+  const lessons = relevantPatterns(goal, patterns).map(patternLine);
+  const done = ran.map((s) => `- ${s.action} "${s.target ?? s.name}": ${s.status}`).join('\n') || '(none)';
+  const reply = await ask({
+    system: (view) => `${withCapabilities(planSystem(view), capabilityList)}\nThis is a continuation: plan ONLY the remaining steps from the current screen.`,
+    prompt: `Goal: ${goal}\nSteps already run:\n${done}\nNot complete yet: ${why}`,
+    frame,
+    context: lessons,
+    json: true,
+  });
+  return { ...parseReply(reply.content, frame, reply.view), source: AI_PLAN_SOURCE, thinking: reply.thinking, expect: [] };
+}
+/**
+ * Re-asks the planner, once, where `step`'s target is after its proposed point was rejected
+ * (`feedback` says why). Resolves the new point, or null when the model says it is not visible.
+ */
+export async function relocateTarget(ask: AskFn, frame: Frame, step: WorkflowStep, feedback: string, context: string[] = [], crop?: Frame): Promise<{ x: number; y: number; thinking: string | null } | null> {
+  const at = `${gridRef(step)} = (${(step.x * 100).toFixed(1)}%, ${(step.y * 100).toFixed(1)}%)`;
+  const reply = await ask({
+    system: (view) => `${planSystem(view)}\nThis is a correction: reply with exactly one step for the named target, or {"steps":[]} if it is not visible.`,
+    prompt: `Step "${step.name}" (${step.action}) targets "${step.target ?? step.name}". Your previous point ${at} was rejected: ${feedback}\nLook again and give the target's true center.${crop ? ' The second image is a zoomed crop of the full-resolution screen around the rejected point (red ring); give the point on the FULL screenshot.' : ''}`,
+    frame,
+    ...(crop ? { crops: [crop] } : {}),
+    ...(context.length ? { context } : {}),
+    json: true,
+  });
+  const steps = parseJsonReply(reply.content).steps;
+  if (!Array.isArray(steps) || !steps.length) return null;
+  const s = (steps[0] ?? {}) as Record<string, unknown>;
+  return { ...replyPoint(s, undefined, reply.view), thinking: reply.thinking };
+}
+
+/**
+ * The one re-plan of a drag whose element did not land where intended (`feedback` says where
+ * it ended up): the model looks at the live frame again and gives one corrected drag for the
+ * same element. Resolves the corrected step (start + end grounded on the grid), or null when
+ * the model says the element is not visible. Rejects with AiError on an unusable reply.
+ */
+export async function replanDrag(ask: AskFn, frame: Frame | null, step: WorkflowStep, feedback: string): Promise<{ step: WorkflowStep; thinking: string | null } | null> {
+  const r = await askOneStep(ask, frame, step, {
+    system: `${PLAN_SYSTEM}\nThis is a correction of one drag that did not work: reply with exactly one "drag" step for the same element, or {"steps":[]} if it is not visible.`,
+    prompt: `Drag "${step.name}" was to move "${step.target ?? step.name}" from ${gridRef(step)} to ${gridRef({ x: step.endX ?? step.x, y: step.endY ?? step.y })} ("${step.endTarget ?? 'drop point'}"). It did not land there: ${feedback}\nLook at the screen as it is now and give the element's current center and the drop point again.`,
+  });
+  if (r && r.step.action !== 'drag') throw new AiError(`AI re-planned the drag as "${r.step.action}"`);
+  return r;
+}
+
+/**
+ * The one re-plan of a step that still failed after its retries (`feedback` says why): the
+ * model looks at the live frame again and gives one replacement step with the same intent,
+ * keeping the step's id and name. Null when the model says the target is not visible.
+ */
+export async function replanStep(ask: AskFn, frame: Frame | null, step: WorkflowStep, feedback: string, patterns: LearnedPattern[] = []): Promise<{ step: WorkflowStep; thinking: string | null } | null> {
+  const what = `${step.action} "${step.target ?? step.name}"${step.text ? ` with "${step.text}"` : ''} at ${gridRef(step)}`;
+  return askOneStep(ask, frame, step, {
+    system: `${PLAN_SYSTEM}\nThis is a re-plan of one step that failed after its retries: reply with exactly one step that achieves the same intent from the current screen, or {"steps":[]} if its target is not visible.`,
+    prompt: `Step "${step.name}" (${what}) failed after its retries: ${feedback}\nLook at the screen as it is now and give one step that does what it was meant to do.`,
+    context: relevantPatterns(step.target ?? step.name, patterns).map(patternLine),
+  });
+}
+
+/** Asks the planner for exactly one step replacing `step` (same id and name); null for an empty reply. */
+async function askOneStep(ask: AskFn, frame: Frame | null, step: WorkflowStep, req: { system: string; prompt: string; context?: string[] }): Promise<{ step: WorkflowStep; thinking: string | null } | null> {
+  const { context, ...rest } = req;
+  const reply = await ask({ ...rest, frame, ...(context?.length ? { context } : {}), json: true });
+  const steps = parseJsonReply(reply.content).steps;
+  if (!Array.isArray(steps) || !steps.length) return null;
+  const next = toStep(steps[0], frame, reply.view ?? SAMPLE_VIEW);
+  return { step: { ...next, id: step.id, name: step.name }, thinking: reply.thinking };
+}
+
+/** A generated name + description for a workflow. */
+export function generateCard(steps: WorkflowStep[], goal: string): { name: string; description: string } {
+  const verbs = Array.from(new Set(steps.map((s) => s.action))).join(', ');
+  const name = goal.trim() ? goal.trim().replace(/^\w/, (c) => c.toUpperCase()).slice(0, 48) : `Workflow (${steps.length} steps)`;
+  return { name, description: `${steps.length} step(s): ${verbs || 'empty'}. ${steps.map((s) => s.name).slice(0, 3).join(' → ')}` };
+}
+
+/** Safely evaluates a plain arithmetic expression; null when it is not one. */
+export function calculate(expr: string): number | null {
+  if (!/^[0-9+\-*/(). ]+$/.test(expr)) return null;
+  try {
+    const value = Function(`"use strict"; return (${expr});`)() as unknown;
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
