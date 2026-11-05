@@ -138,6 +138,7 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
               <article key={id} style={{ border: '1px solid var(--line, #334155)', borderRadius: 9, padding: 10, minWidth: 0 }}>
                 <strong>{id === 'stream-a' ? 'A · Implementation branch' : 'B · Alternative / test branch'}</strong>
                 <div style={muted}>{snapshot.worktrees[id].branch}</div>
+                <div style={{ ...muted, overflowWrap: 'anywhere' }}>{snapshot.worktrees[id].path}</div>
                 <textarea rows={5} value={patches[id]} onChange={(event) => setPatches((old) => ({ ...old, [id]: event.target.value }))}
                   placeholder="Paste a complete unified Git diff for this branch…" style={{ ...field, marginTop: 8 }} disabled={running} />
                 <button type="button" style={{ ...button, marginTop: 7, background: 'transparent', color: 'var(--text, #e2e8f0)' }}
