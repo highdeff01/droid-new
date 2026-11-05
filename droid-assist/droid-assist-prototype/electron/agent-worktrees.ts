@@ -186,12 +186,17 @@ export class AgentWorktreeManager {
     const patchFile = path.join(worktree.path, `.droid-agent-${id}.patch`);
     try {
       await fs.writeFile(patchFile, patch, { encoding: 'utf8', flag: 'wx' });
-      const checked = await this.git(['apply', '--check', '--', patchFile], worktree.path);
-      await this.git(['apply', '--', patchFile], worktree.path);
-      this.passedChecks.delete(id);
-      this.testedFingerprint.delete(id);
-      this.committedHeads.delete(id);
-      return { applied: true, check: checked.stdout || 'git apply --check passed', artifactPath };
+      try {
+        const checked = await this.git(['apply', '--check', '--', patchFile], worktree.path);
+        await this.git(['apply', '--', patchFile], worktree.path);
+        this.passedChecks.delete(id);
+        this.testedFingerprint.delete(id);
+        this.committedHeads.delete(id);
+        return { applied: true, check: checked.stdout || 'git apply --check passed', artifactPath };
+      } catch (error) {
+        await this.saveArtifact(id, 'apply-failure.json', JSON.stringify({ patchArtifact: artifactPath, error: errorText(error), createdAt: new Date().toISOString() }, null, 2));
+        throw new Error(`${errorText(error)}. Candidate patch preserved at ${artifactPath}`);
+      }
     } finally {
       await fs.rm(patchFile, { force: true });
     }
