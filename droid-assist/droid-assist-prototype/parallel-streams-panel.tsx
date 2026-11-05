@@ -2,6 +2,8 @@ import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
 import type { NativeAgentWorktreeApi } from './electron/agent-worktree-api.js';
 import type { AgentCheckResult, AgentDiffResult, AgentWorktreeId, AgentWorktreeSnapshot } from './electron/agent-worktrees.js';
+import type { ParallelAgentRun } from './parallel-agent-runner.js';
+import { extractUnifiedGitDiff } from './parallel-patch.js';
 
 const panelStyle: React.CSSProperties = {
   border: '1px solid var(--line, #334155)',
@@ -22,7 +24,7 @@ const button: React.CSSProperties = {
   background: 'var(--accent, #0891b2)', color: '#fff', cursor: 'pointer',
 };
 
-function AgentWorktreeExecutionPanel() {
+function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) {
   const native = (window as Window & { droidAgentWorktrees?: NativeAgentWorktreeApi }).droidAgentWorktrees;
   const [repository, setRepository] = useState('');
   const [snapshot, setSnapshot] = useState<AgentWorktreeSnapshot | null>(null);
