@@ -229,8 +229,13 @@ export async function runParallelAgentReview(options: ParallelAgentRunnerOptions
     } else {
       run.status = 'failed';
       for (const stream of Object.values(run.streams)) if (stream.status === 'working') {
-        stream.status = 'failed';
-        stream.summary = error instanceof Error ? error.message : String(error);
+        const latest = stream.attempts[stream.attempts.length - 1];
+        if (latest?.status === 'completed') {
+          stream.status = stream.id === 'stream-a' ? 'needs-test' : 'needs-execution';
+        } else {
+          stream.status = 'failed';
+          stream.summary = error instanceof Error ? error.message : String(error);
+        }
       }
     }
   }
