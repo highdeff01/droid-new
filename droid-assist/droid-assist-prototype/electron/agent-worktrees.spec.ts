@@ -57,7 +57,8 @@ describe('AgentWorktreeManager', () => {
   it('applies patches to one stream and returns a diff without changing the other', async () => {
     const f = await fixture();
     const result = await f.manager.prepare(f.base);
-    await f.manager.applyPatch('stream-a', patch);
+    const applied = await f.manager.applyPatch('stream-a', patch);
+    expect(await fs.readFile(applied.artifactPath, 'utf8')).toBe(patch);
     const diff = await f.manager.getDiff('stream-a');
     expect(diff.changedFiles).toEqual(['README.md']);
     expect(diff.diff).toContain('+stream-a');
@@ -87,6 +88,8 @@ new file mode 100644
     expect(results).toHaveLength(3);
     expect(results.map((item) => item.exitCode)).toEqual([0, 0, 0]);
     expect(results[1].stdout).toContain('tests passed');
+    expect(await fs.readFile(results[0].artifactPath!, 'utf8')).toContain('tests passed');
+    expect(results[0].diffArtifactPath).toBeTruthy();
     await expect(f.manager.runChecks('stream-a', ['npm install' as never])).rejects.toThrow('Run both checks together');
   });
 
