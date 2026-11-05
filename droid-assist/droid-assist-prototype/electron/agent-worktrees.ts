@@ -226,10 +226,10 @@ export class AgentWorktreeManager {
     if (untracked.length) await this.git(['add', '-N', '--', ...untracked], worktree.path);
     const [diff, names, status] = await Promise.all([
       this.git(['diff', '--no-ext-diff', '--binary', worktree.baseCommit, '--'], worktree.path),
-      this.git(['diff', '--name-only', worktree.baseCommit, '--'], worktree.path),
+      this.git(['diff', '--name-only', '-z', worktree.baseCommit, '--'], worktree.path),
       this.git(['status', '--porcelain=v1'], worktree.path),
     ]);
-    const changedFiles = names.stdout.split(/\r?\n/).filter(Boolean);
+    const changedFiles = names.stdout.split(String.fromCharCode(0)).filter(Boolean);
     return { id, branch: worktree.branch, baseCommit: worktree.baseCommit, diff: diff.stdout.slice(0, OUTPUT_LIMIT), changedFiles, clean: status.stdout.trim().length === 0 };
   }
 
