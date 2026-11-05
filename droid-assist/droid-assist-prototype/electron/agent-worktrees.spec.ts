@@ -25,6 +25,7 @@ async function fixture() {
     private: true,
     scripts: { test: "node -e \"console.log('tests passed')\"", lint: "node -e \"console.log('lint passed')\"" },
   }));
+  await fs.writeFile(path.join(root, 'package-lock.json'), JSON.stringify({ name: 'fixture', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'fixture', version: '1.0.0' } } }));
   await git(['add', '.'], root);
   await git(['commit', '-m', 'base'], root);
   const base = (await git(['rev-parse', 'HEAD'], root)).stdout.trim();
@@ -82,9 +83,9 @@ new file mode 100644
     const f = await fixture();
     await f.manager.prepare(f.base);
     const results = await f.manager.runChecks('stream-a');
-    expect(results).toHaveLength(2);
+    expect(results).toHaveLength(3);
     expect(results.map((item) => item.exitCode)).toEqual([0, 0]);
-    expect(results[0].stdout).toContain('tests passed');
+    expect(results[1].stdout).toContain('tests passed');
     await expect(f.manager.runChecks('stream-a', ['npm install' as never])).rejects.toThrow('Run both checks together');
   });
 
@@ -92,7 +93,7 @@ new file mode 100644
     const f = await fixture();
     await f.manager.prepare(f.base);
     await f.manager.applyPatch('stream-a', patch);
-    await expect(f.manager.commit('stream-a', ['README.md'], 'must not commit')).rejects.toThrow('Both npm test and npm run lint must pass');
+    await expect(f.manager.commit('stream-a', ['README.md'], 'must not commit')).rejects.toThrow('npm ci, npm test, and npm run lint must all pass');
     const checks = await f.manager.runChecks('stream-a');
     expect(checks.every((item) => item.exitCode === 0)).toBe(true);
     const sha = await f.manager.commit('stream-a', ['README.md'], 'commit after checks');
