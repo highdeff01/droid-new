@@ -22,7 +22,7 @@ const button: React.CSSProperties = {
 
 export function ParallelStreamsPanel({ engine }: { engine: AssistEngine }) {
   const [task, setTask] = useState('');
-  const [baseCommit, setBaseCommit] = useState('');
+  const [baseCommit, setBaseCommit] = useState('9428cd1efb4d226a294b963f33458159422d089c');
   const [error, setError] = useState('');
   const run = engine.parallelAgentRun;
   const busy = run?.status === 'running';
