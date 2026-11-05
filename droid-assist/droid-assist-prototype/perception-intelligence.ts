@@ -286,6 +286,30 @@ export function selectEvidenceFrames(frames: readonly Frame[], currentFrameId: n
   return current ? [current, ...prior] : frames.slice(0, bounded);
 }
 
+/** Resolve reviewer-requested frame IDs from the bounded in-memory evidence window.
+ * Unknown/expired IDs are ignored; results preserve the caller's requested order and are capped.
+ * This returns existing Frame references and never copies image pixel buffers.
+ */
+export function retrieveEvidenceFrames(
+  frames: readonly Frame[],
+  requestedIds?: readonly number[],
+  limit = 6,
+): Frame[] {
+  const bounded = Math.max(1, Math.min(20, Math.floor(limit) || 1));
+  if (!requestedIds?.length) return frames.slice(0, bounded);
+  const byId = new Map(frames.map(frame => [frame.id, frame]));
+  const seen = new Set<number>();
+  const result: Frame[] = [];
+  for (const id of requestedIds) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const frame = byId.get(id);
+    if (frame) result.push(frame);
+    if (result.length >= bounded) break;
+  }
+  return result;
+}
+
 /** Select the newest action that had already occurred when a frame was captured. */
 export function actionForFrame(
   history: readonly ActionRecord[],
