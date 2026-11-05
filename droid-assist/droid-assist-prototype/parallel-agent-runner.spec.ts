@@ -15,6 +15,8 @@ describe('parallel AI agent runner', () => {
     const snapshots: string[] = [];
     const run = await runParallelAgentReview({
       ask,
+      askA: async (request) => { calls.push('A:' + (request.context?.[0] ?? '')); return reply('Stream A isolated response'); },
+      askB: async (request) => { calls.push('B:' + (request.context?.[0] ?? '')); return reply('Stream B isolated response'); },
       task: 'Implement reliable workflow transfer',
       baseCommit: 'base-sha',
       now: (() => { let n = 100; return () => ++n; })(),
@@ -31,6 +33,8 @@ describe('parallel AI agent runner', () => {
     expect(refs).toContain('stream-b->stream-a');
     expect(calls.filter((c) => c.includes('stream-a'))).toHaveLength(2);
     expect(calls.filter((c) => c.includes('stream-b'))).toHaveLength(2);
+    expect(calls.filter((c) => c.startsWith('A:'))).toHaveLength(2);
+    expect(calls.filter((c) => c.startsWith('B:'))).toHaveLength(2);
     expect(snapshots.length).toBeGreaterThan(3);
     expect(parallelAgentRunText(run)).toContain('not passing test results');
   });
