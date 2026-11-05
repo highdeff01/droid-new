@@ -59,6 +59,35 @@ describe('parallel AI agent runner', () => {
     expect(run.status).toBe('needs-verification');
   });
 
+  it('switches both streams to distinct alternative methods after retry exhaustion', async () => {
+    const attempts: string[] = [];
+    const makeAsk = (prefix: string): AskFn => {
+      let initialCalls = 0;
+      return async (request) => {
+        const method = request.context?.find((line) => line.startsWith('METHOD:')) ?? '';
+        attempts.push(prefix + method);
+        if (method.includes('primary-implementation') || method.includes('independent-test-and-alternative')) {
+          initialCalls++;
+          if (initialCalls <= 2) throw new Error('primary method blocked');
+        }
+        return reply('Alternative method produced a usable proposal.');
+      };
+    };
+    const run = await runParallelAgentReview({
+      ask: async () => reply('fallback'),
+      askA: makeAsk('A:'),
+      askB: makeAsk('B:'),
+      task: 'Force alternate method fallback',
+      baseCommit: 'base',
+      maxRetries: 1,
+    });
+    expect(attempts).toContain('A:METHOD: alternative-minimal-implementation');
+    expect(attempts).toContain('B:METHOD: alternative-black-box-test-method');
+    expect(run.streams['stream-a'].attempts.some((a) => a.method === 'alternative-minimal-implementation')).toBe(true);
+    expect(run.streams['stream-b'].attempts.some((a) => a.method === 'alternative-black-box-test-method')).toBe(true);
+    expect(run.status).toBe('needs-verification');
+  });
+
   it('does not report completion as verified test success', async () => {
     const ask: AskFn = async () => reply('A complete proposal, but no tests were executed.');
     const run = await runParallelAgentReview({ ask, task: 'No false green', baseCommit: 'base' });
