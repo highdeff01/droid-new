@@ -113,6 +113,7 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
       stream: id,
       branch: snapshot?.worktrees[id].branch,
       aiAttempts: run?.streams[id].attempts,
+      crossReferences: run?.crossReferences.filter((item) => item.from === id || item.to === id),
       checks: checks[id],
       diff: diff.diff,
       changedFiles: diff.changedFiles,
