@@ -258,7 +258,8 @@ function nextMethod(stream: ParallelWorkstreamState['streams'][ParallelStreamId]
  * Run both streams concurrently. Each has independent retries and method fallback.
  * Failed outputs remain in the ledger and are forwarded as failure-analysis messages.
  * A candidate is marked working only when its own attempt explicitly supplies a passing
- * verification report and a patch artifact marked testPassed=true.
+ * verification report and a patch artifact marked testPassed=true. A successful build or
+ * plausible answer without independent verification is still retried and alternative-tested.
  */
 export async function runParallelWorkstreams(options: ParallelWorkstreamOptions): Promise<ParallelWorkstreamState> {
   const now = options.now ?? Date.now;
@@ -329,9 +330,9 @@ export async function runParallelWorkstreams(options: ParallelWorkstreamOptions)
     attempt.finishedAt = ended;
     attempt.summary = text(output.summary, 8_000);
     attempt.error = output.error ? text(output.error, 4_000) : undefined;
-    attempt.status = cancelled() ? 'cancelled' : output.passed ? 'passed' : 'failed';
+    const verificationPassed = output.passed && output.verification?.testPassed === true;
+    attempt.status = cancelled() ? 'cancelled' : verificationPassed ? 'passed' : 'failed';
 
-    const verificationPassed = output.verification?.testPassed === true;
     for (const artifact of output.artifacts ?? []) {
       appendArtifact(state, streamId, attempt, artifact, ended, maxArtifactChars, verificationPassed);
     }
@@ -363,7 +364,7 @@ export async function runParallelWorkstreams(options: ParallelWorkstreamOptions)
       if (stream.retryNumber < retries) {
         stream.retryNumber++;
         stream.status = 'retrying';
-      } else if (output.tryAlternative !== false && nextMethod(stream)) {
+      } else if (nextMethod(stream)) {
         stream.status = 'retrying';
       } else {
         stream.status = 'failed';
