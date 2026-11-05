@@ -28,6 +28,7 @@ import { BRIDGE_REQUIRED, captureDesktop, checkBridge, dragEnd, pointerAction, s
 import { DRY_RUN, dragEndError, groundTarget, runStep, type Grounding, type SendFn, type StepDeps, type StepOutcome } from './run-step.js';
 import { createInputAuthority } from './input-authority.js';
 import { createWorkflowHandoff, restoreWorkflowHandoff, type WorkflowHandoffSnapshot, type WorkflowHandoffResult } from './workflow-handoff.js';
+import { runParallelAgentReview, parallelAgentRunText, type ParallelAgentRun } from './parallel-agent-runner.js';
 import { NO_SOURCE, captureLabel, captureStatus, stepPlan, type FrameProvider, type StepPlan } from './capture-source.js';
 import { DEFAULT_STEP_RETRIES, avoidPattern, describeAttempt, runLadder, type Attempt } from './retry-ladder.js';
 import { boxedFrames, patchAt, renderView, zoomBox, zoomFrame } from './grounding.js';
@@ -534,6 +535,10 @@ export function useAssist() {
   }, []);
   const [draftCard, setDraftCard] = useState<{ name: string; description: string } | null>(null);
   const [goal, setGoal] = useState('');
+  const [parallelAgentRun, setParallelAgentRun] = useState<ParallelAgentRun | null>(() => {
+    try { const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('droid.parallel-agent-run.v1') : null; return raw ? JSON.parse(raw) as ParallelAgentRun : null; } catch { return null; }
+  });
+  const parallelAgentAbortRef = useRef<AbortController | null>(null);
   const [progress, setProgress] = useState({ done: 0, manual: 0 });
   const [agents, setAgents] = useState<Agent[]>([
     { id: 'popup', name: 'Popup watcher', description: 'Flags ads & intrusive popups, auto-closes when Auto act is on', on: true },
@@ -7699,6 +7704,44 @@ export function useAssist() {
     return { ...inputAuthority.snapshot(), generation };
   };
 
+  /** Run two independent AI work streams: implementation proposal and independent test/alternative review. */
+  const runParallelAgents = async (task: string, baseCommit: string): Promise<ParallelAgentRun> => {
+    if (!aiOnline()) throw new Error('AI is unavailable. Connect the configured AI endpoint before starting parallel agents.');
+    if (!task.trim()) throw new Error('Enter a task for the two work streams.');
+    if (parallelAgentAbortRef.current) throw new Error('A parallel agent run is already active.');
+    const controller = new AbortController();
+    parallelAgentAbortRef.current = controller;
+    addLog('Parallel agents', 'Starting Stream A implementation and Stream B independent testing concurrently.', 'info');
+    try {
+      const result = await runParallelAgentReview({
+        ask: askFor('planner'),
+        task: task.trim(),
+        baseCommit: baseCommit.trim() || 'current checked-out HEAD — exact SHA must be confirmed by the host',
+        signal: controller.signal,
+        onState: (snapshot) => {
+          setParallelAgentRun(snapshot);
+          try { localStorage.setItem('droid.parallel-agent-run.v1', JSON.stringify(snapshot).slice(0, 180_000)); } catch { /* UI state remains available for this session. */ }
+        },
+        onCrossReference: (message) => {
+          addLog('Cross-reference', `${message.from} → ${message.to}: ${message.content.slice(0, 220)}`, 'info');
+        },
+      });
+      setParallelAgentRun(result);
+      addLog('Parallel agents', result.status === 'needs-verification'
+        ? 'Both streams returned cross-reviewed proposals. Apply them on their isolated branches and run executable tests before accepting either.'
+        : `Parallel run ended: ${result.status}. Review preserved attempts and errors.`,
+      result.status === 'needs-verification' ? 'ok' : 'warn');
+      return result;
+    } finally {
+      parallelAgentAbortRef.current = null;
+    }
+  };
+  const stopParallelAgents = () => {
+    parallelAgentAbortRef.current?.abort();
+    addLog('Parallel agents', 'Cancellation requested for both AI work streams.', 'warn');
+  };
+  const exportParallelAgentRun = () => parallelAgentRun ? parallelAgentRunText(parallelAgentRun) : '';
+
   const runDocumentPipeline = async (files: DocumentInput[], question: string, options: DocumentPipelineOptions = {}, reviewerCount = 0): Promise<DocumentPipelineResult> => {
     if (!aiOnline()) throw new Error('AI is unavailable. Connect the configured AI endpoint before running document analysis.');
     if (!files.length) throw new Error('Choose at least one file to analyze.');
@@ -7764,6 +7807,8 @@ export function useAssist() {
     settings, setSettings, source, target, frames, pinned, setPinned, steps, setSteps, trail, setTrail, recording, replaying,
     /** Single shared physical-input authority and evidence-based cooperative takeover controls. */
     getInputAuthority: () => inputAuthority.snapshot(),
+    /** Two concurrent AI proposal/review streams with retries and preserved cross-references. */
+    parallelAgentRun, runParallelAgents, stopParallelAgents, exportParallelAgentRun,
     /** Portable progress transfer between cooperating controllers; import rechecks current frame evidence. */
     exportWorkflowHandoff, importWorkflowHandoff,
     requestInputTakeover, setInputPaused, takeUserInputControl, resumeAutomatedInput,
