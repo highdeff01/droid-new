@@ -147,7 +147,7 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
 
 export function ParallelStreamsPanel({ engine }: { engine: AssistEngine }) {
   const [task, setTask] = useState('');
-  const [baseCommit, setBaseCommit] = useState('67872b196d468aaa8d52533ca50f6ab67cd6f4fc');
+  const [baseCommit, setBaseCommit] = useState('95d22ba9d06439f6d502e1e6cdf6d03a9b96b28d');
   const [error, setError] = useState('');
   const run = engine.parallelAgentRun;
   const busy = run?.status === 'running';
