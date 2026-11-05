@@ -44,8 +44,11 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
   };
   const loadCandidatePatch = (id: AgentWorktreeId) => {
     const attempts = run?.streams[id].attempts ?? [];
-    const candidate = [...attempts].reverse().find((attempt) => attempt.status === 'completed');
-    const patch = candidate ? extractUnifiedGitDiff(candidate.output) : null;
+    const candidate = [...attempts].reverse()
+      .filter((attempt) => attempt.status === 'completed')
+      .map((attempt) => ({ attempt, patch: extractUnifiedGitDiff(attempt.output) }))
+      .find((item) => item.patch !== null);
+    const patch = candidate?.patch ?? null;
     if (!patch) {
       setError(`No complete unified diff found in the latest completed ${id} response.`);
       return;
