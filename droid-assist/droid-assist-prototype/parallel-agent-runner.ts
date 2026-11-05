@@ -178,12 +178,27 @@ export async function runParallelAgentReview(options: ParallelAgentRunnerOptions
         },
       ),
     ]);
-    if (initial.some((result) => result.status === 'rejected')) {
-      const failure = initial.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-      throw failure?.reason ?? new Error('Both initial streams failed');
-    }
-    const primary = (initial[0] as PromiseFulfilledResult<string>).value;
-    const independent = (initial[1] as PromiseFulfilledResult<string>).value;
+    // A failed stream must not discard a usable result from its peer. Convert
+    // each exhausted stream into an explicit rescue brief and let both streams
+    // participate in cross-review/recovery instead of failing the whole run.
+    const initialResult = (index: 0 | 1): string => {
+      const result = initial[index];
+      if (result.status === 'fulfilled') return result.value;
+      const streamId: AgentStreamId = index === 0 ? 'stream-a' : 'stream-b';
+      const stream = run.streams[streamId];
+      const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      stream.status = 'failed';
+      stream.summary = `Initial methods exhausted; requesting peer-assisted rescue. ${reason}`.slice(0, 2_000);
+      return [
+        `STREAM ${streamId.toUpperCase()} INITIAL ATTEMPT FAILURE — RESCUE REQUIRED`,
+        `Failure: ${reason}`,
+        'This stream did not produce a usable initial response. Treat its attempt history as diagnostic evidence, not as a successful implementation or test result.',
+        ...stream.attempts.map((attempt) => `Method: ${attempt.method}; status: ${attempt.status}; error: ${attempt.error ?? 'none'}; output: ${attempt.output.slice(0, 1200)}`),
+        'Peer stream: please identify what can be salvaged, propose a different approach, and state the smallest safe next action.',
+      ].join('\\n');
+    };
+    const primary = initialResult(0);
+    const independent = initialResult(1);
     if (stopped()) throw new DOMException('Parallel agent run cancelled', 'AbortError');
 
     const messageA: AgentCrossReference = {
@@ -236,9 +251,22 @@ export async function runParallelAgentReview(options: ParallelAgentRunnerOptions
     await Promise.all([options.onCrossReference?.(finalA), options.onCrossReference?.(finalB)]);
     run.streams['stream-a'].summary = revisionA.slice(0, 2_000);
     run.streams['stream-b'].summary = revisionB.slice(0, 2_000);
-    run.streams['stream-a'].status = 'needs-test';
-    run.streams['stream-b'].status = 'needs-execution';
-    run.status = 'needs-verification';
+    // A stream that failed initially is only recovered if its rescue revision
+    // actually completed. Otherwise preserve the failure status for the UI.
+    for (const id of ['stream-a', 'stream-b'] as const) {
+      const stream = run.streams[id];
+      const rescueCompleted = stream.attempts.some((attempt) =>
+        attempt.method === 'alternative-cross-review-rewrite' && attempt.status === 'completed'
+      ) || stream.attempts.some((attempt) =>
+        attempt.method === 'cross-reviewed-revision' && attempt.status === 'completed'
+      );
+      if (stream.status !== 'failed' || rescueCompleted) {
+        stream.status = id === 'stream-a' ? 'needs-test' : 'needs-execution';
+      }
+    }
+    run.status = Object.values(run.streams).some((stream) => stream.status === 'failed')
+      ? 'failed'
+      : 'needs-verification';
   } catch (error) {
     if (stopped() || (error instanceof Error && error.name === 'AbortError')) {
       run.status = 'cancelled';
