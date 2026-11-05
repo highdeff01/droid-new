@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActionRecord, Frame, WorkflowStep } from './types.js';
 import type { InventoryElement } from './screen-inventory.js';
 import {
-  actionForFrame, selectEvidenceFrames, appendDecisionHistory, expectedOutcomeForAction, loadDecisionHistory, saveDecisionHistory, DECISION_HISTORY_KEY, assessElementIdentity, calibrateEvidenceConfidence, decisionLearningContext, updateDecisionLearning, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
+  actionForFrame, selectEvidenceFrames, retrieveEvidenceFrames, appendDecisionHistory, expectedOutcomeForAction, loadDecisionHistory, saveDecisionHistory, DECISION_HISTORY_KEY, assessElementIdentity, calibrateEvidenceConfidence, decisionLearningContext, updateDecisionLearning, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
   matchVisualPrototype, outcomeRates, prospectPoints, recognizeElements, relateElements, visualDescriptor,
 } from './perception-intelligence.js';
 
@@ -27,6 +27,15 @@ describe('visual perception intelligence', () => {
     expect(selectEvidenceFrames(frames, 3, 3).map(item => item.id)).toEqual([3, 4, 2]);
     expect(selectEvidenceFrames(frames, 99, 2).map(item => item.id)).toEqual([4, 3]);
     expect(selectEvidenceFrames(frames, 4, 0).map(item => item.id)).toEqual([4]);
+  });
+
+  it('retrieves requested retained frames in request order without duplicating frame objects', () => {
+    const frames = [frame(5), frame(4), frame(3), frame(2)];
+    const selected = retrieveEvidenceFrames(frames, [3, 5, 3, 99, 4], 3);
+    expect(selected.map(item => item.id)).toEqual([3, 5, 4]);
+    expect(selected[0]).toBe(frames[2]);
+    expect(retrieveEvidenceFrames(frames, [99])).toEqual([]);
+    expect(retrieveEvidenceFrames(frames, undefined, 2).map(item => item.id)).toEqual([5, 4]);
   });
 
   it('associates a frame only with the newest action at or before its capture time', () => {
