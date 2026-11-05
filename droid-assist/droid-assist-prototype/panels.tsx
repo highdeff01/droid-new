@@ -460,9 +460,9 @@ function MainBridgeSettings({ engine }: { engine: AssistEngine }) {
       ) : (
         <input value={settings.mainBridgeUrl} onChange={(e) => set({ mainBridgeUrl: e.target.value })} aria-label="Main app URL" placeholder="http://127.0.0.1:5000 or ws://host:port" />
       )}
-      <label>Token (optional)
+      <label>Token
         <input type="password" value={settings.mainBridgeToken} onChange={(e) => set({ mainBridgeToken: e.target.value })} aria-label="Main app bridge token" autoComplete="off" />
-        <small>Sent as ?token= on the WebSocket and as a Bearer token over HTTP; never written to the activity log.</small>
+        <small>Sent as ?token= on the WebSocket and as a Bearer token over HTTP; never written to the activity log. In listen mode the listener refuses every connection until a token is set here, and the main app must use the same one.</small>
       </label>
       <span className={styles.row}>
         <label>Retry after <input type="number" min={MAIN_BRIDGE_BACKOFF_MIN_MS} max={10000} step={250} value={settings.mainBridgeBackoffMinMs} onChange={(e) => set({ mainBridgeBackoffMinMs: clamp(e.target.valueAsNumber, MAIN_BRIDGE_BACKOFF_MIN_MS, 10000, settings.mainBridgeBackoffMinMs) })} aria-label="Main app bridge first retry (ms)" /> ms</label>
