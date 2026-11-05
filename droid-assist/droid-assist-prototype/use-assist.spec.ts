@@ -1088,7 +1088,7 @@ describe('useAssist screen-change responder and proposals', () => {
     const change = result.current.timeline.find((e) => e.kind === 'change');
     expect(change?.text).toBe('[navigation] the Settings page — PLAN STALE: the Files icon moved');
     const changeReq = fetchMock.mock.calls.map((c) => JSON.parse(String(c[1].body))).find((b) => b.messages[0].content.includes('screen-change responder. The first image'));
-    expect(changeReq.messages.at(-1).images).toHaveLength(2);
+    expect(changeReq.messages.at(-1).images).toHaveLength(3);
     const log = [...result.current.log].reverse();
     const assessed = log.findIndex((l) => l.source === 'Screen-change responder' && /PLAN STALE/.test(l.message));
     const proposed = log.findIndex((l) => l.source === 'Auto-Actor' && /^Re-proposal for "Hover Files": WHAT: move "files icon" at \(20%, 80%\) · WHY: The screen now shows the Settings page, so I will/.test(l.message));
