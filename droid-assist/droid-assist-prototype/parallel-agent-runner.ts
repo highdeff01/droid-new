@@ -42,6 +42,9 @@ export interface ParallelAgentRun {
 }
 export interface ParallelAgentRunnerOptions {
   ask: AskFn;
+  /** Optional separate stage/session for each stream to reduce shared-context bleed. */
+  askA?: AskFn;
+  askB?: AskFn;
   task: string;
   baseCommit: string;
   signal?: AbortSignal;
@@ -98,7 +101,8 @@ export async function runParallelAgentReview(options: ParallelAgentRunnerOptions
       stream.attempts.push(attempt);
       await publish();
       try {
-        const reply = await options.ask({
+        const streamAsk = stream.id === 'stream-a' ? (options.askA ?? options.ask) : (options.askB ?? options.ask);
+        const reply = await streamAsk({
           system: stream.id === 'stream-a'
             ? 'You are Stream A, an independent senior implementation engineer. Produce a concrete implementation proposal with file paths, interfaces, edge cases, and patch-ready code where possible. Never claim code was committed or tests were run unless the tools actually did so.'
             : 'You are Stream B, an independent test engineer and alternative designer. Start from the stated base commit, challenge the proposed design, create executable test plans and edge cases, and propose a materially different implementation when useful. Never claim tests were run unless they actually were.',
