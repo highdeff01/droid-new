@@ -47,6 +47,17 @@ describe('workflow handoff', () => {
     expect(restored.steps[0].verifiedAt).toBe(100);
   });
 
+  it('does not preserve a later verified step across a gap in the verified sequence', () => {
+    const snapshot = createWorkflowHandoff('wf-1', 'goal', [
+      step('a'),
+      step('b', { status: 'done', verifiedAt: 200, afterFrame: frame(8) }),
+    ], 'droid-new');
+    const restored = restoreWorkflowHandoff(snapshot, 'wf-1', 'goal', [step('a'), step('b')], new Set([8]));
+    expect(restored.steps.map((s) => s.status)).toEqual(['pending', 'pending']);
+    expect(restored.preservedVerified).toBe(0);
+    expect(restored.resumedIndex).toBe(0);
+  });
+
   it('does not inherit completion when the post-action screenshot has expired', () => {
     const snapshot = createWorkflowHandoff('wf-1', 'goal', [
       step('a', { status: 'done', verifiedAt: 100, afterFrame: frame(7) }),
