@@ -7715,12 +7715,17 @@ export function useAssist() {
     try {
       const result = await runParallelAgentReview({
         ask: askFor('planner'),
+        askA: askFor('planner'),
+        askB: askFor('supervisor'),
         task: task.trim(),
         baseCommit: baseCommit.trim() || 'current checked-out HEAD — exact SHA must be confirmed by the host',
         signal: controller.signal,
         onState: (snapshot) => {
           setParallelAgentRun(snapshot);
-          try { localStorage.setItem('droid.parallel-agent-run.v1', JSON.stringify(snapshot).slice(0, 180_000)); } catch { /* UI state remains available for this session. */ }
+          try {
+            const serialized = JSON.stringify(snapshot);
+            if (serialized.length <= 180_000) localStorage.setItem('droid.parallel-agent-run.v1', serialized);
+          } catch { /* UI state remains available for this session. */ }
         },
         onCrossReference: (message) => {
           addLog('Cross-reference', `${message.from} → ${message.to}: ${message.content.slice(0, 220)}`, 'info');
