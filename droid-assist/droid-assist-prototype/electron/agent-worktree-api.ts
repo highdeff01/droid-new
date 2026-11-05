@@ -12,7 +12,7 @@ import type { AgentCheckResult, AgentDiffResult, AgentWorktreeSnapshot, AgentWor
 
 export interface NativeAgentWorktreeApi {
   chooseRepository(): Promise<string | null>;
-  prepare(repository: string, baseCommit: string): Promise<AgentWorktreeSnapshot>;
+  prepare(repository: string, baseCommit?: string): Promise<AgentWorktreeSnapshot>;
   applyPatch(id: AgentWorktreeId, patch: string): Promise<{ applied: boolean; check: string }>;
   runChecks(id: AgentWorktreeId): Promise<AgentCheckResult[]>;
   getDiff(id: AgentWorktreeId): Promise<AgentDiffResult>;
