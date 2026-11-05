@@ -95,7 +95,7 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
   return (
     <section style={{ borderTop: '1px solid var(--line, #334155)', marginTop: 16, paddingTop: 14 }}>
       <strong>Isolated branch execution</strong>
-      <p style={muted}>Select your local Droid-New repository. The desktop app creates two Git worktrees from its current HEAD. Apply a unified diff, run tests independently, inspect results, then explicitly commit and push. Nothing is auto-merged.</p>
+      <p style={muted}>Select your local Droid-New repository. The desktop app creates two Git worktrees from its current HEAD. Each stream installs its own dependencies, then runs tests and lint independently. Apply a unified diff, inspect results, then explicitly commit and push. Nothing is auto-merged.</p>
       <button type="button" style={button} onClick={() => void prepare()} disabled={!!busy.prepare || !!snapshot || Object.values(busy).some(Boolean)}>
         {busy.prepare ? 'Preparing worktrees…' : snapshot ? 'Two worktrees prepared' : 'Choose repository and prepare both branches'}
       </button>
@@ -120,7 +120,7 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
                   onClick={() => loadCandidatePatch(id)}>Load latest AI diff</button>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
                   <button type="button" style={button} disabled={running || !patches[id].trim()} onClick={() => void apply(id)}>Validate and apply patch</button>
-                  <button type="button" style={button} disabled={running} onClick={() => void test(id)}>{running ? 'Working…' : 'Run tests + lint'}</button>
+                  <button type="button" style={button} disabled={running} onClick={() => void test(id)}>{running ? 'Working…' : 'Install dependencies + run tests/lint'}</button>
                   <button type="button" style={button} disabled={running || !result?.length || result.some((item) => item.exitCode !== 0) || !diff?.changedFiles.length}
                     onClick={() => void commit(id)}>Commit reviewed changes</button>
                   <button type="button" style={{ ...button, background: '#475569' }} disabled={running || !result?.length || result.some((item) => item.exitCode !== 0) || !diff?.clean}
