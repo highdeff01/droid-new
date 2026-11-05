@@ -80,7 +80,7 @@ export class AgentWorktreeManager {
   }
 
   private async git(args: string[], cwd = this.root) {
-    return execFile('git', args, { cwd, timeout: this.timeoutMs, maxBuffer: this.maxBuffer, windowsHide: true });
+    return execFile('git', args, { cwd, timeout: this.timeoutMs, maxBuffer: this.maxBuffer, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
   }
 
   async inspectRepository(): Promise<{ root: string; branch: string; head: string }> {
