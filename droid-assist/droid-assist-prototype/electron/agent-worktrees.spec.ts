@@ -72,6 +72,17 @@ describe('AgentWorktreeManager', () => {
     await expect(f.manager.runChecks('stream-a', ['npm install' as never])).rejects.toThrow('Only these allowlisted checks');
   });
 
+  it('does not allow a branch commit until both test and lint pass', async () => {
+    const f = await fixture();
+    await f.manager.prepare(f.base);
+    await f.manager.applyPatch('stream-a', patch);
+    await expect(f.manager.commit('stream-a', ['README.md'], 'must not commit')).rejects.toThrow('Both npm test and npm run lint must pass');
+    const checks = await f.manager.runChecks('stream-a');
+    expect(checks.every((item) => item.exitCode === 0)).toBe(true);
+    const sha = await f.manager.commit('stream-a', ['README.md'], 'commit after checks');
+    expect(sha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
   it('rejects invalid base SHA and unsafe patch paths', async () => {
     const f = await fixture();
     await expect(f.manager.prepare('main')).rejects.toThrow('full 40-character');
