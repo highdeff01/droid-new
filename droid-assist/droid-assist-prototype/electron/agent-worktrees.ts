@@ -217,6 +217,12 @@ export class AgentWorktreeManager {
   /** Push is deliberately separate from commit and must be triggered by an explicit user action. */
   async push(id: AgentWorktreeId): Promise<string> {
     const worktree = this.getWorktree(id);
+    const current = await this.getDiff(id);
+    if (!current.clean) throw new Error('Commit all reviewed changes before pushing this branch.');
+    const head = (await this.git(['rev-parse', 'HEAD'], worktree.path)).stdout.trim();
+    if (head === worktree.baseCommit) throw new Error('There is no new commit to push.');
+    const passed = this.passedChecks.get(id);
+    if (!passed || CHECKS.some((command) => !passed.has(command))) throw new Error('Both npm test and npm run lint must pass before pushing.');
     await this.git(['push', '--set-upstream', 'origin', worktree.branch], worktree.path);
     return (await this.git(['rev-parse', 'HEAD'], worktree.path)).stdout.trim();
   }
