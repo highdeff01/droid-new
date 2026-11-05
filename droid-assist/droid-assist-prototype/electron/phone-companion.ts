@@ -59,9 +59,15 @@ export interface PhoneCompanion {
   stop(): void;
 }
 
-/** Whether a request carries the token (bearer header or `?token=`); anything goes when no token is set. */
+/**
+ * Whether a request carries the token (bearer header or `?token=`).
+ * Fail-closed: with no token set, nothing is authorized — the companion
+ * serves approvals and workflow triggers, so it follows the same rule as
+ * the main-bridge listener instead of sitting open on the local network.
+ * Set a phone companion token in Settings to let a phone in.
+ */
 function authorized(req: http.IncomingMessage, url: URL, token: string): boolean {
-  if (!token) return true;
+  if (!token) return false;
   return req.headers.authorization === `Bearer ${token}` || url.searchParams.get('token') === token;
 }
 

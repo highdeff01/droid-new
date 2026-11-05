@@ -17,8 +17,8 @@ export function PhoneSettings({ engine }: { engine: AssistEngine }) {
         <input type="number" min={1} max={65535} value={settings.phonePort} onChange={(e) => set({ phonePort: Number(e.target.value) })} aria-label="Phone companion port" />
       </label>
       <label className={styles.setting}>
-        <span>Token <small>optional; a phone must then open the link with it</small></span>
-        <input type="text" value={settings.phoneToken} onChange={(e) => set({ phoneToken: e.target.value })} aria-label="Phone companion token" placeholder="none" />
+        <span>Token <small>required; a phone must open the link with it — with none set, the companion refuses every request</small></span>
+        <input type="text" value={settings.phoneToken} onChange={(e) => set({ phoneToken: e.target.value })} aria-label="Phone companion token" placeholder="set a token" />
       </label>
       <span className={styles.row}>
         <button type="button" onClick={() => void start({ host: '0.0.0.0', port: settings.phonePort, token: settings.phoneToken })} disabled={!view.supported || view.running} aria-label="Start phone companion">Start</button>
