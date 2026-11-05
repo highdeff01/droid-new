@@ -202,7 +202,8 @@ function registerAgentWorktreeIpc() {
     const selected = agentRepositories.get(event.sender.id);
     if (!selected || path.resolve(repository) !== selected) throw new Error('Choose the local repository using the native folder picker first.');
     const manager = new AgentWorktreeManager({ rootDirectory: selected });
-    const snapshot = await manager.prepare(baseCommit);
+    const restored = await manager.restoreExisting();
+    const snapshot = restored ?? await manager.prepare(baseCommit);
     agentWorktrees.set(event.sender.id, manager);
     return snapshot;
   });
