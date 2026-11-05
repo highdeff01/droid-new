@@ -13,7 +13,7 @@ export const AGENT_WORKTREE_CHANNELS = {
 export interface NativeAgentWorktreeApi {
   chooseRepository(): Promise<string | null>;
   prepare(repository: string, baseCommit?: string): Promise<AgentWorktreeSnapshot>;
-  applyPatch(id: AgentWorktreeId, patch: string): Promise<{ applied: boolean; check: string }>;
+  applyPatch(id: AgentWorktreeId, patch: string): Promise<{ applied: boolean; check: string; artifactPath: string }>;
   runChecks(id: AgentWorktreeId): Promise<AgentCheckResult[]>;
   getDiff(id: AgentWorktreeId): Promise<AgentDiffResult>;
   commit(id: AgentWorktreeId, paths: string[], message: string): Promise<string>;
