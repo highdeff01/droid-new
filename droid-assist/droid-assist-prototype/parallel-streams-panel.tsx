@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
+import type { NativeAgentWorktreeApi } from './electron/agent-worktree-api.js';
+import type { AgentCheckResult, AgentDiffResult, AgentWorktreeId, AgentWorktreeSnapshot } from './electron/agent-worktrees.js';
 
 const panelStyle: React.CSSProperties = {
   border: '1px solid var(--line, #334155)',
@@ -19,6 +21,112 @@ const button: React.CSSProperties = {
   padding: '8px 12px', borderRadius: 8, border: '1px solid var(--line, #475569)',
   background: 'var(--accent, #0891b2)', color: '#fff', cursor: 'pointer',
 };
+
+function AgentWorktreeExecutionPanel() {
+  const native = (window as Window & { droidAgentWorktrees?: NativeAgentWorktreeApi }).droidAgentWorktrees;
+  const [repository, setRepository] = useState('');
+  const [snapshot, setSnapshot] = useState<AgentWorktreeSnapshot | null>(null);
+  const [patches, setPatches] = useState<Record<AgentWorktreeId, string>>({ 'stream-a': '', 'stream-b': '' });
+  const [checks, setChecks] = useState<Partial<Record<AgentWorktreeId, AgentCheckResult[]>>>({});
+  const [diffs, setDiffs] = useState<Partial<Record<AgentWorktreeId, AgentDiffResult>>>({});
+  const [busy, setBusy] = useState<Partial<Record<AgentWorktreeId | 'prepare', boolean>>>({});
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  if (!native) return <p style={muted}>Branch execution is available in the Electron desktop build. The browser build can still generate and cross-review both proposals.</p>;
+
+  const withBusy = async (key: AgentWorktreeId | 'prepare', action: () => Promise<void>) => {
+    setError(''); setMessage(''); setBusy((old) => ({ ...old, [key]: true }));
+    try { await action(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setBusy((old) => ({ ...old, [key]: false })); }
+  };
+  const prepare = () => withBusy('prepare', async () => {
+    const selected = await native.chooseRepository();
+    if (!selected) return;
+    setRepository(selected);
+    const result = await native.prepare(selected);
+    setSnapshot(result);
+    setChecks({});
+    setDiffs({});
+    setMessage(`Prepared two isolated worktrees from ${result.baseCommit.slice(0, 12)}. The original checkout was not modified.`);
+  });
+  const apply = (id: AgentWorktreeId) => withBusy(id, async () => {
+    const result = await native.applyPatch(id, patches[id]);
+    setMessage(`${id}: patch applied after validation (${result.check}).`);
+    const diff = await native.getDiff(id);
+    setDiffs((old) => ({ ...old, [id]: diff }));
+    setChecks((old) => ({ ...old, [id]: undefined }));
+  });
+  const test = (id: AgentWorktreeId) => withBusy(id, async () => {
+    const result = await native.runChecks(id);
+    setChecks((old) => ({ ...old, [id]: result }));
+    const diff = await native.getDiff(id);
+    setDiffs((old) => ({ ...old, [id]: diff }));
+    setMessage(`${id}: ${result.filter((item) => item.exitCode === 0).length}/${result.length} checks passed.`);
+  });
+  const commit = (id: AgentWorktreeId) => withBusy(id, async () => {
+    const result = checks[id];
+    if (!result?.length || result.some((item) => item.exitCode !== 0)) throw new Error('Run and pass all checks for this stream before committing.');
+    const diff = await native.getDiff(id);
+    if (!diff.changedFiles.length) throw new Error('There are no changed files to commit.');
+    const sha = await native.commit(id, diff.changedFiles, `Droid agent: reviewed ${id} candidate`);
+    setMessage(`${id}: committed ${sha.slice(0, 12)}. Push remains a separate explicit action.`);
+    const latest = await native.getDiff(id);
+    setDiffs((old) => ({ ...old, [id]: latest }));
+  });
+  const push = (id: AgentWorktreeId) => withBusy(id, async () => {
+    const sha = await native.push(id);
+    setMessage(`${id}: pushed ${sha.slice(0, 12)} to origin. No merge was performed.`);
+  });
+  return (
+    <section style={{ borderTop: '1px solid var(--line, #334155)', marginTop: 16, paddingTop: 14 }}>
+      <strong>Isolated branch execution</strong>
+      <p style={muted}>Select your local Droid-New repository. The desktop app creates two Git worktrees from its current HEAD. Apply a unified diff, run tests independently, inspect results, then explicitly commit and push. Nothing is auto-merged.</p>
+      <button type="button" style={button} onClick={() => void prepare()} disabled={!!busy.prepare || Object.values(busy).some(Boolean)}>
+        {busy.prepare ? 'Preparing worktrees…' : snapshot ? 'Prepare a fresh pair of worktrees' : 'Choose repository and prepare both branches'}
+      </button>
+      {repository && <p style={muted}>Repository: {repository}</p>}
+      {snapshot && <p style={muted}>Shared base: {snapshot.baseCommit}</p>}
+      {error && <p role="alert" style={{ color: '#fca5a5', fontSize: 12 }}>{error}</p>}
+      {message && <p role="status" style={{ color: '#86efac', fontSize: 12 }}>{message}</p>}
+      {snapshot && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 10, marginTop: 12 }}>
+          {(['stream-a', 'stream-b'] as const).map((id) => {
+            const diff = diffs[id];
+            const result = checks[id];
+            const running = !!busy[id];
+            return (
+              <article key={id} style={{ border: '1px solid var(--line, #334155)', borderRadius: 9, padding: 10, minWidth: 0 }}>
+                <strong>{id === 'stream-a' ? 'A · Implementation branch' : 'B · Alternative / test branch'}</strong>
+                <div style={muted}>{snapshot.worktrees[id].branch}</div>
+                <textarea rows={5} value={patches[id]} onChange={(event) => setPatches((old) => ({ ...old, [id]: event.target.value }))}
+                  placeholder="Paste a complete unified Git diff for this branch…" style={{ ...field, marginTop: 8 }} disabled={running} />
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                  <button type="button" style={button} disabled={running || !patches[id].trim()} onClick={() => void apply(id)}>Validate and apply patch</button>
+                  <button type="button" style={button} disabled={running} onClick={() => void test(id)}>{running ? 'Working…' : 'Run tests + lint'}</button>
+                  <button type="button" style={button} disabled={running || !result?.length || result.some((item) => item.exitCode !== 0) || !diff?.changedFiles.length}
+                    onClick={() => void commit(id)}>Commit reviewed changes</button>
+                  <button type="button" style={{ ...button, background: '#475569' }} disabled={running || !result?.length || result.some((item) => item.exitCode !== 0) || !diff?.clean}
+                    onClick={() => void push(id)}>Push branch</button>
+                </div>
+                {result?.map((item) => (
+                  <div key={item.command} style={{ borderTop: '1px solid var(--line, #334155)', marginTop: 8, paddingTop: 7 }}>
+                    <div style={{ fontSize: 12, color: item.exitCode === 0 ? '#86efac' : '#fca5a5' }}>{item.command}: {item.exitCode === 0 ? 'passed' : `failed (exit ${item.exitCode})`}</div>
+                    <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 150, overflow: 'auto', fontSize: 10 }}>{[item.stdout, item.stderr].filter(Boolean).join('\n')}</pre>
+                  </div>
+                ))}
+                {diff && <details style={{ marginTop: 8 }}>
+                  <summary style={{ cursor: 'pointer', fontSize: 12 }}>Diff ({diff.changedFiles.length} files)</summary>
+                  <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 260, overflow: 'auto', fontSize: 10 }}>{diff.diff || 'No tracked diff.'}</pre>
+                </details>}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
 
 export function ParallelStreamsPanel({ engine }: { engine: AssistEngine }) {
   const [task, setTask] = useState('');
@@ -105,5 +213,6 @@ export function ParallelStreamsPanel({ engine }: { engine: AssistEngine }) {
         </p>
       )}
     </section>
+      <AgentWorktreeExecutionPanel />
   );
 }
