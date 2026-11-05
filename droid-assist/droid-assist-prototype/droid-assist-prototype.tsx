@@ -84,6 +84,19 @@ function AssistScreen() {
           </svg>
           <span>Droid Assist <small>accessibility · screen AI · automation</small></span>
         </div>
+        <div className={styles.headerControls} aria-label="Physical input authority">
+          <span role="status" aria-live="polite">
+            Input: {engine.getInputAuthority().owner} · {engine.getInputAuthority().paused ? 'paused' : 'active'}
+          </span>
+          {engine.getInputAuthority().owner !== 'user' ? (
+            <button type="button" onClick={engine.takeUserInputControl}>Take PC control</button>
+          ) : (
+            <button type="button" onClick={() => engine.resumeAutomatedInput('droid-new')}>Return to Droid-New</button>
+          )}
+          <button type="button" onClick={() => engine.setInputPaused(!engine.getInputAuthority().paused)}>
+            {engine.getInputAuthority().paused ? 'Resume input' : 'Pause automation'}
+          </button>
+        </div>
       </header>
       <NotificationStack engine={engine} />
       <main className={styles.main}>
