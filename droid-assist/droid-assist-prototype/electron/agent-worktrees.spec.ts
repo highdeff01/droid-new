@@ -22,7 +22,7 @@ async function fixture() {
   await git(['config', 'user.email', 'test@example.com'], root);
   await fs.writeFile(path.join(root, 'README.md'), 'base\n');
   await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
-    private: true,
+    name: 'fixture', version: '1.0.0', private: true,
     scripts: { test: "node -e \"console.log('tests passed')\"", lint: "node -e \"console.log('lint passed')\"" },
   }));
   await fs.writeFile(path.join(root, 'package-lock.json'), JSON.stringify({ name: 'fixture', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'fixture', version: '1.0.0' } } }));
