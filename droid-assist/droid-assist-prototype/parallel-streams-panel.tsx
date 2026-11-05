@@ -57,6 +57,19 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
     setError('');
     setMessage(`Loaded ${id} diff. Review it before applying.`);
   };
+  const loadPeerReviewPatch = (id: AgentWorktreeId) => {
+    const peerMessage = [...(run?.crossReferences ?? [])].reverse()
+      .filter((item) => item.to === id)
+      .map((item) => ({ item, patch: extractUnifiedGitDiff(item.content) }))
+      .find((candidate) => candidate.patch !== null);
+    if (!peerMessage?.patch) {
+      setError(`No complete peer-stream diff was found for ${id}. The review may contain findings without a proposed patch.`);
+      return;
+    }
+    setPatches((old) => ({ ...old, [id]: peerMessage.patch! }));
+    setError('');
+    setMessage(`Loaded a cross-stream candidate from ${peerMessage.item.from} into ${id}. It remains an untrusted proposal until reviewed and tested.`);
+  };
   const prepare = () => withBusy('prepare', async () => {
     const selected = await native.chooseRepository();
     if (!selected) return;
@@ -144,6 +157,9 @@ function AgentWorktreeExecutionPanel({ run }: { run: ParallelAgentRun | null }) 
                 <button type="button" style={{ ...button, marginTop: 7, background: 'transparent', color: 'var(--text, #e2e8f0)' }}
                   disabled={running || !run?.streams[id].attempts.some((attempt) => attempt.status === 'completed')}
                   onClick={() => loadCandidatePatch(id)}>Load latest AI diff</button>
+                <button type="button" style={{ ...button, marginTop: 7, marginLeft: 6, background: 'transparent', color: 'var(--text, #e2e8f0)' }}
+                  disabled={running || !run?.crossReferences.some((item) => item.to === id)}
+                  onClick={() => loadPeerReviewPatch(id)}>Load peer-stream diff</button>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
                   <button type="button" style={button} disabled={running || !patches[id].trim()} onClick={() => void apply(id)}>Validate and apply patch</button>
                   <button type="button" style={button} disabled={running} onClick={() => void test(id)}>{running ? 'Working…' : result?.some((item) => item.exitCode !== 0) ? 'Retry failed checks' : 'Install dependencies + run tests/lint'}</button>
