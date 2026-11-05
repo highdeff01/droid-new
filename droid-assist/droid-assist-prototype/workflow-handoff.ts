@@ -75,14 +75,15 @@ export function createWorkflowHandoff(
   if (!safeId) throw new Error('A workflow ID is required for handoff');
   if (!Array.isArray(steps) || steps.length > 500) throw new Error('Workflow handoff supports at most 500 steps');
   const safeController = cleanText(fromController, 80).trim() || 'unknown';
-  const currentIndex = Math.max(0, steps.findIndex((step) => step.verifiedAt === undefined));
+  const firstPending = steps.findIndex((step) => step.verifiedAt === undefined);
+  const currentIndex = firstPending < 0 ? steps.length : firstPending;
   return {
     version: WORKFLOW_HANDOFF_VERSION,
     workflowId: safeId,
     goal: cleanText(goal, 2_000),
     createdAt: Number.isFinite(now) ? now : Date.now(),
     fromController: safeController,
-    currentIndex: currentIndex < 0 ? steps.length : currentIndex,
+    currentIndex,
     steps: steps.map((step) => {
       const evidence = step.afterFrame ?? step.shot;
       return {
