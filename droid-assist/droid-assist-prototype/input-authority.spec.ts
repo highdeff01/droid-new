@@ -198,4 +198,21 @@ describe('physical input authority', () => {
     expect(a.snapshot()).toMatchObject({ owner: 'droid-new', paused: true });
   });
 
+  it('supports exclusive user ownership and explicit return to automation', async () => {
+    const a = createInputAuthority();
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const active = a.run('droid-new', async lease => { started(); await gate; lease.assertCurrent(); });
+    await ready;
+    a.changeOwner('user', 'user took control');
+    expect(a.snapshot().owner).toBe('user');
+    await expect(a.run('droid-new', () => 'stale')).rejects.toBeInstanceOf(InputLeaseError);
+    release();
+    await expect(active).rejects.toBeInstanceOf(InputLeaseError);
+    a.changeOwner('droid-main', 'user returned control');
+    await expect(a.run('droid-main', () => 'automation resumed')).resolves.toBe('automation resumed');
+  });
+
 });
