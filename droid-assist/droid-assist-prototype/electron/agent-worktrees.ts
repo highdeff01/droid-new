@@ -271,9 +271,15 @@ export class AgentWorktreeManager {
     for (const value of paths) if (!safeRelativePath(value)) throw new Error(`Unsafe commit path rejected: ${value}`);
     const changed = new Set((await this.getDiff(id)).changedFiles);
     if (paths.some((value) => !changed.has(value))) throw new Error('Commit paths must be changed files in this worktree diff.');
-    await this.git(['add', '--', ...paths], worktree.path);
-    await this.git(['commit', '-m', message], worktree.path);
-    const committed = (await this.git(['rev-parse', 'HEAD'], worktree.path)).stdout.trim();
+    let committed: string;
+    try {
+      await this.git(['add', '--', ...paths], worktree.path);
+      await this.git(['commit', '-m', message], worktree.path);
+      committed = (await this.git(['rev-parse', 'HEAD'], worktree.path)).stdout.trim();
+    } catch (error) {
+      await this.saveArtifact(id, 'commit-failure.json', JSON.stringify({ id, message, paths, error: errorText(error), createdAt: new Date().toISOString() }, null, 2)).catch(() => undefined);
+      throw new Error(`${errorText(error)}. Commit failure details were saved in the stream artifact folder.`);
+    }
     this.committedHeads.set(id, committed);
     await this.saveArtifact(id, 'commit.json', JSON.stringify({ id, committed, message, paths, createdAt: new Date().toISOString() }, null, 2));
     return committed;
@@ -289,8 +295,14 @@ export class AgentWorktreeManager {
     if (head !== this.committedHeads.get(id)) throw new Error('The branch head differs from the reviewed commit. Review and test the latest changes before pushing.');
     const passed = this.passedChecks.get(id);
     if (!passed || CHECKS.some((command) => !passed.has(command))) throw new Error('npm ci, npm test, and npm run lint must all pass before pushing.');
-    await this.git(['push', '--set-upstream', 'origin', worktree.branch], worktree.path);
-    const pushed = (await this.git(['rev-parse', 'HEAD'], worktree.path)).stdout.trim();
+    let pushed: string;
+    try {
+      await this.git(['push', '--set-upstream', 'origin', worktree.branch], worktree.path);
+      pushed = (await this.git(['rev-parse', 'HEAD'], worktree.path)).stdout.trim();
+    } catch (error) {
+      await this.saveArtifact(id, 'push-failure.json', JSON.stringify({ id, branch: worktree.branch, error: errorText(error), createdAt: new Date().toISOString() }, null, 2)).catch(() => undefined);
+      throw new Error(`${errorText(error)}. Push failure details were saved in the stream artifact folder.`);
+    }
     await this.saveArtifact(id, 'push.json', JSON.stringify({ id, branch: worktree.branch, pushed, createdAt: new Date().toISOString() }, null, 2));
     return pushed;
   }
