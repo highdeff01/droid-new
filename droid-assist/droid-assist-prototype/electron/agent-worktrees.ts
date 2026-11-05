@@ -48,7 +48,7 @@ export interface AgentWorktreeManagerOptions {
 const SHA = /^[0-9a-f]{40}$/i;
 const PATCH_LIMIT = 1_000_000;
 const OUTPUT_LIMIT = 2_000_000;
-const CHECKS = ['npm test', 'npm run lint'] as const;
+const CHECKS = ['npm ci', 'npm test', 'npm run lint'] as const;
 type CheckName = typeof CHECKS[number];
 
 function errorText(error: unknown): string {
@@ -213,7 +213,7 @@ export class AgentWorktreeManager {
     const worktree = this.getWorktree(id);
     if (!message.trim() || message.length > 200) throw new Error('Commit message must be 1–200 characters.');
     const passed = this.passedChecks.get(id);
-    if (!passed || CHECKS.some((command) => !passed.has(command))) throw new Error('Both npm test and npm run lint must pass after the latest patch before committing.');
+    if (!passed || CHECKS.some((command) => !passed.has(command))) throw new Error('npm ci, npm test, and npm run lint must all pass after the latest patch before committing.');
     const currentDiff = await this.getDiff(id);
     const currentStatus = (await this.git(['status', '--porcelain=v1'], worktree.path)).stdout;
     const currentFingerprint = createHash('sha256').update(currentDiff.diff).update(String.fromCharCode(0)).update(currentStatus).digest('hex');
@@ -238,7 +238,7 @@ export class AgentWorktreeManager {
     if (head === worktree.baseCommit) throw new Error('There is no new commit to push.');
     if (head !== this.committedHeads.get(id)) throw new Error('The branch head differs from the reviewed commit. Review and test the latest changes before pushing.');
     const passed = this.passedChecks.get(id);
-    if (!passed || CHECKS.some((command) => !passed.has(command))) throw new Error('Both npm test and npm run lint must pass before pushing.');
+    if (!passed || CHECKS.some((command) => !passed.has(command))) throw new Error('npm ci, npm test, and npm run lint must all pass before pushing.');
     await this.git(['push', '--set-upstream', 'origin', worktree.branch], worktree.path);
     return (await this.git(['rev-parse', 'HEAD'], worktree.path)).stdout.trim();
   }
