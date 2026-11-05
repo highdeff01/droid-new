@@ -95,6 +95,33 @@ describe('parallel AI agent runner', () => {
     expect(run.status).toBe('needs-verification');
   });
 
+  it('keeps the surviving stream alive and asks the failed stream to rescue itself from peer findings', async () => {
+    const seenA: string[] = [];
+    const askA: AskFn = async (request) => {
+      const method = request.context?.find((line) => line.startsWith('METHOD:')) ?? '';
+      seenA.push(method);
+      if (method.includes('primary-implementation') || method.includes('alternative-minimal-implementation')) {
+        throw new Error('Stream A endpoint unavailable');
+      }
+      return reply('Stream A recovered from peer review with a minimal candidate.');
+    };
+    const askB: AskFn = async () => reply('Stream B independent test plan and working alternative.');
+    const run = await runParallelAgentReview({
+      ask: async () => reply('unused'),
+      askA,
+      askB,
+      task: 'Recover one failed stream',
+      baseCommit: 'base',
+      maxRetries: 0,
+    });
+    expect(run.streams['stream-a'].attempts.some((attempt) => attempt.status === 'failed')).toBe(true);
+    expect(seenA.some((method) => method.includes('cross-reviewed-revision'))).toBe(true);
+    expect(run.crossReferences.some((item) => item.content.includes('INITIAL ATTEMPT FAILURE'))).toBe(true);
+    expect(run.streams['stream-a'].status).toBe('needs-test');
+    expect(run.streams['stream-b'].status).toBe('needs-execution');
+    expect(run.status).toBe('needs-verification');
+  });
+
   it('does not report completion as verified test success', async () => {
     const ask: AskFn = async () => reply('A complete proposal, but no tests were executed.');
     const run = await runParallelAgentReview({ ask, task: 'No false green', baseCommit: 'base' });
