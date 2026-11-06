@@ -1,0 +1,21 @@
+{
+  \"name\": \"typescript-expert\",
+  \"description\": \"Specialized TypeScript coding agent\",
+  \"type\": \"typescript\",
+  \"settings\": {
+    \"maxTokens\": 16384,
+    \"temperature\": 0.5,
+    \"strictTypeChecking\": true,
+    \"enforceDefinitions\": true,
+    \"checkGenerics\": true,
+    \"checkInterfaces\": true,
+    \"checkTypes\": true
+  },
+  \"capabilities\": [
+    \"typescript\",
+    \"type-inference\",
+    \"generics\",
+    \"interfaces\",
+    \"modules\"
+  ]
+}

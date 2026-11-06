@@ -1,0 +1,14 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Lint Integration UI",
+      "trigger": "PostFileCreate",
+      "description": "Verify Integration UI components created",
+      "action": {
+        "type": "command",
+        "command": "cd .\\src\\automation\\complete-automation-engine\\ && if (Test-Path \".\\InlineHabitSuggestion.tsx\" -and Test-Path \".\\PackCreationAfterRecording.tsx\" -and Test-Path \".\\PackHabitConfidenceDisplay.tsx\" -and Test-Path \".\\AnalyticsDashboard.tsx\" -and Test-Path \".\\IntegrationUIElements.tsx\") { Write-Output \"All 5 Integration UI files created successfully\" } else { Write-Output \"Some files missing\" }"
+      }
+    }
+  ]
+}
