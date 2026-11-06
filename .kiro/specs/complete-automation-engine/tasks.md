@@ -156,35 +156,35 @@ This implementation plan organizes the 58 production-grade tasks into 10 phases,
 
 ## Phase 4: Packs System - Deployment and Sharing (Tasks 19-23)
 
-- [-] 4.1 Implement Pack deployment executor
+- [x] 4.1 Implement Pack deployment executor
   - Validate context compatibility before deployment
   - Execute workflows in configured order
   - Pass execution context through workflow chain
   - Handle failures per policy (stop/continue/rollback)
   - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5_
 
-- [-] 4.2 Implement Coordinate translation for deployment
+- [x] 4.2 Implement Coordinate translation for deployment
   - Adapt workflow coordinates to different display resolutions
   - Handle multi-display scenarios
   - Support cross-platform coordinate adaptation
   - Apply adaptive scaling when displays differ significantly
   - _Requirements: 9.6, 9.7, 9.8, 42.1, 42.2_
 
-- [~] 4.3 Implement Pack execution metrics collection
+- [x] 4.3 Implement Pack execution metrics collection
   - Record start time, end time, total duration
   - Track steps completed and failures
   - Count element not-found errors
   - Record coordinate adaptation counts
   - _Requirements: 9.5, 25.5_
 
-- [~] 4.4 Implement Pack marketplace publishing
+- [x] 4.4 Implement Pack marketplace publishing
   - Validate metadata completeness for publishing
   - Publish pack to marketplace
   - Make pack discoverable by category and tags
   - Include rating and download tracking
   - _Requirements: 10.5, 10.6, 10.7, 10.8_
 
-- [~] 4.5 Implement Pack update notifications
+- [x] 4.5 Implement Pack update notifications
   - Detect when pack has newer version available
   - Notify user with version details and changelog
   - Support in-place updating with migration guidance
@@ -193,49 +193,49 @@ This implementation plan organizes the 58 production-grade tasks into 10 phases,
 
 ## Phase 5: Learning & Habits Engine (Tasks 24-30)
 
-- [~] 5.1 Implement Habit extraction from workflows
+- [x] 5.1 Implement Habit extraction from workflows
   - Identify repeatable elements and patterns in workflows
   - Normalize action sequences to find common subsequences
   - Extract context requirements and conditions
   - Assign initial confidence based on workflow success
   - _Requirements: 13.1, 13.2, 13.3, 13.4_
 
-- [~] 5.2 Implement Habit condition matching
+- [x] 5.2 Implement Habit condition matching
   - Implement element-state matcher (selector-based)
   - Implement context-match matcher (pattern matching)
   - Implement time-pattern matcher (day/time conditions)
   - Implement sequence-history matcher (action history)
   - _Requirements: 14.1, 14.2, 14.3_
 
-- [~] 5.3 Implement Habit confidence scoring
+- [x] 5.3 Implement Habit confidence scoring
   - Initialize confidence from success rate
   - Track execution history (success/failure/dismissal)
   - Calculate confidence breakdown (success rate, frequency, recency, feedback)
   - Apply recency decay (30-day half-life)
   - _Requirements: 15.1, 15.2, 15.3, 15.4, 15.5, 15.6, 15.7, 15.8_
 
-- [~] 5.4 Implement Habit suggestion engine
+- [x] 5.4 Implement Habit suggestion engine
   - Match current context against all habits' conditions
   - Calculate confidence for each matched habit
   - Rank suggestions by confidence score
   - Return top N suggestions (default 5)
   - _Requirements: 14.1, 14.2, 14.3, 14.4, 14.5, 14.6, 14.7_
 
-- [~] 5.5 Implement Habit user feedback handling
+- [x] 5.5 Implement Habit user feedback handling
   - Record when suggestion is accepted/dismissed
   - Track habit execution with success/failure
   - Record user corrections to habit actions
   - Update confidence based on feedback
   - _Requirements: 16.1, 16.2, 16.3, 16.4, 16.5, 16.6, 16.7_
 
-- [~] 5.6 Implement Habit merging and deduplication
+- [x] 5.6 Implement Habit merging and deduplication
   - Detect similar habits using pattern similarity
   - Merge similar habits with confidence averaging
   - Create habit variants for context-specific variations
   - Preserve execution history across merges
   - _Requirements: 13.5_
 
-- [~] 5.7 Implement Habit discovery and search
+- [x] 5.7 Implement Habit discovery and search
   - Search habits by target element
   - Filter by success rate, frequency, recency
   - Group related habits by context
@@ -244,35 +244,35 @@ This implementation plan organizes the 58 production-grade tasks into 10 phases,
 
 ## Phase 6: Integration & Event Messaging (Tasks 31-35)
 
-- [~] 6.1 Implement Event dispatcher and message bus
+- [x] 6.1 Implement Event dispatcher and message bus
   - Create central event dispatcher with multiple subscriber support
   - Implement event emission for all 10+ event types
   - Support event filtering and selective subscription
   - Maintain event audit trail for debugging
   - _Requirements: 22.1, 22.2, 22.3, 22.4, 22.5, 22.6, 22.7, 22.8, 22.9, 22.10_
 
-- [~] 6.2 Implement Recording→Workflow integration
+- [-] 6.2 Implement Recording→Workflow integration
   - Emit WorkflowCreatedEvent when recording completes
   - Preserve all metadata in workflow conversion
   - Link workflow back to source recording
   - Make workflow immediately available for packing
   - _Requirements: 18.1, 18.2, 18.3, 18.4, 18.5_
 
-- [~] 6.3 Implement Workflow→Pack integration
+- [-] 6.3 Implement Workflow→Pack integration
   - Validate workflow compatibility when adding to pack
   - Emit PackModifiedEvent when workflows added/removed
   - Update pack version and metadata
   - Support workflow reference integrity checks
   - _Requirements: 19.1, 19.2, 19.3, 19.4, 19.5_
 
-- [~] 6.4 Implement Pack execution feedback loop
+- [-] 6.4 Implement Pack execution feedback loop
   - Consume ExecutionCompleteEvent from pack deployments
   - Record execution metrics and results
   - Identify workflows to extract habits from
   - Emit ExecutionCompleteEvent with habit extraction list
   - _Requirements: 20.1, 20.2, 20.3, 20.4, 20.5_
 
-- [~] 6.5 Implement Habit→Pack suggestion integration
+- [-] 6.5 Implement Habit→Pack suggestion integration
   - Suggest relevant packs when habits match context
   - Show which habits drove pack suggestion
   - Allow one-click deployment of suggested packs
@@ -281,28 +281,28 @@ This implementation plan organizes the 58 production-grade tasks into 10 phases,
 
 ## Phase 7: Repository Layer & Persistence (Tasks 36-39)
 
-- [~] 7.1 Implement Recording repository
+- [x] 7.1 Implement Recording repository
   - Save/load Recording objects with full metadata
   - Index by author, date, context for fast queries
   - Support filtering by date range and context
   - Implement deletion with secure removal
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 25.1_
 
-- [~] 7.2 Implement Workflow repository
+- [x] 7.2 Implement Workflow repository
   - Save/load Workflow objects with execution history
   - Maintain foreign key to Recording (when applicable)
   - Index by tags and creation date
   - Update execution history efficiently
   - _Requirements: 2.1, 2.2, 25.2_
 
-- [~] 7.3 Implement Pack and Habit repositories
+- [x] 7.3 Implement Pack and Habit repositories
   - Save/load Pack objects with version history
   - Implement versioning with snapshots
   - Save/load Habit objects with execution history
   - Support confidence score updates
   - _Requirements: 7.1, 7.2, 12.1, 12.6, 12.7, 25.3, 25.4_
 
-- [~] 7.4 Implement Execution repository and archiving
+- [-] 7.4 Implement Execution repository and archiving
   - Save workflow and pack execution records
   - Query execution history with filtering
   - Generate execution statistics and reports
@@ -311,21 +311,21 @@ This implementation plan organizes the 58 production-grade tasks into 10 phases,
 
 ## Phase 8: UI Hooks and Event Integration (Tasks 40-44)
 
-- [~] 8.1 Implement Recording UI controls
+- [-] 8.1 Implement Recording UI controls
   - Recording toolbar: start/stop/pause/resume buttons
   - Visual indicator during active recording
   - Step preview after recording completes
   - Drag-and-drop interface for step reordering
   - _Requirements: 31.1, 31.2, 31.3, 31.4, 31.5, 31.6_
 
-- [~] 8.2 Implement Packs UI interface
+- [-] 8.2 Implement Packs UI interface
   - Display pack list with metadata (name, version, author, stats)
   - Implement real-time search filtering
   - Show pack details (workflows, version history, execution stats)
   - Deploy button with progress indicator
   - _Requirements: 32.1, 32.2, 32.3, 32.4, 32.5_
 
-- [~] 8.3 Implement Habits UI interface
+- [-] 8.3 Implement Habits UI interface
   - Display suggested habits based on current context
   - Show confidence score as visual percentage indicator
   - Display context requirements on hover
@@ -333,7 +333,7 @@ This implementation plan organizes the 58 production-grade tasks into 10 phases,
   - Browse habit history with execution stats
   - _Requirements: 33.1, 33.2, 33.3, 33.4, 33.5, 33.6_
 
-- [~] 8.4 Implement Integration UI elements
+- [-] 8.4 Implement Integration UI elements
   - Show inline habit suggestions when matching context
   - Offer pack creation after successful workflow recording
   - Display extracted habits with confidence in pack results
@@ -342,21 +342,21 @@ This implementation plan organizes the 58 production-grade tasks into 10 phases,
 
 ## Phase 9: Performance Optimization (Tasks 45-47)
 
-- [~] 9.1 Implement caching layer
+- [-] 9.1 Implement caching layer
   - LRU cache for Recording, Workflow, Pack, Habit objects
   - Cache invalidation triggers (pack deployed, habit updated, etc.)
   - Suggestion result caching with TTL
   - Query result caching for search operations
   - _Requirements: 35.3, 36.1, 36.2, 36.3, 36.4_
 
-- [~] 9.2 Implement query indexing and optimization
+- [-] 9.2 Implement query indexing and optimization
   - Create indexes on author, date, tags, context for fast queries
   - Optimize habitat similarity search with spatial indexing
   - Implement pagination for large result sets
   - Add query result limiting and timeouts
   - _Requirements: 37.1, 37.2, 37.3, 37.4_
 
-- [~] 9.3 Implement playback performance optimization
+- [-] 9.3 Implement playback performance optimization
   - Batch coordinate translations for multi-step workflows
   - Optimize element selector matching
   - Pre-warm element lookup tables
@@ -365,21 +365,21 @@ This implementation plan organizes the 58 production-grade tasks into 10 phases,
 
 ## Phase 10: Testing & Verification (Tasks 48-50)
 
-- [~] 10.1 Implement coordinate normalization/denormalization tests
+- [-] 10.1 Implement coordinate normalization/denormalization tests
   - Property-based tests for normalization round-trips
   - Multi-display coordinate adaptation tests
   - Verify clamping to [0, 1] range
   - Test coordinate translation with various DPI values
   - _Requirements: 1.6, 2.3, 9.6, 9.7, 9.8_
 
-- [~] 10.2 Implement integration tests for complete workflows
+- [-] 10.2 Implement integration tests for complete workflows
   - Record → Workflow → Pack → Deploy → Habit flow
   - Verify event emission at each step
   - Test data lineage tracking
   - Validate context propagation through execution chain
   - _Requirements: 18.1, 19.1, 20.1, 21.1, 23.1, 23.2, 23.3, 23.4, 23.5, 23.6_
 
-- [~] 10.3 Implement habit learning and confidence tests
+- [-] 10.3 Implement habit learning and confidence tests
   - Test confidence scoring algorithm with various inputs
   - Verify trend calculation (improving/stable/declining)
   - Test habit merging with duplicate detection
@@ -388,14 +388,14 @@ This implementation plan organizes the 58 production-grade tasks into 10 phases,
 
 ## Additional Features (Tasks 51-58)
 
-- [~] 11.1 Implement Recording export/import with format support
+- [-] 11.1 Implement Recording export/import with format support
   - Export Recording to JSON with all metadata
   - Support selective metadata redaction for sharing
   - Import Recording from shared JSON format
   - Validate format integrity before import
   - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7_
 
-- [~] 11.2 Implement Workflow editing capabilities
+- [-] 11.2 Implement Workflow editing capabilities
   - Delete steps from workflow
   - Insert pause steps
   - Adjust coordinates for steps
@@ -404,35 +404,35 @@ This implementation plan organizes the 58 production-grade tasks into 10 phases,
   - Mark steps as optional
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8_
 
-- [~] 11.3 Implement conditional workflows and branching
+- [-] 11.3 Implement conditional workflows and branching
   - Support WHEN conditions (element-exists, element-value, screen-state)
   - Execute different branches based on conditions
   - Support nested conditional branching
   - Extract conditional habits for each branch variant
   - _Requirements: 45.1, 45.2, 45.3, 45.4_
 
-- [~] 11.4 Implement workflow composition and decomposition
+- [-] 11.4 Implement workflow composition and decomposition
   - Support parallel and sequential execution policies
   - Implement data passing between composed workflows
   - Extract composed habits from successful workflows
   - Support decomposition of workflows into components
   - _Requirements: 46.1, 46.2, 46.3, 46.4_
 
-- [~] 11.5 Implement dry-run and test mode
+- [-] 11.5 Implement dry-run and test mode
   - Support dry-run execution without side effects
   - Show predicted results for each step
   - Provide confidence scoring for dry-run success
   - Require confirmation before live execution of risky workflows
   - _Requirements: 51.1, 51.2, 51.3, 51.4_
 
-- [~] 11.6 Implement undo/rollback for executions
+- [-] 11.6 Implement undo/rollback for executions
   - Support undoing completed pack execution steps
   - Reverse state changes in reverse order
   - Allow retry from failure point or from start
   - Support immediate rollback on deployment errors
   - _Requirements: 49.1, 49.2, 49.3, 50.1, 50.2, 50.3, 50.4_
 
-- [~] 11.7 Implement habit analytics and diagnostics
+- [-] 11.7 Implement habit analytics and diagnostics
   - Generate human-readable habit descriptions
   - Provide confidence explanation with breakdown
   - Show habit execution trends over time
