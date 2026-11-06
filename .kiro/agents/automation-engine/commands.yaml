@@ -1,0 +1,19 @@
+commands:
+  - name: start_task_6.2
+    description: Start task 6.2 - Recording to Workflow integration
+    tool: implement_recording_workflow_integration
+  - name: start_task_6.3
+    description: Start task 6.3 - Workflow to Pack integration
+    tool: implement_workflow_pack_integration
+  - name: start_task_6.4
+    description: Start task 6.4 - Pack execution feedback loop
+    tool: implement_pack_execution_feedback
+  - name: start_task_6.5
+    description: Start task 6.5 - Habit to Pack suggestion integration
+    tool: implement_habit_pack_integration
+  - name: start_task_7.4
+    description: Start task 7.4 - Execution repository and archiving
+    tool: implement_execution_repository
+  - name: start_task_10.2
+    description: Start task 10.2 - Integration tests
+    tool: implement_integration_tests

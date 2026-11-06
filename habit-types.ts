@@ -644,3 +644,55 @@ export function calculateRecencyScore(lastExecutedAt?: string, now: Date = new D
   // After 60 days: 25
   return 100 * Math.pow(0.5, daysSince / 30);
 }
+
+/**
+ * Condition type for habit matching.
+ */
+export type ConditionType = 'element-state' | 'context-match' | 'time-pattern' | 'sequence-history';
+
+/**
+ * A condition for habit matching.
+ */
+export interface HabitCondition {
+  /** Type of condition */
+  type: ConditionType;
+  
+  /** Context string for context-match */
+  context?: string;
+  
+  /** Selector for element-state matching */
+  selector?: string;
+  
+  /** Expected state for element-state (e.g., 'visible', 'enabled', 'focused') */
+  state?: string;
+  
+  /** Day of week for time-pattern (0=Sunday, 6=Saturday) */
+  dayOfWeek?: number[];
+  
+  /** Time range for time-pattern (HH:MM format) */
+  timeRange?: { start: string; end: string };
+  
+  /** Sequence of actions for sequence-history matching */
+  sequence?: string[];
+  
+  /** Weight of this condition (0..1, default 1.0) */
+  weight?: number;
+  
+  /** Whether to negate this condition */
+  negate?: boolean;
+  
+  /** URL pattern for context-match (regex string) */
+  urlPattern?: string;
+  
+  /** Title pattern for context-match (regex string) */
+  titlePattern?: string;
+  
+  /** View name for context-match */
+  viewName?: string;
+  
+  /** Environment variables for context-match */
+  environment?: Record<string, string>;
+  
+  /** Whether to enable fuzzy matching for sequence-history */
+  fuzzyMatch?: boolean;
+}

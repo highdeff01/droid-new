@@ -1,0 +1,25 @@
+tools:
+  - name: implement_recording_workflow_integration
+    description: Implements Recording to Workflow integration with event emission
+    type: code
+    output: src/automation/complete-automation-engine/recording-workflow-integration.ts
+  - name: implement_workflow_pack_integration
+    description: Implements Workflow to Pack integration with event emission
+    type: code
+    output: src/automation/complete-automation-engine/workflow-pack-integration.ts
+  - name: implement_pack_execution_feedback
+    description: Implements Pack execution feedback loop for habit extraction
+    type: code
+    output: src/automation/complete-automation-engine/pack-execution-feedback.ts
+  - name: implement_habit_pack_integration
+    description: Implements Habit to Pack suggestion integration
+    type: code
+    output: src/automation/complete-automation-engine/habit-pack-integration.ts
+  - name: implement_execution_repository
+    description: Implements Execution repository and archiving
+    type: code
+    output: src/automation/complete-automation-engine/execution-repository.ts
+  - name: implement_event_dispatcher
+    description: Implements Event dispatcher and message bus
+    type: code
+    output: src/automation/complete-automation-engine/event-dispatcher.ts

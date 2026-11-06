@@ -1,0 +1,4 @@
+name: recording-automation
+description: Handles Recording, Workflow, Pack, and Habit system implementations
+type: task
+version: 1.0.0

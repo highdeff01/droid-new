@@ -1,0 +1,21 @@
+{
+  \"name\": \"testing-specialist\",
+  \"description\": \"Testing and verification agent\",
+  \"type\": \"testing\",
+  \"settings\": {
+    \"maxTokens\": 16384,
+    \"temperature\": 0.4,
+    \"propertyBasedTesting\": true,
+    \"integrationTesting\": true,
+    \"e2eTesting\": true,
+    \"coverage\": true,
+    \"assertions\": true
+  },
+  \"capabilities\": [
+    \"vitest\",
+    \"react-testing-library\",
+    \"playwright\",
+    \"cypress\",
+    \"testing\"
+  ]
+}

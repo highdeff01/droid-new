@@ -1,0 +1,21 @@
+{
+  \"name\": \"react-specialist\",
+  \"description\": \"React and UI development agent\",
+  \"type\": \"react\",
+  \"settings\": {
+    \"maxTokens\": 16384,
+    \"temperature\": 0.6,
+    \"react19Features\": true,
+    \"hooksOnly\": true,
+    \"functionalComponents\": true,
+    \"typescript\": true,
+    \"testing-library\": true
+  },
+  \"capabilities\": [
+    \"react\",
+    \"hooks\",
+    \"components\",
+    \"forms\",
+    \"state-management\"
+  ]
+}

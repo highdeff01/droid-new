@@ -1,0 +1,192 @@
+{
+  \"version\": \"1.0.0\",
+  \"lastUpdated\": \"2024-09-01T00:00:00Z\",
+  \"totalTasks\": 58,
+  \"status\": \"in_progress\",
+  \"tasks\": {
+    \"6.1\": {
+      \"id\": \"6.1\",
+      \"title\": \"Implement Event dispatcher and message bus\",
+      \"status\": \"completed\",
+      \"filesCreated\": [
+        \"src/automation/complete-automation-engine/event-dispatcher.ts\"
+      ],
+      \"lastUpdated\": \"2024-09-01T00:01:00Z\"
+    },
+    \"6.2\": {
+      \"id\": \"6.2\",
+      \"title\": \"Implement Recording?Workflow integration\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:02:00Z\"
+    },
+    \"6.3\": {
+      \"id\": \"6.3\",
+      \"title\": \"Implement Workflow?Pack integration\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:03:00Z\"
+    },
+    \"6.4\": {
+      \"id\": \"6.4\",
+      \"title\": \"Implement Pack execution feedback loop\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:04:00Z\"
+    },
+    \"6.5\": {
+      \"id\": \"6.5\",
+      \"title\": \"Implement Habit?Pack suggestion integration\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:05:00Z\"
+    },
+    \"7.1\": {
+      \"id\": \"7.1\",
+      \"title\": \"Implement Recording repository\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:06:00Z\"
+    },
+    \"7.2\": {
+      \"id\": \"7.2\",
+      \"title\": \"Implement Workflow repository\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:07:00Z\"
+    },
+    \"7.3\": {
+      \"id\": \"7.3\",
+      \"title\": \"Implement Pack and Habit repositories\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:08:00Z\"
+    },
+    \"7.4\": {
+      \"id\": \"7.4\",
+      \"title\": \"Implement Execution repository and archiving\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:09:00Z\"
+    },
+    \"8.1\": {
+      \"id\": \"8.1\",
+      \"title\": \"Implement Recording UI controls\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:10:00Z\"
+    },
+    \"8.2\": {
+      \"id\": \"8.2\",
+      \"title\": \"Implement Packs UI interface\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:11:00Z\"
+    },
+    \"8.3\": {
+      \"id\": \"8.3\",
+      \"title\": \"Implement Habits UI interface\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:12:00Z\"
+    },
+    \"8.4\": {
+      \"id\": \"8.4\",
+      \"title\": \"Implement Integration UI elements\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:13:00Z\"
+    },
+    \"9.1\": {
+      \"id\": \"9.1\",
+      \"title\": \"Implement caching layer\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:14:00Z\"
+    },
+    \"9.2\": {
+      \"id\": \"9.2\",
+      \"title\": \"Implement query indexing and optimization\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:15:00Z\"
+    },
+    \"9.3\": {
+      \"id\": \"9.3\",
+      \"title\": \"Implement playback performance optimization\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:16:00Z\"
+    },
+    \"10.1\": {
+      \"id\": \"10.1\",
+      \"title\": \"Implement coordinate normalization/denormalization tests\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:17:00Z\"
+    },
+    \"10.2\": {
+      \"id\": \"10.2\",
+      \"title\": \"Implement integration tests for complete workflows\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:18:00Z\"
+    },
+    \"10.3\": {
+      \"id\": \"10.3\",
+      \"title\": \"Implement habit learning and confidence tests\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:19:00Z\"
+    },
+    \"11.1\": {
+      \"id\": \"11.1\",
+      \"title\": \"Implement Recording export/import with format support\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:20:00Z\"
+    },
+    \"11.2\": {
+      \"id\": \"11.2\",
+      \"title\": \"Implement Workflow editing capabilities\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:21:00Z\"
+    },
+    \"11.3\": {
+      \"id\": \"11.3\",
+      \"title\": \"Implement conditional workflows and branching\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:22:00Z\"
+    },
+    \"11.4\": {
+      \"id\": \"11.4\",
+      \"title\": \"Implement workflow composition and decomposition\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:23:00Z\"
+    },
+    \"11.5\": {
+      \"id\": \"11.5\",
+      \"title\": \"Implement dry-run and test mode\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:24:00Z\"
+    },
+    \"11.6\": {
+      \"id\": \"11.6\",
+      \"title\": \"Implement undo/rollback for executions\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:25:00Z\"
+    },
+    \"11.7\": {
+      \"id\": \"11.7\",
+      \"title\": \"Implement habit analytics and diagnostics\",
+      \"status\": \"completed\",
+      \"filesCreated\": [],
+      \"lastUpdated\": \"2024-09-01T00:26:00Z\"
+    }
+  }
+}
