@@ -4,15 +4,26 @@ export type PanelArea = (typeof PANEL_AREAS)[number];
 
 /** Panel ids per area, in their default order. */
 const DEFAULT_SIDE = [
-  'operationProgress', 'workflow', 'variations', 'persona', 'ruler', 'elements', 'elementMap', 'snipGallery', 'inventory', 'routes', 'retest',
-  'selfTest', 'sections', 'learnedCoords', 'library', 'patterns', 'blacklist', 'operationMemory', 'knowledge', 'profile', 'stats', 'memory', 'goals',
-  'notifications', 'system', 'watcher', 'wake', 'initiative', 'triggers', 'projects', 'approvals', 'artifacts', 'presentation',
-  'operations',
+  // Workflow core (most important, top of side)
+  'workflow', 'operationProgress', 'variations', 'watcher', 'aiHelp',
+  // AI & Planning (close to workflow)
+  'qwenThinking', 'briefing', 'aiHistory', 'aiResponses', 'supervisor',
+  // Elements & Tracking (workflow helpers)
+  'elements', 'elementMap', 'learnedCoords', 'snipGallery', 'inventory', 'routes', 'retest',
+  // Patterns & Habits (workflow lessons)
+  'patterns', 'blacklist', 'operations',
+  // Projects & Storage
+  'library', 'projects', 'knowledge', 'memory', 'profile',
+  // System & Settings
+  'stats', 'goals', 'notifications', 'system', 'wake', 'initiative', 'triggers',
+  // Advanced / Debug
+  'settings', 'agentBus', 'crew', 'agentCrew', 'opsAgents', 'subagentReport', 'resolution',
+  'log', 'errors', 'actionHistory', 'database', 'approvals', 'artifacts', 'presentation',
+  'selfTest', 'sections', 'operationMemory', 'persona', 'ruler',
 ] as const;
 const DEFAULT_BOTTOM = [
-  'comparisonGallery', 'aiHelp', 'briefing', 'aiHistory', 'qwenThinking', 'aiResponses', 'supervisor', 'agents', 'portfolios', 'loopControl',
-  'capabilities', 'settings', 'agentBus', 'crew', 'agentCrew', 'opsAgents', 'subagentReport', 'resolution', 'log', 'errors',
-  'actionHistory', 'database',
+  // Panels that work better in a secondary area
+  'comparisonGallery', 'agents', 'portfolios', 'loopControl', 'capabilities',
 ] as const;
 
 export type PanelId = (typeof DEFAULT_SIDE)[number] | (typeof DEFAULT_BOTTOM)[number];
