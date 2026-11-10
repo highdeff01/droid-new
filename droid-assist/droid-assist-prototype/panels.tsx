@@ -1,5 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { AssistEngine } from './use-assist.js';
+import { createExternalModelBridge, type ExternalChatProtocol } from './external-model-adapters.js';
+import { getDocumentFileReadiness } from './document-file-formats.js';
+import { reviewGeneratedProject } from './generated-project-review.js';
+import { clearLongGenerationCheckpoint, loadLongGenerationCheckpoint, saveLongGenerationCheckpoint, type LongGenerationCheckpointMode } from './long-generation-checkpoint.js';
+import { LONG_GENERATION_MAX_ROUNDS } from './long-generation.js';
+import { getGeneratedProjectDiff } from './generated-project-diff.js';
 import { frameDistance } from './drift.js';
 import { checkBridge } from './bridge.js';
 import { DRY_RUN } from './run-step.js';
@@ -218,6 +224,7 @@ export function WorkflowPanel({ engine }: { engine: AssistEngine }) {
             {s.shot ? <img src={s.shot.url} alt={`After step ${i + 1}`} title="Desktop screenshot after this step ran" /> : s.refFrame ? <img src={s.refFrame.url} alt="" /> : <span className={styles.noThumb}>{s.action}</span>}
             <div>
               <input value={s.name} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} onFocus={(e) => { e.currentTarget.dataset.was = e.currentTarget.value; }} onBlur={(e) => { const name = e.currentTarget.value.trim(); if (name !== (e.currentTarget.dataset.was ?? '').trim()) engine.knowledge.noteSignal('correction', `renamed step to "${name}"`); }} aria-label={`Step ${i + 1} name`} />
+              <input value={s.expectedOutcome ?? ''} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, expectedOutcome: e.target.value } : x)))} placeholder="Expected result (optional; e.g. Saved confirmation appears)" aria-label={`Step ${i + 1} expected result`} />
               <small>
                 {s.action}{s.target ? ` "${s.target}"` : ''}{(s.action === 'key' || s.action === 'scroll') && s.text ? ` ${s.text}` : ''} @ {(s.x * 100).toFixed(0)}%,{(s.y * 100).toFixed(0)}%{s.endX !== undefined && s.endY !== undefined ? ` → ${s.endTarget ? `"${s.endTarget}" ` : ''}${(s.endX * 100).toFixed(0)}%,${(s.endY * 100).toFixed(0)}%` : ''} · {s.status}
                 {s.verifiedAt !== undefined && <b aria-label={`Step ${i + 1} checked off`}> · ✓ {clock(s.verifiedAt)}</b>}
@@ -453,9 +460,9 @@ function MainBridgeSettings({ engine }: { engine: AssistEngine }) {
       ) : (
         <input value={settings.mainBridgeUrl} onChange={(e) => set({ mainBridgeUrl: e.target.value })} aria-label="Main app URL" placeholder="http://127.0.0.1:5000 or ws://host:port" />
       )}
-      <label>Token (optional)
+      <label>Token
         <input type="password" value={settings.mainBridgeToken} onChange={(e) => set({ mainBridgeToken: e.target.value })} aria-label="Main app bridge token" autoComplete="off" />
-        <small>Sent as ?token= on the WebSocket and as a Bearer token over HTTP; never written to the activity log.</small>
+        <small>Sent as ?token= on the WebSocket and as a Bearer token over HTTP; never written to the activity log. In listen mode the listener refuses every connection until a token is set here, and the main app must use the same one.</small>
       </label>
       <span className={styles.row}>
         <label>Retry after <input type="number" min={MAIN_BRIDGE_BACKOFF_MIN_MS} max={10000} step={250} value={settings.mainBridgeBackoffMinMs} onChange={(e) => set({ mainBridgeBackoffMinMs: clamp(e.target.valueAsNumber, MAIN_BRIDGE_BACKOFF_MIN_MS, 10000, settings.mainBridgeBackoffMinMs) })} aria-label="Main app bridge first retry (ms)" /> ms</label>
@@ -577,7 +584,7 @@ export function SettingsPanel({ engine }: { engine: AssistEngine }) {
       />
       <label className={styles.setting}>Bridge auth token
         <input type="password" value={settings.bridgeToken} onChange={(e) => setSettings({ ...settings, bridgeToken: e.target.value })} aria-label="Bridge auth token" autoComplete="off" />
-        <small>Must match DROID_BRIDGE_TOKEN on the bridge; sent as a Bearer token on every bridge call and never written to the activity log.</small>
+        <small>Must match DROID_BRIDGE_TOKEN on the bridge; sent as a Bearer token on every bridge call and never written to the activity log. On Windows, run resources/bridge-service/start-windows.ps1, then use http://127.0.0.1:3000.</small>
       </label>
       <MainBridgeSettings engine={engine} />
       <label className={styles.setting}>AI endpoint (Ollama /api/chat)
@@ -1213,6 +1220,320 @@ export function LogPanel({ engine }: { engine: AssistEngine }) {
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+
+/** Read-only audit of passive perception outcomes; it never dispatches or changes workflow state. */
+export function DecisionHistoryPanel({ engine }: { engine: AssistEngine }) {
+  const records = engine.decisionHistory;
+  const counts = {
+    verified: records.filter((r) => r.status === 'verified').length,
+    contradicted: records.filter((r) => r.status === 'contradicted').length,
+    uncertain: records.filter((r) => r.status === 'uncertain').length,
+  };
+  // Advisory prompts are derived locally from existing records; no extra AI calls or actions.
+  const reviewQuestions = records
+    .filter((r) => r.status !== 'verified' || !r.expected.trim())
+    .slice(0, 8)
+    .map((r) => ({
+      id: r.id,
+      question: r.status === 'contradicted'
+        ? `What explains the mismatch after ${r.actor} ${r.action}?`
+        : !r.expected.trim()
+          ? `What outcome should be expected after ${r.actor} ${r.action}?`
+          : `What additional screen evidence would verify the result of ${r.actor} ${r.action}?`,
+      detail: `Frame #${r.frameId} · ${r.status} · ${r.actual}`,
+    }));
+  return (
+    <section className={styles.panel} aria-label="Perception decision history">
+      <h3>Perception review <small>{records.length} saved observations</small></h3>
+      <p className={styles.muted}>Read-only evidence from screen observations correlated with prior actions. This panel does not control input or workflow execution.</p>
+      <p><b>Verified:</b> {counts.verified} · <b>Contradicted:</b> {counts.contradicted} · <b>Uncertain:</b> {counts.uncertain}</p>
+      {!records.length && <p className={styles.muted}>No correlated outcomes yet. Records appear after the observer compares a later screen inventory with a recent action.</p>}
+      {reviewQuestions.length > 0 && <section aria-label="Suggested review questions">
+        <h4>Questions worth reviewing <small>advisory only</small></h4>
+        <p className={styles.muted}>These prompts highlight uncertainty for a person or AI reviewer. They do not trigger analysis, clicks, or workflow changes.</p>
+        <ul>{reviewQuestions.map((item) => <li key={item.id}><b>{item.question}</b><div>{item.detail}</div></li>)}</ul>
+      </section>}
+      <ol className={styles.log}>
+        {records.map((record) => (
+          <li key={record.id} data-tone={record.status === 'verified' ? 'ok' : record.status === 'contradicted' ? 'error' : 'warn'}>
+            <small>{new Date(record.at).toLocaleString()} · frame #{record.frameId}{record.reviewedFrameId ? ` · reviewed in #${record.reviewedFrameId}` : ''}</small>
+            <b>{record.status.toUpperCase()}</b> · {record.actor} {record.action}
+            <div><b>Expected:</b> {record.expected || 'Not specified'}</div>
+            <div><b>Observed:</b> {record.actual}</div>
+            <small>Confidence {Math.round(record.confidence * 100)}%{record.evidenceQuality ? ` · ${record.evidenceQuality} evidence` : ''}</small>
+            {record.evidence.length > 0 && <ul>{record.evidence.map((item, index) => <li key={index}>{item}</li>)}</ul>}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+
+/** File-focused document analysis. Reads selected files in the browser and uses the existing AI session only. */
+export function DocumentPipelinePanel({ engine }: { engine: AssistEngine }) {
+  type QueuedFile = { id: string; name: string; text: string; selected: boolean; group: string; workers: number };
+  const [files, setFiles] = useState<QueuedFile[]>([]);
+  const [savedLongCheckpoint, setSavedLongCheckpoint] = useState(() => loadLongGenerationCheckpoint());
+  const [question, setQuestion] = useState(savedLongCheckpoint?.prompt || 'Summarize the key information and answer the question using source evidence.');
+  const [groupFilter, setGroupFilter] = useState('All files');
+  const [reviewers, setReviewers] = useState(1);
+  const [externalLabel, setExternalLabel] = useState('External reviewer');
+  const [externalEndpoint, setExternalEndpoint] = useState('');
+  const [externalModel, setExternalModel] = useState('');
+  const [externalProtocol, setExternalProtocol] = useState<ExternalChatProtocol>('ollama');
+  const [externalApiKey, setExternalApiKey] = useState('');
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState('');
+  const [error, setError] = useState('');
+  const [answer, setAnswer] = useState('');
+  const [report, setReport] = useState('');
+  const [liveTestRunning, setLiveTestRunning] = useState(false);
+  const [longRunning, setLongRunning] = useState(false);
+  const longAbortRef = useRef<AbortController | null>(null);
+  const [longAnswer, setLongAnswer] = useState(savedLongCheckpoint?.content ?? '');
+  const [longStatus, setLongStatus] = useState(savedLongCheckpoint ? `Restored local checkpoint · ${savedLongCheckpoint.rounds} call(s) · ${savedLongCheckpoint.content.length.toLocaleString()} characters` : '');
+  const [longCodeMode, setLongCodeMode] = useState(savedLongCheckpoint?.mode === 'multi_file_code');
+  const [repairRunning, setRepairRunning] = useState(false);
+  const [repairStatus, setRepairStatus] = useState('');
+  const [repairCandidate, setRepairCandidate] = useState('');
+  const [repairBase, setRepairBase] = useState('');
+  const longProjectReview = longCodeMode && longAnswer ? reviewGeneratedProject(longAnswer) : null;
+  const repairDiff = repairCandidate ? getGeneratedProjectDiff(longAnswer, repairCandidate) : [];
+  const groups = [...new Set(files.map((file) => file.group.trim() || 'Ungrouped'))];
+  const visible = files.filter((file) => groupFilter === 'All files' || (file.group.trim() || 'Ungrouped') === groupFilter);
+  const selected = visible.filter((file) => file.selected);
+  const loadFiles = async (list: FileList | null) => {
+    if (!list?.length) return;
+    setError('');
+    const loaded: QueuedFile[] = [];
+    const rejected: string[] = [];
+    for (const file of Array.from(list)) {
+      const readiness = getDocumentFileReadiness(file.name, file.type);
+      if (!readiness.supported) {
+        rejected.push(`${file.name}: ${readiness.reason}`);
+        continue;
+      }
+      try {
+        const text = await file.text();
+        loaded.push({ id: `${file.name}-${file.size}-${file.lastModified}`, name: file.name, text, selected: true, group: 'Default', workers: 0 });
+      } catch (e) {
+        rejected.push(`Could not read ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (rejected.length) setError(rejected.join('\\n'));
+    setFiles((old) => {
+      const next = [...old];
+      for (const file of loaded) {
+        const existing = next.findIndex((item) => item.id === file.id);
+        if (existing >= 0) next[existing] = file;
+        else next.push(file);
+      }
+      return next;
+    });
+  };
+  const updateFile = (id: string, patch: Partial<QueuedFile>) => setFiles((old) => old.map((file) => file.id === id ? { ...file, ...patch } : file));
+  const run = async () => {
+    if (!selected.length) { setError('Select at least one file in the current group.'); return; }
+    if (!question.trim()) { setError('Enter a question or analysis goal.'); return; }
+    setRunning(true); setError(''); setAnswer(''); setReport('');
+    try {
+      const inputs = selected.map(({ id, name, text }) => ({ id, name, text }));
+      const workerAllocations = Object.fromEntries(selected.filter((file) => file.workers > 0).map((file) => [file.id, file.workers]));
+      const externalReviewers = externalEndpoint.trim() && externalModel.trim() ? [createExternalModelBridge({ id: 'external-reviewer-1', label: externalLabel.trim() || 'External reviewer', endpoint: externalEndpoint, model: externalModel, protocol: externalProtocol, apiKey: externalApiKey })] : [];
+      const result = await engine.runDocumentPipeline(inputs, question, {
+        workerAllocations,
+        reviewers: externalReviewers,
+        onProgress: (event) => setProgress(`${event.phase}: ${event.file} — ${event.detail}`),
+      }, reviewers);
+      setAnswer(result.combinedAnswer);
+      setReport(result.files.map((file) => `${file.plan.name} · ${file.plan.agentCount} workers · relevance ${file.relevanceScore ?? 'unscored'}/5 · failed sections ${file.failedChunks}\n${file.review}`).join('\n\n---\n\n'));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+  return (
+    <section className={styles.panel} aria-label="Document pipeline">
+      <h3>Document pipeline <small>file analysis · existing AI session</small></h3>
+      <p className={styles.muted}>Read-only document analysis. Files are read locally in this tab and sent through the configured AI session for analysis; this panel never issues mouse or keyboard actions.</p>
+      <div className={styles.group}>
+        <label>Choose files <input type="file" multiple onChange={(event) => { void loadFiles(event.currentTarget.files); event.currentTarget.value = ''; }} /></label>
+        <label>File group
+          <select value={groupFilter} onChange={(event) => setGroupFilter(event.currentTarget.value)}>
+            <option>All files</option>
+            {groups.map((group) => <option key={group}>{group}</option>)}
+          </select>
+        </label>
+        <label>Independent reviewer agents
+          <input type="number" min={0} max={5} value={reviewers} onChange={(event) => setReviewers(Math.max(0, Math.min(5, Number(event.currentTarget.value) || 0)))} />
+        </label>
+      </div>
+      <label>Question / analysis goal
+        <textarea value={question} onChange={(event) => setQuestion(event.currentTarget.value)} rows={3} />
+      </label>
+      <details>
+        <summary>External model reviewer (optional)</summary>
+        <p className={styles.muted}>Uses a real HTTP request to the configured endpoint. API keys are held only in this panel's memory and are not saved by this feature.</p>
+        <div className={styles.group}>
+          <label>Reviewer label <input value={externalLabel} onChange={(event) => setExternalLabel(event.currentTarget.value)} /></label>
+          <label>Protocol <select value={externalProtocol} onChange={(event) => setExternalProtocol(event.currentTarget.value as ExternalChatProtocol)}><option value="ollama">Ollama-compatible /api/chat</option><option value="openai-compatible">OpenAI-compatible chat completions</option></select></label>
+          <label>Exact endpoint URL <input type="url" placeholder="http://localhost:11434/api/chat" value={externalEndpoint} onChange={(event) => setExternalEndpoint(event.currentTarget.value)} /></label>
+          <label>Model ID <input value={externalModel} onChange={(event) => setExternalModel(event.currentTarget.value)} placeholder="qwen3.5:2b" /></label>
+          <label>API key (optional) <input type="password" autoComplete="off" value={externalApiKey} onChange={(event) => setExternalApiKey(event.currentTarget.value)} /></label>
+        </div>
+      </details>
+      <h4>Files <small>{selected.length} selected in this view · {files.length} loaded</small></h4>
+      {!files.length && <p className={styles.muted}>Choose one or more text-readable files to begin. Files are not uploaded until you run the analysis.</p>}
+      <ul className={styles.log}>
+        {visible.map((file) => (
+          <li key={file.id}>
+            <label><input type="checkbox" checked={file.selected} onChange={(event) => updateFile(file.id, { selected: event.currentTarget.checked })} /> <b>{file.name}</b></label>
+            <small>{file.text.length.toLocaleString()} characters</small>
+            <div className={styles.group}>
+              <label>Group <input value={file.group} onChange={(event) => updateFile(file.id, { group: event.currentTarget.value })} /></label>
+              <label>Workers (0 = automatic) <input type="number" min={0} max={100} value={file.workers} onChange={(event) => updateFile(file.id, { workers: Math.max(0, Math.min(100, Number(event.currentTarget.value) || 0)) })} /></label>
+              <button type="button" onClick={() => setFiles((old) => old.filter((item) => item.id !== file.id))}>Remove</button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <div className={styles.group}>
+        <button type="button" disabled={running || !selected.length} onClick={() => void run()}>{running ? 'Analyzing…' : `Analyze ${selected.length} selected file(s)`}</button>
+        <button type="button" disabled={running || !files.length} onClick={() => { setFiles([]); setAnswer(''); setReport(''); setError(''); setProgress(''); }}>Clear files/results</button>
+      </div>
+      <details>
+        <summary>Long-form generation (multi-call continuation)</summary>
+        <p className={styles.muted}>Generates through sequential bounded calls to the existing AI session. Each completed section is checkpointed immediately, so a later failure does not discard earlier output. Multi-file mode asks for explicit FILE: path headers and carries a file manifest between calls. This is not token streaming.</p>
+        <label><input type="checkbox" checked={longCodeMode} onChange={(event) => setLongCodeMode(event.currentTarget.checked)} disabled={longRunning} /> Multi-file code mode (FILE: relative/path headers)</label>
+        <button type="button" disabled={longRunning || running || !question.trim()} onClick={async () => {
+          const mode: LongGenerationCheckpointMode = longCodeMode ? 'multi_file_code' : 'answer';
+          const resume = savedLongCheckpoint && savedLongCheckpoint.prompt === question && savedLongCheckpoint.mode === mode && savedLongCheckpoint.content === longAnswer && savedLongCheckpoint.rounds < LONG_GENERATION_MAX_ROUNDS;
+          const checkpointId = resume ? savedLongCheckpoint.id : `generation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const initialContent = resume ? savedLongCheckpoint.content : '';
+          const initialRounds = resume ? savedLongCheckpoint.rounds : 0;
+          setLongRunning(true); if (!resume) setLongAnswer(''); setLongStatus(resume ? 'Resuming saved checkpoint…' : 'Starting…'); setError('');
+          const controller = new AbortController();
+          longAbortRef.current = controller;
+          try {
+            const result = await engine.runLongGeneration(question, {
+              mode,
+              initialContent,
+              initialRounds,
+              signal: controller.signal,
+              onProgress: (event) => setLongStatus(`Section ${event.round}/${event.maxRounds} · ${event.totalChars.toLocaleString()} characters assembled`),
+              onPartial: (content, round) => {
+                setLongAnswer(content);
+                const checkpoint = { id: checkpointId, prompt: question, content, mode, rounds: round, updatedAt: Date.now() };
+                const saved = saveLongGenerationCheckpoint(checkpoint);
+                setSavedLongCheckpoint(saved ? checkpoint : null);
+                setLongStatus(`${saved ? 'Saved locally' : 'Checkpoint is session-only (browser storage unavailable)'} · ${round} call(s) · ${content.length.toLocaleString()} characters`);
+              },
+            });
+            setLongAnswer(result.content);
+            const finalCheckpoint = { id: checkpointId, prompt: question, content: result.content, mode, rounds: result.rounds, updatedAt: Date.now() };
+            const finalSaved = saveLongGenerationCheckpoint(finalCheckpoint);
+            setSavedLongCheckpoint(finalSaved ? finalCheckpoint : null);
+            setLongStatus(`${result.complete ? 'Complete' : `Partial · ${result.stoppedBecause}`} · ${result.rounds} calls · ${result.content.length.toLocaleString()} characters · ${finalSaved ? 'saved locally' : 'session-only checkpoint'}`);
+          } catch (e) {
+            const failure = e as Error & { partial?: { content: string; rounds: number } };
+            if (failure.partial?.content) {
+              setLongAnswer(failure.partial.content);
+              const recoveredCheckpoint = { id: checkpointId, prompt: question, content: failure.partial.content, mode, rounds: failure.partial.rounds, updatedAt: Date.now() };
+              const recoveredSaved = saveLongGenerationCheckpoint(recoveredCheckpoint);
+              setSavedLongCheckpoint(recoveredSaved ? recoveredCheckpoint : null);
+              setLongStatus(`Recovered partial output · ${failure.partial.rounds} completed call(s) · ${recoveredSaved ? 'saved locally' : 'session-only checkpoint'}`);
+            }
+            setError(failure.message);
+          } finally {
+            if (longAbortRef.current === controller) longAbortRef.current = null;
+            setLongRunning(false);
+          }
+        }}>{longRunning ? 'Generating continuation…' : savedLongCheckpoint && savedLongCheckpoint.prompt === question && savedLongCheckpoint.mode === (longCodeMode ? 'multi_file_code' : 'answer') && savedLongCheckpoint.content === longAnswer ? savedLongCheckpoint.rounds >= LONG_GENERATION_MAX_ROUNDS ? 'Restart generation (round limit reached)' : 'Resume saved generation' : longCodeMode ? 'Generate multi-file code' : 'Generate long response'}</button>
+        {longRunning && <button type="button" className={styles.secondary} onClick={() => longAbortRef.current?.abort()}>Cancel generation</button>}
+        <button type="button" className={styles.secondary} disabled={longRunning || !longAnswer} onClick={() => {
+          clearLongGenerationCheckpoint(); setSavedLongCheckpoint(null); setLongAnswer(''); setLongStatus('Local checkpoint cleared.'); setRepairCandidate(''); setRepairStatus('');
+        }}>Clear saved generation</button>
+        {longStatus && <p role="status">{longStatus}</p>}
+        {longAnswer && <pre className={styles.log}>{longAnswer}</pre>}
+        {longProjectReview && longProjectReview.issues.length > 0 && (
+          <div className={styles.group}>
+            <button type="button" disabled={repairRunning || longRunning} onClick={() => {
+              const sourceSnapshot = longAnswer;
+              setRepairRunning(true); setRepairCandidate(''); setRepairBase(sourceSnapshot); setRepairStatus('Repairing only files identified by static review…');
+              void engine.repairLongGeneration(sourceSnapshot).then((result) => {
+                if (result.repaired) {
+                  setRepairCandidate(result.output);
+                  setRepairStatus(`Candidate passed static review after ${result.attempts} repair attempt(s). Inspect it below; the original remains unchanged until you accept.`);
+                } else {
+                  setRepairStatus(`Repair attempted ${result.attempts} time(s); ${result.review.issues.length} issue(s) remain. The original generated output is unchanged. Review the diagnostics and retry after adjusting the source or model.`);
+                }
+              }).catch((e) => setRepairStatus(e instanceof Error ? e.message : String(e))).finally(() => setRepairRunning(false));
+            }}>{repairRunning ? 'Repairing flagged files…' : 'Repair flagged files'}</button>
+            {repairStatus && <p role="status">{repairStatus}</p>}
+            {repairCandidate && <div className={styles.group}>
+              <h4>Verified repair candidate</h4>
+              <p>The candidate passed static checks. Nothing has been written to disk; accepting replaces only the text in this generation panel.</p>
+              <ul className={styles.log} aria-label="Repair file changes">
+                {repairDiff.map((change) => <li key={change.path}>
+                  <b>{change.kind.toUpperCase()}</b> · {change.path} · {change.beforeLines} → {change.afterLines} lines
+                  {change.removedLines.length > 0 && <pre>{change.removedLines.map((line) => `− ${line}`).join('\n')}</pre>}
+                  {change.addedLines.length > 0 && <pre>{change.addedLines.map((line) => `+ ${line}`).join('\n')}</pre>}
+                </li>)}
+              </ul>
+              <details><summary>Full verified repair candidate</summary><pre className={styles.log}>{repairCandidate}</pre></details>
+              <div className={styles.row}>
+                <button type="button" onClick={() => {
+                  if (longAnswer !== repairBase) {
+                    setRepairStatus('The original output changed after this candidate was reviewed. Candidate was not applied; run repair again against the current output.');
+                  } else if (reviewGeneratedProject(repairCandidate).complete) {
+                    const accepted = repairCandidate;
+                    setLongAnswer(accepted);
+                    const checkpoint = {
+                      id: savedLongCheckpoint?.id ?? `generation-${Date.now()}-repair`,
+                      prompt: savedLongCheckpoint?.prompt ?? question,
+                      content: accepted,
+                      mode: savedLongCheckpoint?.mode ?? (longCodeMode ? 'multi_file_code' : 'answer'),
+                      rounds: savedLongCheckpoint?.rounds ?? 0,
+                      updatedAt: Date.now(),
+                    };
+                    const saved = saveLongGenerationCheckpoint(checkpoint);
+                    setSavedLongCheckpoint(saved ? checkpoint : null);
+                    setLongStatus(saved ? 'Accepted repair saved locally.' : 'Accepted repair applied in this panel; browser storage unavailable.');
+                    setRepairCandidate('');
+                    setRepairStatus('Repair accepted in this panel. No project files were written to disk.');
+                  } else {
+                    setRepairStatus('Candidate no longer passes static review; it was not applied.');
+                  }
+                }}>Accept repair in panel</button>
+                <button type="button" className={styles.secondary} onClick={() => {
+                  setRepairCandidate(''); setRepairBase('');
+                  setRepairStatus('Repair candidate rejected. Original generated output retained.');
+                }}>Reject candidate</button>
+              </div>
+            </div>}
+          </div>
+        )}
+        {longProjectReview && (
+          <section aria-label="Generated project review">
+            <h4>Generated project review <small>{longProjectReview.files.length} file(s) · {longProjectReview.issues.length} issue(s)</small></h4>
+            <p role="status">{longProjectReview.complete ? 'Static checks passed.' : 'Review found items that need attention.'} This check does not execute generated code or write files.</p>
+            <ul className={styles.log}>
+              {longProjectReview.files.map((file) => <li key={file.path}><b>{file.path}</b> · {file.content.length.toLocaleString()} characters{file.language ? ` · ${file.language}` : ''}</li>)}
+              {longProjectReview.issues.map((issue, index) => <li key={`${issue.code}:${issue.path ?? index}`} data-tone="warn"><b>{issue.code}</b> · {issue.message}</li>)}
+            </ul>
+          </section>
+        )}
+      </details>
+      {progress && <p role="status">{progress}</p>}
+      {error && <p role="alert" data-tone="error">{error}</p>}
+      {answer && <><h4>Combined answer</h4><pre className={styles.log}>{answer}</pre></>}
+      {report && <details><summary>Per-file review and relevance reports</summary><pre className={styles.log}>{report}</pre></details>}
     </section>
   );
 }

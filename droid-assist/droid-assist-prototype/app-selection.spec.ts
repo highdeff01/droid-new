@@ -1,16 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   AI_CALL_COST,
+  APP_SELECTION_SOURCE,
   ARBITER,
   LOAD_COST,
   MEMORY_CREDIT,
   appCost,
+  decideApp,
   decisionText,
   emptyTally,
+  selectApp,
   selectApps,
-  type AppDecision,
+  standingCapabilities,
+  type AppCapability,
+  type JointDecision,
   type AppProfile,
   type AppTally,
+  type Job,
   type JointOperation,
 } from './app-selection.js';
 
@@ -120,7 +126,7 @@ describe('appCost', () => {
 
 describe('decisionText', () => {
   it('contains the operation name and the mode', () => {
-    const decision: AppDecision = { operation: 'Save file', calculate: 'droid-new', perform: 'droid-main', mode: 'split', reason: 'because' };
+    const decision: JointDecision = { operation: 'Save file', calculate: 'droid-new', perform: 'droid-main', mode: 'split', reason: 'because' };
     const text = decisionText(decision);
     expect(text).toContain('Save file');
     expect(text).toContain('split');

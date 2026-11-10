@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useAssist } from './use-assist.js';
 import type { NativeCaptureApi, NativeFrame } from './electron/capture-api.js';
@@ -17,6 +17,7 @@ if (typeof globalThis.ImageData === 'undefined') {
 type Engine = { current: ReturnType<typeof useAssist> };
 
 afterEach(() => {
+  cleanup();
   vi.unstubAllGlobals();
   vi.useRealTimers();
   delete window.droidNative;

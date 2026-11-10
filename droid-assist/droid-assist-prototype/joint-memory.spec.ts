@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { AppDecision } from './app-selection.js';
+import type { JointDecision } from './app-selection.js';
 import { JOINT_OP, RECALL_LIMIT, appTally, jointDraft, recallLines, recallSimilar, type JointOutcome } from './joint-memory.js';
 import type { OperationRecord } from './operation-db.js';
 import { buildOperation } from './operation-log.js';
 
-const decision = (overrides: Partial<AppDecision> = {}): AppDecision => ({ operation: 'Save file', calculate: 'droid-new', perform: 'droid-main', mode: 'split', reason: 'droid-new arbitrates: cheapest', ...overrides });
+const decision = (overrides: Partial<JointDecision> = {}): JointDecision => ({ operation: 'Save file', calculate: 'droid-new', perform: 'droid-main', mode: 'split', reason: 'droid-new arbitrates: cheapest', ...overrides });
 
 const outcome = (overrides: Partial<JointOutcome> = {}): JointOutcome => ({ operation: 'Save file', app: 'droid-main', role: 'perform', ok: true, output: 'saved', ...overrides });
 

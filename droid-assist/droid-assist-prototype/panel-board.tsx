@@ -38,7 +38,9 @@ export function PanelBoard({ area, ids, className, renderPanel, onMove, onFloat 
   return (
     <div className={className} data-panel-area={area} onDragOver={allowDrop} onDrop={drop(null)}>
       {ids.map((id) => (
-        <PanelSlot key={id} id={id} onDragOver={allowDrop} onDrop={drop(id)} onFloat={onFloat}>{renderPanel(id)}</PanelSlot>
+        <PanelSlot key={id} id={id} onDragOver={allowDrop} onDrop={drop(id)} onFloat={onFloat}>
+          {renderPanel(id)}
+        </PanelSlot>
       ))}
     </div>
   );
@@ -71,9 +73,16 @@ function PanelSlot({ id, onDragOver, onDrop, onFloat, children }: PanelSlotProps
       <div className={styles.panelTools}>
         <span className={styles.panelTitle}>{title}</span>
         <button type="button" className={styles.panelHandle} draggable onDragStart={start} aria-label={`Move ${id} panel`} title="Drag to move this panel">⠿</button>
+        {onFloat && (
+          <button type="button" className={styles.panelControl} onClick={(e) => float(e.currentTarget.closest('[data-panel-id]'))} aria-label={`Float ${id} panel`} title="Undock into a floating window">⧉</button>
+        )}
         <button type="button" className={styles.panelToggle} onClick={() => setCollapsed((value) => !value)} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${id} panel`} aria-expanded={!collapsed}>
           {collapsed ? '+' : '−'}
         </button>
+      </div>
+      <div className={styles.panelBody} hidden={collapsed}>
+        <PanelErrorBoundary>{children}</PanelErrorBoundary>
+      </div>
         {onFloat && (
           <button type="button" className={styles.panelControl} onClick={(e) => float(e.currentTarget.closest('[data-panel-id]'))} aria-label={`Float ${id} panel`} title="Undock into a floating window">⧉</button>
         )}

@@ -1,0 +1,241 @@
+import { describe, expect, it } from 'vitest';
+import type { ActionRecord, Frame, WorkflowStep } from './types.js';
+import type { InventoryElement } from './screen-inventory.js';
+import {
+  actionForFrame, selectEvidenceFrames, retrieveEvidenceFrames, appendDecisionHistory, expectedOutcomeForAction, loadDecisionHistory, saveDecisionHistory, DECISION_HISTORY_KEY, assessElementIdentity, calibrateEvidenceConfidence, decisionLearningContext, updateDecisionLearning, auditCommands, decisionHistoryContext, recordDecisionOutcome, reconcileDecisionHistory, classifyPageTransition, compareElementEffect, derivePerceptionQuestions, descriptorDistance, frameChangeRatio, learnVisualPrototype,
+  matchVisualPrototype, outcomeRates, prospectPoints, recognizeElements, relateElements, visualDescriptor,
+} from './perception-intelligence.js';
+
+const element = (name: string, x: number, y: number, state: InventoryElement['state'] = 'static'): InventoryElement => ({
+  id: name, name, known: true, kind: 'button', box: { x, y, w: 0.12, h: 0.06 },
+  cell: 'A1', mapCells: 'R1C1', state,
+});
+const frame = (id: number, value = 80): Frame => {
+  const data = { width: 32, height: 18, data: new Uint8ClampedArray(32 * 18 * 4) };
+  for (let i = 0; i < data.data.length; i += 4) {
+    data.data[i] = value; data.data[i + 1] = value; data.data[i + 2] = value; data.data[i + 3] = 255;
+  }
+  return { id, time: id * 1000, url: '', data: data as unknown as ImageData, srcW: 1920, srcH: 1080, source: 'desktop' };
+};
+const step = (over: Partial<WorkflowStep> = {}): WorkflowStep => ({
+  id: 's1', name: 'Click Save', action: 'click', x: 0.5, y: 0.5, status: 'done', ...over,
+});
+
+describe('visual perception intelligence', () => {
+  it('retains the current and preceding screenshots independently of action attribution', () => {
+    const frames = [frame(4), frame(3), frame(2), frame(1)];
+    expect(selectEvidenceFrames(frames, 3, 3).map(item => item.id)).toEqual([3, 4, 2]);
+    expect(selectEvidenceFrames(frames, 99, 2).map(item => item.id)).toEqual([4, 3]);
+    expect(selectEvidenceFrames(frames, 4, 0).map(item => item.id)).toEqual([4]);
+  });
+
+  it('retrieves requested retained frames in request order without duplicating frame objects', () => {
+    const frames = [frame(5), frame(4), frame(3), frame(2)];
+    const selected = retrieveEvidenceFrames(frames, [3, 5, 3, 99, 4], 3);
+    expect(selected.map(item => item.id)).toEqual([3, 5, 4]);
+    expect(selected[0]).toBe(frames[2]);
+    expect(retrieveEvidenceFrames(frames, [99])).toEqual([]);
+    expect(retrieveEvidenceFrames(frames, undefined, 2).map(item => item.id)).toEqual([5, 4]);
+  });
+
+  it('associates a frame only with the newest action at or before its capture time', () => {
+    const earlier = { id: 'a1', time: 1000, source: 'user', action: 'click', x: 1, y: 1, ok: true, dispatched: true } as ActionRecord;
+    const later = { ...earlier, id: 'a2', time: 3000 };
+    expect(actionForFrame([later, earlier], null, 2000)?.id).toBe('a1');
+    expect(actionForFrame([later, earlier], null, 4000)?.id).toBe('a2');
+    expect(actionForFrame([later, earlier], null, 500)?.id).toBeUndefined();
+    expect(actionForFrame([earlier], null, 12_000)).toBeNull();
+    expect(actionForFrame([later, earlier], 'a1', 2000)).toBeNull();
+  });
+
+  it('associates expected outcomes only with the exact step that dispatched an action', () => {
+    const first = step({ id: 'first', status: 'done', expectedOutcome: 'Save confirmation appears' });
+    const second = step({ id: 'second', status: 'running', expectedOutcome: 'Dashboard becomes visible' });
+    expect(expectedOutcomeForAction({ stepId: 'first' }, [first, second])).toBe('Save confirmation appears');
+    expect(expectedOutcomeForAction({ stepId: 'second' }, [first, second])).toBe('Dashboard becomes visible');
+    expect(expectedOutcomeForAction({ stepId: 'missing' }, [first, second])).toBeUndefined();
+    expect(expectedOutcomeForAction({}, [first, second])).toBeUndefined();
+  });
+  it('extracts a stable appearance descriptor and compares it', () => {
+    const a = visualDescriptor(frame(1, 50), { x: 0, y: 0, w: 1, h: 1 });
+    const b = visualDescriptor(frame(2, 50), { x: 0, y: 0, w: 1, h: 1 });
+    expect(a).toHaveLength(16);
+    expect(descriptorDistance(a, b)).toBe(0);
+    expect(frameChangeRatio(frame(1, 50), frame(2, 50))).toBe(0);
+    expect(frameChangeRatio(frame(1, 50), frame(2, 200))).toBe(1);
+  });
+
+  it('does not learn an image prototype from an unverified or failed outcome', () => {
+    const input = { name: 'Save', kind: 'button' as const, descriptor: [0.2, 0.3], frameId: 1, verifiedSuccess: false, at: 10 };
+    expect(learnVisualPrototype([], input)).toEqual([]);
+    const learned = learnVisualPrototype([], { ...input, verifiedSuccess: true });
+    expect(learned[0]).toMatchObject({ name: 'Save', samples: 1, verifiedSuccesses: 1, lastFrameId: 1 });
+    expect(matchVisualPrototype(learned, 'button', [0.2, 0.3])?.distance).toBe(0);
+    expect(matchVisualPrototype(learned, 'input', [0.2, 0.3])).toBeNull();
+  });
+
+  it('lowers advisory identity confidence when an element moves and lacks a verified prototype', () => {
+    const shot = frame(4, 80);
+    const current = { ...element('Save', 0.4, 0.4), known: true };
+    const prior = { ...element('Save', 0.1, 0.1), known: true };
+    const result = assessElementIdentity({ element: current, frame: shot, prototypes: [], previous: prior });
+    expect(result.stability).toBe('changed');
+    expect(result.confidence).toBeLessThan(0.6);
+    expect(result.reasons.some(reason => reason.includes('moved'))).toBe(true);
+    expect(result.reasons.some(reason => reason.includes('prototype'))).toBe(true);
+  });
+
+  it('recognizes a repeated element only after at least two verified visual examples', () => {
+    const shot = frame(3, 80);
+    const descriptor = visualDescriptor(shot, { x: 0, y: 0, w: 1, h: 1 });
+    const one = learnVisualPrototype([], { name: 'Save', kind: 'button', descriptor, frameId: 3, verifiedSuccess: true, at: 30 });
+    expect(recognizeElements([{ ...element('button A1', 0, 0), known: false }], shot, one)[0].known).toBe(false);
+    const two = learnVisualPrototype(one, { name: 'Save', kind: 'button', descriptor, frameId: 4, verifiedSuccess: true, at: 40 });
+    expect(recognizeElements([{ ...element('button A1', 0, 0), known: false }], shot, two)[0]).toMatchObject({ name: 'Save', known: true });
+  });
+
+  it('correlates an input coordinate with the resulting visual element changes', () => {
+    const action: ActionRecord = {
+      id: 'a1', time: 100, action: 'click', x: 240, y: 180, srcW: 1920, srcH: 1080,
+      source: 'user', via: 'bridge', ok: true, message: 'clicked',
+    };
+    const effect = compareElementEffect(action, [element('Save', 0.1, 0.1)], [element('Save', 0.1, 0.1), element('Toast', 0.3, 0.3)]);
+    expect(effect).toMatchObject({ actor: 'user', target: 'Save', appeared: ['Toast'], disappeared: [] });
+    expect(effect.evidence).toContain('input coordinate');
+  });
+
+  it('tracks geometric relationships without claiming semantic causality', () => {
+    const relations = relateElements([element('Panel', 0.1, 0.1), element('Save', 0.12, 0.12), element('Cancel', 0.8, 0.12)]);
+    expect(relations.some(r => r.kind === 'contains' || r.kind === 'overlaps')).toBe(true);
+    expect(relations.some(r => r.kind === 'aligned-y')).toBe(true);
+    expect(relations.every(r => r.evidence.includes('frame geometry'))).toBe(true);
+  });
+
+  it('distinguishes likely navigation from content changing on the same page', () => {
+    expect(classifyPageTransition([element('Home', 0.1, 0.1), element('Save', 0.3, 0.1)], [element('Home', 0.1, 0.1), element('Save', 0.3, 0.1)], 0.3)).toBe('content-shift');
+    expect(classifyPageTransition([element('Home', 0.1, 0.1), element('Save', 0.3, 0.1)], [element('Profile', 0.6, 0.1), element('Settings', 0.8, 0.1)], 0.4)).toBe('navigation-likely');
+  });
+
+  it('audits pending, running and completed-without-screenshot commands', () => {
+    const audits = auditCommands([
+      step({ id: 'pending', name: 'Pending', status: 'pending', refFrame: frame(1) }),
+      step({ id: 'running', name: 'Running', status: 'running' }),
+      step({ id: 'done', name: 'Done', status: 'done' }),
+    ], 50_000, 10_000);
+    expect(audits.map(a => a.issue)).toEqual(['possibly-missed', 'unverified', 'unverified']);
+  });
+
+  it('computes success percentages only from explicit after-frame verification', () => {
+    const rates = outcomeRates([], [
+      step({ id: 'a', target: 'Save', status: 'done', verifiedAt: 10, afterFrame: frame(1) }),
+      step({ id: 'b', target: 'Save', status: 'failed', verifiedAt: 20, afterFrame: frame(2) }),
+      step({ id: 'c', target: 'Save', status: 'done' }),
+    ]);
+    expect(rates).toEqual([{ target: 'Save', attempts: 2, verifiedSuccesses: 1, verifiedFailures: 1, successPercent: 50, confidence: 'low' }]);
+  });
+
+  it('creates prospect points for missed commands and moving elements', () => {
+    const audits = auditCommands([step({ name: 'Save', target: 'Save', status: 'failed' })]);
+    const points = prospectPoints([element('Save', 0.4, 0.3, 'moved')], [], audits);
+    expect(points[0]).toMatchObject({ priority: 'high', reason: expect.stringContaining('failed') });
+    expect(points.some(p => p.reason.includes('Reconfirm Save'))).toBe(true);
+  });
+  it('turns uncertainty into bounded AI review questions without creating actions', () => {
+    const unknown = { ...element('button A1', 0.2, 0.3), known: false };
+    const snapshot = {
+      frameId: 9, capturedAt: 9000, evidenceFrames: [], elements: [unknown], relations: [], pageTransition: 'navigation-likely' as const,
+      changeRatio: 0.42, notes: ['Step "Save" needs review: unverified'],
+      effects: [{ actionId: 'a1', actor: 'User', action: 'click', target: '(unmatched coordinate)', nearbyBefore: [], appeared: ['Dialog'], disappeared: [], moved: [], evidence: 'after-frame comparison' }],
+    };
+    const questions = derivePerceptionQuestions(snapshot);
+    expect(questions.length).toBeGreaterThanOrEqual(3);
+    expect(questions[0].id).toBe('page-transition');
+    expect(questions.some(q => q.id.startsWith('identify:') && q.region)).toBe(true);
+    expect(questions.some(q => q.id === 'effect:a1' && q.priority === 'high')).toBe(true);
+    expect(questions.every(q => q.question.length > 20 && q.evidence.length > 0)).toBe(true);
+    expect(questions.length).toBeLessThanOrEqual(10);
+  });
+
+  it('keeps absence uncertain when inventory coverage is partial or unknown', () => {
+    const r = recordDecisionOutcome({ effect: { actionId:'hide1', actor:'user', action:'click', target:'Close', nearbyBefore:[], appeared:[], disappeared:[], moved:[], evidence:'frame comparison' }, frameId:20, expected:'Dialog disappears' });
+    expect(reconcileDecisionHistory([r], [], 21, 'same-page', 'partial')[0]).toMatchObject({ status:'uncertain', evidenceQuality:'limited' });
+    expect(reconcileDecisionHistory([r], [], 21, 'same-page', 'unknown')[0].status).toBe('uncertain');
+    expect(reconcileDecisionHistory([r], [], 21, 'same-page', 'complete')[0]).toMatchObject({ status:'verified', evidenceQuality:'strong' });
+  });
+  it('uses positive evidence in partial inventories but not missing-item evidence', () => {
+    const r = recordDecisionOutcome({ effect: { actionId:'show1', actor:'user', action:'click', target:'Open', nearbyBefore:[], appeared:[], disappeared:[], moved:[], evidence:'frame comparison' }, frameId:30, expected:'Saved toast appears' });
+    expect(reconcileDecisionHistory([r], [element('Saved toast',0.2,0.2)], 31, 'same-page', 'partial')[0]).toMatchObject({ status:'verified', evidenceQuality:'strong' });
+    expect(reconcileDecisionHistory([r], [], 31, 'same-page', 'partial')[0].status).toBe('uncertain');
+  });
+  it('calibrates evidence and learns resolved patterns only once', () => {
+    expect(calibrateEvidenceConfidence({base:0.8,quality:'limited',supporting:1,conflicting:0})).toBeLessThan(0.8);
+    expect(calibrateEvidenceConfidence({base:0.8,quality:'conflicting',supporting:1,conflicting:2})).toBeLessThan(0.4);
+    const r={...recordDecisionOutcome({effect:{actionId:'learn1',actor:'agent',action:'click',target:'Save',nearbyBefore:[],appeared:[],disappeared:[],moved:[],evidence:'frame comparison'},frameId:40}),status:'verified' as const,confidence:0.8};
+    const learned=updateDecisionLearning([],r); expect(learned[0]).toMatchObject({attempts:1,verified:1,target:'Save'}); expect(updateDecisionLearning(learned,r)).toEqual(learned); expect(decisionLearningContext(learned)[0]).toContain('low sample');
+    expect(updateDecisionLearning(learned,{...r,id:'learn2',status:'contradicted'})).toMatchObject([{attempts:2,verified:1,contradicted:1}]);
+  });
+
+  it('records bounded decision history without inventing an expected outcome', () => {
+    const effect = {
+      actionId: 'a1', actor: 'user', action: 'click', target: 'Save', nearbyBefore: ['Save'],
+      appeared: ['Saved toast'], disappeared: [], moved: [], evidence: 'frame inventory comparison',
+    };
+    const record = recordDecisionOutcome({ effect, frameId: 8, expected: 'Saved toast appears', at: 80 });
+    expect(record).toMatchObject({ status: 'uncertain', confidence: 0.2, frameId: 8, actual: 'appeared: Saved toast' });
+    const verified = reconcileDecisionHistory([{ ...record, expected: 'Saved toast appears' }], [element('Saved toast', 0.3, 0.3)], 9);
+    expect(verified[0]).toMatchObject({ status: 'verified', confidence: 0.7, reviewedFrameId: 9 });
+    const contradicted = reconcileDecisionHistory([{ ...record, expected: 'Saved toast appears' }], [element('Cancel', 0.3, 0.3)], 9, 'unknown', 'complete');
+    expect(contradicted[0]).toMatchObject({ status: 'contradicted', confidence: 0.7, reviewedFrameId: 9 });
+    const navRecord = { ...record, expected: 'Navigation to dashboard occurs' };
+    expect(reconcileDecisionHistory([navRecord], [], 9, 'navigation-likely')[0]).toMatchObject({
+      status: 'verified', confidence: 0.65, reviewedFrameId: 9,
+    });
+    expect(reconcileDecisionHistory([navRecord], [], 9, 'same-page')[0]).toMatchObject({
+      status: 'contradicted', confidence: 0.65, reviewedFrameId: 9,
+    });
+    expect(reconcileDecisionHistory([navRecord], [], 9, 'unknown')[0]).toMatchObject({ status: 'uncertain', confidence: 0.2 });
+    const uncertain = recordDecisionOutcome({ effect: { ...effect, actionId: 'a2', appeared: [] }, frameId: 9 });
+    expect(uncertain).toMatchObject({ status: 'uncertain', confidence: 0.2, expected: 'No explicit expected outcome recorded' });
+    const history = appendDecisionHistory([record], { ...record, id: 'a3:9' }, 1);
+    expect(history).toHaveLength(1);
+    expect(history[0].id).toBe('a3:9');
+    expect(decisionHistoryContext(history)[0]).toContain('Decision history');
+  });
+
+});
+
+
+describe('persistent decision history', () => {
+  function memoryStorage() {
+    const values = new Map<string, string>();
+    return {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+    };
+  }
+  it('round-trips compact records, bounds history, and clamps confidence', () => {
+    const storage = memoryStorage();
+    const records = Array.from({ length: 105 }, (_, i) => ({
+      id: 'decision-' + i, at: i + 1, frameId: i + 1, actor: 'agent', action: 'click',
+      expected: 'toast appears', actual: 'toast visible', evidence: ['frame-backed observation'],
+      status: 'verified' as const, confidence: 1.4,
+    }));
+    saveDecisionHistory(records, storage);
+    const loaded = loadDecisionHistory(storage);
+    expect(storage.getItem(DECISION_HISTORY_KEY)).toBeTruthy();
+    expect(loaded).toHaveLength(100);
+    expect(loaded[0].id).toBe('decision-0');
+    expect(loaded[0].confidence).toBe(1);
+  });
+  it('ignores malformed records and tolerates corrupt storage', () => {
+    const storage = memoryStorage();
+    storage.setItem(DECISION_HISTORY_KEY, JSON.stringify([{ id: 'bad' }, null]));
+    expect(loadDecisionHistory(storage)).toEqual([]);
+    storage.setItem(DECISION_HISTORY_KEY, '{broken');
+    expect(loadDecisionHistory(storage)).toEqual([]);
+  });
+  it('never lets storage failures interrupt perception', () => {
+    expect(() => saveDecisionHistory([], { setItem: () => { throw new Error('quota'); } })).not.toThrow();
+    expect(loadDecisionHistory({ getItem: () => { throw new Error('blocked'); } })).toEqual([]);
+  });
+});

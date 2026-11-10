@@ -1,4 +1,4 @@
-// bit-generated-oxlint-config
+
 {
     "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
     "plugins": ["react", "unicorn", "typescript", "oxc"],
@@ -8,6 +8,6 @@
         }
     },
     "options": {
-        "typeAware": true
+        "typeAware": false
     }
 }

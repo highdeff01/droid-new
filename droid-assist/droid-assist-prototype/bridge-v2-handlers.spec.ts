@@ -37,6 +37,7 @@ function fakePeers(): PeerHandlers {
     health: vi.fn(),
     approval_decision: vi.fn(),
     resume: vi.fn(),
+    driving: vi.fn(),
   };
 }
 
@@ -55,6 +56,7 @@ const PEER_GOOD_PAYLOADS: Record<PeerType, object> = {
   health: { app: 'droid-main', aiUp: true, latencyMs: 120, crewLoad: 0.2, armed: true, canExecute: true },
   approval_decision: { id: 'a1', decision: 'approved', by: 'droid-main' },
   resume: { runId: 'r1', goal: 'open settings', steps: ['click'], activeIndex: 0, replay: ['clicked'] },
+  driving: { driver: 'droid-main', since: 5, reason: 'took over step 1' },
 };
 
 // --- validateInbound ---------------------------------------------------------

@@ -90,6 +90,21 @@ describe('displayMediaCapture', () => {
     expect(h.onLost).toHaveBeenCalledWith('Screen share ended');
   });
 
+  it('stops granted media tracks and clears capture state when video startup fails', async () => {
+    const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+    const stream = { getVideoTracks: () => [track], getTracks: () => [track] } as unknown as MediaStream;
+    const media = { getDisplayMedia: vi.fn(async () => stream) } as unknown as MediaDevices;
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockRejectedValue(new Error('video startup failed'));
+    const capture = displayMediaCapture(media);
+    await expect(capture.start(1000, handlers())).rejects.toThrow('video startup failed');
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    // A subsequent start must be able to acquire and initialize a fresh share.
+    vi.mocked(HTMLMediaElement.prototype.play).mockResolvedValue(undefined);
+    await capture.start(1000, handlers());
+    capture.stop();
+    expect(track.stop).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects when the user denies the share', async () => {
     const media = { getDisplayMedia: vi.fn(async () => { throw new DOMException('denied', 'NotAllowedError'); }) } as unknown as MediaDevices;
     await expect(displayMediaCapture(media).start(1000, handlers())).rejects.toThrow('denied');

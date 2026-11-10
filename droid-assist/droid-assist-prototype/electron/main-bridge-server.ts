@@ -18,9 +18,15 @@ export interface MainBridgeListener {
   stop(): void;
 }
 
-/** Whether a request carries the token (bearer header or `?token=`); anything goes when no token is set. */
+/**
+ * Whether a request carries the token (bearer header or `?token=`).
+ * Fail-closed: with no token set, nothing is authorized — set a main app
+ * bridge token in Settings to let the main app in. (The Python desktop
+ * bridge has always refused to run unauthenticated; this listener now
+ * follows the same rule instead of accepting any local caller.)
+ */
 function authorized(req: http.IncomingMessage, url: URL, token: string): boolean {
-  if (!token) return true;
+  if (!token) return false;
   return req.headers.authorization === `Bearer ${token}` || url.searchParams.get('token') === token;
 }
 

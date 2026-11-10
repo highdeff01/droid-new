@@ -19,4 +19,7 @@ const port = Number(process.env.PORT) || DEFAULT_PORT;
 const app = createAiProxy(options);
 app.use(express.static(dist));
 app.get('*', (_req, res) => res.sendFile(path.join(dist, 'index.html')));
-app.listen(port, () => console.log(`[Droid Assist] AI proxy on http://localhost:${port} → ${options.upstream}`));
+// Loopback only: the proxy is unauthenticated, so it must not relay for the
+// LAN. Override with HOST=0.0.0.0 only if you mean to expose it.
+const host = process.env.HOST || '127.0.0.1';
+app.listen(port, host, () => console.log(`[Droid Assist] AI proxy on http://${host}:${port} → ${options.upstream}`));

@@ -14,6 +14,8 @@ import { UPDATE_CHANNELS } from './update-api.js';
 import { check, update } from './update-runner.js';
 import { PHONE_CHANNELS, type PhoneAction, type PhoneOptions, type PhonePush } from './phone-api.js';
 import { startPhoneCompanion, type PhoneCompanion } from './phone-companion.js';
+import { AGENT_WORKTREE_CHANNELS } from './agent-worktree-api.js';
+import { AgentWorktreeManager, type AgentWorktreeId } from './agent-worktrees.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** One capture loop per renderer. */
@@ -175,6 +177,63 @@ function registerPhoneIpc() {
   ipcMain.on(PHONE_CHANNELS.stop, (event) => stopPhone(event.sender));
 }
 
+/** Per-renderer local Git worktree sessions. Repository paths must come from the native folder picker. */
+const agentRepositories = new Map<number, string>();
+const agentWorktrees = new Map<number, AgentWorktreeManager>();
+
+function registerAgentWorktreeIpc() {
+  ipcMain.handle(AGENT_WORKTREE_CHANNELS.chooseRepository, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const options = { properties: ['openDirectory' as const] };
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+    if (result.canceled || !result.filePaths[0]) return null;
+    const candidate = path.resolve(result.filePaths[0]);
+    const manager = new AgentWorktreeManager({ rootDirectory: candidate });
+    await manager.inspectRepository();
+    agentRepositories.set(event.sender.id, candidate);
+    agentWorktrees.delete(event.sender.id);
+    event.sender.once('destroyed', () => {
+      agentRepositories.delete(event.sender.id);
+      agentWorktrees.delete(event.sender.id);
+    });
+    return candidate;
+  });
+  ipcMain.handle(AGENT_WORKTREE_CHANNELS.prepare, async (event, repository: string, baseCommit: string) => {
+    const selected = agentRepositories.get(event.sender.id);
+    if (!selected || path.resolve(repository) !== selected) throw new Error('Choose the local repository using the native folder picker first.');
+    const manager = new AgentWorktreeManager({ rootDirectory: selected });
+    const restored = await manager.restoreExisting();
+    const snapshot = restored ?? await manager.prepare(baseCommit);
+    agentWorktrees.set(event.sender.id, manager);
+    return snapshot;
+  });
+  ipcMain.handle(AGENT_WORKTREE_CHANNELS.applyPatch, (event, id: AgentWorktreeId, patch: string) => {
+    const manager = agentWorktrees.get(event.sender.id);
+    if (!manager) throw new Error('Prepare the two worktrees first.');
+    return manager.applyPatch(id, patch);
+  });
+  ipcMain.handle(AGENT_WORKTREE_CHANNELS.runChecks, (event, id: AgentWorktreeId) => {
+    const manager = agentWorktrees.get(event.sender.id);
+    if (!manager) throw new Error('Prepare the two worktrees first.');
+    return manager.runChecks(id);
+  });
+  ipcMain.handle(AGENT_WORKTREE_CHANNELS.getDiff, (event, id: AgentWorktreeId) => {
+    const manager = agentWorktrees.get(event.sender.id);
+    if (!manager) throw new Error('Prepare the two worktrees first.');
+    return manager.getDiff(id);
+  });
+  ipcMain.handle(AGENT_WORKTREE_CHANNELS.commit, (event, id: AgentWorktreeId, paths: string[], message: string) => {
+    const manager = agentWorktrees.get(event.sender.id);
+    if (!manager) throw new Error('Prepare the two worktrees first.');
+    return manager.commit(id, paths, message);
+  });
+  ipcMain.handle(AGENT_WORKTREE_CHANNELS.push, (event, id: AgentWorktreeId) => {
+    const manager = agentWorktrees.get(event.sender.id);
+    if (!manager) throw new Error('Prepare the two worktrees first.');
+    return manager.push(id);
+  });
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
@@ -204,6 +263,7 @@ void app.whenReady().then(() => {
   registerWindowIpc();
   registerUpdateIpc();
   registerPhoneIpc();
+  registerAgentWorktreeIpc();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

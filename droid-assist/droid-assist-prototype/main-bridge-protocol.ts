@@ -324,6 +324,16 @@ export interface ResumePayload {
   replay: string[];
 }
 
+/** v2: who holds the wheel. Sent whenever the driving flag changes, so both UIs agree on who is driving. */
+export interface DrivingPayload {
+  /** The app that currently owns execution. */
+  driver: JointApp;
+  /** When this app took the wheel, epoch ms. */
+  since: number;
+  /** Why the wheel changed hands. */
+  reason: string;
+}
+
 /** The v2 messages both apps send each other. */
 export interface PeerPayloads {
   user_request: UserRequestPayload;
@@ -337,6 +347,7 @@ export interface PeerPayloads {
   health: HealthPayload;
   approval_decision: ApprovalDecisionPayload;
   resume: ResumePayload;
+  driving: DrivingPayload;
 }
 
 /** The v2 requests the main app sends; each is answered with a `result` replying to it. */
@@ -470,6 +481,7 @@ const INBOUND_CHECKS: Record<InboundType, (p: Record<string, unknown>) => string
   health: (p) => (typeof p.app === 'string' && typeof p.aiUp === 'boolean' && isNum(p.latencyMs) && isNum(p.crewLoad) && typeof p.armed === 'boolean' && typeof p.canExecute === 'boolean' ? null : 'health needs app, aiUp, latencyMs, crewLoad, armed and canExecute'),
   approval_decision: (p) => (isText(p.id) && (p.decision === 'approved' || p.decision === 'edited' || p.decision === 'rejected') && typeof p.by === 'string' && optString(p.text) ? null : 'approval_decision needs id, a decision, by and optional text'),
   resume: (p) => (isText(p.runId) && typeof p.goal === 'string' && isStrings(p.steps) && isNum(p.activeIndex) && isStrings(p.replay) ? null : 'resume needs runId, goal, steps, activeIndex and replay'),
+  driving: (p) => ((p.driver === 'droid-new' || p.driver === 'droid-main') && isNum(p.since) && typeof p.reason === 'string' ? null : 'driving needs driver, since and reason'),
 };
 
 const REQUEST_TYPES: Record<RequestType, true> = { analyze: true, plan_workflow: true, run_workflow: true, verify: true, watch: true, assist_error: true };

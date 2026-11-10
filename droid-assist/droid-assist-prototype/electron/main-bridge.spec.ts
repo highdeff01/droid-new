@@ -178,17 +178,17 @@ describe('WEBSOCKET', () => {
   it('delivers a masked text frame to onMessage', async () => {
     const port = randomPort();
     const [onMessage, onMessageFn] = once<[string]>();
-    await listen('', port, { ...noopHandlers(), onMessage: onMessageFn }).ready;
-    const client = await connect(port, WS_PATH);
+    await listen('t', port, { ...noopHandlers(), onMessage: onMessageFn }).ready;
+    const client = await connect(port, `${WS_PATH}?token=t`);
     client.sendText('{"hello":"world"}');
     await expect(onMessage).resolves.toEqual(['{"hello":"world"}']);
   });
 
   it('writes an unmasked frame via listener.send that the client decodes', async () => {
     const port = randomPort();
-    const listener = listen('', port);
+    const listener = listen('t', port);
     await listener.ready;
-    const client = await connect(port, WS_PATH);
+    const client = await connect(port, `${WS_PATH}?token=t`);
     expect(listener.send('{"type":"hello"}')).toBe(true);
     const frame = await client.next();
     expect(frame?.payload.toString('utf8')).toBe('{"type":"hello"}');
@@ -199,6 +199,15 @@ describe('WEBSOCKET', () => {
     const handlers = noopHandlers();
     await listen('t', port, handlers).ready;
     const client = await connect(port, `${WS_PATH}?token=wrong`);
+    expect(client.status).toContain('401');
+    expect(handlers.onOpen).not.toHaveBeenCalled();
+  });
+
+  it('rejects every upgrade when no token is set on the listener', async () => {
+    const port = randomPort();
+    const handlers = noopHandlers();
+    await listen('', port, handlers).ready;
+    const client = await connect(port, `${WS_PATH}?token=t`);
     expect(client.status).toContain('401');
     expect(handlers.onOpen).not.toHaveBeenCalled();
   });
@@ -215,8 +224,8 @@ describe('WEBSOCKET', () => {
   it('calls onClose when the client sends a close frame', async () => {
     const port = randomPort();
     const [onClose, onCloseFn] = once<[string]>();
-    await listen('', port, { ...noopHandlers(), onClose: onCloseFn }).ready;
-    const client = await connect(port, WS_PATH);
+    await listen('t', port, { ...noopHandlers(), onClose: onCloseFn }).ready;
+    const client = await connect(port, `${WS_PATH}?token=t`);
     client.socket.write(encodeFrame(OPCODES.close, Buffer.alloc(0), randomBytes(4)));
     await expect(onClose).resolves.toBeDefined();
   });
@@ -264,12 +273,12 @@ describe('HTTP FALLBACK', () => {
   it('delivers each envelope of a POSTed array', async () => {
     const port = randomPort();
     const messages: string[] = [];
-    await listen('', port, { ...noopHandlers(), onMessage: (text) => messages.push(text) }).ready;
+    await listen('t', port, { ...noopHandlers(), onMessage: (text) => messages.push(text) }).ready;
     const envelopes = [
       { v: 1, id: 'a', time: 1, type: 'hello', payload: { app: 'x' } },
       { v: 1, id: 'b', time: 2, type: 'hello', payload: { app: 'y' } },
     ];
-    const res = await fetch(`http://${HOST}:${port}${EVENTS_PATH}`, { method: 'POST', body: JSON.stringify(envelopes) });
+    const res = await fetch(`http://${HOST}:${port}${EVENTS_PATH}`, { method: 'POST', headers: { Authorization: 'Bearer t' }, body: JSON.stringify(envelopes) });
     expect(res.status).toBe(200);
     expect(messages.map((m) => JSON.parse(m))).toEqual(envelopes);
   });
@@ -281,16 +290,23 @@ describe('HTTP FALLBACK', () => {
     expect(res.status).toBe(401);
   });
 
+  it('rejects a POST when no token is set on the listener, even with a bearer header', async () => {
+    const port = randomPort();
+    await listen('', port).ready;
+    const res = await fetch(`http://${HOST}:${port}${EVENTS_PATH}`, { method: 'POST', headers: { Authorization: 'Bearer t' }, body: JSON.stringify({}) });
+    expect(res.status).toBe(401);
+  });
+
   it('queues a sent command for an HTTP peer and serves it via GET COMMANDS_PATH', async () => {
     const port = randomPort();
-    const listener = listen('', port);
+    const listener = listen('t', port);
     await listener.ready;
-    await fetch(`http://${HOST}:${port}${EVENTS_PATH}`, { method: 'POST', body: JSON.stringify({ v: 1, id: 'a', time: 1, type: 'hello', payload: { app: 'x' } }) });
+    await fetch(`http://${HOST}:${port}${EVENTS_PATH}`, { method: 'POST', headers: { Authorization: 'Bearer t' }, body: JSON.stringify({ v: 1, id: 'a', time: 1, type: 'hello', payload: { app: 'x' } }) });
     const command = { v: 1, id: 'c', time: 1, type: 'run_script', payload: {} };
     expect(listener.send(JSON.stringify(command))).toBe(true);
-    const after0 = await fetch(`http://${HOST}:${port}${COMMANDS_PATH}?after=0`);
+    const after0 = await fetch(`http://${HOST}:${port}${COMMANDS_PATH}?after=0`, { headers: { Authorization: 'Bearer t' } });
     expect(await after0.json()).toEqual({ success: true, events: [command], cursor: '1' });
-    const after1 = await fetch(`http://${HOST}:${port}${COMMANDS_PATH}?after=1`);
+    const after1 = await fetch(`http://${HOST}:${port}${COMMANDS_PATH}?after=1`, { headers: { Authorization: 'Bearer t' } });
     expect(await after1.json()).toEqual({ success: true, events: [], cursor: '1' });
   });
 

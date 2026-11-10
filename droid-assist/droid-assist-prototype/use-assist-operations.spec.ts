@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useAssist } from './use-assist.js';
 import type { WorkflowStep } from './types.js';
@@ -29,6 +29,7 @@ async function mount(fetchImpl: (url: string) => Promise<Response> = async () =>
 }
 
 afterEach(() => {
+  cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   localStorage.clear();

@@ -65,6 +65,8 @@ export type InputAction = 'move' | 'click' | 'double_click' | 'drag' | 'type' | 
 /** One executed mouse or keyboard action, persisted for viewing and export. */
 export interface ActionRecord {
   id: string;
+  /** Exact workflow step that dispatched this input; absent for manual/user actions. */
+  stepId?: string;
   time: number;
   action: InputAction;
   /** Native screen pixels the action targeted (a drag's start). */
@@ -176,6 +178,8 @@ export interface WorkflowStep {
   repeat?: number;
   /** The on-screen thing a pointer step acts on ("files icon"); its coordinates are confirmed against it before dispatch. */
   target?: string;
+  /** Explicit, screenshot-verifiable postcondition; advisory only and never triggers a retry. */
+  expectedOutcome?: string;
   /** Set when the planner gave no point for this pointer step's target (it ran at a default). */
   unlocated?: boolean;
   /** A drag's release point, normalized 0..1 like x/y. Required for a drag step. */
@@ -401,7 +405,7 @@ export interface AssistSettings {
   voiceVolume: number;
   /** Phone companion: the port the small mobile page is served on. */
   phonePort: number;
-  /** Phone companion: the token a phone must present (empty = no token, open on the local network). */
+  /** Phone companion: the token a phone must present (empty = the companion refuses every request until one is set). */
   phoneToken: string;
   /** User arrangement of the workspace panels, per area; validated on load so no panel is ever lost. */
   panelLayout: PanelLayout;

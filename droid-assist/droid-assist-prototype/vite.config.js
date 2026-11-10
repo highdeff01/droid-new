@@ -6,10 +6,10 @@ import react from '@vitejs/plugin-react';
  * set the bridge URL to `/bridge` and requests reach DROID_BRIDGE_URL without CORS.
  */
 const bridgeProxy = {
-  '/bridge': {
+  '/bridge/': {
     target: process.env.DROID_BRIDGE_URL ?? 'http://127.0.0.1:3000',
     changeOrigin: true,
-    rewrite: (/** @type {string} */ path) => path.replace(/^\/bridge/, ''),
+    rewrite: (/** @type {string} */ path) => path.replace(/^\/bridge\//, '/'),
   },
 };
 
@@ -22,8 +22,8 @@ export default defineConfig({
   // Relative asset paths so the built index.html also loads from file:// inside Electron.
   base: './',
   plugins: [react()],
-  server: { proxy: aiProxy },
-  preview: { proxy: aiProxy },
+  server: { proxy: { ...bridgeProxy, ...aiProxy } },
+  preview: { proxy: { ...bridgeProxy, ...aiProxy } },
   test: {
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
