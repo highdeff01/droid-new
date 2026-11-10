@@ -270,7 +270,9 @@ export async function runParallelAgentReview(options: ParallelAgentRunnerOptions
   } catch (error) {
     if (stopped() || (error instanceof Error && error.name === 'AbortError')) {
       run.status = 'cancelled';
-      for (const stream of Object.values(run.streams)) if (stream.status === 'working') stream.status = 'cancelled';
+      for (const stream of Object.values(run.streams)) {
+        if (stream.status === 'working' || stream.status === 'failed') stream.status = 'cancelled';
+      }
     } else {
       run.status = 'failed';
       for (const stream of Object.values(run.streams)) if (stream.status === 'working') {
